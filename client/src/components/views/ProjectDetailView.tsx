@@ -370,7 +370,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
 
       {/* ── Gantt Tab ─────────────────────────────────────────────────────── */}
       {mainTab === 'gantt' && (
-        <GanttView project={project} onPhaseClick={handleGanttPhaseClick} />
+        <GanttView project={project} onUpdate={onUpdate} onPhaseClick={handleGanttPhaseClick} />
       )}
 
       {/* ── Tasks Tab ─────────────────────────────────────────────────────── */}

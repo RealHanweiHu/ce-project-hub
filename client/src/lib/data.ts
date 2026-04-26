@@ -42,6 +42,11 @@ export interface PhaseData {
   notes: string;
 }
 
+export interface PhaseDate {
+  startDate: string; // YYYY-MM-DD
+  endDate: string;   // YYYY-MM-DD
+}
+
 export interface Project {
   id: string;
   code: string;
@@ -53,6 +58,7 @@ export interface Project {
   currentPhase: string;
   risk: 'low' | 'medium' | 'high';
   phases: Record<string, PhaseData>;
+  phaseDates?: Record<string, PhaseDate>; // custom per-phase dates
 }
 
 export const SOP_PHASES: SOPPhase[] = [
@@ -233,7 +239,7 @@ export const normalizeProject = (project: Project): Project => {
         phases[phase.id].taskDetails[t.id] = { instructions: '', files: [] };
     });
   });
-  return { ...project, phases };
+  return { ...project, phases, phaseDates: project.phaseDates || {} };
 };
 
 export const computePhaseProgress = (

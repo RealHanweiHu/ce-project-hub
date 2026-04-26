@@ -28,7 +28,8 @@ export default function Home() {
   );
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving'>('saved');
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -46,7 +47,7 @@ export default function Home() {
     setLoaded(true);
   }, []);
 
-  // Auto-save
+  // Auto-save with timestamp
   useEffect(() => {
     if (!loaded) return;
     setSaveStatus('saving');
@@ -55,7 +56,10 @@ export default function Home() {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
         setSaveStatus('saved');
-      } catch {}
+        setLastSavedAt(new Date());
+      } catch {
+        setSaveStatus('error');
+      }
     }, 600);
   }, [projects, loaded]);
 
@@ -199,6 +203,11 @@ export default function Home() {
                 <CheckCircle2 size={11} className="text-emerald-500 shrink-0" />
                 <span className="text-stone-500">已自动保存</span>
               </>
+            ) : saveStatus === 'error' ? (
+              <>
+                <span className="text-[10px] text-rose-400 shrink-0">✕</span>
+                <span className="text-rose-400">保存失败</span>
+              </>
             ) : (
               <>
                 <Save size={11} className="text-amber-400 animate-pulse shrink-0" />
@@ -206,7 +215,12 @@ export default function Home() {
               </>
             )}
           </div>
-          <div className="mt-2 text-[9px] font-mono text-stone-700">
+          {lastSavedAt && saveStatus === 'saved' && (
+            <div className="mt-1 text-[9px] font-mono text-stone-600">
+              {lastSavedAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+            </div>
+          )}
+          <div className="mt-1 text-[9px] font-mono text-stone-700">
             {projects.length} PROJECTS · LOCAL STORAGE
           </div>
         </div>
@@ -238,12 +252,27 @@ export default function Home() {
             )}
           </div>
 
-          <div className="ml-auto flex items-center gap-4">
-            <div className="hidden sm:flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider text-stone-400">
+          <div className="ml-auto flex items-center gap-3">
+            <div className="hidden sm:flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider">
               {saveStatus === 'saved' ? (
-                <><CheckCircle2 size={11} className="text-emerald-500" /> 已保存</>
+                <span className="flex items-center gap-1.5 text-stone-400">
+                  <CheckCircle2 size={11} className="text-emerald-500" />
+                  <span>已保存</span>
+                  {lastSavedAt && (
+                    <span className="text-stone-300 normal-case tracking-normal">
+                      {lastSavedAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                    </span>
+                  )}
+                </span>
+              ) : saveStatus === 'error' ? (
+                <span className="flex items-center gap-1.5 text-rose-500">
+                  <span>✕</span><span>保存失败</span>
+                </span>
               ) : (
-                <><Save size={11} className="text-amber-400 animate-pulse" /> 保存中</>
+                <span className="flex items-center gap-1.5 text-stone-400">
+                  <Save size={11} className="text-amber-400 animate-pulse" />
+                  <span>保存中...</span>
+                </span>
               )}
             </div>
             <div className="text-[10px] font-mono text-stone-400 hidden md:block bg-stone-100 px-2 py-1">
