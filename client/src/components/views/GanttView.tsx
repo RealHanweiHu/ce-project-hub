@@ -7,7 +7,7 @@ import {
   Flag, CalendarDays, ZoomIn, ZoomOut, ChevronLeft, ChevronRight,
   Pencil, Check, X as XIcon,
 } from 'lucide-react';
-import { Project, SOP_PHASES, PhaseDate, computePhaseProgress, getPhaseStatus } from '@/lib/data';
+import { Project, SOP_PHASES, PhaseDate, computePhaseProgress, getPhaseStatus, getProjectPhases, SOPPhase } from '@/lib/data';
 
 // ── Duration defaults (days) ──────────────────────────────────────────────────
 const PHASE_DAYS: Record<string, number> = {
@@ -45,7 +45,7 @@ function formatMonth(d: Date): string {
 }
 
 interface PhaseBar {
-  phase: (typeof SOP_PHASES)[0];
+  phase: SOPPhase;
   startDate: Date;
   endDate: Date;
   progress: number;
@@ -99,8 +99,9 @@ export function GanttView({ project, onUpdate, onPhaseClick }: GanttViewProps) {
     const projectStart = parseDate(project.startDate) || new Date();
     const projectEnd = parseDate(project.targetDate);
 
+    const projectPhases = getProjectPhases(project);
     let cursor = new Date(projectStart);
-    const bars: PhaseBar[] = SOP_PHASES.map((phase) => {
+    const bars: PhaseBar[] = projectPhases.map((phase) => {
       const custom = project.phaseDates?.[phase.id];
       let phaseStart: Date;
       let phaseEnd: Date;

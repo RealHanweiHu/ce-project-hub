@@ -60,6 +60,7 @@ export interface Project {
   risk: 'low' | 'medium' | 'high';
   phases: Record<string, PhaseData>;
   phaseDates?: Record<string, PhaseDate>; // custom per-phase dates
+  category?: 'npd' | 'eco' | 'idr'; // project category determines SOP template
 }
 
 export const SOP_PHASES: SOPPhase[] = [
@@ -238,7 +239,8 @@ export const buildPhasesData = (
 
 export const normalizeProject = (project: Project): Project => {
   const phases = { ...project.phases };
-  SOP_PHASES.forEach((phase) => {
+  const projectPhases = getProjectPhases(project);
+  projectPhases.forEach((phase) => {
     if (!phases[phase.id]) phases[phase.id] = { tasks: {}, taskDetails: {}, notes: '' };
     if (!phases[phase.id].taskDetails) phases[phase.id].taskDetails = {};
     phase.tasks.forEach((t) => {
@@ -252,23 +254,27 @@ export const normalizeProject = (project: Project): Project => {
 
 export const computePhaseProgress = (
   phaseData: PhaseData | undefined,
-  phaseId: string
+  phaseId: string,
+  phaseObj?: SOPPhase
 ): number => {
-  const phase = PHASE_MAP[phaseId];
+  const phase = phaseObj || PHASE_MAP[phaseId];
   if (!phase || !phaseData?.tasks) return 0;
   const total = phase.tasks.length;
-  const done = Object.values(phaseData.tasks).filter(Boolean).length;
+  if (total === 0) return 0;
+  const done = phase.tasks.filter((t) => phaseData.tasks[t.id]).length;
   return Math.round((done / total) * 100);
 };
 
 export const computeOverallProgress = (project: Project): number => {
+  const phases = getProjectPhases(project);
   let totalTasks = 0;
   let doneTasks = 0;
-  SOP_PHASES.forEach((phase) => {
+  phases.forEach((phase) => {
     const pd = project.phases[phase.id];
     totalTasks += phase.tasks.length;
-    if (pd?.tasks) doneTasks += Object.values(pd.tasks).filter(Boolean).length;
+    if (pd?.tasks) doneTasks += phase.tasks.filter((t) => pd.tasks[t.id]).length;
   });
+  if (totalTasks === 0) return 0;
   return Math.round((doneTasks / totalTasks) * 100);
 };
 
@@ -276,20 +282,34 @@ export const getPhaseStatus = (
   project: Project,
   phaseId: string
 ): 'completed' | 'active' | 'pending' => {
-  const idx = SOP_PHASES.findIndex((p) => p.id === phaseId);
-  const currIdx = SOP_PHASES.findIndex((p) => p.id === project.currentPhase);
-  const progress = computePhaseProgress(project.phases[phaseId], phaseId);
+  const phases = getProjectPhases(project);
+  const idx = phases.findIndex((p) => p.id === phaseId);
+  const currIdx = phases.findIndex((p) => p.id === project.currentPhase);
+  const phaseObj = phases[idx];
+  const progress = computePhaseProgress(project.phases[phaseId], phaseId, phaseObj);
   if (idx < currIdx) return 'completed';
   if (idx === currIdx) return progress === 100 ? 'completed' : 'active';
   return 'pending';
 };
 
+// ── Category-aware phase helpers ─────────────────────────────────────────────
+// Import lazily to avoid circular deps; use dynamic require pattern
+let _getPhasesForCategory: ((cat?: string) => SOPPhase[]) | null = null;
+export const registerGetPhasesForCategory = (fn: (cat?: string) => SOPPhase[]) => {
+  _getPhasesForCategory = fn;
+};
+export const getProjectPhases = (project: Project): SOPPhase[] => {
+  if (_getPhasesForCategory) return _getPhasesForCategory(project.category as string | undefined);
+  return SOP_PHASES;
+};
+
 /**
  * Returns true if the Gate Review task of the given phase is completed.
- * Used to determine if the NEXT phase is unlocked.
+ * Uses the project's category-specific SOP phases.
  */
 export const isPhaseGatePassed = (project: Project, phaseId: string): boolean => {
-  const phase = PHASE_MAP[phaseId];
+  const phases = getProjectPhases(project);
+  const phase = phases.find((p) => p.id === phaseId);
   if (!phase) return true;
   const phaseData = project.phases[phaseId];
   if (!phaseData?.tasks) return false;
@@ -301,11 +321,11 @@ export const isPhaseGatePassed = (project: Project, phaseId: string): boolean =>
  * The first phase (P1) is always unlocked.
  */
 export const isPhaseUnlocked = (project: Project, phaseId: string): boolean => {
-  const idx = SOP_PHASES.findIndex((p) => p.id === phaseId);
-  if (idx <= 0) return true; // first phase always unlocked
-  // All previous phases must have their Gate task completed
+  const phases = getProjectPhases(project);
+  const idx = phases.findIndex((p) => p.id === phaseId);
+  if (idx <= 0) return true;
   for (let i = 0; i < idx; i++) {
-    if (!isPhaseGatePassed(project, SOP_PHASES[i].id)) return false;
+    if (!isPhaseGatePassed(project, phases[i].id)) return false;
   }
   return true;
 };
@@ -314,10 +334,11 @@ export const isPhaseUnlocked = (project: Project, phaseId: string): boolean => {
  * Returns the blocking phase name if a phase is locked, or null if unlocked.
  */
 export const getBlockingGate = (project: Project, phaseId: string): { phaseName: string; gateTaskName: string } | null => {
-  const idx = SOP_PHASES.findIndex((p) => p.id === phaseId);
+  const phases = getProjectPhases(project);
+  const idx = phases.findIndex((p) => p.id === phaseId);
   if (idx <= 0) return null;
   for (let i = 0; i < idx; i++) {
-    const prev = SOP_PHASES[i];
+    const prev = phases[i];
     if (!isPhaseGatePassed(project, prev.id)) {
       const gateTask = prev.tasks.find((t) => t.id === prev.gateTaskId);
       return { phaseName: prev.name, gateTaskName: gateTask?.name || prev.gate };

@@ -11,9 +11,10 @@ import {
 import {
   Project, SOP_PHASES, PHASE_MAP, RISK_CONFIG,
   computePhaseProgress, computeOverallProgress, getPhaseStatus,
-  isPhaseUnlocked, getBlockingGate,
+  isPhaseUnlocked, getBlockingGate, getProjectPhases,
   TaskDetails, FileAttachment, formatBytes,
 } from '@/lib/data';
+import { CATEGORY_MAP } from '@/lib/sop-templates';
 import { ProgressBar } from '@/components/shared/ProgressBar';
 import { GanttView } from './GanttView';
 
@@ -230,13 +231,16 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
   const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
   const [mainTab, setMainTab] = useState<'tasks' | 'gantt'>('tasks');
 
-  const activePhase = PHASE_MAP[activePhaseId];
+  const projectPhases = getProjectPhases(project);
+  const phaseMap = Object.fromEntries(projectPhases.map((p) => [p.id, p]));
+  const activePhase = phaseMap[activePhaseId] || PHASE_MAP[activePhaseId];
   const activePhaseData = project.phases[activePhaseId];
-  const activeProgress = computePhaseProgress(activePhaseData, activePhaseId);
+  const activeProgress = computePhaseProgress(activePhaseData, activePhaseId, activePhase);
   const overallProgress = computeOverallProgress(project);
   const risk = RISK_CONFIG[project.risk];
   const isCurrentPhaseUnlocked = isPhaseUnlocked(project, activePhaseId);
   const blockingGate = getBlockingGate(project, activePhaseId);
+  const catConfig = project.category ? CATEGORY_MAP[project.category] : null;
 
   const updateField = (field: keyof Project, value: string) => onUpdate({ ...project, [field]: value });
 
@@ -249,11 +253,11 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
       ...activePhaseData,
       tasks: { ...activePhaseData.tasks, [taskId]: !activePhaseData.tasks[taskId] },
     };
-    const newProgress = computePhaseProgress(newProject.phases[activePhaseId], activePhaseId);
+    const newProgress = computePhaseProgress(newProject.phases[activePhaseId], activePhaseId, activePhase);
     if (newProgress === 100) {
-      const idx = SOP_PHASES.findIndex((p) => p.id === activePhaseId);
-      if (idx < SOP_PHASES.length - 1 && activePhaseId === project.currentPhase) {
-        newProject.currentPhase = SOP_PHASES[idx + 1].id;
+      const idx = projectPhases.findIndex((p) => p.id === activePhaseId);
+      if (idx < projectPhases.length - 1 && activePhaseId === project.currentPhase) {
+        newProject.currentPhase = projectPhases[idx + 1].id;
       }
     }
     onUpdate(newProject);
@@ -295,8 +299,13 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
         </button>
         <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
           <div className="flex-1 min-w-0">
-            <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">
+            <div className="flex items-center gap-2 mb-1">
               <EditableText value={project.code} onChange={(v) => updateField('code', v)} className="text-[10px] font-mono uppercase tracking-widest text-stone-400" />
+              {catConfig && (
+                <span className={`text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 ${catConfig.color} ${catConfig.textColor} border ${catConfig.borderColor}`}>
+                  {catConfig.badge}
+                </span>
+              )}
             </div>
             <h1 className="font-serif text-3xl lg:text-4xl text-stone-900 leading-tight">
               <EditableText
@@ -385,7 +394,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
           {/* Phase Navigation */}
           <div className="bg-white border border-stone-200 overflow-x-auto">
             <div className="flex min-w-max">
-              {SOP_PHASES.map((phase) => {
+              {projectPhases.map((phase) => {
                 const status = getPhaseStatus(project, phase.id);
                 const isActive = phase.id === activePhaseId;
                 const unlocked = isPhaseUnlocked(project, phase.id);
@@ -606,7 +615,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
               <div className="bg-white border border-stone-200 p-5">
                 <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-3">全阶段进度</div>
                 <div className="space-y-3">
-                  {SOP_PHASES.map((phase) => {
+                  {projectPhases.map((phase) => {
                     const pd = project.phases[phase.id];
                     const prog = computePhaseProgress(pd, phase.id);
                     const status = getPhaseStatus(project, phase.id);

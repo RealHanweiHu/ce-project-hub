@@ -10,8 +10,9 @@ import {
 } from 'lucide-react';
 import {
   Project, SOP_PHASES, PHASE_MAP, RISK_CONFIG,
-  computePhaseProgress, computeOverallProgress,
+  computePhaseProgress, computeOverallProgress, getProjectPhases,
 } from '@/lib/data';
+import { getPhasesForCategory, CATEGORY_MAP } from '@/lib/sop-templates';
 import { StatCard } from '@/components/shared/StatCard';
 import { ProgressBar } from '@/components/shared/ProgressBar';
 
@@ -31,25 +32,38 @@ export function DashboardView({ projects, onSelectProject }: DashboardViewProps)
     return { total, active, atRisk, avgProgress };
   }, [projects]);
 
-  const phaseDistribution = useMemo(
-    () =>
-      SOP_PHASES.map((phase) => ({
-        name: phase.code,
-        fullName: phase.name,
-        count: projects.filter((p) => p.currentPhase === phase.id).length,
-        color: phase.color,
-        label: phase.name,
-      })),
-    [projects]
-  );
+  const phaseDistribution = useMemo(() => {
+    // Collect all unique phases across all projects
+    const phaseMap = new Map<string, { name: string; code: string; color: string; count: number }>();
+    projects.forEach((p) => {
+      const phases = getProjectPhases(p);
+      phases.forEach((ph) => {
+        if (!phaseMap.has(ph.id)) {
+          phaseMap.set(ph.id, { name: ph.name, code: ph.code, color: ph.color, count: 0 });
+        }
+      });
+      const cur = phaseMap.get(p.currentPhase);
+      if (cur) cur.count++;
+    });
+    // Sort by typical SOP order
+    const order = ['concept', 'planning', 'design', 'evt', 'dvt', 'pvt', 'mp'];
+    return Array.from(phaseMap.entries())
+      .sort(([a], [b]) => {
+        const ai = order.indexOf(a), bi = order.indexOf(b);
+        return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+      })
+      .map(([, v]) => ({ name: v.code, fullName: v.name, count: v.count, color: v.color, label: v.name }));
+  }, [projects]);
 
   const upcomingMilestones = useMemo(
     () =>
       projects
         .map((p) => {
-          const phase = PHASE_MAP[p.currentPhase];
-          const progress = computePhaseProgress(p.phases[p.currentPhase], p.currentPhase);
-          return { project: p, phase, progress, gate: phase?.gate };
+          const phases = getProjectPhases(p);
+          const phase = phases.find((ph) => ph.id === p.currentPhase) || PHASE_MAP[p.currentPhase];
+          const progress = computePhaseProgress(p.phases[p.currentPhase], p.currentPhase, phase);
+          const catConfig = p.category ? CATEGORY_MAP[p.category] : null;
+          return { project: p, phase, progress, gate: phase?.gate, catConfig };
         })
         .sort((a, b) => b.progress - a.progress)
         .slice(0, 5),
@@ -123,17 +137,24 @@ export function DashboardView({ projects, onSelectProject }: DashboardViewProps)
             <Target size={20} className="text-stone-300" />
           </div>
           <div className="space-y-4">
-            {upcomingMilestones.map(({ project, phase, progress, gate }) => (
+            {upcomingMilestones.map(({ project, phase, progress, gate, catConfig }) => (
               <div
                 key={project.id}
                 onClick={() => onSelectProject(project.id)}
                 className="cursor-pointer group"
               >
                 <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-sm font-medium text-stone-900 group-hover:text-amber-700 transition-colors truncate max-w-[160px]">
-                    {project.name}
-                  </span>
-                  <span className="text-[10px] font-mono text-stone-400 ml-2">{progress}%</span>
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="text-sm font-medium text-stone-900 group-hover:text-amber-700 transition-colors truncate max-w-[140px]">
+                      {project.name}
+                    </span>
+                    {catConfig && (
+                      <span className={`text-[9px] font-mono shrink-0 px-1 py-0.5 ${catConfig.color} ${catConfig.textColor} border ${catConfig.borderColor}`}>
+                        {catConfig.badge}
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-[10px] font-mono text-stone-400 ml-2 shrink-0">{progress}%</span>
                 </div>
                 <div className="text-[10px] font-mono uppercase tracking-wider text-stone-400 mb-1.5 truncate">
                   {gate}
@@ -167,9 +188,11 @@ export function DashboardView({ projects, onSelectProject }: DashboardViewProps)
             </thead>
             <tbody>
               {projects.map((project) => {
-                const phase = PHASE_MAP[project.currentPhase];
+                const projectPhases = getProjectPhases(project);
+                const phase = projectPhases.find((p) => p.id === project.currentPhase) || PHASE_MAP[project.currentPhase];
                 const progress = computeOverallProgress(project);
                 const risk = RISK_CONFIG[project.risk];
+                const catConfig = project.category ? CATEGORY_MAP[project.category] : null;
                 return (
                   <tr
                     key={project.id}
@@ -180,9 +203,16 @@ export function DashboardView({ projects, onSelectProject }: DashboardViewProps)
                       <span className="text-xs font-mono text-stone-500">{project.code}</span>
                     </td>
                     <td className="p-4">
-                      <span className="text-sm font-medium text-stone-900 group-hover:text-amber-700 transition-colors">
-                        {project.name}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-stone-900 group-hover:text-amber-700 transition-colors">
+                          {project.name}
+                        </span>
+                        {catConfig && (
+                          <span className={`text-[9px] font-mono shrink-0 px-1 py-0.5 ${catConfig.color} ${catConfig.textColor} border ${catConfig.borderColor}`}>
+                            {catConfig.badge}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="p-4 hidden md:table-cell">
                       <span className="text-xs text-stone-600">{project.type}</span>
