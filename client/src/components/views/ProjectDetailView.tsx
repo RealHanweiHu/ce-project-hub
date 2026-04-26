@@ -1,11 +1,11 @@
 // Design: Industrial Precision - stone/amber color system
-// ProjectDetailView: phase navigation, task checklist, task details, file upload
+// ProjectDetailView: phase navigation, Gantt chart tab, task checklist, task details, file upload
 
 import { useState, useRef } from 'react';
 import {
   ArrowLeft, CheckCircle2, Circle, ChevronDown, ChevronRight,
   Upload, Download, Trash2, Paperclip, FileText, Image as ImageIcon,
-  Edit3, Calendar, AlertTriangle, Target, Zap,
+  Edit3, Calendar, AlertTriangle, Target, Zap, BarChart2, ListChecks,
 } from 'lucide-react';
 import {
   Project, SOP_PHASES, PHASE_MAP, RISK_CONFIG,
@@ -13,6 +13,7 @@ import {
   TaskDetails, FileAttachment, formatBytes,
 } from '@/lib/data';
 import { ProgressBar } from '@/components/shared/ProgressBar';
+import { GanttView } from './GanttView';
 
 const MAX_FILE_SIZE = 2 * 1024 * 1024;
 
@@ -221,9 +222,11 @@ function TaskDetail({
   );
 }
 
+// ── Main Component ────────────────────────────────────────────────────────────
 export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailViewProps) {
   const [activePhaseId, setActivePhaseId] = useState(project.currentPhase);
   const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
+  const [mainTab, setMainTab] = useState<'tasks' | 'gantt'>('tasks');
 
   const activePhase = PHASE_MAP[activePhaseId];
   const activePhaseData = project.phases[activePhaseId];
@@ -266,6 +269,12 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
       if (next.has(taskId)) next.delete(taskId); else next.add(taskId);
       return next;
     });
+  };
+
+  // When user clicks a phase bar in Gantt, switch to tasks tab and jump to that phase
+  const handleGanttPhaseClick = (phaseId: string) => {
+    setActivePhaseId(phaseId);
+    setMainTab('tasks');
   };
 
   return (
@@ -333,205 +342,241 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
         </div>
       </div>
 
-      {/* Phase Navigation */}
-      <div className="bg-white border border-stone-200 overflow-x-auto">
-        <div className="flex min-w-max">
-          {SOP_PHASES.map((phase, idx) => {
-            const status = getPhaseStatus(project, phase.id);
-            const isActive = phase.id === activePhaseId;
-            return (
-              <button
-                key={phase.id}
-                onClick={() => setActivePhaseId(phase.id)}
-                className={`flex-1 min-w-[80px] p-3 text-left transition-all border-b-2 ${
-                  isActive
-                    ? 'border-b-stone-900 bg-stone-50'
-                    : 'border-b-transparent hover:bg-stone-50'
-                }`}
-              >
-                <div className="text-[9px] font-mono uppercase tracking-widest text-stone-400 mb-0.5">{phase.code}</div>
-                <div className={`text-xs font-medium ${isActive ? 'text-stone-900' : 'text-stone-500'}`}>
-                  {phase.nameEn}
-                </div>
-                <div className="mt-1.5 flex items-center gap-1">
-                  {status === 'completed' ? (
-                    <CheckCircle2 size={10} className="text-emerald-500 shrink-0" />
-                  ) : status === 'active' ? (
-                    <Zap size={10} className="text-amber-500 shrink-0" />
-                  ) : (
-                    <Circle size={10} className="text-stone-300 shrink-0" />
-                  )}
-                </div>
-              </button>
-            );
-          })}
-        </div>
+      {/* Main Tab Bar: Tasks / Gantt */}
+      <div className="flex items-center gap-0 border-b border-stone-200">
+        <button
+          onClick={() => setMainTab('tasks')}
+          className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all ${
+            mainTab === 'tasks'
+              ? 'border-b-stone-900 text-stone-900'
+              : 'border-b-transparent text-stone-400 hover:text-stone-700'
+          }`}
+        >
+          <ListChecks size={14} />
+          任务清单
+        </button>
+        <button
+          onClick={() => setMainTab('gantt')}
+          className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all ${
+            mainTab === 'gantt'
+              ? 'border-b-stone-900 text-stone-900'
+              : 'border-b-transparent text-stone-400 hover:text-stone-700'
+          }`}
+        >
+          <BarChart2 size={14} />
+          甘特图
+        </button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Task List */}
-        <div className="lg:col-span-2 space-y-3">
-          {/* Phase Header */}
-          <div className="bg-white border border-stone-200 p-5" style={{ borderLeftWidth: 4, borderLeftColor: activePhase?.color }}>
-            <div className="flex items-start justify-between mb-3">
-              <div>
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-[10px] font-mono uppercase tracking-widest text-stone-400">{activePhase?.code}</span>
-                  <span className="text-[10px] font-mono uppercase tracking-wider text-stone-300">·</span>
-                  <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400">{activePhase?.duration}</span>
-                </div>
-                <h2 className="font-serif text-2xl text-stone-900">{activePhase?.name}</h2>
-                <p className="text-sm text-stone-500 mt-1">{activePhase?.desc}</p>
-              </div>
-              <div className="text-right shrink-0 ml-4">
-                <div className="text-2xl font-serif font-semibold text-stone-900">{activeProgress}%</div>
-                <div className="text-[10px] font-mono text-stone-400">完成</div>
-              </div>
-            </div>
-            <ProgressBar value={activeProgress} color="bg-amber-500" height="h-1.5" />
-            <div className="mt-3 flex items-center gap-1.5">
-              <Target size={12} className="text-amber-600" />
-              <span className="text-xs font-medium text-stone-700">Gate: {activePhase?.gate}</span>
-            </div>
-          </div>
+      {/* ── Gantt Tab ─────────────────────────────────────────────────────── */}
+      {mainTab === 'gantt' && (
+        <GanttView project={project} onPhaseClick={handleGanttPhaseClick} />
+      )}
 
-          {/* Tasks */}
-          <div className="space-y-2">
-            {activePhase?.tasks.map((task) => {
-              const checked = activePhaseData?.tasks[task.id] || false;
-              const details = activePhaseData?.taskDetails?.[task.id];
-              const expanded = expandedTasks.has(task.id);
-              const hasInstructions = !!(details?.instructions || '').trim();
-              const fileCount = (details?.files || []).length;
-
-              return (
-                <div
-                  key={task.id}
-                  className={`border transition-all ${checked ? 'border-l-2 border-l-stone-900 border-stone-200 bg-stone-50/50' : 'border-stone-200 bg-white'}`}
-                >
-                  <div className="flex items-start gap-3 p-3 group">
-                    <button onClick={() => toggleTask(task.id)} className="mt-0.5 shrink-0">
-                      {checked ? (
-                        <CheckCircle2 size={18} className="text-stone-900" />
-                      ) : (
-                        <Circle size={18} className="text-stone-300 hover:text-stone-500 transition-colors" />
-                      )}
-                    </button>
-                    <div className="flex-1 min-w-0 cursor-pointer" onClick={() => toggleExpand(task.id)}>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className={`text-sm font-medium ${checked ? 'text-stone-500 line-through' : 'text-stone-900'}`}>
-                          {task.name}
-                        </span>
-                        <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400">{task.id}</span>
-                        {hasInstructions && (
-                          <span className="text-[10px] font-mono uppercase tracking-wider text-amber-600 flex items-center gap-0.5">
-                            <Edit3 size={9} /> 已批注
-                          </span>
-                        )}
-                        {fileCount > 0 && (
-                          <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400 flex items-center gap-0.5">
-                            <Paperclip size={9} /> {fileCount}
-                          </span>
-                        )}
-                      </div>
-                      <p className={`text-xs mt-1 ${checked ? 'text-stone-400' : 'text-stone-500'}`}>
-                        {task.desc}
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => toggleExpand(task.id)}
-                      className="shrink-0 mt-0.5 text-stone-400 hover:text-stone-600 transition-colors"
-                    >
-                      {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                    </button>
-                  </div>
-
-                  {expanded && (
-                    <div className="px-3 pb-3">
-                      {task.guide && (
-                        <div className="p-3 border-l-2 border-amber-500 bg-amber-50 mb-3">
-                          <div className="text-[10px] font-mono uppercase tracking-widest text-amber-600 mb-1.5">操作指南</div>
-                          <pre className="text-xs text-stone-700 whitespace-pre-wrap font-sans leading-relaxed">{task.guide}</pre>
-                        </div>
-                      )}
-                      <TaskDetail
-                        taskId={task.id}
-                        taskDetails={details || { instructions: '', files: [] }}
-                        onUpdate={(d) => updateTaskDetails(task.id, d)}
-                      />
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Side Panel: Deliverables + Notes */}
-        <div className="space-y-4">
-          {/* Deliverables */}
-          <div className="bg-white border border-stone-200 p-5">
-            <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-3">交付物</div>
-            <div className="space-y-1.5">
-              {activePhase?.deliverables.map((d, i) => (
-                <div key={i} className="flex items-start gap-2 text-sm text-stone-700">
-                  <span className="text-stone-300 mt-0.5">▸</span>
-                  <span>{d}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Phase Notes */}
-          <div className="bg-white border border-stone-200 p-5">
-            <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-3">阶段备注</div>
-            <textarea
-              value={activePhaseData?.notes || ''}
-              onChange={(e) => {
-                const newProject = { ...project };
-                newProject.phases = { ...project.phases };
-                newProject.phases[activePhaseId] = { ...activePhaseData, notes: e.target.value };
-                onUpdate(newProject);
-              }}
-              rows={5}
-              placeholder="记录阶段备注、决策记录、风险说明..."
-              className="w-full text-xs text-stone-700 border border-stone-200 focus:border-stone-400 outline-none px-3 py-2 resize-none transition-colors"
-            />
-          </div>
-
-          {/* Phase Progress Summary */}
-          <div className="bg-white border border-stone-200 p-5">
-            <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-3">全阶段进度</div>
-            <div className="space-y-3">
+      {/* ── Tasks Tab ─────────────────────────────────────────────────────── */}
+      {mainTab === 'tasks' && (
+        <>
+          {/* Phase Navigation */}
+          <div className="bg-white border border-stone-200 overflow-x-auto">
+            <div className="flex min-w-max">
               {SOP_PHASES.map((phase) => {
-                const pd = project.phases[phase.id];
-                const prog = computePhaseProgress(pd, phase.id);
                 const status = getPhaseStatus(project, phase.id);
+                const isActive = phase.id === activePhaseId;
                 return (
-                  <div
+                  <button
                     key={phase.id}
-                    className="cursor-pointer"
                     onClick={() => setActivePhaseId(phase.id)}
+                    className={`flex-1 min-w-[80px] p-3 text-left transition-all border-b-2 ${
+                      isActive
+                        ? 'border-b-stone-900 bg-stone-50'
+                        : 'border-b-transparent hover:bg-stone-50'
+                    }`}
                   >
-                    <div className="flex items-center justify-between mb-1">
-                      <div className="flex items-center gap-1.5">
-                        <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: phase.color }} />
-                        <span className="text-[10px] font-mono uppercase tracking-wider text-stone-500">{phase.code}</span>
-                      </div>
-                      <span className="text-[10px] font-mono text-stone-500">{prog}%</span>
+                    <div className="text-[9px] font-mono uppercase tracking-widest text-stone-400 mb-0.5">{phase.code}</div>
+                    <div className={`text-xs font-medium ${isActive ? 'text-stone-900' : 'text-stone-500'}`}>
+                      {phase.nameEn}
                     </div>
-                    <ProgressBar
-                      value={prog}
-                      color={status === 'completed' ? 'bg-emerald-500' : status === 'active' ? 'bg-amber-500' : 'bg-stone-200'}
-                      height="h-1"
-                    />
-                  </div>
+                    <div className="mt-1.5 flex items-center gap-1">
+                      {status === 'completed' ? (
+                        <CheckCircle2 size={10} className="text-emerald-500 shrink-0" />
+                      ) : status === 'active' ? (
+                        <Zap size={10} className="text-amber-500 shrink-0" />
+                      ) : (
+                        <Circle size={10} className="text-stone-300 shrink-0" />
+                      )}
+                    </div>
+                  </button>
                 );
               })}
             </div>
           </div>
-        </div>
-      </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Task List */}
+            <div className="lg:col-span-2 space-y-3">
+              {/* Phase Header */}
+              <div className="bg-white border border-stone-200 p-5" style={{ borderLeftWidth: 4, borderLeftColor: activePhase?.color }}>
+                <div className="flex items-start justify-between mb-3">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-[10px] font-mono uppercase tracking-widest text-stone-400">{activePhase?.code}</span>
+                      <span className="text-[10px] font-mono uppercase tracking-wider text-stone-300">·</span>
+                      <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400">{activePhase?.duration}</span>
+                    </div>
+                    <h2 className="font-serif text-2xl text-stone-900">{activePhase?.name}</h2>
+                    <p className="text-sm text-stone-500 mt-1">{activePhase?.desc}</p>
+                  </div>
+                  <div className="text-right shrink-0 ml-4">
+                    <div className="text-2xl font-serif font-semibold text-stone-900">{activeProgress}%</div>
+                    <div className="text-[10px] font-mono text-stone-400">完成</div>
+                  </div>
+                </div>
+                <ProgressBar value={activeProgress} color="bg-amber-500" height="h-1.5" />
+                <div className="mt-3 flex items-center gap-1.5">
+                  <Target size={12} className="text-amber-600" />
+                  <span className="text-xs font-medium text-stone-700">Gate: {activePhase?.gate}</span>
+                </div>
+              </div>
+
+              {/* Tasks */}
+              <div className="space-y-2">
+                {activePhase?.tasks.map((task) => {
+                  const checked = activePhaseData?.tasks[task.id] || false;
+                  const details = activePhaseData?.taskDetails?.[task.id];
+                  const expanded = expandedTasks.has(task.id);
+                  const hasInstructions = !!(details?.instructions || '').trim();
+                  const fileCount = (details?.files || []).length;
+
+                  return (
+                    <div
+                      key={task.id}
+                      className={`border transition-all ${checked ? 'border-l-2 border-l-stone-900 border-stone-200 bg-stone-50/50' : 'border-stone-200 bg-white'}`}
+                    >
+                      <div className="flex items-start gap-3 p-3 group">
+                        <button onClick={() => toggleTask(task.id)} className="mt-0.5 shrink-0">
+                          {checked ? (
+                            <CheckCircle2 size={18} className="text-stone-900" />
+                          ) : (
+                            <Circle size={18} className="text-stone-300 hover:text-stone-500 transition-colors" />
+                          )}
+                        </button>
+                        <div className="flex-1 min-w-0 cursor-pointer" onClick={() => toggleExpand(task.id)}>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={`text-sm font-medium ${checked ? 'text-stone-500 line-through' : 'text-stone-900'}`}>
+                              {task.name}
+                            </span>
+                            <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400">{task.id}</span>
+                            {hasInstructions && (
+                              <span className="text-[10px] font-mono uppercase tracking-wider text-amber-600 flex items-center gap-0.5">
+                                <Edit3 size={9} /> 已批注
+                              </span>
+                            )}
+                            {fileCount > 0 && (
+                              <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400 flex items-center gap-0.5">
+                                <Paperclip size={9} /> {fileCount}
+                              </span>
+                            )}
+                          </div>
+                          <p className={`text-xs mt-1 ${checked ? 'text-stone-400' : 'text-stone-500'}`}>
+                            {task.desc}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => toggleExpand(task.id)}
+                          className="shrink-0 mt-0.5 text-stone-400 hover:text-stone-600 transition-colors"
+                        >
+                          {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                        </button>
+                      </div>
+
+                      {expanded && (
+                        <div className="px-3 pb-3">
+                          {task.guide && (
+                            <div className="p-3 border-l-2 border-amber-500 bg-amber-50 mb-3">
+                              <div className="text-[10px] font-mono uppercase tracking-widest text-amber-600 mb-1.5">操作指南</div>
+                              <pre className="text-xs text-stone-700 whitespace-pre-wrap font-sans leading-relaxed">{task.guide}</pre>
+                            </div>
+                          )}
+                          <TaskDetail
+                            taskId={task.id}
+                            taskDetails={details || { instructions: '', files: [] }}
+                            onUpdate={(d) => updateTaskDetails(task.id, d)}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Side Panel: Deliverables + Notes */}
+            <div className="space-y-4">
+              {/* Deliverables */}
+              <div className="bg-white border border-stone-200 p-5">
+                <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-3">交付物</div>
+                <div className="space-y-1.5">
+                  {activePhase?.deliverables.map((d, i) => (
+                    <div key={i} className="flex items-start gap-2 text-sm text-stone-700">
+                      <span className="text-stone-300 mt-0.5">▸</span>
+                      <span>{d}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Phase Notes */}
+              <div className="bg-white border border-stone-200 p-5">
+                <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-3">阶段备注</div>
+                <textarea
+                  value={activePhaseData?.notes || ''}
+                  onChange={(e) => {
+                    const newProject = { ...project };
+                    newProject.phases = { ...project.phases };
+                    newProject.phases[activePhaseId] = { ...activePhaseData, notes: e.target.value };
+                    onUpdate(newProject);
+                  }}
+                  rows={5}
+                  placeholder="记录阶段备注、决策记录、风险说明..."
+                  className="w-full text-xs text-stone-700 border border-stone-200 focus:border-stone-400 outline-none px-3 py-2 resize-none transition-colors"
+                />
+              </div>
+
+              {/* Phase Progress Summary */}
+              <div className="bg-white border border-stone-200 p-5">
+                <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-3">全阶段进度</div>
+                <div className="space-y-3">
+                  {SOP_PHASES.map((phase) => {
+                    const pd = project.phases[phase.id];
+                    const prog = computePhaseProgress(pd, phase.id);
+                    const status = getPhaseStatus(project, phase.id);
+                    return (
+                      <div
+                        key={phase.id}
+                        className="cursor-pointer"
+                        onClick={() => setActivePhaseId(phase.id)}
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <div className="flex items-center gap-1.5">
+                            <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: phase.color }} />
+                            <span className="text-[10px] font-mono uppercase tracking-wider text-stone-500">{phase.code}</span>
+                          </div>
+                          <span className="text-[10px] font-mono text-stone-500">{prog}%</span>
+                        </div>
+                        <ProgressBar
+                          value={prog}
+                          color={status === 'completed' ? 'bg-emerald-500' : status === 'active' ? 'bg-amber-500' : 'bg-stone-200'}
+                          height="h-1"
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
