@@ -60,11 +60,26 @@ export interface Issue {
   attachments?: string[];      // file names
 }
 
+// ── Gate Review Record ──────────────────────────────────────────────────────
+export interface GateReview {
+  id: string;
+  phaseId: string;
+  phaseName: string;
+  gateName: string;
+  reviewDate: string;       // YYYY-MM-DD
+  participants: string;     // comma-separated names
+  decision: 'approved' | 'conditional' | 'rejected';
+  conditions: string;       // conditions if conditional approval
+  notes: string;            // meeting notes / decision rationale
+  createdAt: string;        // ISO timestamp
+}
+
 export interface PhaseData {
   tasks: Record<string, boolean>;
   taskDetails: Record<string, TaskDetails>;
   notes: string;
   issues?: Issue[];            // issue list for this phase
+  gateReview?: GateReview;     // formal gate review record
 }
 
 export interface PhaseDate {

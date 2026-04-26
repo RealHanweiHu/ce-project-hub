@@ -18,7 +18,8 @@ import { CATEGORY_MAP } from '@/lib/sop-templates';
 import { ProgressBar } from '@/components/shared/ProgressBar';
 import { GanttView } from './GanttView';
 import { IssueList } from './IssueList';
-import { ISSUE_PHASES, Issue } from '@/lib/data';
+import { ISSUE_PHASES, Issue, GateReview } from '@/lib/data';
+import { GateReviewModal, GateReviewBadge } from './GateReviewModal';
 
 const MAX_FILE_SIZE = 2 * 1024 * 1024;
 
@@ -299,6 +300,38 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
     newProject.phases = { ...project.phases };
     newProject.phases[activePhaseId] = { ...activePhaseData, issues };
     onUpdate(newProject);
+  };
+
+  // Gate Review Modal state
+  const [gateReviewPending, setGateReviewPending] = useState<{ phaseId: string } | null>(null);
+
+  const handleGateTaskToggle = (taskId: string) => {
+    // If checking a gate task (not unchecking), show review modal
+    const isChecking = !activePhaseData?.tasks[taskId];
+    if (isChecking && taskId === activePhase?.gateTaskId) {
+      setGateReviewPending({ phaseId: activePhaseId });
+      return;
+    }
+    toggleTask(taskId);
+  };
+
+  const handleGateReviewConfirm = (review: GateReview) => {
+    // Save review record + mark gate task as done + advance phase
+    const newProject = { ...project };
+    newProject.phases = { ...project.phases };
+    const gateTaskId = activePhase?.gateTaskId || '';
+    newProject.phases[activePhaseId] = {
+      ...activePhaseData,
+      tasks: { ...activePhaseData.tasks, [gateTaskId]: true },
+      gateReview: review,
+    };
+    // Advance to next phase if this was current
+    const idx = projectPhases.findIndex((p) => p.id === activePhaseId);
+    if (idx < projectPhases.length - 1 && activePhaseId === project.currentPhase) {
+      newProject.currentPhase = projectPhases[idx + 1].id;
+    }
+    onUpdate(newProject);
+    setGateReviewPending(null);
   };
 
   return (
@@ -586,9 +619,9 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
 
                       <div className="flex items-start gap-3 p-3 group">
                         <button
-                          onClick={() => !locked && toggleTask(task.id)}
+                          onClick={() => !locked && (isGateTask ? handleGateTaskToggle(task.id) : toggleTask(task.id))}
                           className={`mt-0.5 shrink-0 ${locked ? 'cursor-not-allowed' : 'cursor-pointer'}`}
-                          title={locked ? '此阶段已锁定，请先完成前置 Gate 评审' : undefined}
+                          title={locked ? '此阶段已锁定，请先完成前置 Gate 评审' : isGateTask && !checked ? '点击完成 Gate 评审并填写评审记录' : undefined}
                         >
                           {locked ? (
                             <Lock size={18} className="text-stone-300" />
@@ -646,6 +679,45 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                             taskDetails={details || { instructions: '', files: [] }}
                             onUpdate={(d) => updateTaskDetails(task.id, d)}
                           />
+                        </div>
+                      )}
+
+                      {/* Gate Review Record Display */}
+                      {isGateTask && checked && activePhaseData?.gateReview && (
+                        <div className="px-3 pb-3 pt-0">
+                          <div className="border border-emerald-200 bg-emerald-50/50 p-3">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-[10px] font-mono uppercase tracking-widest text-emerald-600">评审记录</span>
+                              <button
+                                onClick={() => setGateReviewPending({ phaseId: activePhaseId })}
+                                className="text-[10px] font-mono text-stone-400 hover:text-stone-700 transition-colors"
+                              >
+                                编辑记录
+                              </button>
+                            </div>
+                            <GateReviewBadge review={activePhaseData.gateReview} />
+                            <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-stone-600">
+                              <div><span className="font-mono text-stone-400">参与人：</span>{activePhaseData.gateReview.participants}</div>
+                              {activePhaseData.gateReview.conditions && (
+                                <div className="col-span-2"><span className="font-mono text-stone-400">条件：</span>{activePhaseData.gateReview.conditions}</div>
+                              )}
+                              {activePhaseData.gateReview.notes && (
+                                <div className="col-span-2 mt-1 text-stone-500 italic">{activePhaseData.gateReview.notes}</div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Gate task checked but no review record yet — prompt to add */}
+                      {isGateTask && checked && !activePhaseData?.gateReview && (
+                        <div className="px-3 pb-3">
+                          <button
+                            onClick={() => setGateReviewPending({ phaseId: activePhaseId })}
+                            className="w-full text-xs font-mono text-amber-600 border border-dashed border-amber-300 py-2 hover:bg-amber-50 transition-colors"
+                          >
+                            + 补充填写 Gate 评审记录
+                          </button>
                         </div>
                       )}
                     </div>
@@ -720,6 +792,19 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
             </div>
           </div>
         </>
+      )}
+
+      {/* ── Gate Review Modal ──────────────────────────────────────────────── */}
+      {gateReviewPending && (
+        <GateReviewModal
+          open={!!gateReviewPending}
+          phaseId={gateReviewPending.phaseId}
+          phaseName={activePhase?.name || gateReviewPending.phaseId}
+          gateName={activePhase?.gate || 'Gate 评审'}
+          existingReview={activePhaseData?.gateReview}
+          onConfirm={handleGateReviewConfirm}
+          onCancel={() => setGateReviewPending(null)}
+        />
       )}
     </div>
   );
