@@ -17,6 +17,7 @@ export interface SOPPhase {
   duration: string;
   desc: string;
   gate: string;
+  gateTaskId: string; // ID of the Gate Review task that must be completed before next phase
   deliverables: string[];
   tasks: SOPTask[];
   color: string;
@@ -70,6 +71,7 @@ export const SOP_PHASES: SOPPhase[] = [
     duration: '2-4周',
     desc: '市场洞察与产品立项',
     gate: '立项评审 / Project Charter',
+    gateTaskId: 'c6',
     color: '#78716c',
     deliverables: ['市场调研报告', '产品概念书', '商业可行性分析', '立项申请书'],
     tasks: [
@@ -89,6 +91,7 @@ export const SOP_PHASES: SOPPhase[] = [
     duration: '3-4月',
     desc: '产品规格与项目计划',
     gate: 'Kickoff评审',
+    gateTaskId: 'p7',
     color: '#a16207',
     deliverables: ['PRD产品需求文档', 'PSD产品规格书', '项目甘特图', 'BOM v0.1'],
     tasks: [
@@ -109,6 +112,7 @@ export const SOP_PHASES: SOPPhase[] = [
     duration: '6-12周',
     desc: 'ID/MD/EE/SW并行设计',
     gate: '设计冻结评审 (Design Freeze)',
+    gateTaskId: 'd8',
     color: '#0369a1',
     deliverables: ['ID外观图', 'MD结构图', 'PCB原理图&Layout', 'SW架构文档', 'BOM v1.0'],
     tasks: [
@@ -130,6 +134,7 @@ export const SOP_PHASES: SOPPhase[] = [
     duration: '4-6周',
     desc: '工程样机功能验证',
     gate: 'EVT评审',
+    gateTaskId: 'e7',
     color: '#7c3aed',
     deliverables: ['EVT样机 ≥10台', '功能测试报告', '问题清单 (Issue List)', 'PCB v2'],
     tasks: [
@@ -150,6 +155,7 @@ export const SOP_PHASES: SOPPhase[] = [
     duration: '4-8周',
     desc: '设计成熟度全面验证',
     gate: 'DVT评审',
+    gateTaskId: 'v8',
     color: '#0f766e',
     deliverables: ['DVT样机 ≥30台', '可靠性测试报告', '认证报告', '模具T1样品'],
     tasks: [
@@ -171,6 +177,7 @@ export const SOP_PHASES: SOPPhase[] = [
     duration: '3-6周',
     desc: '生产工艺与良率验证',
     gate: 'MP准备就绪评审',
+    gateTaskId: 'pv8',
     color: '#b45309',
     deliverables: ['试产50-300台', 'SOP/WI作业指导书', '良率报告', '治具与测试程序'],
     tasks: [
@@ -192,6 +199,7 @@ export const SOP_PHASES: SOPPhase[] = [
     duration: '持续',
     desc: '量产爬坡与持续改善',
     gate: '产品交付/EOL',
+    gateTaskId: 'mp6',
     color: '#166534',
     deliverables: ['量产产品', '良率周报', 'ECN/ECR记录', '售后数据分析'],
     tasks: [
@@ -274,6 +282,48 @@ export const getPhaseStatus = (
   if (idx < currIdx) return 'completed';
   if (idx === currIdx) return progress === 100 ? 'completed' : 'active';
   return 'pending';
+};
+
+/**
+ * Returns true if the Gate Review task of the given phase is completed.
+ * Used to determine if the NEXT phase is unlocked.
+ */
+export const isPhaseGatePassed = (project: Project, phaseId: string): boolean => {
+  const phase = PHASE_MAP[phaseId];
+  if (!phase) return true;
+  const phaseData = project.phases[phaseId];
+  if (!phaseData?.tasks) return false;
+  return phaseData.tasks[phase.gateTaskId] === true;
+};
+
+/**
+ * Returns true if a phase is unlocked (i.e., all previous phases' Gate tasks are done).
+ * The first phase (P1) is always unlocked.
+ */
+export const isPhaseUnlocked = (project: Project, phaseId: string): boolean => {
+  const idx = SOP_PHASES.findIndex((p) => p.id === phaseId);
+  if (idx <= 0) return true; // first phase always unlocked
+  // All previous phases must have their Gate task completed
+  for (let i = 0; i < idx; i++) {
+    if (!isPhaseGatePassed(project, SOP_PHASES[i].id)) return false;
+  }
+  return true;
+};
+
+/**
+ * Returns the blocking phase name if a phase is locked, or null if unlocked.
+ */
+export const getBlockingGate = (project: Project, phaseId: string): { phaseName: string; gateTaskName: string } | null => {
+  const idx = SOP_PHASES.findIndex((p) => p.id === phaseId);
+  if (idx <= 0) return null;
+  for (let i = 0; i < idx; i++) {
+    const prev = SOP_PHASES[i];
+    if (!isPhaseGatePassed(project, prev.id)) {
+      const gateTask = prev.tasks.find((t) => t.id === prev.gateTaskId);
+      return { phaseName: prev.name, gateTaskName: gateTask?.name || prev.gate };
+    }
+  }
+  return null;
 };
 
 export const RISK_CONFIG = {

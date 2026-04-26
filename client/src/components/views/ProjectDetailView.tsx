@@ -6,10 +6,12 @@ import {
   ArrowLeft, CheckCircle2, Circle, ChevronDown, ChevronRight,
   Upload, Download, Trash2, Paperclip, FileText, Image as ImageIcon,
   Edit3, Calendar, AlertTriangle, Target, Zap, BarChart2, ListChecks,
+  Lock, ShieldAlert, Flag,
 } from 'lucide-react';
 import {
   Project, SOP_PHASES, PHASE_MAP, RISK_CONFIG,
   computePhaseProgress, computeOverallProgress, getPhaseStatus,
+  isPhaseUnlocked, getBlockingGate,
   TaskDetails, FileAttachment, formatBytes,
 } from '@/lib/data';
 import { ProgressBar } from '@/components/shared/ProgressBar';
@@ -233,10 +235,14 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
   const activeProgress = computePhaseProgress(activePhaseData, activePhaseId);
   const overallProgress = computeOverallProgress(project);
   const risk = RISK_CONFIG[project.risk];
+  const isCurrentPhaseUnlocked = isPhaseUnlocked(project, activePhaseId);
+  const blockingGate = getBlockingGate(project, activePhaseId);
 
   const updateField = (field: keyof Project, value: string) => onUpdate({ ...project, [field]: value });
 
   const toggleTask = (taskId: string) => {
+    // Gate lock check: if this phase is locked, disallow toggling
+    if (!isPhaseUnlocked(project, activePhaseId)) return;
     const newProject = { ...project };
     newProject.phases = { ...project.phases };
     newProject.phases[activePhaseId] = {
@@ -382,22 +388,25 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
               {SOP_PHASES.map((phase) => {
                 const status = getPhaseStatus(project, phase.id);
                 const isActive = phase.id === activePhaseId;
+                const unlocked = isPhaseUnlocked(project, phase.id);
                 return (
                   <button
                     key={phase.id}
                     onClick={() => setActivePhaseId(phase.id)}
-                    className={`flex-1 min-w-[80px] p-3 text-left transition-all border-b-2 ${
+                    className={`flex-1 min-w-[80px] p-3 text-left transition-all border-b-2 relative ${
                       isActive
                         ? 'border-b-stone-900 bg-stone-50'
                         : 'border-b-transparent hover:bg-stone-50'
-                    }`}
+                    } ${!unlocked ? 'opacity-60' : ''}`}
                   >
                     <div className="text-[9px] font-mono uppercase tracking-widest text-stone-400 mb-0.5">{phase.code}</div>
                     <div className={`text-xs font-medium ${isActive ? 'text-stone-900' : 'text-stone-500'}`}>
                       {phase.nameEn}
                     </div>
                     <div className="mt-1.5 flex items-center gap-1">
-                      {status === 'completed' ? (
+                      {!unlocked ? (
+                        <Lock size={10} className="text-stone-400 shrink-0" />
+                      ) : status === 'completed' ? (
                         <CheckCircle2 size={10} className="text-emerald-500 shrink-0" />
                       ) : status === 'active' ? (
                         <Zap size={10} className="text-amber-500 shrink-0" />
@@ -438,6 +447,21 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                 </div>
               </div>
 
+              {/* Gate Lock Banner */}
+              {!isCurrentPhaseUnlocked && blockingGate && (
+                <div className="flex items-start gap-3 p-4 bg-rose-50 border border-rose-200 border-l-4 border-l-rose-500">
+                  <ShieldAlert size={18} className="text-rose-500 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="text-sm font-semibold text-rose-800 mb-0.5">此阶段已锁定</div>
+                    <div className="text-xs text-rose-700">
+                      请先完成 <span className="font-mono font-semibold">{blockingGate.phaseName}</span> 的
+                      Gate 评审任务：<span className="font-medium">「{blockingGate.gateTaskName}」</span>，
+                      通过后此阶段将自动解锁。
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Tasks */}
               <div className="space-y-2">
                 {activePhase?.tasks.map((task) => {
@@ -446,53 +470,89 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                   const expanded = expandedTasks.has(task.id);
                   const hasInstructions = !!(details?.instructions || '').trim();
                   const fileCount = (details?.files || []).length;
+                  const isGateTask = task.id === activePhase.gateTaskId;
+                  const locked = !isCurrentPhaseUnlocked;
 
                   return (
                     <div
                       key={task.id}
-                      className={`border transition-all ${checked ? 'border-l-2 border-l-stone-900 border-stone-200 bg-stone-50/50' : 'border-stone-200 bg-white'}`}
+                      className={`border transition-all ${
+                        locked
+                          ? 'border-stone-200 bg-stone-50/30 opacity-60'
+                          : isGateTask
+                          ? checked
+                            ? 'border-l-4 border-l-emerald-500 border-stone-200 bg-emerald-50/30'
+                            : 'border-l-4 border-l-amber-500 border-amber-200 bg-amber-50/30'
+                          : checked
+                          ? 'border-l-2 border-l-stone-900 border-stone-200 bg-stone-50/50'
+                          : 'border-stone-200 bg-white'
+                      }`}
                     >
+                      {/* Gate Task Label */}
+                      {isGateTask && (
+                        <div className={`flex items-center gap-1.5 px-3 pt-2 pb-0 ${
+                          checked ? 'text-emerald-700' : 'text-amber-700'
+                        }`}>
+                          <Flag size={10} />
+                          <span className="text-[9px] font-mono uppercase tracking-widest font-semibold">
+                            Gate 评审 · 通过后解锁下一阶段
+                          </span>
+                        </div>
+                      )}
+
                       <div className="flex items-start gap-3 p-3 group">
-                        <button onClick={() => toggleTask(task.id)} className="mt-0.5 shrink-0">
-                          {checked ? (
-                            <CheckCircle2 size={18} className="text-stone-900" />
+                        <button
+                          onClick={() => !locked && toggleTask(task.id)}
+                          className={`mt-0.5 shrink-0 ${locked ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+                          title={locked ? '此阶段已锁定，请先完成前置 Gate 评审' : undefined}
+                        >
+                          {locked ? (
+                            <Lock size={18} className="text-stone-300" />
+                          ) : checked ? (
+                            <CheckCircle2 size={18} className={isGateTask ? 'text-emerald-600' : 'text-stone-900'} />
                           ) : (
-                            <Circle size={18} className="text-stone-300 hover:text-stone-500 transition-colors" />
+                            <Circle size={18} className={`${isGateTask ? 'text-amber-400 hover:text-amber-600' : 'text-stone-300 hover:text-stone-500'} transition-colors`} />
                           )}
                         </button>
-                        <div className="flex-1 min-w-0 cursor-pointer" onClick={() => toggleExpand(task.id)}>
+                        <div className="flex-1 min-w-0 cursor-pointer" onClick={() => !locked && toggleExpand(task.id)}>
                           <div className="flex items-center gap-2 flex-wrap">
-                            <span className={`text-sm font-medium ${checked ? 'text-stone-500 line-through' : 'text-stone-900'}`}>
+                            <span className={`text-sm font-medium ${
+                              locked ? 'text-stone-400' : checked ? 'text-stone-500 line-through' : isGateTask ? 'text-stone-900 font-semibold' : 'text-stone-900'
+                            }`}>
                               {task.name}
                             </span>
                             <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400">{task.id}</span>
-                            {hasInstructions && (
+                            {!locked && hasInstructions && (
                               <span className="text-[10px] font-mono uppercase tracking-wider text-amber-600 flex items-center gap-0.5">
                                 <Edit3 size={9} /> 已批注
                               </span>
                             )}
-                            {fileCount > 0 && (
+                            {!locked && fileCount > 0 && (
                               <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400 flex items-center gap-0.5">
                                 <Paperclip size={9} /> {fileCount}
                               </span>
                             )}
                           </div>
-                          <p className={`text-xs mt-1 ${checked ? 'text-stone-400' : 'text-stone-500'}`}>
+                          <p className={`text-xs mt-1 ${locked || checked ? 'text-stone-400' : 'text-stone-500'}`}>
                             {task.desc}
                           </p>
                         </div>
-                        <button
-                          onClick={() => toggleExpand(task.id)}
-                          className="shrink-0 mt-0.5 text-stone-400 hover:text-stone-600 transition-colors"
-                        >
-                          {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                        </button>
+                        {!locked && (
+                          <button
+                            onClick={() => toggleExpand(task.id)}
+                            className="shrink-0 mt-0.5 text-stone-400 hover:text-stone-600 transition-colors"
+                          >
+                            {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                          </button>
+                        )}
                       </div>
 
-                      {expanded && (
+                      {!locked && expanded && (
                         <div className="px-3 pb-3">
                           {task.guide && (
-                            <div className="p-3 border-l-2 border-amber-500 bg-amber-50 mb-3">
+                            <div className={`p-3 border-l-2 mb-3 ${
+                              isGateTask ? 'border-amber-500 bg-amber-50' : 'border-amber-500 bg-amber-50'
+                            }`}>
                               <div className="text-[10px] font-mono uppercase tracking-widest text-amber-600 mb-1.5">操作指南</div>
                               <pre className="text-xs text-stone-700 whitespace-pre-wrap font-sans leading-relaxed">{task.guide}</pre>
                             </div>
