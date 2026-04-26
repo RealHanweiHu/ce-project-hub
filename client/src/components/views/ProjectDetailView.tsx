@@ -320,15 +320,22 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
     const newProject = { ...project };
     newProject.phases = { ...project.phases };
     const gateTaskId = activePhase?.gateTaskId || '';
+    const prevReviews = activePhaseData?.gateReviews || [];
+    // Only mark gate task done if decision is approved or conditional
+    const shouldMarkDone = review.decision !== 'rejected';
     newProject.phases[activePhaseId] = {
       ...activePhaseData,
-      tasks: { ...activePhaseData.tasks, [gateTaskId]: true },
-      gateReview: review,
+      tasks: shouldMarkDone
+        ? { ...activePhaseData.tasks, [gateTaskId]: true }
+        : activePhaseData.tasks,
+      gateReviews: [...prevReviews, review],
     };
-    // Advance to next phase if this was current
-    const idx = projectPhases.findIndex((p) => p.id === activePhaseId);
-    if (idx < projectPhases.length - 1 && activePhaseId === project.currentPhase) {
-      newProject.currentPhase = projectPhases[idx + 1].id;
+    // Advance to next phase if approved/conditional and this was current
+    if (shouldMarkDone) {
+      const idx = projectPhases.findIndex((p) => p.id === activePhaseId);
+      if (idx < projectPhases.length - 1 && activePhaseId === project.currentPhase) {
+        newProject.currentPhase = projectPhases[idx + 1].id;
+      }
     }
     onUpdate(newProject);
     setGateReviewPending(null);
@@ -683,43 +690,61 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                       )}
 
                       {/* Gate Review Record Display */}
-                      {isGateTask && checked && activePhaseData?.gateReview && (
-                        <div className="px-3 pb-3 pt-0">
-                          <div className="border border-emerald-200 bg-emerald-50/50 p-3">
-                            <div className="flex items-center justify-between mb-2">
-                              <span className="text-[10px] font-mono uppercase tracking-widest text-emerald-600">评审记录</span>
+                      {isGateTask && (() => {
+                        const reviews = activePhaseData?.gateReviews || [];
+                        const latest = reviews[reviews.length - 1];
+                        if (checked && latest) {
+                          return (
+                            <div className="px-3 pb-3 pt-0">
+                              <div className={`border p-3 ${
+                                latest.decision === 'approved' ? 'border-emerald-200 bg-emerald-50/50' :
+                                latest.decision === 'conditional' ? 'border-amber-200 bg-amber-50/50' :
+                                'border-rose-200 bg-rose-50/50'
+                              }`}>
+                                <div className="flex items-center justify-between mb-2">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[10px] font-mono uppercase tracking-widest text-stone-400">评审记录</span>
+                                    {reviews.length > 1 && (
+                                      <span className="text-[9px] font-mono text-stone-400 bg-stone-100 px-1.5 py-0.5 border border-stone-200">
+                                        共 {reviews.length} 次
+                                      </span>
+                                    )}
+                                  </div>
+                                  <button
+                                    onClick={() => setGateReviewPending({ phaseId: activePhaseId })}
+                                    className="text-[10px] font-mono text-stone-400 hover:text-stone-700 transition-colors"
+                                  >
+                                    查看历史
+                                  </button>
+                                </div>
+                                <GateReviewBadge review={latest} />
+                                <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-stone-600">
+                                  <div><span className="font-mono text-stone-400">参与人：</span>{latest.participants}</div>
+                                  {latest.conditions && (
+                                    <div className="col-span-2"><span className="font-mono text-stone-400">条件：</span>{latest.conditions}</div>
+                                  )}
+                                  {latest.notes && (
+                                    <div className="col-span-2 mt-1 text-stone-500 italic">{latest.notes}</div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        }
+                        if (checked && !latest) {
+                          return (
+                            <div className="px-3 pb-3">
                               <button
                                 onClick={() => setGateReviewPending({ phaseId: activePhaseId })}
-                                className="text-[10px] font-mono text-stone-400 hover:text-stone-700 transition-colors"
+                                className="w-full text-xs font-mono text-amber-600 border border-dashed border-amber-300 py-2 hover:bg-amber-50 transition-colors"
                               >
-                                编辑记录
+                                + 补充填写 Gate 评审记录
                               </button>
                             </div>
-                            <GateReviewBadge review={activePhaseData.gateReview} />
-                            <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-stone-600">
-                              <div><span className="font-mono text-stone-400">参与人：</span>{activePhaseData.gateReview.participants}</div>
-                              {activePhaseData.gateReview.conditions && (
-                                <div className="col-span-2"><span className="font-mono text-stone-400">条件：</span>{activePhaseData.gateReview.conditions}</div>
-                              )}
-                              {activePhaseData.gateReview.notes && (
-                                <div className="col-span-2 mt-1 text-stone-500 italic">{activePhaseData.gateReview.notes}</div>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Gate task checked but no review record yet — prompt to add */}
-                      {isGateTask && checked && !activePhaseData?.gateReview && (
-                        <div className="px-3 pb-3">
-                          <button
-                            onClick={() => setGateReviewPending({ phaseId: activePhaseId })}
-                            className="w-full text-xs font-mono text-amber-600 border border-dashed border-amber-300 py-2 hover:bg-amber-50 transition-colors"
-                          >
-                            + 补充填写 Gate 评审记录
-                          </button>
-                        </div>
-                      )}
+                          );
+                        }
+                        return null;
+                      })()}
                     </div>
                   );
                 })}
@@ -801,7 +826,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
           phaseId={gateReviewPending.phaseId}
           phaseName={activePhase?.name || gateReviewPending.phaseId}
           gateName={activePhase?.gate || 'Gate 评审'}
-          existingReview={activePhaseData?.gateReview}
+          existingReviews={activePhaseData?.gateReviews}
           onConfirm={handleGateReviewConfirm}
           onCancel={() => setGateReviewPending(null)}
         />

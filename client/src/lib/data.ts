@@ -72,6 +72,7 @@ export interface GateReview {
   conditions: string;       // conditions if conditional approval
   notes: string;            // meeting notes / decision rationale
   createdAt: string;        // ISO timestamp
+  roundNumber?: number;     // review round (1 = first, 2 = re-review, etc.)
 }
 
 export interface PhaseData {
@@ -79,7 +80,8 @@ export interface PhaseData {
   taskDetails: Record<string, TaskDetails>;
   notes: string;
   issues?: Issue[];            // issue list for this phase
-  gateReview?: GateReview;     // formal gate review record
+  gateReviews?: GateReview[];  // gate review history (newest last)
+  /** @deprecated use gateReviews instead */ gateReview?: GateReview;
 }
 
 export interface PhaseDate {

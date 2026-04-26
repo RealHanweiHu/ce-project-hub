@@ -8,6 +8,7 @@ import {
 import {
   Layers, Hash, Target, TrendingUp, AlertTriangle, Activity, Bug, ChevronRight, ShieldAlert,
 } from 'lucide-react';
+import { GateReviewBadge } from './GateReviewModal';
 import {
   Project, PHASE_MAP, RISK_CONFIG, Issue,
   computePhaseProgress, computeOverallProgress, getProjectPhases,
@@ -104,7 +105,11 @@ export function DashboardView({ projects, onSelectProject }: DashboardViewProps)
           const phase = phases.find((ph) => ph.id === p.currentPhase) || PHASE_MAP[p.currentPhase];
           const progress = computePhaseProgress(p.phases[p.currentPhase], p.currentPhase, phase);
           const catConfig = p.category ? CATEGORY_MAP[p.category] : null;
-          return { project: p, phase, progress, gate: phase?.gate, catConfig };
+          // Get latest gate review for current phase (support both new array and legacy single)
+          const phaseData = p.phases[p.currentPhase];
+          const reviews = phaseData?.gateReviews || (phaseData?.gateReview ? [phaseData.gateReview] : []);
+          const latestReview = reviews.length > 0 ? reviews[reviews.length - 1] : undefined;
+          return { project: p, phase, progress, gate: phase?.gate, catConfig, latestReview, reviewCount: reviews.length };
         })
         .sort((a, b) => b.progress - a.progress)
         .slice(0, 5),
@@ -290,7 +295,7 @@ export function DashboardView({ projects, onSelectProject }: DashboardViewProps)
             <Target size={20} className="text-stone-300" />
           </div>
           <div className="space-y-4">
-            {upcomingMilestones.map(({ project, phase, progress, gate, catConfig }) => (
+            {upcomingMilestones.map(({ project, phase, progress, gate, catConfig, latestReview, reviewCount }) => (
               <div
                 key={project.id}
                 onClick={() => onSelectProject(project.id)}
@@ -298,7 +303,7 @@ export function DashboardView({ projects, onSelectProject }: DashboardViewProps)
               >
                 <div className="flex items-center justify-between mb-1.5">
                   <div className="flex items-center gap-1.5 min-w-0">
-                    <span className="text-sm font-medium text-stone-900 group-hover:text-amber-700 transition-colors truncate max-w-[140px]">
+                    <span className="text-sm font-medium text-stone-900 group-hover:text-amber-700 transition-colors truncate max-w-[130px]">
                       {project.name}
                     </span>
                     {catConfig && (
@@ -309,8 +314,18 @@ export function DashboardView({ projects, onSelectProject }: DashboardViewProps)
                   </div>
                   <span className="text-[10px] font-mono text-stone-400 ml-2 shrink-0">{progress}%</span>
                 </div>
-                <div className="text-[10px] font-mono uppercase tracking-wider text-stone-400 mb-1.5 truncate">
-                  {gate}
+                <div className="flex items-center justify-between mb-1.5 gap-2">
+                  <div className="text-[10px] font-mono uppercase tracking-wider text-stone-400 truncate">
+                    {gate}
+                  </div>
+                  {latestReview && (
+                    <div className="shrink-0 flex items-center gap-1">
+                      <GateReviewBadge review={latestReview} size="xs" />
+                      {reviewCount > 1 && (
+                        <span className="text-[9px] font-mono text-stone-400">×{reviewCount}</span>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <ProgressBar value={progress} color="bg-amber-500" height="h-1" />
               </div>
