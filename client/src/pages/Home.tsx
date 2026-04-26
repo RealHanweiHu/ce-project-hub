@@ -6,7 +6,7 @@
 import { useState, useEffect, useRef } from 'react';
 import {
   LayoutDashboard, FolderKanban, BookOpen, Save, CheckCircle2,
-  ChevronRight, Menu, X, Cpu,
+  ChevronRight, Menu, X, Cpu, DatabaseBackup,
 } from 'lucide-react';
 import { nanoid } from 'nanoid';
 import {
@@ -16,8 +16,9 @@ import { DashboardView } from '@/components/views/DashboardView';
 import { ProjectListView } from '@/components/views/ProjectListView';
 import { ProjectDetailView } from '@/components/views/ProjectDetailView';
 import { SOPLibraryView } from '@/components/views/SOPLibraryView';
+import { BackupPanel } from '@/components/views/BackupPanel';
 
-type View = 'dashboard' | 'projects' | 'sop';
+type View = 'dashboard' | 'projects' | 'sop' | 'backup';
 
 const STORAGE_KEY = 'ce_projects_v2';
 
@@ -95,6 +96,7 @@ export default function Home() {
     { id: 'dashboard' as View, label: '仪表盘', labelEn: 'Dashboard', icon: LayoutDashboard },
     { id: 'projects' as View, label: '项目管理', labelEn: 'Projects', icon: FolderKanban },
     { id: 'sop' as View, label: 'SOP 流程库', labelEn: 'SOP Library', icon: BookOpen },
+    { id: 'backup' as View, label: '备份与恢复', labelEn: 'Backup & Restore', icon: DatabaseBackup },
   ];
 
   const handleNavClick = (v: View) => {
@@ -103,10 +105,23 @@ export default function Home() {
     setSidebarOpen(false);
   };
 
+  const handleImportProjects = (imported: Project[]) => {
+    setProjects(imported.map(normalizeProject));
+    setView('projects');
+    setSelectedProjectId(null);
+  };
+
+  const handleClearAll = () => {
+    setProjects([]);
+    setSelectedProjectId(null);
+    setView('dashboard');
+  };
+
   const viewLabels: Record<View, string> = {
     dashboard: 'Dashboard',
     projects: 'Projects',
     sop: 'SOP Library',
+    backup: 'Backup & Restore',
   };
 
   return (
@@ -302,6 +317,13 @@ export default function Home() {
             />
           )}
           {view === 'sop' && <SOPLibraryView />}
+          {view === 'backup' && (
+            <BackupPanel
+              projects={projects}
+              onImport={handleImportProjects}
+              onClearAll={handleClearAll}
+            />
+          )}
         </main>
       </div>
     </div>
