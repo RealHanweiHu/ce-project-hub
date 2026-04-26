@@ -6,7 +6,7 @@ import {
   ArrowLeft, CheckCircle2, Circle, ChevronDown, ChevronRight,
   Upload, Download, Trash2, Paperclip, FileText, Image as ImageIcon,
   Edit3, Calendar, AlertTriangle, Target, Zap, BarChart2, ListChecks,
-  Lock, ShieldAlert, Flag,
+  Lock, ShieldAlert, Flag, Bug,
 } from 'lucide-react';
 import {
   Project, SOP_PHASES, PHASE_MAP, RISK_CONFIG,
@@ -17,6 +17,8 @@ import {
 import { CATEGORY_MAP } from '@/lib/sop-templates';
 import { ProgressBar } from '@/components/shared/ProgressBar';
 import { GanttView } from './GanttView';
+import { IssueList } from './IssueList';
+import { ISSUE_PHASES, Issue } from '@/lib/data';
 
 const MAX_FILE_SIZE = 2 * 1024 * 1024;
 
@@ -229,7 +231,7 @@ function TaskDetail({
 export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailViewProps) {
   const [activePhaseId, setActivePhaseId] = useState(project.currentPhase);
   const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
-  const [mainTab, setMainTab] = useState<'tasks' | 'gantt'>('tasks');
+  const [mainTab, setMainTab] = useState<'tasks' | 'gantt' | 'issues'>('tasks');
 
   const projectPhases = getProjectPhases(project);
   const phaseMap = Object.fromEntries(projectPhases.map((p) => [p.id, p]));
@@ -285,6 +287,18 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
   const handleGanttPhaseClick = (phaseId: string) => {
     setActivePhaseId(phaseId);
     setMainTab('tasks');
+  };
+
+  // Issue List helpers
+  const activeIssues: Issue[] = activePhaseData?.issues || [];
+  const isIssuePhase = ISSUE_PHASES.has(activePhaseId);
+  const openIssueCount = activeIssues.filter((i) => i.status === 'open' || i.status === 'in_progress').length;
+
+  const updateIssues = (issues: Issue[]) => {
+    const newProject = { ...project };
+    newProject.phases = { ...project.phases };
+    newProject.phases[activePhaseId] = { ...activePhaseData, issues };
+    onUpdate(newProject);
   };
 
   return (
@@ -357,7 +371,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
         </div>
       </div>
 
-      {/* Main Tab Bar: Tasks / Gantt */}
+      {/* Main Tab Bar: Tasks / Issues / Gantt */}
       <div className="flex items-center gap-0 border-b border-stone-200">
         <button
           onClick={() => setMainTab('tasks')}
@@ -370,6 +384,24 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
           <ListChecks size={14} />
           任务清单
         </button>
+        {isIssuePhase && (
+          <button
+            onClick={() => setMainTab('issues')}
+            className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all ${
+              mainTab === 'issues'
+                ? 'border-b-rose-600 text-rose-700'
+                : 'border-b-transparent text-stone-400 hover:text-stone-700'
+            }`}
+          >
+            <Bug size={14} />
+            问题清单
+            {openIssueCount > 0 && (
+              <span className="text-[9px] font-mono bg-rose-100 text-rose-700 border border-rose-200 px-1.5 py-0.5 min-w-[18px] text-center">
+                {openIssueCount}
+              </span>
+            )}
+          </button>
+        )}
         <button
           onClick={() => setMainTab('gantt')}
           className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all ${
@@ -382,6 +414,49 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
           甘特图
         </button>
       </div>
+
+      {/* ── Issues Tab ────────────────────────────────────────────────────── */}
+      {mainTab === 'issues' && isIssuePhase && (
+        <div className="space-y-4">
+          {/* Phase Navigation (compact) */}
+          <div className="bg-white border border-stone-200 overflow-x-auto">
+            <div className="flex min-w-max">
+              {projectPhases.filter((p) => ISSUE_PHASES.has(p.id)).map((phase) => {
+                const isActive = phase.id === activePhaseId;
+                const phaseIssues = project.phases[phase.id]?.issues || [];
+                const openCount = phaseIssues.filter((i) => i.status === 'open' || i.status === 'in_progress').length;
+                return (
+                  <button
+                    key={phase.id}
+                    onClick={() => setActivePhaseId(phase.id)}
+                    className={`flex-1 min-w-[100px] p-3 text-left transition-all border-b-2 ${
+                      isActive ? 'border-b-rose-600 bg-rose-50/30' : 'border-b-transparent hover:bg-stone-50'
+                    }`}
+                  >
+                    <div className="text-[9px] font-mono uppercase tracking-widest text-stone-400 mb-0.5">{phase.code}</div>
+                    <div className={`text-xs font-medium ${isActive ? 'text-rose-700' : 'text-stone-500'}`}>{phase.name}</div>
+                    <div className="mt-1 flex items-center gap-1">
+                      {openCount > 0 ? (
+                        <span className="text-[9px] font-mono bg-rose-100 text-rose-700 border border-rose-200 px-1 py-0.5">
+                          {openCount} 待处理
+                        </span>
+                      ) : (
+                        <span className="text-[9px] font-mono text-stone-300">{phaseIssues.length} 问题</span>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <IssueList
+            phaseId={activePhaseId}
+            phaseName={activePhase?.name || activePhaseId}
+            issues={activeIssues}
+            onUpdate={updateIssues}
+          />
+        </div>
+      )}
 
       {/* ── Gantt Tab ─────────────────────────────────────────────────────── */}
       {mainTab === 'gantt' && (

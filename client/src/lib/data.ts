@@ -37,10 +37,34 @@ export interface FileAttachment {
   dataUrl: string;
 }
 
+// ── Issue Tracking ───────────────────────────────────────────────────────────
+export type IssueSeverity = 'P0' | 'P1' | 'P2' | 'P3';
+export type IssueStatus = 'open' | 'in_progress' | 'resolved' | 'closed' | 'wont_fix';
+export type IssueCategory = 'hardware' | 'software' | 'mechanical' | 'thermal' | 'reliability' | 'safety' | 'performance' | 'other';
+
+export interface Issue {
+  id: string;
+  title: string;
+  desc: string;
+  severity: IssueSeverity;     // P0 Critical / P1 Major / P2 Minor / P3 Observation
+  status: IssueStatus;
+  category: IssueCategory;
+  owner: string;               // responsible person
+  reporter: string;
+  foundDate: string;           // YYYY-MM-DD
+  targetDate: string;          // expected close date
+  closedDate?: string;
+  rootCause?: string;
+  solution?: string;
+  relatedTaskId?: string;      // link to a SOP task
+  attachments?: string[];      // file names
+}
+
 export interface PhaseData {
   tasks: Record<string, boolean>;
   taskDetails: Record<string, TaskDetails>;
   notes: string;
+  issues?: Issue[];            // issue list for this phase
 }
 
 export interface PhaseDate {
@@ -447,3 +471,37 @@ export const SAMPLE_PROJECTS: Project[] = [
     })(),
   },
 ];
+
+// ── Issue Config ─────────────────────────────────────────────────────────────
+export const SEVERITY_CONFIG: Record<IssueSeverity, {
+  label: string; desc: string; color: string; bg: string; border: string; dot: string; textColor: string;
+}> = {
+  P0: { label: 'P0', desc: '严重缺陷', color: 'text-red-700', bg: 'bg-red-50', border: 'border-red-300', dot: 'bg-red-500', textColor: 'text-red-700' },
+  P1: { label: 'P1', desc: '重要缺陷', color: 'text-orange-700', bg: 'bg-orange-50', border: 'border-orange-300', dot: 'bg-orange-500', textColor: 'text-orange-700' },
+  P2: { label: 'P2', desc: '一般缺陷', color: 'text-amber-700', bg: 'bg-amber-50', border: 'border-amber-300', dot: 'bg-amber-500', textColor: 'text-amber-700' },
+  P3: { label: 'P3', desc: '观察项', color: 'text-stone-600', bg: 'bg-stone-50', border: 'border-stone-300', dot: 'bg-stone-400', textColor: 'text-stone-600' },
+};
+
+export const STATUS_CONFIG: Record<IssueStatus, {
+  label: string; color: string; bg: string; border: string;
+}> = {
+  open:        { label: '待处理', color: 'text-rose-700', bg: 'bg-rose-50', border: 'border-rose-200' },
+  in_progress: { label: '处理中', color: 'text-blue-700', bg: 'bg-blue-50', border: 'border-blue-200' },
+  resolved:    { label: '已解决', color: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-200' },
+  closed:      { label: '已关闭', color: 'text-stone-500', bg: 'bg-stone-100', border: 'border-stone-200' },
+  wont_fix:    { label: '不修复', color: 'text-stone-400', bg: 'bg-stone-50', border: 'border-stone-200' },
+};
+
+export const CATEGORY_LABELS: Record<IssueCategory, string> = {
+  hardware:    '硬件',
+  software:    '软件',
+  mechanical:  '结构',
+  thermal:     '散热',
+  reliability: '可靠性',
+  safety:      '安规',
+  performance: '性能',
+  other:       '其他',
+};
+
+// Phases where Issue List is shown (validation phases)
+export const ISSUE_PHASES = new Set(['evt', 'dvt', 'pvt', 'mp', 'design']);
