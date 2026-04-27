@@ -13,6 +13,7 @@ import { nanoid } from 'nanoid';
 import {
   Project, SAMPLE_PROJECTS, normalizeProject,
 } from '@/lib/data';
+import { buildPhasesDataForCategory, getPhasesForCategory } from '@/lib/sop-templates';
 import { DashboardView } from '@/components/views/DashboardView';
 import { ProjectListView } from '@/components/views/ProjectListView';
 import { ProjectDetailView } from '@/components/views/ProjectDetailView';
@@ -114,6 +115,28 @@ export default function Home() {
   const handleDeleteProject = (id: string) => {
     setProjects((prev) => prev.filter((p) => p.id !== id));
     if (selectedProjectId === id) setSelectedProjectId(null);
+  };
+
+  const handleCloneProject = (sourceId: string, overrides: Partial<Omit<Project, 'id' | 'phases'>>) => {
+    const source = projects.find((p) => p.id === sourceId);
+    if (!source) return;
+    const category = source.category || 'npd';
+    const phases = getPhasesForCategory(category);
+    const firstPhaseId = phases[0]?.id || 'concept';
+    // Build fresh phase data (all tasks unchecked, no issues, no gate reviews)
+    const freshPhases = buildPhasesDataForCategory(category, firstPhaseId);
+    const cloned = normalizeProject({
+      ...source,
+      ...overrides,
+      id: nanoid(8),
+      currentPhase: firstPhaseId,
+      phases: freshPhases,
+      phaseDates: undefined, // clear custom dates
+    } as Project);
+    setProjects((prev) => [...prev, cloned]);
+    // Navigate to the new project
+    setSelectedProjectId(cloned.id);
+    setView('projects');
   };
 
   const navItems = [
@@ -342,6 +365,7 @@ export default function Home() {
               onSelectProject={handleSelectProject}
               onAddProject={handleAddProject}
               onDeleteProject={handleDeleteProject}
+              onCloneProject={handleCloneProject}
             />
           )}
           {view === 'projects' && selectedProject && (

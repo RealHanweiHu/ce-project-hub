@@ -2,7 +2,7 @@
 // ProjectListView: project cards with category badges and 3-step new project wizard
 
 import { useState } from 'react';
-import { Plus, Trash2, FolderKanban, ChevronRight, ChevronLeft, Check } from 'lucide-react';
+import { Plus, Trash2, FolderKanban, ChevronRight, ChevronLeft, Check, Copy } from 'lucide-react';
 import {
   Project, SOP_PHASES, PHASE_MAP, RISK_CONFIG,
   computePhaseProgress, computeOverallProgress,
@@ -17,6 +17,7 @@ interface ProjectListViewProps {
   onSelectProject: (id: string) => void;
   onAddProject: (project: Omit<Project, 'id' | 'phases'>) => void;
   onDeleteProject: (id: string) => void;
+  onCloneProject?: (sourceId: string, overrides: Partial<Omit<Project, 'id' | 'phases'>>) => void;
 }
 
 // ── Wizard Steps ──────────────────────────────────────────────────────────────
@@ -35,8 +36,35 @@ export function ProjectListView({
   onSelectProject,
   onAddProject,
   onDeleteProject,
+  onCloneProject,
 }: ProjectListViewProps) {
   const [showAdd, setShowAdd] = useState(false);
+  const [cloneSource, setCloneSource] = useState<Project | null>(null);
+  const [cloneForm, setCloneForm] = useState({ name: '', code: '', pm: '', startDate: '', targetDate: '' });
+
+  const handleOpenClone = (e: React.MouseEvent, project: Project) => {
+    e.stopPropagation();
+    setCloneSource(project);
+    setCloneForm({
+      name: `${project.name}（副本）`,
+      code: '',
+      pm: project.pm,
+      startDate: '',
+      targetDate: '',
+    });
+  };
+
+  const handleCloneConfirm = () => {
+    if (!cloneSource || !cloneForm.name.trim()) return;
+    onCloneProject?.(cloneSource.id, {
+      name: cloneForm.name.trim(),
+      code: cloneForm.code.trim() || undefined as unknown as string,
+      pm: cloneForm.pm.trim(),
+      startDate: cloneForm.startDate,
+      targetDate: cloneForm.targetDate,
+    });
+    setCloneSource(null);
+  };
   const [step, setStep] = useState<WizardStep>(1);
   const [selectedCategory, setSelectedCategory] = useState<ProjectCategory>('npd');
   const [form, setForm] = useState({
@@ -125,15 +153,24 @@ export function ProjectListView({
                       </span>
                     )}
                   </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (confirm(`确定删除项目「${project.name}」？`)) onDeleteProject(project.id);
-                    }}
-                    className="text-stone-300 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-all p-0.5"
-                  >
-                    <Trash2 size={14} />
-                  </button>
+                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                    <button
+                      onClick={(e) => handleOpenClone(e, project)}
+                      className="text-stone-300 hover:text-amber-500 transition-colors p-0.5"
+                      title="克隆项目"
+                    >
+                      <Copy size={13} />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (confirm(`确定删除项目「${project.name}」？`)) onDeleteProject(project.id);
+                      }}
+                      className="text-stone-300 hover:text-rose-500 transition-colors p-0.5"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
                 </div>
                 <h3 className="font-serif text-lg text-stone-900 leading-tight mb-2">
                   {project.name}
@@ -216,6 +253,114 @@ export function ProjectListView({
           </div>
         )}
       </div>
+
+      {/* ── Clone Project Modal ──────────────────────────────────────────────── */}
+      {cloneSource && (
+        <div className="fixed inset-0 bg-stone-900/50 z-50 flex items-center justify-center p-4" onClick={() => setCloneSource(null)}>
+          <div
+            className="bg-white w-full max-w-lg shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="p-6 border-b border-stone-200 flex items-center justify-between">
+              <div>
+                <h3 className="font-serif text-xl text-stone-900">克隆项目</h3>
+                <p className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mt-0.5">CLONE PROJECT</p>
+              </div>
+              <button onClick={() => setCloneSource(null)} className="text-stone-400 hover:text-stone-600 text-xl leading-none">×</button>
+            </div>
+
+            {/* Source Info */}
+            <div className="px-6 pt-5 pb-3">
+              <div className="flex items-center gap-2 p-3 bg-amber-50 border border-amber-200 mb-5">
+                <Copy size={13} className="text-amber-600 shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-xs font-medium text-amber-900 truncate">基于「{cloneSource.name}」克隆</p>
+                  <p className="text-[10px] font-mono text-amber-600">
+                    {cloneSource.category ? CATEGORY_MAP[cloneSource.category]?.name : 'NPD'}
+                    {' · '}
+                    {cloneSource.category ? CATEGORY_MAP[cloneSource.category]?.phaseCount : 7} 个阶段 · 进度将清零
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">新项目名称 *</label>
+                  <input
+                    type="text"
+                    value={cloneForm.name}
+                    onChange={(e) => setCloneForm({ ...cloneForm, name: e.target.value })}
+                    className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors"
+                    autoFocus
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">项目编号</label>
+                    <input
+                      type="text"
+                      value={cloneForm.code}
+                      onChange={(e) => setCloneForm({ ...cloneForm, code: e.target.value })}
+                      className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors"
+                      placeholder={cloneSource.code ? `${cloneSource.code}-2` : 'CE-2026-XXX'}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">项目经理</label>
+                    <input
+                      type="text"
+                      value={cloneForm.pm}
+                      onChange={(e) => setCloneForm({ ...cloneForm, pm: e.target.value })}
+                      className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors"
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">开始日期</label>
+                    <input
+                      type="date"
+                      value={cloneForm.startDate}
+                      onChange={(e) => setCloneForm({ ...cloneForm, startDate: e.target.value })}
+                      className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">目标日期</label>
+                    <input
+                      type="date"
+                      value={cloneForm.targetDate}
+                      onChange={(e) => setCloneForm({ ...cloneForm, targetDate: e.target.value })}
+                      className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="p-6 border-t border-stone-200 flex items-center justify-between">
+              <button
+                onClick={() => setCloneSource(null)}
+                className="px-4 py-2 text-xs font-mono uppercase tracking-wider text-stone-600 border border-stone-300 hover:bg-stone-50 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleCloneConfirm}
+                disabled={!cloneForm.name.trim()}
+                className={`flex items-center gap-2 px-5 py-2 text-xs font-mono uppercase tracking-wider bg-amber-500 text-white hover:bg-amber-600 transition-colors ${
+                  !cloneForm.name.trim() ? 'opacity-50 cursor-not-allowed' : ''
+                }`}
+              >
+                <Copy size={13} />
+                克隆项目
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── New Project Wizard Modal ─────────────────────────────────────────── */}
       {showAdd && (
