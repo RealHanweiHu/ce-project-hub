@@ -84,6 +84,38 @@ export interface PhaseData {
   /** @deprecated use gateReviews instead */ gateReview?: GateReview;
 }
 
+// ── Change Log / ECR ────────────────────────────────────────────────────────
+export type ChangeType =
+  | 'decision'    // 老板拍板 / 关键决策
+  | 'tradeoff'    // 方案取舍
+  | 'eco'         // ECO — Engineering Change Order
+  | 'ecn'         // ECN — Engineering Change Notice
+  | 'spec'        // 规格变更
+  | 'cost'        // 成本变更
+  | 'schedule'    // 时间/进度变更
+  | 'supplier'    // 供应商变更
+  | 'other';      // 其他
+
+export type ChangeStatus = 'proposed' | 'approved' | 'rejected' | 'implemented' | 'cancelled';
+
+export interface ChangeRecord {
+  id: string;
+  number: string;           // ECR-001, ECN-002, etc. (auto or manual)
+  type: ChangeType;
+  title: string;
+  description: string;      // what changed
+  reason: string;           // why it changed (老板拍板/技术原因/成本压力等)
+  decisionMaker: string;    // 拍板人
+  affectedPhases: string[]; // which phases are affected
+  status: ChangeStatus;
+  costImpact?: string;      // e.g. "+$2/unit", "BOM +5%"
+  scheduleImpact?: string;  // e.g. "+2 weeks", "no impact"
+  createdAt: string;        // ISO timestamp
+  createdDate: string;      // YYYY-MM-DD
+  implementedDate?: string; // YYYY-MM-DD
+  notes?: string;           // additional context
+}
+
 export interface PhaseDate {
   startDate: string; // YYYY-MM-DD
   endDate: string;   // YYYY-MM-DD
@@ -102,6 +134,7 @@ export interface Project {
   phases: Record<string, PhaseData>;
   phaseDates?: Record<string, PhaseDate>; // custom per-phase dates
   category?: 'npd' | 'eco' | 'idr'; // project category determines SOP template
+  changeLog?: ChangeRecord[];          // project-level change & decision log
 }
 
 export const SOP_PHASES: SOPPhase[] = [

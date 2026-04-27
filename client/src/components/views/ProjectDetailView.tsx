@@ -6,7 +6,7 @@ import {
   ArrowLeft, CheckCircle2, Circle, ChevronDown, ChevronRight,
   Upload, Download, Trash2, Paperclip, FileText, Image as ImageIcon,
   Edit3, Calendar, AlertTriangle, Target, Zap, BarChart2, ListChecks,
-  Lock, ShieldAlert, Flag, Bug,
+  Lock, ShieldAlert, Flag, Bug, GitBranch,
 } from 'lucide-react';
 import {
   Project, SOP_PHASES, PHASE_MAP, RISK_CONFIG,
@@ -18,7 +18,8 @@ import { CATEGORY_MAP } from '@/lib/sop-templates';
 import { ProgressBar } from '@/components/shared/ProgressBar';
 import { GanttView } from './GanttView';
 import { IssueList } from './IssueList';
-import { ISSUE_PHASES, Issue, GateReview } from '@/lib/data';
+import { ChangeLog } from './ChangeLog';
+import { ISSUE_PHASES, Issue, GateReview, ChangeRecord } from '@/lib/data';
 import { GateReviewModal, GateReviewBadge } from './GateReviewModal';
 
 const MAX_FILE_SIZE = 2 * 1024 * 1024;
@@ -232,7 +233,14 @@ function TaskDetail({
 export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailViewProps) {
   const [activePhaseId, setActivePhaseId] = useState(project.currentPhase);
   const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
-  const [mainTab, setMainTab] = useState<'tasks' | 'gantt' | 'issues'>('tasks');
+  const [mainTab, setMainTab] = useState<'tasks' | 'gantt' | 'issues' | 'changelog'>('tasks');
+
+  // Change Log helpers
+  const changeLog: ChangeRecord[] = project.changeLog || [];
+  const pendingChangeCount = changeLog.filter((r) => r.status === 'proposed').length;
+  const updateChangeLog = (records: ChangeRecord[]) => {
+    onUpdate({ ...project, changeLog: records });
+  };
 
   const projectPhases = getProjectPhases(project);
   const phaseMap = Object.fromEntries(projectPhases.map((p) => [p.id, p]));
@@ -453,6 +461,22 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
           <BarChart2 size={14} />
           甘特图
         </button>
+        <button
+          onClick={() => setMainTab('changelog')}
+          className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all ${
+            mainTab === 'changelog'
+              ? 'border-b-amber-500 text-amber-700'
+              : 'border-b-transparent text-stone-400 hover:text-stone-700'
+          }`}
+        >
+          <GitBranch size={14} />
+          变更记录
+          {pendingChangeCount > 0 && (
+            <span className="text-[9px] font-mono bg-amber-100 text-amber-700 border border-amber-200 px-1.5 py-0.5 min-w-[18px] text-center">
+              {pendingChangeCount}
+            </span>
+          )}
+        </button>
       </div>
 
       {/* ── Issues Tab ────────────────────────────────────────────────────── */}
@@ -498,9 +522,20 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
         </div>
       )}
 
-      {/* ── Gantt Tab ─────────────────────────────────────────────────────── */}
+       {/* ── Gantt Tab ─────────────────────────────────────────────────── */}
       {mainTab === 'gantt' && (
         <GanttView project={project} onUpdate={onUpdate} onPhaseClick={handleGanttPhaseClick} />
+      )}
+
+      {/* ── Change Log Tab ──────────────────────────────────────────── */}
+      {mainTab === 'changelog' && (
+        <div className="p-6">
+          <ChangeLog
+            projectId={project.id}
+            records={changeLog}
+            onUpdate={updateChangeLog}
+          />
+        </div>
       )}
 
       {/* ── Tasks Tab ─────────────────────────────────────────────────────── */}
