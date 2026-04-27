@@ -3,11 +3,12 @@
 // Font: Playfair Display (serif) + JetBrains Mono (mono) + Source Sans 3 (body)
 // Colors: stone-900 sidebar, stone-50 background, amber-500 accent
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   LayoutDashboard, FolderKanban, BookOpen, Save, CheckCircle2,
-  ChevronRight, Menu, X, Cpu, DatabaseBackup,
+  ChevronRight, Menu, X, Cpu, DatabaseBackup, Search,
 } from 'lucide-react';
+import { GlobalSearch } from '@/components/GlobalSearch';
 import { nanoid } from 'nanoid';
 import {
   Project, SAMPLE_PROJECTS, normalizeProject,
@@ -33,6 +34,29 @@ export default function Home() {
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  // Ctrl+K global shortcut
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        setSearchOpen(true);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  const handleSearchNavigate = useCallback((result: { type: string; projectId?: string; phaseId?: string }) => {
+    if (result.projectId) {
+      setSelectedProjectId(result.projectId);
+      setView('projects');
+    } else if (result.type === 'sop') {
+      setView('sop');
+      setSelectedProjectId(null);
+    }
+  }, []);
 
   // Load from localStorage
   useEffect(() => {
@@ -268,6 +292,17 @@ export default function Home() {
           </div>
 
           <div className="ml-auto flex items-center gap-3">
+            {/* Search trigger */}
+            <button
+              onClick={() => setSearchOpen(true)}
+              className="flex items-center gap-2 px-3 py-1.5 border border-stone-200 bg-white hover:border-stone-400 transition-colors text-stone-400 hover:text-stone-700"
+            >
+              <Search size={13} />
+              <span className="text-[11px] font-mono hidden sm:inline">搜索</span>
+              <kbd className="hidden md:flex items-center gap-0.5 text-[9px] font-mono text-stone-300 bg-stone-100 px-1 py-0.5 border border-stone-200">
+                ⌘K
+              </kbd>
+            </button>
             <div className="hidden sm:flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider">
               {saveStatus === 'saved' ? (
                 <span className="flex items-center gap-1.5 text-stone-400">
@@ -326,6 +361,14 @@ export default function Home() {
           )}
         </main>
       </div>
+
+      {/* Global Search */}
+      <GlobalSearch
+        open={searchOpen}
+        onClose={() => setSearchOpen(false)}
+        projects={projects}
+        onNavigate={handleSearchNavigate}
+      />
     </div>
   );
 }
