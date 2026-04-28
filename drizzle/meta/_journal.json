@@ -15,6 +15,13 @@
       "when": 1777397579226,
       "tag": "0001_freezing_scourge",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1777399228699,
+      "tag": "0002_aspiring_human_fly",
+      "breakpoints": true
     }
   ]
 }

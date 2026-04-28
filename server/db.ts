@@ -614,3 +614,23 @@ export async function getActivityLogs(
     .orderBy(desc(activityLogs.createdAt))
     .limit(limit);
 }
+
+// ── Test helpers (not used in production code) ────────────────────────────────
+/**
+ * Hard-delete a project and ALL its child records.
+ * Only for use in tests — production uses soft-delete (archived=true).
+ */
+export async function hardDeleteProjectForTest(projectId: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  // Delete child records first (no FK cascade configured)
+  await db.delete(projectChangelog).where(eq(projectChangelog.projectId, projectId));
+  await db.delete(projectGateReviews).where(eq(projectGateReviews.projectId, projectId));
+  await db.delete(projectIssues).where(eq(projectIssues.projectId, projectId));
+  await db.delete(projectFiles).where(eq(projectFiles.projectId, projectId));
+  await db.delete(activityLogs).where(eq(activityLogs.projectId, projectId));
+  await db.delete(projectTasks).where(eq(projectTasks.projectId, projectId));
+  await db.delete(projectPhases).where(eq(projectPhases.projectId, projectId));
+  await db.delete(projectMembers).where(eq(projectMembers.projectId, projectId));
+  await db.delete(projects).where(eq(projects.id, projectId));
+}

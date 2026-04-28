@@ -194,3 +194,12 @@
 - [x] vitest：补充 project_files 和 activity_logs 的测试（infra-improvements.test.ts，8 tests）
 - [x] 前端：PM 选择器改为从 listUsersForSelect 用户列表选择（PmSelector 组件，pmUserId 写入 DB）
 - [x] Project 接口添加 pmUserId 可选字段，rowToProject/useProjectData/projectToApiInput 全部更新
+
+## Schema 清理与一致性（已完成）
+
+- [x] 审计 schema.ts 与数据库实际结构差异
+- [x] 重写 drizzle/schema.ts 确保完整准确（含 changelog 枚举统一）
+- [x] 生成规范 migration SQL（从空库可执行），替代临时手工脚本
+- [x] 删除临时手工脚本：alter-projects-table.mjs、create-missing-tables.mjs、migrate-infra.mjs
+- [x] 统一前端 data.ts 和 ChangeLog.tsx 的 changelog type/status 枚举（shared/const.ts 重新导出 schema 枚举）
+- [x] 编写 clean-db smoke test：空库→migrate→seed admin→创建项目→打开详情（7 步，31 tests 全部通过）

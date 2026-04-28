@@ -222,14 +222,14 @@ export const projectIssues = mysqlTable("project_issues", {
   id: int("id").autoincrement().primaryKey(),
   projectId: varchar("projectId", { length: 32 }).notNull(),
   phaseId: varchar("phaseId", { length: 32 }).notNull(),
-  title: varchar("title", { length: 256 }).notNull(),
+  title: varchar("title", { length: 512 }).notNull(),
   description: text("description"),
   severity: mysqlEnum("severity", ISSUE_SEVERITIES).notNull().default("P2"),
   status: mysqlEnum("status", ISSUE_STATUSES).notNull().default("open"),
   category: mysqlEnum("category", ISSUE_CATEGORIES).notNull().default("other"),
   /** Responsible person (display name) */
-  owner: varchar("owner", { length: 128 }),
-  reporter: varchar("reporter", { length: 128 }),
+  owner: varchar("owner", { length: 256 }),
+  reporter: varchar("reporter", { length: 256 }),
   foundDate: varchar("foundDate", { length: 32 }),
   targetDate: varchar("targetDate", { length: 32 }),
   closedDate: varchar("closedDate", { length: 32 }),
@@ -259,8 +259,8 @@ export const projectGateReviews = mysqlTable("project_gate_reviews", {
   id: int("id").autoincrement().primaryKey(),
   projectId: varchar("projectId", { length: 32 }).notNull(),
   phaseId: varchar("phaseId", { length: 32 }).notNull(),
-  phaseName: varchar("phaseName", { length: 64 }).notNull().default(""),
-  gateName: varchar("gateName", { length: 128 }).notNull().default(""),
+  phaseName: varchar("phaseName", { length: 256 }).notNull().default(""),
+  gateName: varchar("gateName", { length: 256 }).notNull().default(""),
   reviewDate: varchar("reviewDate", { length: 32 }).notNull(),
   /** Comma-separated participant names */
   participants: text("participants"),
@@ -283,11 +283,22 @@ export type InsertProjectGateReview = typeof projectGateReviews.$inferInsert;
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const CHANGE_TYPES = [
-  "decision", "tradeoff", "eco", "ecn", "spec",
-  "cost", "schedule", "supplier", "other",
+  "decision",  // 老板拍板 / 关键决策
+  "tradeoff",  // 方案取舍
+  "eco",       // ECO — Engineering Change Order
+  "ecn",       // ECN — Engineering Change Notice
+  "spec",      // 规格变更
+  "cost",      // 成本变更
+  "schedule",  // 时间/进度变更
+  "supplier",  // 供应商变更
+  "other",     // 其他
 ] as const;
 export const CHANGE_STATUSES = [
-  "proposed", "approved", "rejected", "implemented",
+  "proposed",    // 提议中
+  "approved",    // 已批准
+  "rejected",    // 已拒绝
+  "implemented", // 已实施
+  "cancelled",   // 已取消
 ] as const;
 
 export type ChangeType = (typeof CHANGE_TYPES)[number];
@@ -300,12 +311,12 @@ export const projectChangelog = mysqlTable("project_changelog", {
   id: int("id").autoincrement().primaryKey(),
   projectId: varchar("projectId", { length: 32 }).notNull(),
   /** Auto-generated number e.g. ECR-001, ECN-002 */
-  number: varchar("number", { length: 32 }).notNull().default(""),
+  number: varchar("number", { length: 64 }).notNull().default(""),
   type: mysqlEnum("type", CHANGE_TYPES).notNull().default("other"),
-  title: varchar("title", { length: 256 }).notNull(),
+  title: varchar("title", { length: 512 }).notNull(),
   description: text("description"),
   reason: text("reason"),
-  decisionMaker: varchar("decisionMaker", { length: 128 }),
+  decisionMaker: varchar("decisionMaker", { length: 256 }),
   /** JSON array of phase ids affected */
   affectedPhases: json("affectedPhases").$type<string[]>().default([]),
   status: mysqlEnum("status", CHANGE_STATUSES).notNull().default("proposed"),

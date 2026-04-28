@@ -97,18 +97,10 @@ export interface PhaseData {
 }
 
 // ── Change Log / ECR ────────────────────────────────────────────────────────
-export type ChangeType =
-  | 'decision'    // 老板拍板 / 关键决策
-  | 'tradeoff'    // 方案取舍
-  | 'eco'         // ECO — Engineering Change Order
-  | 'ecn'         // ECN — Engineering Change Notice
-  | 'spec'        // 规格变更
-  | 'cost'        // 成本变更
-  | 'schedule'    // 时间/进度变更
-  | 'supplier'    // 供应商变更
-  | 'other';      // 其他
-
-export type ChangeStatus = 'proposed' | 'approved' | 'rejected' | 'implemented' | 'cancelled';
+// ChangeType and ChangeStatus are the single source of truth from drizzle/schema.ts.
+// They are re-exported via @shared/const to keep frontend and backend in sync.
+import type { ChangeType, ChangeStatus } from '@shared/const';
+export type { ChangeType, ChangeStatus };
 
 export interface ChangeRecord {
   id: string;
