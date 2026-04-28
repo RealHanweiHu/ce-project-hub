@@ -23,6 +23,7 @@ import { ISSUE_PHASES, Issue, GateReview, ChangeRecord } from '@/lib/data';
 import { GateReviewModal, GateReviewBadge } from './GateReviewModal';
 import { MembersPanel } from './MembersPanel';
 import { useProjectPermission } from '@/hooks/useProjectPermission';
+import { useAuth } from '@/_core/hooks/useAuth';
 import { Users } from 'lucide-react';
 
 const MAX_FILE_SIZE = 2 * 1024 * 1024;
@@ -180,10 +181,27 @@ function FileUploadArea({
   );
 }
 
+// Role labels for visibleRoles selector
+const ROLE_OPTIONS = [
+  { value: 'rd_hw',  label: '硬件研发' },
+  { value: 'rd_sw',  label: '软件研发' },
+  { value: 'rd_mech', label: '结构/ID' },
+  { value: 'qa',     label: '测试/品质' },
+  { value: 'scm',    label: '供应链' },
+  { value: 'pm',     label: '产品经理' },
+  { value: 'manager', label: '管理层' },
+  { value: 'owner',  label: '项目创建者' },
+] as const;
+
 function TaskDetail({
-  taskId, taskDetails, onUpdate,
+  taskId, taskDetails, onUpdate, visibleRoles, onVisibleRolesChange, canEditRoles,
 }: {
-  taskId: string; taskDetails: TaskDetails; onUpdate: (details: TaskDetails) => void;
+  taskId: string;
+  taskDetails: TaskDetails;
+  onUpdate: (details: TaskDetails) => void;
+  visibleRoles?: string[];
+  onVisibleRolesChange?: (roles: string[]) => void;
+  canEditRoles?: boolean;
 }) {
   const [draft, setDraft] = useState(taskDetails?.instructions || '');
   const [dirty, setDirty] = useState(false);
@@ -228,6 +246,42 @@ function TaskDetail({
           onRemove={(id) => onUpdate({ ...taskDetails, files: (taskDetails?.files || []).filter((f) => f.id !== id) })}
         />
       </div>
+      {/* Visible Roles Selector - only shown to canEditProjectInfo users */}
+      {canEditRoles && onVisibleRolesChange && (
+        <div className="border-t border-stone-100 pt-3">
+          <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-2 flex items-center gap-1.5">
+            <Lock size={10} />可见岗位（空=所有人可见）
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {ROLE_OPTIONS.map(({ value, label }) => {
+              const selected = (visibleRoles || []).includes(value);
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => {
+                    const current = visibleRoles || [];
+                    const next = selected
+                      ? current.filter((r) => r !== value)
+                      : [...current, value];
+                    onVisibleRolesChange(next);
+                  }}
+                  className={`px-2 py-0.5 text-[10px] font-mono border transition-colors ${
+                    selected
+                      ? 'bg-amber-500 text-stone-900 border-amber-500'
+                      : 'bg-white text-stone-500 border-stone-200 hover:border-amber-400'
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+          {(visibleRoles || []).length === 0 && (
+            <p className="text-[10px] text-stone-400 mt-1">未选择岗位时所有成员均可见此任务</p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -238,6 +292,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
   const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
   const [mainTab, setMainTab] = useState<'tasks' | 'gantt' | 'issues' | 'changelog' | 'members'>('tasks');
   const perms = useProjectPermission(project.id);
+  const { user: currentUser } = useAuth();
 
   // Change Log helpers
   const changeLog: ChangeRecord[] = project.changeLog || [];
@@ -535,6 +590,8 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
             issues={activeIssues}
             onUpdate={updateIssues}
             canEdit={perms.canEditIssues}
+            currentUserId={currentUser?.id !== undefined ? String(currentUser.id) : undefined}
+            canManage={perms.canManageMembers}
           />
         </div>
       )}
@@ -655,8 +712,10 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
               {perms.role !== 'owner' && !perms.isLoading && (() => {
                 const totalTasks = activePhase?.tasks.length || 0;
                 const visibleTasks = activePhase?.tasks.filter((task) => {
-                  if (!task.visibleRoles || task.visibleRoles.length === 0) return true;
-                  return task.visibleRoles.includes(perms.role);
+                  // Use project-level override if set, else fall back to template default
+                  const effectiveRoles = project.taskVisibleRoles?.[task.id] ?? (task.visibleRoles || []);
+                  if (!effectiveRoles || effectiveRoles.length === 0) return true;
+                  return effectiveRoles.includes(perms.role);
                 }).length || 0;
                 const hiddenCount = totalTasks - visibleTasks;
                 if (hiddenCount === 0) return null;
@@ -671,12 +730,14 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
               {/* Tasks */}
               <div className="space-y-2">
                 {activePhase?.tasks.filter((task) => {
-                  // If visibleRoles is empty or undefined, everyone can see it
-                  if (!task.visibleRoles || task.visibleRoles.length === 0) return true;
+                  // Use project-level override if set, else fall back to template default
+                  const effectiveRoles = project.taskVisibleRoles?.[task.id] ?? (task.visibleRoles || []);
+                  // If effectiveRoles is empty, everyone can see it
+                  if (!effectiveRoles || effectiveRoles.length === 0) return true;
                   // Owner always sees all tasks
                   if (perms.role === 'owner') return true;
                   // Filter by role
-                  return task.visibleRoles.includes(perms.role);
+                  return effectiveRoles.includes(perms.role);
                 }).map((task) => {
                   const checked = activePhaseData?.tasks[task.id] || false;
                   const details = activePhaseData?.taskDetails?.[task.id];
@@ -774,6 +835,20 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                             taskId={task.id}
                             taskDetails={details || { instructions: '', files: [] }}
                             onUpdate={(d) => updateTaskDetails(task.id, d)}
+                            visibleRoles={
+                              project.taskVisibleRoles?.[task.id] ??
+                              (task.visibleRoles || [])
+                            }
+                            onVisibleRolesChange={(roles) => {
+                              onUpdate({
+                                ...project,
+                                taskVisibleRoles: {
+                                  ...(project.taskVisibleRoles || {}),
+                                  [task.id]: roles,
+                                },
+                              });
+                            }}
+                            canEditRoles={perms.canEditProjectInfo}
                           />
                         </div>
                       )}

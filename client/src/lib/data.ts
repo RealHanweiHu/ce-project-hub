@@ -64,6 +64,7 @@ export interface Issue {
   solution?: string;
   relatedTaskId?: string;      // link to a SOP task
   attachments?: string[];      // file names
+  creatorId?: string;          // userId of the person who created this issue
 }
 
 // ── Gate Review Record ──────────────────────────────────────────────────────
@@ -141,6 +142,8 @@ export interface Project {
   phaseDates?: Record<string, PhaseDate>; // custom per-phase dates
   category?: 'npd' | 'eco' | 'idr'; // project category determines SOP template
   changeLog?: ChangeRecord[];          // project-level change & decision log
+  /** Per-task visibleRoles overrides: taskId -> roles[] (empty = all can see) */
+  taskVisibleRoles?: Record<string, string[]>;
 }
 
 export const SOP_PHASES: SOPPhase[] = [

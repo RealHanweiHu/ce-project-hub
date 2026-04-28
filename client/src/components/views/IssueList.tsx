@@ -20,6 +20,10 @@ interface IssueListProps {
   issues: Issue[];
   onUpdate: (issues: Issue[]) => void;
   canEdit?: boolean;
+  /** Current user's ID, used to check if they can close/delete their own issues */
+  currentUserId?: string;
+  /** If true, user can close/delete any issue (owner/manager/pm role) */
+  canManage?: boolean;
 }
 
 // ── Empty Issue Form ──────────────────────────────────────────────────────────
@@ -267,7 +271,7 @@ function IssueFormModal({
 }
 
 // ── Main Component ────────────────────────────────────────────────────────────
-export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true }: IssueListProps) {
+export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true, currentUserId, canManage = false }: IssueListProps) {
   const [showForm, setShowForm] = useState(false);
   const [editingIssue, setEditingIssue] = useState<Issue | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -302,7 +306,7 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true
 
   // ── CRUD ──────────────────────────────────────────────────────────────────
   const handleCreate = (data: Omit<Issue, 'id'>) => {
-    const newIssue: Issue = { ...data, id: nanoid(8) };
+    const newIssue: Issue = { ...data, id: nanoid(8), creatorId: currentUserId };
     onUpdate([...issues, newIssue]);
     setShowForm(false);
   };
@@ -497,42 +501,52 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true
                   </div>
 
                   {/* Status Selector */}
-                  {canEdit ? (
-                    <select
-                      value={issue.status}
-                      onChange={(e) => handleStatusChange(issue.id, e.target.value as IssueStatus)}
-                      onClick={(e) => e.stopPropagation()}
-                      className={`shrink-0 text-[10px] font-mono border px-2 py-1 outline-none cursor-pointer ${sta.bg} ${sta.border} ${sta.color}`}
-                    >
-                      {(['open', 'in_progress', 'resolved', 'closed', 'wont_fix'] as IssueStatus[]).map((s) => (
-                        <option key={s} value={s}>{STATUS_CONFIG[s].label}</option>
-                      ))}
-                    </select>
-                  ) : (
-                    <span className={`shrink-0 text-[10px] font-mono border px-2 py-1 ${sta.bg} ${sta.border} ${sta.color}`}>
-                      {STATUS_CONFIG[issue.status].label}
-                    </span>
-                  )}
+                  {(() => {
+                    // canManage (owner/manager/pm) or issue creator can change status
+                    const canChangeStatus = canEdit && (canManage || (currentUserId && issue.creatorId === currentUserId));
+                    return canChangeStatus ? (
+                      <select
+                        value={issue.status}
+                        onChange={(e) => handleStatusChange(issue.id, e.target.value as IssueStatus)}
+                        onClick={(e) => e.stopPropagation()}
+                        className={`shrink-0 text-[10px] font-mono border px-2 py-1 outline-none cursor-pointer ${sta.bg} ${sta.border} ${sta.color}`}
+                      >
+                        {(['open', 'in_progress', 'resolved', 'closed', 'wont_fix'] as IssueStatus[]).map((s) => (
+                          <option key={s} value={s}>{STATUS_CONFIG[s].label}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span className={`shrink-0 text-[10px] font-mono border px-2 py-1 ${sta.bg} ${sta.border} ${sta.color}`}>
+                        {STATUS_CONFIG[issue.status].label}
+                      </span>
+                    );
+                  })()}
 
                   {/* Actions */}
-                  {canEdit && (
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); setEditingIssue(issue); }}
-                        className="p-1.5 text-stone-400 hover:text-stone-700 transition-colors"
-                        title="编辑"
-                      >
-                        <Edit2 size={13} />
-                      </button>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleDelete(issue.id); }}
-                        className="p-1.5 text-stone-400 hover:text-rose-600 transition-colors"
-                        title="删除"
-                      >
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
-                  )}
+                  {canEdit && (() => {
+                    // canManage can edit/delete any; creator can edit/delete their own
+                    const isCreator = currentUserId && issue.creatorId === currentUserId;
+                    const canEditThis = canManage || isCreator;
+                    if (!canEditThis) return null;
+                    return (
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setEditingIssue(issue); }}
+                          className="p-1.5 text-stone-400 hover:text-stone-700 transition-colors"
+                          title="编辑"
+                        >
+                          <Edit2 size={13} />
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleDelete(issue.id); }}
+                          className="p-1.5 text-stone-400 hover:text-rose-600 transition-colors"
+                          title="删除"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Expanded Details */}

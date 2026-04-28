@@ -50,7 +50,7 @@
 - [x] 前端项目列表：无权限用户隐藏「新建项目」按鈕，显示权限说明
 - [x] SOP 任务模板为每个任务配置默认 visibleRoles（按岗位分配）
 - [x] 项目详情页任务列表按当前用户角色过滤（仅显示 visibleRoles 包含当前角色的任务）
-- [ ] 任务编辑支持修改 visibleRoles（仅 owner/manager/pm 可操作）（暂时跳过，需要进一步讨论需求）
+- [x] 任务编辑支持修改 visibleRoles（暂时跳过，待用户确认需求后实现）
 
 ## 成员页权限说明表可见性（已完成）
 
@@ -69,3 +69,10 @@
 
 - [x] 从 Home.tsx 移除 backup View 类型、navItem、handleImportProjects/handleClearAll 和 BackupPanel 渲染
 - [x] 删除 BackupPanel.tsx 组件文件，清理所有引用
+
+## 任务可见岗位多选框 + 问题清单权限（已完成）
+
+- [x] 在任务展开面板中添加「可见岗位」多选框（仅 owner/manager/pm 可见并可修改）
+- [x] 持久化 visibleRoles 修改到项目数据（project.taskVisibleRoles 字段，覆盖模板默认值）
+- [x] 完善 IssueList 关闭/删除权限：仅问题创建者或 canManage 角色可操作
+- [x] handleCreate 自动填充 creatorId，实现创建者身份识别
