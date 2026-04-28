@@ -29,10 +29,8 @@ const projectInputSchema = z.object({
   name: z.string(),
   projectNumber: z.string().default(""),
   category: z.string().default("npd"),
-  /** PM user id (from users table) */
-  pmUserId: z.number().nullable().optional(),
-  /** PM display name (fallback) */
-  pmName: z.string().default(""),
+  /** PM user id (FK to users.id) */
+  pmUserId: z.number().int().nullable().optional(),
   risk: riskEnum,
   currentPhase: z.string().default("concept"),
   progress: z.number().default(0),
@@ -85,7 +83,6 @@ export const projectsRouter = router({
         projectNumber: input.projectNumber,
         category: input.category,
         pmUserId: input.pmUserId ?? null,
-        pmName: input.pmName,
         risk: input.risk,
         currentPhase: input.currentPhase,
         progress: input.progress,
@@ -113,7 +110,6 @@ export const projectsRouter = router({
         projectNumber: input.projectNumber,
         category: input.category,
         pmUserId: input.pmUserId ?? null,
-        pmName: input.pmName,
         risk: input.risk,
         currentPhase: input.currentPhase,
         progress: input.progress,

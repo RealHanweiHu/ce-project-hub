@@ -36,7 +36,7 @@ beforeAll(async () => {
     name: "Test Relational Project",
     projectNumber: "TEST-001",
     category: "npd",
-    pmName: "Test PM",
+    pmUserId: null,
     risk: "low",
     currentPhase: "concept",
     progress: 0,
@@ -59,7 +59,7 @@ describe("projects", () => {
     expect(project).toBeDefined();
     expect(project!.name).toBe("Test Relational Project");
     expect(project!.category).toBe("npd");
-    expect(project!.pmName).toBe("Test PM");
+    expect(project!.pmUserId).toBeNull();
   });
 
   it("can update a project", async () => {

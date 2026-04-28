@@ -40,7 +40,12 @@ export interface FileAttachment {
   size: number;
   type: string;
   uploadDate: string;
+  /** Base64 data URL (legacy) or empty string when storageUrl is set */
   dataUrl: string;
+  /** S3-backed URL path (e.g. /manus-storage/{key}). Present for server-uploaded files. */
+  storageUrl?: string;
+  /** S3 storage key. Present for server-uploaded files. */
+  storageKey?: string;
 }
 
 // ── Issue Tracking ───────────────────────────────────────────────────────────
@@ -134,6 +139,7 @@ export interface Project {
   name: string;
   type: string;
   pm: string;
+  pmUserId?: number | null;
   startDate: string;
   targetDate: string;
   currentPhase: string;

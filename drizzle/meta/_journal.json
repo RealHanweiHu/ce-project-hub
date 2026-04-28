@@ -8,6 +8,13 @@
       "when": 1777392451920,
       "tag": "0000_clever_the_hood",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1777397579226,
+      "tag": "0001_freezing_scourge",
+      "breakpoints": true
     }
   ]
 }

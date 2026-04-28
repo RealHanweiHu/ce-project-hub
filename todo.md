@@ -176,3 +176,21 @@
 - [x] index.html 移除 Google Fonts preconnect + link 标签
 - [x] index.css 添加 @font-face 自托管声明（11个字体文件）
 - [x] 验证替换后字体显示效果正常，TypeScript 零错误
+
+## 基础设施改进（已完成）
+
+- [x] drizzle/schema.ts：新增 project_files 表（id, projectId, phaseId, name, mimeType, size, storageKey, storageUrl, uploadedBy, createdAt）
+- [x] drizzle/schema.ts：新增 activity_logs 表（id, projectId, userId, action, entityType, entityId, meta, createdAt）
+- [x] drizzle/schema.ts：project_members 添加 UNIQUE(projectId, userId) 约束和索引
+- [x] drizzle/schema.ts：projects.pmUserId 改为 int 外键引用 users.id（移除 pmName 字符串字段）
+- [x] 数据库迁移：执行 ALTER TABLE 和 CREATE TABLE SQL（create-missing-tables.mjs / alter-projects-table.mjs / migrate-infra.mjs）
+- [x] server/db.ts：新增 createProjectFile / getProjectFiles / deleteProjectFile 函数
+- [x] server/db.ts：新增 createActivityLog / getActivityLogs 函数
+- [x] server/routers/files.ts：文件上传路由（multipart → S3 storagePut → 写 project_files）
+- [x] server/routers/projects.ts：pmUserId 改为 int，移除 pmName
+- [x] server/_core/index.ts：生产环境强制校验 JWT_SECRET 非空且长度 ≥ 32
+- [x] 前端：文件上传组件改为 multipart（FormData POST /api/files/upload），大小限制提升到 16MB
+- [x] 前端：FileAttachment 接口添加 storageUrl/storageKey 字段，下载优先使用 storageUrl
+- [x] vitest：补充 project_files 和 activity_logs 的测试（infra-improvements.test.ts，8 tests）
+- [x] 前端：PM 选择器改为从 listUsersForSelect 用户列表选择（PmSelector 组件，pmUserId 写入 DB）
+- [x] Project 接口添加 pmUserId 可选字段，rowToProject/useProjectData/projectToApiInput 全部更新

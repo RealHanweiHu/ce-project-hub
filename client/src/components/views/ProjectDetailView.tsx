@@ -24,9 +24,10 @@ import { GateReviewModal, GateReviewBadge } from './GateReviewModal';
 import { MembersPanel } from './MembersPanel';
 import { useProjectPermission } from '@/hooks/useProjectPermission';
 import { useAuth } from '@/_core/hooks/useAuth';
+import { trpc } from '@/lib/trpc';
 import { Users } from 'lucide-react';
 
-const MAX_FILE_SIZE = 2 * 1024 * 1024;
+const MAX_FILE_SIZE = 16 * 1024 * 1024;
 
 interface ProjectDetailViewProps {
   project: Project;
@@ -104,41 +105,72 @@ function EditableSelect({
 }
 
 function FileUploadArea({
-  files, onAdd, onRemove,
+  files, onAdd, onRemove, projectId, phaseId,
 }: {
-  files: FileAttachment[]; onAdd: (files: FileAttachment[]) => void; onRemove: (id: string) => void;
+  files: FileAttachment[];
+  onAdd: (files: FileAttachment[]) => void;
+  onRemove: (id: string) => void;
+  projectId: string;
+  phaseId?: string;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState('');
+  const [uploading, setUploading] = useState(false);
 
   const handleFiles = async (fileList: FileList) => {
     setError('');
     const newFiles: FileAttachment[] = [];
     for (const file of Array.from(fileList)) {
-      if (file.size > MAX_FILE_SIZE) { setError(`文件 "${file.name}" 超出 2MB 限制`); continue; }
+      if (file.size > MAX_FILE_SIZE) {
+        setError(`文件 "${file.name}" 超出 ${formatBytes(MAX_FILE_SIZE)} 限制`);
+        continue;
+      }
       try {
-        const dataUrl = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result as string);
-          reader.onerror = reject;
-          reader.readAsDataURL(file);
+        setUploading(true);
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('projectId', projectId);
+        if (phaseId) formData.append('phaseId', phaseId);
+        const resp = await fetch('/api/files/upload', {
+          method: 'POST',
+          body: formData,
+          credentials: 'include',
         });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({ error: resp.statusText }));
+          setError(`上传 "${file.name}" 失败: ${(err as any).error || resp.statusText}`);
+          continue;
+        }
+        const result = await resp.json() as {
+          id: number; name: string; mimeType: string; size: number;
+          storageKey: string; storageUrl: string;
+        };
         newFiles.push({
-          id: `f_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-          name: file.name, size: file.size, type: file.type || 'application/octet-stream',
-          uploadDate: new Date().toISOString().slice(0, 10), dataUrl,
+          id: String(result.id),
+          name: result.name,
+          size: result.size,
+          type: result.mimeType,
+          uploadDate: new Date().toISOString().slice(0, 10),
+          dataUrl: '',
+          storageUrl: result.storageUrl,
+          storageKey: result.storageKey,
         });
-      } catch { setError(`读取文件 "${file.name}" 失败`); }
+      } catch (e: any) {
+        setError(`上传 "${file.name}" 失败: ${e.message || '网络错误'}`);
+      } finally {
+        setUploading(false);
+      }
     }
     if (newFiles.length > 0) onAdd(newFiles);
   };
 
   const downloadFile = (file: FileAttachment) => {
+    const url = file.storageUrl || file.dataUrl;
+    if (!url) return;
     const a = document.createElement('a');
-    a.href = file.dataUrl; a.download = file.name; a.click();
+    a.href = url; a.download = file.name; a.click();
   };
-
   const getIcon = (type: string) => type?.startsWith('image/') ? <ImageIcon size={14} /> : <FileText size={14} />;
 
   return (
@@ -150,9 +182,11 @@ function FileUploadArea({
         onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files); }}
         className={`border-2 border-dashed p-4 text-center cursor-pointer transition-colors ${dragOver ? 'border-amber-500 bg-amber-50' : 'border-stone-300 hover:border-stone-400'}`}
       >
-        <input ref={inputRef} type="file" multiple onChange={(e) => handleFiles(e.target.files!)} className="hidden" />
-        <Upload size={18} className="mx-auto text-stone-400 mb-2" />
-        <div className="text-sm text-stone-700"><span className="font-medium">点击上传</span>或拖拽文件</div>
+        <input ref={inputRef} type="file" multiple onChange={(e) => handleFiles(e.target.files!)} className="hidden" disabled={uploading} />
+        <Upload size={18} className={`mx-auto mb-2 ${uploading ? 'text-amber-400 animate-pulse' : 'text-stone-400'}`} />
+        <div className="text-sm text-stone-700">
+          {uploading ? '上传中...' : <><span className="font-medium">点击上传</span>或拖拽文件</>}
+        </div>
         <div className="text-[10px] font-mono uppercase tracking-wider text-stone-400 mt-1">
           单个文件最大 {formatBytes(MAX_FILE_SIZE)} · 支持 PDF / 图片 / Office 文档
         </div>
@@ -195,6 +229,7 @@ const ROLE_OPTIONS = [
 
 function TaskDetail({
   taskId, taskDetails, onUpdate, visibleRoles, onVisibleRolesChange, canEditRoles,
+  projectId, phaseId,
 }: {
   taskId: string;
   taskDetails: TaskDetails;
@@ -202,6 +237,8 @@ function TaskDetail({
   visibleRoles?: string[];
   onVisibleRolesChange?: (roles: string[]) => void;
   canEditRoles?: boolean;
+  projectId: string;
+  phaseId?: string;
 }) {
   const [draft, setDraft] = useState(taskDetails?.instructions || '');
   const [dirty, setDirty] = useState(false);
@@ -244,6 +281,8 @@ function TaskDetail({
           files={taskDetails?.files || []}
           onAdd={(newFiles) => onUpdate({ ...taskDetails, files: [...(taskDetails?.files || []), ...newFiles] })}
           onRemove={(id) => onUpdate({ ...taskDetails, files: (taskDetails?.files || []).filter((f) => f.id !== id) })}
+          projectId={projectId}
+          phaseId={phaseId}
         />
       </div>
       {/* Visible Roles Selector - only shown to canEditProjectInfo users */}
@@ -287,6 +326,45 @@ function TaskDetail({
 }
 
 // ── Main Component ────────────────────────────────────────────────────────────
+// ── PM Selector ──────────────────────────────────────────────────────────────
+function PmSelector({
+  pmUserId,
+  onChange,
+  disabled,
+}: {
+  pmUserId: number | null;
+  onChange: (id: number | null) => void;
+  disabled?: boolean;
+}) {
+  const { data: users = [] } = trpc.admin.listUsersForSelect.useQuery(undefined, {
+    staleTime: 60_000,
+  });
+  const selected = users.find((u) => u.id === pmUserId);
+  const displayName = selected ? (selected.name || selected.username) : '—';
+
+  if (disabled) {
+    return <span className="text-xs text-stone-700">{displayName}</span>;
+  }
+
+  return (
+    <select
+      value={pmUserId ?? ''}
+      onChange={(e) => {
+        const val = e.target.value;
+        onChange(val === '' ? null : Number(val));
+      }}
+      className="text-xs text-stone-700 bg-transparent border-none outline-none cursor-pointer hover:text-amber-600 transition-colors"
+    >
+      <option value="">— 未指定 —</option>
+      {users.map((u) => (
+        <option key={u.id} value={u.id}>
+          {u.name || u.username}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailViewProps) {
   const [activePhaseId, setActivePhaseId] = useState(project.currentPhase);
   const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
@@ -313,6 +391,8 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
   const catConfig = project.category ? CATEGORY_MAP[project.category] : null;
 
   const updateField = (field: keyof Project, value: string) => onUpdate({ ...project, [field]: value });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const updateFieldAny = (field: keyof Project, value: any) => onUpdate({ ...project, [field]: value });
 
   const toggleTask = (taskId: string) => {
     // Gate lock check: if this phase is locked, disallow toggling
@@ -449,7 +529,11 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
               </div>
               <div className="flex items-center gap-1.5">
                 <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400">PM</span>
-                <EditableText value={project.pm} onChange={(v) => updateField('pm', v)} className="text-xs text-stone-700" />
+                <PmSelector
+                  pmUserId={project.pmUserId ?? null}
+                  onChange={(id) => updateFieldAny('pmUserId', id)}
+                  disabled={!perms.canEditProjectInfo}
+                />
               </div>
               <div className="flex items-center gap-1.5">
                 <Calendar size={12} className="text-stone-400" />
@@ -849,6 +933,8 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                               });
                             }}
                             canEditRoles={perms.canEditProjectInfo}
+                            projectId={project.id}
+                            phaseId={activePhaseId}
                           />
                         </div>
                       )}

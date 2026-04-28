@@ -31,13 +31,13 @@ type View = 'dashboard' | 'projects' | 'sop';
 
 // Helper: convert Project to API input shape (meta fields only)
 function projectToApiInput(p: Project) {
-  const { id, name, code, category, pm, risk, currentPhase, startDate, targetDate } = p;
+  const { id, name, code, category, pmUserId, risk, currentPhase, startDate, targetDate } = p;
   return {
     id,
     name: name || '',
     projectNumber: code || '',
     category: category || 'npd',
-    pmName: pm || '',
+    pmUserId: pmUserId ?? null,
     risk: (risk || 'low') as 'low' | 'medium' | 'high',
     currentPhase: currentPhase || 'concept',
     progress: 0,
@@ -49,7 +49,7 @@ function projectToApiInput(p: Project) {
 // Helper: convert API row (new schema) back to lightweight Project shape for list views
 function rowToProject(row: {
   id: string; name: string; projectNumber: string; category: string;
-  pmName: string; risk: string; currentPhase: string; progress: number;
+  pmUserId?: number | null; risk: string; currentPhase: string; progress: number;
   startDate: string | null; targetDate: string | null;
 }): Project {
   return normalizeProject({
@@ -57,7 +57,8 @@ function rowToProject(row: {
     name: row.name,
     code: row.projectNumber || '',
     category: (row.category as 'npd' | 'eco' | 'idr') || 'npd',
-    pm: row.pmName || '',
+    pm: '',
+    pmUserId: row.pmUserId ?? null,
     risk: (row.risk as 'low' | 'medium' | 'high') || 'low',
     currentPhase: row.currentPhase || 'concept',
     startDate: row.startDate || '',
@@ -124,7 +125,7 @@ function ProjectDetailWrapper({
         const metaChanged =
           updated.name !== project.name ||
           updated.code !== project.code ||
-          updated.pm !== project.pm ||
+          updated.pmUserId !== project.pmUserId ||
           updated.risk !== project.risk ||
           updated.currentPhase !== project.currentPhase ||
           updated.startDate !== project.startDate ||
@@ -329,7 +330,7 @@ function ProjectDetailWrapper({
                 reason: record.reason || null,
                 decisionMaker: record.decisionMaker || null,
                 affectedPhases: record.affectedPhases || [],
-                status: record.status as 'proposed' | 'approved' | 'rejected' | 'implemented' | 'cancelled',
+                status: (['proposed','approved','rejected','implemented'].includes(record.status) ? record.status : 'proposed') as 'proposed' | 'approved' | 'rejected' | 'implemented',
                 costImpact: record.costImpact || null,
                 scheduleImpact: record.scheduleImpact || null,
                 notes: record.notes || null,
@@ -350,7 +351,7 @@ function ProjectDetailWrapper({
                   reason: record.reason || null,
                   decisionMaker: record.decisionMaker || null,
                   affectedPhases: record.affectedPhases || [],
-                  status: record.status as 'proposed' | 'approved' | 'rejected' | 'implemented' | 'cancelled',
+                  status: (['proposed','approved','rejected','implemented'].includes(record.status) ? record.status : 'proposed') as 'proposed' | 'approved' | 'rejected' | 'implemented',
                   costImpact: record.costImpact || null,
                   scheduleImpact: record.scheduleImpact || null,
                   notes: record.notes || null,

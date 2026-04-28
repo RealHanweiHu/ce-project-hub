@@ -5,6 +5,7 @@ import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { registerStorageProxy } from "./storageProxy";
+import { registerFileUploadRoute } from "../routers/files";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
@@ -28,7 +29,19 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
   throw new Error(`No available port found starting from ${startPort}`);
 }
 
+function validateProductionSecrets() {
+  if (process.env.NODE_ENV !== "production") return;
+  const jwtSecret = process.env.JWT_SECRET ?? "";
+  if (!jwtSecret || jwtSecret.length < 32) {
+    console.error(
+      "[FATAL] JWT_SECRET must be set to a random string of at least 32 characters in production."
+    );
+    process.exit(1);
+  }
+}
+
 async function startServer() {
+  validateProductionSecrets();
   const app = express();
   const server = createServer(app);
   // Configure body parser with larger size limit for file uploads
@@ -36,6 +49,7 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   registerStorageProxy(app);
   registerOAuthRoutes(app);
+  registerFileUploadRoute(app);
   // tRPC API
   app.use(
     "/api/trpc",

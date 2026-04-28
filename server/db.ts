@@ -8,6 +8,8 @@ import {
   projectIssues, ProjectIssue, InsertProjectIssue,
   projectGateReviews, ProjectGateReview, InsertProjectGateReview,
   projectChangelog, ProjectChangeRecord, InsertProjectChangeRecord,
+  projectFiles, InsertProjectFile, ProjectFile,
+  activityLogs, InsertActivityLog, ActivityLog,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { getSopPhasesForCategory } from "./sop-data";
@@ -538,4 +540,77 @@ export async function deleteProjectChangeRecord(id: number): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.delete(projectChangelog).where(eq(projectChangelog.id, id));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Project Files
+// ─────────────────────────────────────────────────────────────────────────────
+
+
+/** Insert a file metadata record after uploading to S3 */
+export async function createProjectFile(record: Omit<InsertProjectFile, "id" | "createdAt">): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(projectFiles).values(record);
+  return (result as unknown as [{ insertId: number }, unknown])[0].insertId;
+}
+
+/** List all files for a project, optionally filtered by phase */
+export async function getProjectFiles(
+  projectId: string,
+  phaseId?: string
+): Promise<ProjectFile[]> {
+  const db = await getDb();
+  if (!db) return [];
+  if (phaseId) {
+    return db
+      .select()
+      .from(projectFiles)
+      .where(and(eq(projectFiles.projectId, projectId), eq(projectFiles.phaseId, phaseId)));
+  }
+  return db.select().from(projectFiles).where(eq(projectFiles.projectId, projectId));
+}
+
+/** Delete a file metadata record (caller should also remove from S3 if needed) */
+export async function deleteProjectFile(id: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(projectFiles).where(eq(projectFiles.id, id));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Activity Logs
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Append an immutable activity log entry */
+export async function createActivityLog(
+  record: Omit<InsertActivityLog, "id" | "createdAt">
+): Promise<void> {
+  const db = await getDb();
+  if (!db) {
+    // Non-fatal: activity logging should never block the main operation
+    console.warn("[ActivityLog] Database not available, skipping log entry");
+    return;
+  }
+  try {
+    await db.insert(activityLogs).values(record);
+  } catch (err) {
+    // Non-fatal: log the error but don't propagate
+    console.error("[ActivityLog] Failed to write log entry:", err);
+  }
+}
+
+/** Fetch recent activity logs for a project (newest first) */
+export async function getActivityLogs(
+  projectId: string,
+  limit = 50
+): Promise<ActivityLog[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(activityLogs)
+    .where(eq(activityLogs.projectId, projectId))
+    .orderBy(desc(activityLogs.createdAt))
+    .limit(limit);
 }

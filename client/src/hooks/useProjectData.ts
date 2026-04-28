@@ -194,7 +194,8 @@ export function useProjectData(projectId: string | null) {
       name: projectRow.name,
       code: projectRow.projectNumber ?? '',
       category: (projectRow.category as 'npd' | 'eco' | 'idr') ?? 'npd',
-      pm: projectRow.pmName ?? '',
+      pm: '',  // pmName resolved in UI via listUsersForSelect
+      pmUserId: projectRow.pmUserId ?? null,
       risk: (projectRow.risk as 'low' | 'medium' | 'high') ?? 'low',
       currentPhase: projectRow.currentPhase ?? 'concept',
       startDate: projectRow.startDate ?? '',
