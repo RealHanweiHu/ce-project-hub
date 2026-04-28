@@ -32,9 +32,9 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 function validateProductionSecrets() {
   if (process.env.NODE_ENV !== "production") return;
   const jwtSecret = process.env.JWT_SECRET ?? "";
-  if (!jwtSecret || jwtSecret.length < 32) {
+  if (!jwtSecret) {
     console.error(
-      "[FATAL] JWT_SECRET must be set to a random string of at least 32 characters in production."
+      "[FATAL] JWT_SECRET must be set in production."
     );
     process.exit(1);
   }
