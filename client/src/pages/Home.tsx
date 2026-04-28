@@ -6,12 +6,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   LayoutDashboard, FolderKanban, BookOpen, Save, CheckCircle2,
-  ChevronRight, Menu, X, Cpu, DatabaseBackup, Search,
+  ChevronRight, Menu, X, Cpu, DatabaseBackup, Search, LogIn, Loader2, Cloud,
 } from 'lucide-react';
 import { GlobalSearch } from '@/components/GlobalSearch';
 import { nanoid } from 'nanoid';
 import {
-  Project, SAMPLE_PROJECTS, normalizeProject,
+  Project, normalizeProject,
 } from '@/lib/data';
 import { buildPhasesDataForCategory, getPhasesForCategory } from '@/lib/sop-templates';
 import { DashboardView } from '@/components/views/DashboardView';
@@ -19,25 +19,80 @@ import { ProjectListView } from '@/components/views/ProjectListView';
 import { ProjectDetailView } from '@/components/views/ProjectDetailView';
 import { SOPLibraryView } from '@/components/views/SOPLibraryView';
 import { BackupPanel } from '@/components/views/BackupPanel';
+import { trpc } from '@/lib/trpc';
+import { useAuth } from '@/_core/hooks/useAuth';
+import { getLoginUrl } from '@/const';
+import { useQueryClient } from '@tanstack/react-query';
+import { getQueryKey } from '@trpc/react-query';
 
 type View = 'dashboard' | 'projects' | 'sop' | 'backup';
 
-const STORAGE_KEY = 'ce_projects_v2';
+// Helper: convert Project to API input shape
+function projectToApiInput(p: Project) {
+  const { id, name, code, category, pm, risk, currentPhase, startDate, targetDate, phases, phaseDates, changeLog } = p;
+  return {
+    id,
+    name: name || '',
+    projectNumber: code || '',
+    category: category || 'npd',
+    pm: pm || '',
+    risk: risk || 'low',
+    currentPhase: currentPhase || 'concept',
+    progress: 0,
+    startDate: startDate || null,
+    targetDate: targetDate || null,
+    data: { phases, phaseDates, changeLog } as Record<string, unknown>,
+  };
+}
+
+// Helper: convert API row back to Project
+function rowToProject(row: {
+  id: string; name: string; projectNumber: string; category: string;
+  pm: string; risk: string; currentPhase: string; progress: number;
+  startDate: string | null; targetDate: string | null;
+  data: Record<string, unknown>;
+}): Project {
+  const { data, projectNumber, ...meta } = row;
+  return normalizeProject({
+    ...meta,
+    code: projectNumber || '',
+    type: (data.type as string) || '',
+    phases: (data.phases as Record<string, unknown>) || {},
+    phaseDates: data.phaseDates as Record<string, unknown> | undefined,
+    changeLog: data.changeLog as unknown[] | undefined,
+  } as unknown as Project);
+}
 
 export default function Home() {
+  const { user, loading: authLoading } = useAuth();
+  const queryClient = useQueryClient();
+
   const [view, setView] = useState<View>('dashboard');
-  const [projects, setProjects] = useState<Project[]>(
-    SAMPLE_PROJECTS.map(normalizeProject)
-  );
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
-  const [loaded, setLoaded] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Ctrl+K global shortcut
+  // ── tRPC queries & mutations ─────────────────────────────────────────────
+  const { data: projectRows = [], isLoading: projectsLoading } = trpc.projects.list.useQuery(
+    undefined,
+    { enabled: !!user }
+  );
+
+  const projects: Project[] = projectRows.map(rowToProject);
+
+  const createMutation = trpc.projects.create.useMutation();
+  const updateMutation = trpc.projects.update.useMutation();
+  const deleteMutation = trpc.projects.delete.useMutation();
+  const bulkImportMutation = trpc.projects.bulkImport.useMutation();
+
+  const invalidateProjects = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: getQueryKey(trpc.projects.list) });
+  }, [queryClient]);
+
+  // ── Ctrl+K global shortcut ───────────────────────────────────────────────
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
@@ -49,7 +104,7 @@ export default function Home() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  const handleSearchNavigate = useCallback((result: { type: string; projectId?: string; phaseId?: string }) => {
+  const handleSearchNavigate = useCallback((result: { type: string; projectId?: string }) => {
     if (result.projectId) {
       setSelectedProjectId(result.projectId);
       setView('projects');
@@ -59,36 +114,7 @@ export default function Home() {
     }
   }, []);
 
-  // Load from localStorage
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const saved = JSON.parse(raw);
-        if (Array.isArray(saved) && saved.length > 0) {
-          setProjects(saved.map(normalizeProject));
-        }
-      }
-    } catch {}
-    setLoaded(true);
-  }, []);
-
-  // Auto-save with timestamp
-  useEffect(() => {
-    if (!loaded) return;
-    setSaveStatus('saving');
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
-        setSaveStatus('saved');
-        setLastSavedAt(new Date());
-      } catch {
-        setSaveStatus('error');
-      }
-    }, 600);
-  }, [projects, loaded]);
-
+  // ── Project CRUD ─────────────────────────────────────────────────────────
   const selectedProject = selectedProjectId
     ? projects.find((p) => p.id === selectedProjectId) || null
     : null;
@@ -99,31 +125,51 @@ export default function Home() {
     setSidebarOpen(false);
   };
 
-  const handleUpdateProject = (updated: Project) => {
-    setProjects((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+  const handleUpdateProject = async (updated: Project) => {
+    setSaveStatus('saving');
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(async () => {
+      try {
+        await updateMutation.mutateAsync(projectToApiInput(updated));
+        invalidateProjects();
+        setSaveStatus('saved');
+        setLastSavedAt(new Date());
+      } catch {
+        setSaveStatus('error');
+      }
+    }, 600);
   };
 
-  const handleAddProject = (data: Omit<Project, 'id' | 'phases'>) => {
+  const handleAddProject = async (data: Omit<Project, 'id' | 'phases'>) => {
     const newProject = normalizeProject({
       ...data,
       id: nanoid(8),
       phases: {},
     } as Project);
-    setProjects((prev) => [...prev, newProject]);
+    try {
+      await createMutation.mutateAsync(projectToApiInput(newProject));
+      invalidateProjects();
+    } catch {
+      setSaveStatus('error');
+    }
   };
 
-  const handleDeleteProject = (id: string) => {
-    setProjects((prev) => prev.filter((p) => p.id !== id));
-    if (selectedProjectId === id) setSelectedProjectId(null);
+  const handleDeleteProject = async (id: string) => {
+    try {
+      await deleteMutation.mutateAsync({ id });
+      invalidateProjects();
+      if (selectedProjectId === id) setSelectedProjectId(null);
+    } catch {
+      setSaveStatus('error');
+    }
   };
 
-  const handleCloneProject = (sourceId: string, overrides: Partial<Omit<Project, 'id' | 'phases'>>) => {
+  const handleCloneProject = async (sourceId: string, overrides: Partial<Omit<Project, 'id' | 'phases'>>) => {
     const source = projects.find((p) => p.id === sourceId);
     if (!source) return;
     const category = source.category || 'npd';
     const phases = getPhasesForCategory(category);
     const firstPhaseId = phases[0]?.id || 'concept';
-    // Build fresh phase data (all tasks unchecked, no issues, no gate reviews)
     const freshPhases = buildPhasesDataForCategory(category, firstPhaseId);
     const cloned = normalizeProject({
       ...source,
@@ -131,14 +177,39 @@ export default function Home() {
       id: nanoid(8),
       currentPhase: firstPhaseId,
       phases: freshPhases,
-      phaseDates: undefined, // clear custom dates
+      phaseDates: undefined,
     } as Project);
-    setProjects((prev) => [...prev, cloned]);
-    // Navigate to the new project
-    setSelectedProjectId(cloned.id);
-    setView('projects');
+    try {
+      await createMutation.mutateAsync(projectToApiInput(cloned));
+      invalidateProjects();
+      setSelectedProjectId(cloned.id);
+      setView('projects');
+    } catch {
+      setSaveStatus('error');
+    }
   };
 
+  const handleImportProjects = async (imported: Project[]) => {
+    try {
+      await bulkImportMutation.mutateAsync(imported.map(projectToApiInput));
+      invalidateProjects();
+      setView('projects');
+      setSelectedProjectId(null);
+    } catch {
+      setSaveStatus('error');
+    }
+  };
+
+  const handleClearAll = async () => {
+    for (const p of projects) {
+      await deleteMutation.mutateAsync({ id: p.id });
+    }
+    invalidateProjects();
+    setSelectedProjectId(null);
+    setView('dashboard');
+  };
+
+  // ── Navigation ───────────────────────────────────────────────────────────
   const navItems = [
     { id: 'dashboard' as View, label: '仪表盘', labelEn: 'Dashboard', icon: LayoutDashboard },
     { id: 'projects' as View, label: '项目管理', labelEn: 'Projects', icon: FolderKanban },
@@ -152,18 +223,6 @@ export default function Home() {
     setSidebarOpen(false);
   };
 
-  const handleImportProjects = (imported: Project[]) => {
-    setProjects(imported.map(normalizeProject));
-    setView('projects');
-    setSelectedProjectId(null);
-  };
-
-  const handleClearAll = () => {
-    setProjects([]);
-    setSelectedProjectId(null);
-    setView('dashboard');
-  };
-
   const viewLabels: Record<View, string> = {
     dashboard: 'Dashboard',
     projects: 'Projects',
@@ -171,6 +230,52 @@ export default function Home() {
     backup: 'Backup & Restore',
   };
 
+  // ── Auth loading / login gate ────────────────────────────────────────────
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-stone-50">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-10 h-10 bg-amber-500 flex items-center justify-center">
+            <Cpu size={20} className="text-stone-900" />
+          </div>
+          <Loader2 size={20} className="animate-spin text-stone-400" />
+          <p className="text-sm font-mono text-stone-400 uppercase tracking-widest">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-stone-50">
+        <div className="text-center space-y-6 max-w-sm px-6">
+          <div className="flex justify-center">
+            <div className="w-14 h-14 bg-amber-500 flex items-center justify-center">
+              <Cpu size={26} className="text-stone-900" />
+            </div>
+          </div>
+          <div>
+            <h1 className="font-serif text-2xl text-stone-900 mb-2">CE Project Hub</h1>
+            <p className="text-[11px] font-mono uppercase tracking-widest text-stone-400">
+              Consumer Electronics · Product Development
+            </p>
+          </div>
+          <p className="text-sm text-stone-500">
+            请登录以访问您的项目数据，支持多人多设备实时同步。
+          </p>
+          <a
+            href={getLoginUrl()}
+            className="inline-flex items-center gap-2 bg-amber-500 hover:bg-amber-400 text-stone-900 font-medium px-6 py-3 transition-colors text-sm"
+          >
+            <LogIn size={16} />
+            登录 / 注册
+          </a>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Main App ─────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen flex bg-stone-50">
       {/* Mobile Overlay */}
@@ -234,7 +339,7 @@ export default function Home() {
             );
           })}
 
-          {/* Recent Projects (when in projects view) */}
+          {/* Recent Projects */}
           {view === 'projects' && projects.length > 0 && (
             <div className="mt-4">
               <div className="text-[9px] font-mono uppercase tracking-widest text-stone-600 mb-1.5 px-3">
@@ -257,33 +362,40 @@ export default function Home() {
           )}
         </nav>
 
-        {/* Save Status */}
-        <div className="p-4 border-t border-stone-800">
+        {/* Save Status + User */}
+        <div className="p-4 border-t border-stone-800 space-y-2">
           <div className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-wider">
             {saveStatus === 'saved' ? (
               <>
                 <CheckCircle2 size={11} className="text-emerald-500 shrink-0" />
-                <span className="text-stone-500">已自动保存</span>
+                <span className="text-stone-500">已同步至云端</span>
               </>
             ) : saveStatus === 'error' ? (
               <>
                 <span className="text-[10px] text-rose-400 shrink-0">✕</span>
-                <span className="text-rose-400">保存失败</span>
+                <span className="text-rose-400">同步失败</span>
               </>
             ) : (
               <>
                 <Save size={11} className="text-amber-400 animate-pulse shrink-0" />
-                <span className="text-stone-500">保存中...</span>
+                <span className="text-stone-500">同步中...</span>
               </>
             )}
           </div>
           {lastSavedAt && saveStatus === 'saved' && (
-            <div className="mt-1 text-[9px] font-mono text-stone-600">
+            <div className="text-[9px] font-mono text-stone-600">
               {lastSavedAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
             </div>
           )}
-          <div className="mt-1 text-[9px] font-mono text-stone-700">
-            {projects.length} PROJECTS · LOCAL STORAGE
+          <div className="text-[9px] font-mono text-stone-700">
+            {projects.length} PROJECTS · CLOUD DB
+          </div>
+          {/* User info */}
+          <div className="pt-1 flex items-center gap-2">
+            <div className="w-5 h-5 bg-amber-600 flex items-center justify-center text-[9px] font-mono text-stone-900 uppercase shrink-0">
+              {(user.name || user.email || 'U').charAt(0)}
+            </div>
+            <span className="text-[10px] text-stone-500 truncate">{user.name || user.email}</span>
           </div>
         </div>
       </aside>
@@ -326,62 +438,76 @@ export default function Home() {
                 ⌘K
               </kbd>
             </button>
+
+            {/* Sync status */}
             <div className="hidden sm:flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider">
-              {saveStatus === 'saved' ? (
+              {saveStatus === 'saving' ? (
                 <span className="flex items-center gap-1.5 text-stone-400">
-                  <CheckCircle2 size={11} className="text-emerald-500" />
-                  <span>已保存</span>
+                  <Save size={11} className="text-amber-400 animate-pulse" />
+                  <span>同步中...</span>
+                </span>
+              ) : saveStatus === 'error' ? (
+                <span className="flex items-center gap-1.5 text-rose-500">
+                  <span>✕</span><span>同步失败</span>
+                </span>
+              ) : (
+                <span className="flex items-center gap-1.5 text-stone-400">
+                  <Cloud size={11} className="text-emerald-500" />
+                  <span>已同步</span>
                   {lastSavedAt && (
                     <span className="text-stone-300 normal-case tracking-normal">
                       {lastSavedAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                     </span>
                   )}
                 </span>
-              ) : saveStatus === 'error' ? (
-                <span className="flex items-center gap-1.5 text-rose-500">
-                  <span>✕</span><span>保存失败</span>
-                </span>
-              ) : (
-                <span className="flex items-center gap-1.5 text-stone-400">
-                  <Save size={11} className="text-amber-400 animate-pulse" />
-                  <span>保存中...</span>
-                </span>
               )}
             </div>
+
             <div className="text-[10px] font-mono text-stone-400 hidden md:block bg-stone-100 px-2 py-1">
-              {projects.length} PROJECTS
+              {projectsLoading ? '...' : `${projects.length} PROJECTS`}
             </div>
           </div>
         </header>
 
         {/* Page Content */}
         <main className="flex-1 p-4 lg:p-8 overflow-auto">
-          {view === 'dashboard' && (
-            <DashboardView projects={projects} onSelectProject={handleSelectProject} />
-          )}
-          {view === 'projects' && !selectedProject && (
-            <ProjectListView
-              projects={projects}
-              onSelectProject={handleSelectProject}
-              onAddProject={handleAddProject}
-              onDeleteProject={handleDeleteProject}
-              onCloneProject={handleCloneProject}
-            />
-          )}
-          {view === 'projects' && selectedProject && (
-            <ProjectDetailView
-              project={selectedProject}
-              onUpdate={handleUpdateProject}
-              onBack={() => setSelectedProjectId(null)}
-            />
-          )}
-          {view === 'sop' && <SOPLibraryView />}
-          {view === 'backup' && (
-            <BackupPanel
-              projects={projects}
-              onImport={handleImportProjects}
-              onClearAll={handleClearAll}
-            />
+          {projectsLoading ? (
+            <div className="flex items-center justify-center h-64">
+              <div className="flex flex-col items-center gap-3">
+                <Loader2 size={24} className="animate-spin text-amber-500" />
+                <p className="text-sm font-mono text-stone-400 uppercase tracking-widest">加载项目数据...</p>
+              </div>
+            </div>
+          ) : (
+            <>
+              {view === 'dashboard' && (
+                <DashboardView projects={projects} onSelectProject={handleSelectProject} />
+              )}
+              {view === 'projects' && !selectedProject && (
+                <ProjectListView
+                  projects={projects}
+                  onSelectProject={handleSelectProject}
+                  onAddProject={handleAddProject}
+                  onDeleteProject={handleDeleteProject}
+                  onCloneProject={handleCloneProject}
+                />
+              )}
+              {view === 'projects' && selectedProject && (
+                <ProjectDetailView
+                  project={selectedProject}
+                  onUpdate={handleUpdateProject}
+                  onBack={() => setSelectedProjectId(null)}
+                />
+              )}
+              {view === 'sop' && <SOPLibraryView />}
+              {view === 'backup' && (
+                <BackupPanel
+                  projects={projects}
+                  onImport={handleImportProjects}
+                  onClearAll={handleClearAll}
+                />
+              )}
+            </>
           )}
         </main>
       </div>
