@@ -99,7 +99,8 @@ CREATE TABLE `project_phases` (
   `notes` text,
   `createdAt` timestamp NOT NULL DEFAULT (now()),
   `updatedAt` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
-  CONSTRAINT `project_phases_id` PRIMARY KEY(`id`)
+  CONSTRAINT `project_phases_id` PRIMARY KEY(`id`),
+  CONSTRAINT `uniq_project_phase` UNIQUE(`projectId`,`phaseId`)
 );
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -112,11 +113,12 @@ CREATE TABLE `project_tasks` (
   `taskId` varchar(32) NOT NULL,
   `completed` boolean NOT NULL DEFAULT false,
   `instructions` text,
-  `visibleRoles` json DEFAULT ('[]'),
+  `visibleRoles` json DEFAULT NULL,
   `updatedBy` int,
   `createdAt` timestamp NOT NULL DEFAULT (now()),
   `updatedAt` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
-  CONSTRAINT `project_tasks_id` PRIMARY KEY(`id`)
+  CONSTRAINT `project_tasks_id` PRIMARY KEY(`id`),
+  CONSTRAINT `uniq_project_phase_task` UNIQUE(`projectId`,`phaseId`,`taskId`)
 );
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -144,6 +146,7 @@ CREATE TABLE `project_issues` (
   `updatedAt` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT `project_issues_id` PRIMARY KEY(`id`)
 );
+CREATE INDEX `idx_issues_project_phase_status_severity` ON `project_issues` (`projectId`,`phaseId`,`status`,`severity`);
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Project Gate Reviews
@@ -165,6 +168,7 @@ CREATE TABLE `project_gate_reviews` (
   `updatedAt` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT `project_gate_reviews_id` PRIMARY KEY(`id`)
 );
+CREATE INDEX `idx_gate_reviews_project_phase` ON `project_gate_reviews` (`projectId`,`phaseId`);
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Project Changelog
@@ -178,7 +182,7 @@ CREATE TABLE `project_changelog` (
   `description` text,
   `reason` text,
   `decisionMaker` varchar(256),
-  `affectedPhases` json DEFAULT ('[]'),
+  `affectedPhases` json DEFAULT NULL,
   `status` enum('proposed','approved','rejected','implemented','cancelled') NOT NULL DEFAULT 'proposed',
   `costImpact` varchar(128),
   `scheduleImpact` varchar(128),
@@ -190,6 +194,7 @@ CREATE TABLE `project_changelog` (
   `updatedAt` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT `project_changelog_id` PRIMARY KEY(`id`)
 );
+CREATE INDEX `idx_changelog_project_type_status` ON `project_changelog` (`projectId`,`type`,`status`);
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Project Files (object storage metadata)

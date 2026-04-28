@@ -22,6 +22,13 @@
       "when": 1777399228699,
       "tag": "0002_aspiring_human_fly",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1777400865728,
+      "tag": "0003_open_skullbuster",
+      "breakpoints": true
     }
   ]
 }

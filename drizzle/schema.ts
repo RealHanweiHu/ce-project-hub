@@ -150,20 +150,27 @@ export type InsertProjectMember = typeof projectMembers.$inferInsert;
  * project_phases table - stores per-project phase metadata.
  * One row per (project, phase) pair.
  */
-export const projectPhases = mysqlTable("project_phases", {
-  id: int("id").autoincrement().primaryKey(),
-  projectId: varchar("projectId", { length: 32 }).notNull(),
-  /** Phase id matching SOP template (e.g. 'concept', 'planning', 'design') */
-  phaseId: varchar("phaseId", { length: 32 }).notNull(),
-  /** Custom start date override (YYYY-MM-DD) */
-  startDate: varchar("startDate", { length: 32 }),
-  /** Custom end date override (YYYY-MM-DD) */
-  endDate: varchar("endDate", { length: 32 }),
-  /** Phase-level notes */
-  notes: text("notes"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-});
+export const projectPhases = mysqlTable(
+  "project_phases",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    projectId: varchar("projectId", { length: 32 }).notNull(),
+    /** Phase id matching SOP template (e.g. 'concept', 'planning', 'design') */
+    phaseId: varchar("phaseId", { length: 32 }).notNull(),
+    /** Custom start date override (YYYY-MM-DD) */
+    startDate: varchar("startDate", { length: 32 }),
+    /** Custom end date override (YYYY-MM-DD) */
+    endDate: varchar("endDate", { length: 32 }),
+    /** Phase-level notes */
+    notes: text("notes"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => ({
+    /** Each project can only have one row per phase */
+    uniqProjectPhase: uniqueIndex("uniq_project_phase").on(table.projectId, table.phaseId),
+  })
+);
 
 export type ProjectPhase = typeof projectPhases.$inferSelect;
 export type InsertProjectPhase = typeof projectPhases.$inferInsert;
@@ -176,26 +183,37 @@ export type InsertProjectPhase = typeof projectPhases.$inferInsert;
  * project_tasks table - tracks completion state and details for each SOP task.
  * One row per (project, phase, task) triple.
  */
-export const projectTasks = mysqlTable("project_tasks", {
-  id: int("id").autoincrement().primaryKey(),
-  projectId: varchar("projectId", { length: 32 }).notNull(),
-  phaseId: varchar("phaseId", { length: 32 }).notNull(),
-  /** Task id matching SOP template (e.g. 'c1', 'p3', 'd5') */
-  taskId: varchar("taskId", { length: 32 }).notNull(),
-  /** Whether the task is checked/completed */
-  completed: boolean("completed").notNull().default(false),
-  /** Task-level instructions / notes */
-  instructions: text("instructions"),
-  /**
-   * Roles that can see this task.
-   * JSON array of ProjectMemberRole strings.
-   * Empty array = visible to all members.
-   */
-  visibleRoles: json("visibleRoles").$type<string[]>().default([]),
-  updatedBy: int("updatedBy"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-});
+export const projectTasks = mysqlTable(
+  "project_tasks",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    projectId: varchar("projectId", { length: 32 }).notNull(),
+    phaseId: varchar("phaseId", { length: 32 }).notNull(),
+    /** Task id matching SOP template (e.g. 'c1', 'p3', 'd5') */
+    taskId: varchar("taskId", { length: 32 }).notNull(),
+    /** Whether the task is checked/completed */
+    completed: boolean("completed").notNull().default(false),
+    /** Task-level instructions / notes */
+    instructions: text("instructions"),
+    /**
+     * Roles that can see this task.
+     * JSON array of ProjectMemberRole strings.
+     * Empty array = visible to all members.
+     */
+    visibleRoles: json("visibleRoles").$type<string[]>().default([]),
+    updatedBy: int("updatedBy"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => ({
+    /** Each project/phase can only have one row per task template id */
+    uniqProjectPhaseTask: uniqueIndex("uniq_project_phase_task").on(
+      table.projectId,
+      table.phaseId,
+      table.taskId
+    ),
+  })
+);
 
 export type ProjectTask = typeof projectTasks.$inferSelect;
 export type InsertProjectTask = typeof projectTasks.$inferInsert;
@@ -218,29 +236,41 @@ export type IssueCategory = (typeof ISSUE_CATEGORIES)[number];
 /**
  * project_issues table - issue tracking per project/phase.
  */
-export const projectIssues = mysqlTable("project_issues", {
-  id: int("id").autoincrement().primaryKey(),
-  projectId: varchar("projectId", { length: 32 }).notNull(),
-  phaseId: varchar("phaseId", { length: 32 }).notNull(),
-  title: varchar("title", { length: 512 }).notNull(),
-  description: text("description"),
-  severity: mysqlEnum("severity", ISSUE_SEVERITIES).notNull().default("P2"),
-  status: mysqlEnum("status", ISSUE_STATUSES).notNull().default("open"),
-  category: mysqlEnum("category", ISSUE_CATEGORIES).notNull().default("other"),
-  /** Responsible person (display name) */
-  owner: varchar("owner", { length: 256 }),
-  reporter: varchar("reporter", { length: 256 }),
-  foundDate: varchar("foundDate", { length: 32 }),
-  targetDate: varchar("targetDate", { length: 32 }),
-  closedDate: varchar("closedDate", { length: 32 }),
-  rootCause: text("rootCause"),
-  solution: text("solution"),
-  relatedTaskId: varchar("relatedTaskId", { length: 32 }),
-  /** User id of the creator (for permission checks) */
-  creatorId: int("creatorId"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-});
+export const projectIssues = mysqlTable(
+  "project_issues",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    projectId: varchar("projectId", { length: 32 }).notNull(),
+    phaseId: varchar("phaseId", { length: 32 }).notNull(),
+    title: varchar("title", { length: 512 }).notNull(),
+    description: text("description"),
+    severity: mysqlEnum("severity", ISSUE_SEVERITIES).notNull().default("P2"),
+    status: mysqlEnum("status", ISSUE_STATUSES).notNull().default("open"),
+    category: mysqlEnum("category", ISSUE_CATEGORIES).notNull().default("other"),
+    /** Responsible person (display name) */
+    owner: varchar("owner", { length: 256 }),
+    reporter: varchar("reporter", { length: 256 }),
+    foundDate: varchar("foundDate", { length: 32 }),
+    targetDate: varchar("targetDate", { length: 32 }),
+    closedDate: varchar("closedDate", { length: 32 }),
+    rootCause: text("rootCause"),
+    solution: text("solution"),
+    relatedTaskId: varchar("relatedTaskId", { length: 32 }),
+    /** User id of the creator (for permission checks) */
+    creatorId: int("creatorId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => ({
+    /** Speed up issue list queries filtered by project/phase/status/severity */
+    idxProjectPhaseStatusSeverity: index("idx_issues_project_phase_status_severity").on(
+      table.projectId,
+      table.phaseId,
+      table.status,
+      table.severity
+    ),
+  })
+);
 
 export type ProjectIssue = typeof projectIssues.$inferSelect;
 export type InsertProjectIssue = typeof projectIssues.$inferInsert;
@@ -255,25 +285,35 @@ export type GateDecision = (typeof GATE_DECISIONS)[number];
 /**
  * project_gate_reviews table - gate review records per project/phase.
  */
-export const projectGateReviews = mysqlTable("project_gate_reviews", {
-  id: int("id").autoincrement().primaryKey(),
-  projectId: varchar("projectId", { length: 32 }).notNull(),
-  phaseId: varchar("phaseId", { length: 32 }).notNull(),
-  phaseName: varchar("phaseName", { length: 256 }).notNull().default(""),
-  gateName: varchar("gateName", { length: 256 }).notNull().default(""),
-  reviewDate: varchar("reviewDate", { length: 32 }).notNull(),
-  /** Comma-separated participant names */
-  participants: text("participants"),
-  decision: mysqlEnum("decision", GATE_DECISIONS).notNull().default("conditional"),
-  /** Conditions if conditional approval */
-  conditions: text("conditions"),
-  notes: text("notes"),
-  /** Review round number (1 = first, 2 = re-review, etc.) */
-  roundNumber: int("roundNumber").notNull().default(1),
-  createdBy: int("createdBy"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-});
+export const projectGateReviews = mysqlTable(
+  "project_gate_reviews",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    projectId: varchar("projectId", { length: 32 }).notNull(),
+    phaseId: varchar("phaseId", { length: 32 }).notNull(),
+    phaseName: varchar("phaseName", { length: 256 }).notNull().default(""),
+    gateName: varchar("gateName", { length: 256 }).notNull().default(""),
+    reviewDate: varchar("reviewDate", { length: 32 }).notNull(),
+    /** Comma-separated participant names */
+    participants: text("participants"),
+    decision: mysqlEnum("decision", GATE_DECISIONS).notNull().default("conditional"),
+    /** Conditions if conditional approval */
+    conditions: text("conditions"),
+    notes: text("notes"),
+    /** Review round number (1 = first, 2 = re-review, etc.) */
+    roundNumber: int("roundNumber").notNull().default(1),
+    createdBy: int("createdBy"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => ({
+    /** Speed up gate review list queries per project/phase */
+    idxProjectPhase: index("idx_gate_reviews_project_phase").on(
+      table.projectId,
+      table.phaseId
+    ),
+  })
+);
 
 export type ProjectGateReview = typeof projectGateReviews.$inferSelect;
 export type InsertProjectGateReview = typeof projectGateReviews.$inferInsert;
@@ -307,28 +347,39 @@ export type ChangeStatus = (typeof CHANGE_STATUSES)[number];
 /**
  * project_changelog table - change records and decisions per project.
  */
-export const projectChangelog = mysqlTable("project_changelog", {
-  id: int("id").autoincrement().primaryKey(),
-  projectId: varchar("projectId", { length: 32 }).notNull(),
-  /** Auto-generated number e.g. ECR-001, ECN-002 */
-  number: varchar("number", { length: 64 }).notNull().default(""),
-  type: mysqlEnum("type", CHANGE_TYPES).notNull().default("other"),
-  title: varchar("title", { length: 512 }).notNull(),
-  description: text("description"),
-  reason: text("reason"),
-  decisionMaker: varchar("decisionMaker", { length: 256 }),
-  /** JSON array of phase ids affected */
-  affectedPhases: json("affectedPhases").$type<string[]>().default([]),
-  status: mysqlEnum("status", CHANGE_STATUSES).notNull().default("proposed"),
-  costImpact: varchar("costImpact", { length: 128 }),
-  scheduleImpact: varchar("scheduleImpact", { length: 128 }),
-  notes: text("notes"),
-  createdDate: varchar("createdDate", { length: 32 }),
-  implementedDate: varchar("implementedDate", { length: 32 }),
-  creatorId: int("creatorId"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-});
+export const projectChangelog = mysqlTable(
+  "project_changelog",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    projectId: varchar("projectId", { length: 32 }).notNull(),
+    /** Auto-generated number e.g. ECR-001, ECN-002 */
+    number: varchar("number", { length: 64 }).notNull().default(""),
+    type: mysqlEnum("type", CHANGE_TYPES).notNull().default("other"),
+    title: varchar("title", { length: 512 }).notNull(),
+    description: text("description"),
+    reason: text("reason"),
+    decisionMaker: varchar("decisionMaker", { length: 256 }),
+    /** JSON array of phase ids affected */
+    affectedPhases: json("affectedPhases").$type<string[]>().default([]),
+    status: mysqlEnum("status", CHANGE_STATUSES).notNull().default("proposed"),
+    costImpact: varchar("costImpact", { length: 128 }),
+    scheduleImpact: varchar("scheduleImpact", { length: 128 }),
+    notes: text("notes"),
+    createdDate: varchar("createdDate", { length: 32 }),
+    implementedDate: varchar("implementedDate", { length: 32 }),
+    creatorId: int("creatorId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => ({
+    /** Speed up changelog list queries filtered by project/type/status */
+    idxProjectTypeStatus: index("idx_changelog_project_type_status").on(
+      table.projectId,
+      table.type,
+      table.status
+    ),
+  })
+);
 
 export type ProjectChangeRecord = typeof projectChangelog.$inferSelect;
 export type InsertProjectChangeRecord = typeof projectChangelog.$inferInsert;

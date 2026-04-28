@@ -203,3 +203,14 @@
 - [x] 删除临时手工脚本：alter-projects-table.mjs、create-missing-tables.mjs、migrate-infra.mjs
 - [x] 统一前端 data.ts 和 ChangeLog.tsx 的 changelog type/status 枚举（shared/const.ts 重新导出 schema 枚举）
 - [x] 编写 clean-db smoke test：空库→migrate→seed admin→创建项目→打开详情（7 步，31 tests 全部通过）
+
+### Schema 约束与索引补全（已完成）
+- [x] project_phases 添加 UNIQUE(projectId, phaseId)
+- [x] project_tasks 添加 UNIQUE(projectId, phaseId, taskId)
+- [x] project_issues 添加 INDEX(projectId, phaseId, status, severity)
+- [x] project_gate_reviews 添加 INDEX(projectId, phaseId)
+- [x] project_changelog 添加 INDEX(projectId, type, status)
+- [x] 生成并应用 drizzle-kit 迁移（0003 SQL 直接执行 + 手动注册 hash）
+- [x] 更新 drizzle/migrations/migration.sql 规范从零迁移文件（含 TiDB json DEFAULT NULL 修复）
+- [x] 验证空库可从零 migrate 成功（20 条语句全部 OK，11 张表 + 5 个约束/索引验证通过）
+- [x] 补充 vitest 测试：unique-constraints.test.ts（14 tests，验证唯一约束冲突抛出错误 + 索引存在）
