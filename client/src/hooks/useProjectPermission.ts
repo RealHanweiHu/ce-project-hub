@@ -47,8 +47,9 @@ export function useProjectPermission(projectId: string | null) {
   );
 
   if (!projectId || isLoading) {
-    // Optimistic: show full UI while loading to avoid flicker
-    return { ...FULL_PERMISSIONS, isLoading: true };
+    // Security-first: default to NO_PERMISSIONS while loading
+    // This prevents unauthorized users from briefly seeing editable UI
+    return { ...NO_PERMISSIONS, isLoading: true };
   }
 
   if (!data) {

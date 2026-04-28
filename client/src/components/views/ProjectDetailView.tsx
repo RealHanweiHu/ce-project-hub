@@ -541,7 +541,12 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
 
        {/* ── Gantt Tab ─────────────────────────────────────────────────── */}
       {mainTab === 'gantt' && (
-        <GanttView project={project} onUpdate={onUpdate} onPhaseClick={handleGanttPhaseClick} />
+        <GanttView
+          project={project}
+          onUpdate={onUpdate}
+          onPhaseClick={handleGanttPhaseClick}
+          readOnly={!perms.canEditProjectInfo}
+        />
       )}
 
       {/* ── Change Log Tab ──────────────────────────────────────────── */}

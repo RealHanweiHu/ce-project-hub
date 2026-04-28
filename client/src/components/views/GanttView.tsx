@@ -5,7 +5,7 @@
 import { useMemo, useRef, useState, useCallback } from 'react';
 import {
   Flag, CalendarDays, ZoomIn, ZoomOut, ChevronLeft, ChevronRight,
-  Pencil, Check, X as XIcon,
+  Pencil, Check, X as XIcon, Lock,
 } from 'lucide-react';
 import { Project, SOP_PHASES, PhaseDate, computePhaseProgress, getPhaseStatus, getProjectPhases, SOPPhase } from '@/lib/data';
 
@@ -57,6 +57,7 @@ interface GanttViewProps {
   project: Project;
   onUpdate: (project: Project) => void;
   onPhaseClick?: (phaseId: string) => void;
+  readOnly?: boolean;
 }
 
 // ── Inline date editor ────────────────────────────────────────────────────────
@@ -88,11 +89,19 @@ function DateEditor({
   );
 }
 
-export function GanttView({ project, onUpdate, onPhaseClick }: GanttViewProps) {
+export function GanttView({ project, onUpdate, onPhaseClick, readOnly = false }: GanttViewProps) {
   const [zoom, setZoom] = useState(1);
   const [editingPhase, setEditingPhase] = useState<string | null>(null);
   const [editingField, setEditingField] = useState<'start' | 'end' | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Close any open editor panel when readOnly becomes true (e.g. permissions resolved)
+  const prevReadOnly = useRef(readOnly);
+  if (readOnly && !prevReadOnly.current && editingPhase) {
+    setEditingPhase(null);
+    setEditingField(null);
+  }
+  prevReadOnly.current = readOnly;
 
   // ── Compute phase bars ────────────────────────────────────────────────────
   const { bars, totalStart, totalEnd } = useMemo(() => {
@@ -213,10 +222,17 @@ export function GanttView({ project, onUpdate, onPhaseClick }: GanttViewProps) {
               {formatDate(totalStart)} → {formatDate(totalEnd)}
             </span>
           </div>
-          <div className="flex items-center gap-1.5 bg-amber-50 border border-amber-200 px-2.5 py-1">
-            <Pencil size={10} className="text-amber-600" />
-            <span className="text-[10px] font-mono text-amber-700 uppercase tracking-wider">双击阶段条可编辑日期</span>
-          </div>
+          {!readOnly ? (
+            <div className="flex items-center gap-1.5 bg-amber-50 border border-amber-200 px-2.5 py-1">
+              <Pencil size={10} className="text-amber-600" />
+              <span className="text-[10px] font-mono text-amber-700 uppercase tracking-wider">双击阶段条可编辑日期</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 bg-stone-100 border border-stone-200 px-2.5 py-1">
+              <Lock size={10} className="text-stone-400" />
+              <span className="text-[10px] font-mono text-stone-400 uppercase tracking-wider">仅 Owner / 管理层 / PM 可修改阶段日期</span>
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-1">
           <button onClick={() => scrollBy(-200)} className="p-1.5 text-stone-400 hover:text-stone-700 hover:bg-stone-100 transition-colors" title="向左滚动">
@@ -305,14 +321,18 @@ export function GanttView({ project, onUpdate, onPhaseClick }: GanttViewProps) {
 
                   {/* Phase bar */}
                   <div
-                    className="absolute cursor-pointer group"
+                    className={`absolute group ${readOnly ? 'cursor-default' : 'cursor-pointer'}`}
                     style={{ left, width, top: '50%', transform: 'translateY(-50%)' }}
                     onDoubleClick={() => {
+                      if (readOnly) return;
                       setEditingPhase(phase.id);
                       setEditingField('start');
                     }}
                     onClick={() => !isEditing && onPhaseClick?.(phase.id)}
-                    title={`双击编辑 · ${phase.name}: ${formatDate(startDate)} → ${formatDate(endDate)}`}
+                    title={readOnly
+                      ? `${phase.name}: ${formatDate(startDate)} → ${formatDate(endDate)}`
+                      : `双击编辑 · ${phase.name}: ${formatDate(startDate)} → ${formatDate(endDate)}`
+                    }
                   >
                     {/* Track */}
                     <div
@@ -337,11 +357,13 @@ export function GanttView({ project, onUpdate, onPhaseClick }: GanttViewProps) {
                       </div>
                     )}
                     {/* Edit hint on hover */}
-                    <div className="absolute -top-5 left-0 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap">
-                      <span className="text-[9px] font-mono text-stone-500 bg-white border border-stone-200 px-1.5 py-0.5">
-                        {formatDate(startDate)} → {formatDate(endDate)} · 双击编辑
-                      </span>
-                    </div>
+                    {!readOnly && (
+                      <div className="absolute -top-5 left-0 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap">
+                        <span className="text-[9px] font-mono text-stone-500 bg-white border border-stone-200 px-1.5 py-0.5">
+                          {formatDate(startDate)} → {formatDate(endDate)} · 双击编辑
+                        </span>
+                      </div>
+                    )}
                     {/* Gate marker */}
                     <div className="absolute top-1/2 -translate-y-1/2 -right-0.5 z-20 opacity-0 group-hover:opacity-100 transition-opacity">
                       <Flag size={12} className="text-stone-700" />
@@ -375,8 +397,8 @@ export function GanttView({ project, onUpdate, onPhaseClick }: GanttViewProps) {
         </div>
       </div>
 
-      {/* Inline Date Editor Panel */}
-      {editingPhase && (() => {
+      {/* Inline Date Editor Panel - only shown when not readOnly */}
+      {!readOnly && editingPhase && (() => {
         const bar = bars.find((b) => b.phase.id === editingPhase);
         if (!bar) return null;
         const custom = project.phaseDates?.[editingPhase];

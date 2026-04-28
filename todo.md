@@ -33,3 +33,10 @@
 - [x] 各视图应用权限控制：只读用户隐藏编辑按鈕，viewer 无法修改任务状态
 - [x] 项目列表显示共享项目（合并自己创建 + 作为成员加入的项目）
 - [x] 后端权限校验：project.get/update/delete 根据角色矩阵授权
+
+## 甘特图权限控制（已完成）
+
+- [x] 读取 GanttView 组件，了解拖拽/编辑交互结构
+- [x] 为 GanttView 添加 readOnly prop，禁用双击编辑/日期修改面板
+- [x] 在 ProjectDetailView 中根据 canEditProjectInfo 传入 readOnly prop
+- [x] 只读时显示角色权限提示（"仅 Owner / 管理层 / PM 可修改阶段日期"）
