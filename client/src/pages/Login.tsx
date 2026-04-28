@@ -74,6 +74,10 @@ export default function Login() {
         setError('请输入显示名称');
         return;
       }
+      if (name.trim().length < 1) {
+        setError('显示名称不能为空');
+        return;
+      }
       if (!username.trim()) {
         setError('请输入用户名');
         return;
@@ -90,7 +94,7 @@ export default function Login() {
         setError('两次输入的密码不一致');
         return;
       }
-      registerMutation.mutate({ username: username.trim(), password, name: name.trim() });
+      registerMutation.mutate({ username: username.trim(), password, name: name.trim() }); // trim ensures no leading/trailing spaces
     }
   };
 

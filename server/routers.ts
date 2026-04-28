@@ -65,7 +65,7 @@ export const appRouter = router({
       .input(z.object({
         username: z.string().min(2).max(32).regex(/^[a-zA-Z0-9_\.\-]+$/, '用户名只能包含字母、数字、下划线、点和横线'),
         password: z.string().min(6, '密码至少6位'),
-        name: z.string().min(1, '请输入显示名称').max(64),
+        name: z.string().trim().min(1, '请输入显示名称').max(64),
       }))
       .mutation(async ({ input, ctx }) => {
         const existing = await db.getUserByUsername(input.username);
@@ -98,7 +98,7 @@ export const appRouter = router({
       .input(z.object({
         username: z.string().min(2).max(32).regex(/^[a-zA-Z0-9_.\-]+$/, '用户名只能包含字母、数字、下划线、点和横线'),
         password: z.string().min(6, '密码至少6位'),
-        name: z.string().min(1),
+        name: z.string().trim().min(1, '请输入显示名称').max(64),
         role: z.enum(['user', 'admin']).default('user'),
         canCreateProject: z.boolean().default(false),
       }))

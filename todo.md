@@ -90,6 +90,17 @@
 - [x] admin.listUsers 返回 username 字段
 - [x] TypeScript 零错误，测试通过
 
+## 用户显示名称强制必填（已完成）
+
+- [x] 后端 auth.register 接口已强制 name 非空（z.string().min(1)）
+- [x] 后端 auth.createUser 接口已强制 name 非空（z.string().min(1)）
+- [x] 前端注册表单已有「显示名称」必填字段（含前端验证）
+- [x] 前端管理员创建用户弹窗已有「显示名称」必填字段（含前端验证）
+- [x] PM 下拉选择列表已用 u.name || u.username 优先显示显示名称
+- [x] 后端 auth.register 和 auth.createUser 的 name 字段添加 .trim() 防纯空格输入
+- [x] 前端注册表单和管理员创建用户弹窗均提交 trim() 后的值
+- [x] TypeScript 零错误
+
 ## 创建项目功能改进（已完成）
 
 - [x] 产品类型改为预设下拉（汽车充气泵/自行车充气泵/户外充气泵/车载吸尘器/暴力风扇/胎压计/机械式打气筒/组件）

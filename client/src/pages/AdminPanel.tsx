@@ -443,14 +443,14 @@ export default function AdminPanel() {
               className="bg-amber-500 hover:bg-amber-600 text-stone-900 text-sm"
               disabled={createUserMutation.isPending}
               onClick={() => {
-                if (!newUsername || !newPassword || !newName) {
-                  toast.error('请填写所有必填项');
+                if (!newUsername.trim() || !newPassword || !newName.trim()) {
+                  toast.error('请填写所必填项（显示名称和用户名不能为空）');
                   return;
                 }
                 createUserMutation.mutate({
-                  username: newUsername,
+                  username: newUsername.trim(),
                   password: newPassword,
-                  name: newName,
+                  name: newName.trim(),
                   role: newRole,
                   canCreateProject: newCanCreate,
                 });
