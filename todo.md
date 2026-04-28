@@ -77,6 +77,19 @@
 - [x] 完善 IssueList 关闭/删除权限：仅问题创建者或 canManage 角色可操作
 - [x] handleCreate 自动填充 creatorId，实现创建者身份识别
 
+## 认证系统切换：Manus OAuth → 用户名密码（已完成）
+
+- [x] 数据库 users 表添加 passwordHash 和 username 字段，推送迁移
+- [x] 安装 bcryptjs，实现密码哈希工具函数 server/_core/password.ts
+- [x] 后端新增 auth.login tRPC 接口（用户名+密码）
+- [x] 后端新增 auth.createUser tRPC 接口（仅管理员可调用）
+- [x] 后端新增 auth.resetPassword tRPC 接口（仅管理员可调用）
+- [x] 实现前端登录页面 /login（用户名+密码表单）
+- [x] 替换 getLoginUrl() 跳转为内部 /login 路由
+- [x] 在管理员后台添加创建用户和重置密码功能
+- [x] admin.listUsers 返回 username 字段
+- [x] TypeScript 零错误，测试通过
+
 ## 中国大陆访问优化（已完成）
 
 - [x] 将 Google Fonts (fonts.googleapis.com) 替换为自托管字体（上传到 /manus-storage/）

@@ -25,6 +25,7 @@ export const adminRouter = router({
       .select({
         id: users.id,
         name: users.name,
+        username: users.username,
         email: users.email,
         role: users.role,
         canCreateProject: users.canCreateProject,

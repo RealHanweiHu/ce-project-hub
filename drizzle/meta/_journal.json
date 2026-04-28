@@ -29,6 +29,13 @@
       "when": 1777366404321,
       "tag": "0003_cuddly_big_bertha",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1777371329750,
+      "tag": "0004_lucky_next_avengers",
+      "breakpoints": true
     }
   ]
 }

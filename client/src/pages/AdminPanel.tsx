@@ -7,23 +7,32 @@ import { useAuth } from '@/_core/hooks/useAuth';
 import { useLocation } from 'wouter';
 import {
   Shield, Users, CheckCircle2, XCircle, ChevronDown,
-  Crown, User, AlertTriangle, RefreshCw, Search,
+  Crown, User, AlertTriangle, RefreshCw, Search, UserPlus, KeyRound,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog';
 import { toast } from 'sonner';
 
 type UserRow = {
   id: number;
   name: string;
-  email: string;
+  username: string | null;
+  email: string | null;
   role: 'admin' | 'user';
   canCreateProject: boolean;
   createdAt: Date | null;
@@ -34,6 +43,20 @@ export default function AdminPanel() {
   const { user, isAuthenticated, loading } = useAuth();
   const [, navigate] = useLocation();
   const [search, setSearch] = useState('');
+
+  // Create user dialog state
+  const [createOpen, setCreateOpen] = useState(false);
+  const [newUsername, setNewUsername] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [newName, setNewName] = useState('');
+  const [newRole, setNewRole] = useState<'user' | 'admin'>('user');
+  const [newCanCreate, setNewCanCreate] = useState(false);
+
+  // Reset password dialog state
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetUserId, setResetUserId] = useState<number | null>(null);
+  const [resetUserName, setResetUserName] = useState('');
+  const [newPwd, setNewPwd] = useState('');
 
   // Redirect non-admins
   if (!loading && (!isAuthenticated || user?.role !== 'admin')) {
@@ -46,17 +69,31 @@ export default function AdminPanel() {
   });
 
   const setRoleMutation = trpc.admin.setUserRole.useMutation({
-    onSuccess: () => {
-      refetch();
-      toast.success('角色已更新');
-    },
+    onSuccess: () => { refetch(); toast.success('角色已更新'); },
     onError: (err) => toast.error(err.message),
   });
 
   const setCanCreateMutation = trpc.admin.setCanCreateProject.useMutation({
+    onSuccess: () => { refetch(); toast.success('权限已更新'); },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const createUserMutation = trpc.auth.createUser.useMutation({
     onSuccess: () => {
       refetch();
-      toast.success('权限已更新');
+      toast.success('用户已创建');
+      setCreateOpen(false);
+      setNewUsername(''); setNewPassword(''); setNewName('');
+      setNewRole('user'); setNewCanCreate(false);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const resetPasswordMutation = trpc.auth.resetPassword.useMutation({
+    onSuccess: () => {
+      toast.success('密码已重置');
+      setResetOpen(false);
+      setNewPwd('');
     },
     onError: (err) => toast.error(err.message),
   });
@@ -64,8 +101,9 @@ export default function AdminPanel() {
   const filteredUsers = (users as UserRow[] | undefined)?.filter((u) => {
     const q = search.toLowerCase();
     return (
-      u.name.toLowerCase().includes(q) ||
-      u.email.toLowerCase().includes(q)
+      (u.name || '').toLowerCase().includes(q) ||
+      (u.username || '').toLowerCase().includes(q) ||
+      (u.email || '').toLowerCase().includes(q)
     );
   }) ?? [];
 
@@ -141,7 +179,7 @@ export default function AdminPanel() {
               <Input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="搜索姓名或邮箱..."
+                placeholder="搜索姓名或用户名..."
                 className="pl-8 h-8 text-sm"
               />
             </div>
@@ -152,6 +190,14 @@ export default function AdminPanel() {
               className="h-8 w-8 p-0"
             >
               <RefreshCw size={13} />
+            </Button>
+            <Button
+              size="sm"
+              className="h-8 gap-1.5 bg-amber-500 hover:bg-amber-600 text-stone-900 text-xs"
+              onClick={() => setCreateOpen(true)}
+            >
+              <UserPlus size={13} />
+              新建用户
             </Button>
           </div>
 
@@ -164,7 +210,7 @@ export default function AdminPanel() {
               <thead>
                 <tr className="border-b border-stone-100 bg-stone-50">
                   <th className="text-left px-4 py-2.5 text-[10px] font-mono uppercase tracking-wider text-stone-400">用户</th>
-                  <th className="text-left px-4 py-2.5 text-[10px] font-mono uppercase tracking-wider text-stone-400">邮箱</th>
+                  <th className="text-left px-4 py-2.5 text-[10px] font-mono uppercase tracking-wider text-stone-400">用户名</th>
                   <th className="text-center px-4 py-2.5 text-[10px] font-mono uppercase tracking-wider text-stone-400">系统角色</th>
                   <th className="text-center px-4 py-2.5 text-[10px] font-mono uppercase tracking-wider text-stone-400">可创建项目</th>
                   <th className="text-left px-4 py-2.5 text-[10px] font-mono uppercase tracking-wider text-stone-400">最近登录</th>
@@ -187,7 +233,7 @@ export default function AdminPanel() {
                         )}
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-stone-500 font-mono text-xs">{u.email}</td>
+                    <td className="px-4 py-3 text-stone-500 font-mono text-xs">{u.username || '—'}</td>
                     <td className="px-4 py-3 text-center">
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
@@ -254,30 +300,18 @@ export default function AdminPanel() {
                         <Button
                           variant="outline"
                           size="sm"
-                          className="h-6 text-xs px-2"
-                          onClick={() =>
-                            setCanCreateMutation.mutate({
-                              userId: u.id,
-                              canCreate: true,
-                            })
-                          }
-                          disabled={u.canCreateProject}
+                          className="h-6 text-xs px-2 gap-1"
+                          onClick={() => {
+                            setResetUserId(u.id);
+                            setResetUserName(u.name || u.username || '');
+                            setNewPwd('');
+                            setResetOpen(true);
+                          }}
+                          disabled={u.id === user?.id}
+                          title="重置密码"
                         >
-                          授权创建
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 text-xs px-2 text-rose-500 hover:text-rose-700"
-                          onClick={() =>
-                            setCanCreateMutation.mutate({
-                              userId: u.id,
-                              canCreate: false,
-                            })
-                          }
-                          disabled={!u.canCreateProject}
-                        >
-                          撤销
+                          <KeyRound size={11} />
+                          重置密码
                         </Button>
                       </div>
                     </td>
@@ -338,6 +372,141 @@ export default function AdminPanel() {
           </div>
         </div>
       </div>
+
+      {/* Create User Dialog */}
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="font-serif flex items-center gap-2">
+              <UserPlus size={16} className="text-amber-500" />
+              新建用户
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label className="text-sm text-stone-700">用户名 <span className="text-rose-500">*</span></Label>
+              <Input
+                value={newUsername}
+                onChange={(e) => setNewUsername(e.target.value)}
+                placeholder="仅字母、数字、下划线、点、横线"
+                className="text-sm"
+              />
+              <p className="text-xs text-stone-400">用于登录，创建后不可修改</p>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-sm text-stone-700">显示名称 <span className="text-rose-500">*</span></Label>
+              <Input
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="例：张三"
+                className="text-sm"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-sm text-stone-700">初始密码 <span className="text-rose-500">*</span></Label>
+              <Input
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="至少6位"
+                className="text-sm"
+              />
+            </div>
+            <div className="flex gap-4">
+              <div className="space-y-1.5 flex-1">
+                <Label className="text-sm text-stone-700">系统角色</Label>
+                <select
+                  value={newRole}
+                  onChange={(e) => setNewRole(e.target.value as 'user' | 'admin')}
+                  className="w-full h-9 border border-stone-200 rounded-md px-3 text-sm bg-white"
+                >
+                  <option value="user">普通用户</option>
+                  <option value="admin">管理员</option>
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-sm text-stone-700">可创建项目</Label>
+                <div className="flex items-center h-9">
+                  <input
+                    type="checkbox"
+                    checked={newCanCreate}
+                    onChange={(e) => setNewCanCreate(e.target.checked)}
+                    className="w-4 h-4 accent-amber-500"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreateOpen(false)} className="text-sm">取消</Button>
+            <Button
+              className="bg-amber-500 hover:bg-amber-600 text-stone-900 text-sm"
+              disabled={createUserMutation.isPending}
+              onClick={() => {
+                if (!newUsername || !newPassword || !newName) {
+                  toast.error('请填写所有必填项');
+                  return;
+                }
+                createUserMutation.mutate({
+                  username: newUsername,
+                  password: newPassword,
+                  name: newName,
+                  role: newRole,
+                  canCreateProject: newCanCreate,
+                });
+              }}
+            >
+              {createUserMutation.isPending ? '创建中...' : '创建'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reset Password Dialog */}
+      <Dialog open={resetOpen} onOpenChange={setResetOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="font-serif flex items-center gap-2">
+              <KeyRound size={16} className="text-amber-500" />
+              重置密码
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-stone-600">
+              正在重置 <strong>{resetUserName}</strong> 的密码
+            </p>
+            <div className="space-y-1.5">
+              <Label className="text-sm text-stone-700">新密码 <span className="text-rose-500">*</span></Label>
+              <Input
+                type="password"
+                value={newPwd}
+                onChange={(e) => setNewPwd(e.target.value)}
+                placeholder="至少6位"
+                className="text-sm"
+                autoFocus
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setResetOpen(false)} className="text-sm">取消</Button>
+            <Button
+              className="bg-amber-500 hover:bg-amber-600 text-stone-900 text-sm"
+              disabled={resetPasswordMutation.isPending}
+              onClick={() => {
+                if (!newPwd || newPwd.length < 6) {
+                  toast.error('密码至少6位');
+                  return;
+                }
+                if (resetUserId !== null) {
+                  resetPasswordMutation.mutate({ userId: resetUserId, newPassword: newPwd });
+                }
+              }}
+            >
+              {resetPasswordMutation.isPending ? '重置中...' : '确认重置'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

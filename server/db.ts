@@ -106,6 +106,40 @@ export async function getUserByEmail(email: string) {
   return result[0];
 }
 
+export async function getUserByUsername(username: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(users).where(eq(users.username, username)).limit(1);
+  return result[0];
+}
+
+export async function createUserWithPassword(data: {
+  username: string;
+  passwordHash: string;
+  name: string;
+  role?: 'user' | 'admin';
+  canCreateProject?: boolean;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error('Database not available');
+  await db.insert(users).values({
+    openId: data.username,
+    username: data.username,
+    passwordHash: data.passwordHash,
+    name: data.name,
+    loginMethod: 'password',
+    role: data.role ?? 'user',
+    canCreateProject: data.canCreateProject ?? false,
+    lastSignedIn: new Date(),
+  });
+}
+
+export async function updateUserPassword(userId: number, passwordHash: string): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error('Database not available');
+  await db.update(users).set({ passwordHash }).where(eq(users.id, userId));
+}
+
 // ── Project helpers ───────────────────────────────────────────────────────────
 
 /**

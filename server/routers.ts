@@ -1,13 +1,18 @@
-import { COOKIE_NAME } from "@shared/const";
+import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
+import { TRPCError } from "@trpc/server";
+import { z } from "zod";
 import { getSessionCookieOptions } from "./_core/cookies";
+import { hashPassword, verifyPassword } from "./_core/password";
+import { sdk } from "./_core/sdk";
 import { systemRouter } from "./_core/systemRouter";
-import { publicProcedure, router } from "./_core/trpc";
+import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { projectsRouter } from "./routers/projects";
 import { membersRouter } from "./routers/members";
 import { adminRouter } from "./routers/admin";
+import * as db from "./db";
 
 export const appRouter = router({
-    // if you need to use socket.io, read and register route in server/_core/index.ts, all api should start with '/api/' so that the gateway can route correctly
+  // if you need to use socket.io, read and register route in server/_core/index.ts, all api should start with '/api/' so that the gateway can route correctly
   system: systemRouter,
   auth: router({
     me: publicProcedure.query(opts => {
@@ -19,6 +24,34 @@ export const appRouter = router({
         canCreateProject: user.role === 'admin' || user.canCreateProject,
       };
     }),
+
+    /** Password-based login - replaces Manus OAuth */
+    login: publicProcedure
+      .input(z.object({
+        username: z.string().min(1),
+        password: z.string().min(1),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const user = await db.getUserByUsername(input.username);
+        if (!user || !user.passwordHash) {
+          throw new TRPCError({ code: 'UNAUTHORIZED', message: '用户名或密码错误' });
+        }
+        const valid = await verifyPassword(input.password, user.passwordHash);
+        if (!valid) {
+          throw new TRPCError({ code: 'UNAUTHORIZED', message: '用户名或密码错误' });
+        }
+        // Update last sign in
+        await db.upsertUser({ openId: user.openId, lastSignedIn: new Date() });
+        // Create session token using existing JWT infrastructure
+        const sessionToken = await sdk.createSessionToken(user.openId, {
+          name: user.name || user.username || '',
+          expiresInMs: ONE_YEAR_MS,
+        });
+        const cookieOptions = getSessionCookieOptions(ctx.req);
+        ctx.res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+        return { success: true } as const;
+      }),
+
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
@@ -26,6 +59,49 @@ export const appRouter = router({
         success: true,
       } as const;
     }),
+
+    /** Admin-only: create a new user with username + password */
+    createUser: protectedProcedure
+      .input(z.object({
+        username: z.string().min(2).max(32).regex(/^[a-zA-Z0-9_.\-]+$/, '用户名只能包含字母、数字、下划线、点和横线'),
+        password: z.string().min(6, '密码至少6位'),
+        name: z.string().min(1),
+        role: z.enum(['user', 'admin']).default('user'),
+        canCreateProject: z.boolean().default(false),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        if (ctx.user.role !== 'admin') {
+          throw new TRPCError({ code: 'FORBIDDEN', message: '仅管理员可创建用户' });
+        }
+        const existing = await db.getUserByUsername(input.username);
+        if (existing) {
+          throw new TRPCError({ code: 'CONFLICT', message: '用户名已存在' });
+        }
+        const passwordHash = await hashPassword(input.password);
+        await db.createUserWithPassword({
+          username: input.username,
+          passwordHash,
+          name: input.name,
+          role: input.role,
+          canCreateProject: input.canCreateProject,
+        });
+        return { success: true } as const;
+      }),
+
+    /** Admin-only: reset a user's password */
+    resetPassword: protectedProcedure
+      .input(z.object({
+        userId: z.number(),
+        newPassword: z.string().min(6, '密码至少6位'),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        if (ctx.user.role !== 'admin') {
+          throw new TRPCError({ code: 'FORBIDDEN', message: '仅管理员可重置密码' });
+        }
+        const passwordHash = await hashPassword(input.newPassword);
+        await db.updateUserPassword(input.userId, passwordHash);
+        return { success: true } as const;
+      }),
   }),
 
   projects: projectsRouter,
