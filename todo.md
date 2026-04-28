@@ -76,3 +76,10 @@
 - [x] 持久化 visibleRoles 修改到项目数据（project.taskVisibleRoles 字段，覆盖模板默认值）
 - [x] 完善 IssueList 关闭/删除权限：仅问题创建者或 canManage 角色可操作
 - [x] handleCreate 自动填充 creatorId，实现创建者身份识别
+
+## 中国大陆访问优化（已完成）
+
+- [x] 将 Google Fonts (fonts.googleapis.com) 替换为自托管字体（上传到 /manus-storage/）
+- [x] index.html 移除 Google Fonts preconnect + link 标签
+- [x] index.css 添加 @font-face 自托管声明（11个字体文件）
+- [x] 验证替换后字体显示效果正常，TypeScript 零错误
