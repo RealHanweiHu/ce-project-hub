@@ -49,6 +49,7 @@ export default function AdminPanel() {
   const [newUsername, setNewUsername] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [newName, setNewName] = useState('');
+  const [newEmail, setNewEmail] = useState('');
   const [newRole, setNewRole] = useState<'user' | 'admin'>('user');
   const [newCanCreate, setNewCanCreate] = useState(false);
 
@@ -84,7 +85,7 @@ export default function AdminPanel() {
       toast.success('用户已创建');
       setCreateOpen(false);
       setNewUsername(''); setNewPassword(''); setNewName('');
-      setNewRole('user'); setNewCanCreate(false);
+      setNewRole('user'); setNewCanCreate(false); setNewEmail('');
     },
     onError: (err) => toast.error(err.message),
   });
@@ -403,6 +404,16 @@ export default function AdminPanel() {
               />
             </div>
             <div className="space-y-1.5">
+              <Label className="text-sm text-stone-700">邮筱</Label>
+              <Input
+                type="email"
+                value={newEmail}
+                onChange={(e) => setNewEmail(e.target.value)}
+                placeholder="example@company.com"
+                className="text-sm"
+              />
+            </div>
+            <div className="space-y-1.5">
               <Label className="text-sm text-stone-700">初始密码 <span className="text-rose-500">*</span></Label>
               <Input
                 type="password"
@@ -451,6 +462,7 @@ export default function AdminPanel() {
                   username: newUsername.trim(),
                   password: newPassword,
                   name: newName.trim(),
+                  email: newEmail.trim() || undefined,
                   role: newRole,
                   canCreateProject: newCanCreate,
                 });

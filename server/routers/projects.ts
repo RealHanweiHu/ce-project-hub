@@ -139,6 +139,14 @@ export const projectsRouter = router({
   bulkImport: protectedProcedure
     .input(z.array(projectInputSchema))
     .mutation(async ({ ctx, input }) => {
+      // Same permission check as create: admin always can; regular users need canCreateProject=true
+      const canCreate = ctx.user.role === 'admin' || ctx.user.canCreateProject;
+      if (!canCreate) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: '您没有创建项目的权限。请联系管理员授权。',
+        });
+      }
       for (const p of input) {
         const existing = await getProjectById(p.id);
         if (existing) {

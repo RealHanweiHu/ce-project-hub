@@ -90,6 +90,18 @@
 - [x] admin.listUsers 返回 username 字段
 - [x] TypeScript 零错误，测试通过
 
+## bulkImport 权限修复 + 注册强制 Email（已完成）
+
+- [x] 分析 bulkImport 接口，确认绕过权限的具体位置（缺少 canCreateProject 校验）
+- [x] 后端 bulkImport 添加 canCreateProject 权限校验（与 create 接口保持一致）
+- [x] drizzle/schema.ts users 表已有 email 字段，无需迁移
+- [x] 后端 auth.register 强制 email 非空（z.email() 格式验证 + 唯一性检查）
+- [x] db.createUserWithPassword 添加可选 email 参数
+- [x] 后端 auth.createUser 接口添加可选 email 字段（含唯一性检查）
+- [x] 前端注册表单添加 Email 必填字段（含前端格式验证）
+- [x] 管理员创建用户弹窗添加可选 Email 字段
+- [x] TypeScript 零错误
+
 ## 用户显示名称强制必填（已完成）
 
 - [x] 后端 auth.register 接口已强制 name 非空（z.string().min(1)）

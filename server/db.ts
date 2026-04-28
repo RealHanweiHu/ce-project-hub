@@ -117,6 +117,7 @@ export async function createUserWithPassword(data: {
   username: string;
   passwordHash: string;
   name: string;
+  email?: string | null;
   role?: 'user' | 'admin';
   canCreateProject?: boolean;
 }): Promise<void> {
@@ -127,6 +128,7 @@ export async function createUserWithPassword(data: {
     username: data.username,
     passwordHash: data.passwordHash,
     name: data.name,
+    email: data.email ?? null,
     loginMethod: 'password',
     role: data.role ?? 'user',
     canCreateProject: data.canCreateProject ?? false,

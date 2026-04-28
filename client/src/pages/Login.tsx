@@ -23,6 +23,7 @@ export default function Login() {
 
   // Register-only fields
   const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
 
   const utils = trpc.useUtils();
@@ -56,6 +57,7 @@ export default function Login() {
     setPassword('');
     setConfirmPassword('');
     setName('');
+    setEmail('');
     setShowPassword(false);
   };
 
@@ -74,8 +76,13 @@ export default function Login() {
         setError('请输入显示名称');
         return;
       }
-      if (name.trim().length < 1) {
-        setError('显示名称不能为空');
+      if (!email.trim()) {
+        setError('请输入邮箱地址');
+        return;
+      }
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email.trim())) {
+        setError('请输入有效的邮箱地址');
         return;
       }
       if (!username.trim()) {
@@ -94,7 +101,12 @@ export default function Login() {
         setError('两次输入的密码不一致');
         return;
       }
-      registerMutation.mutate({ username: username.trim(), password, name: name.trim() }); // trim ensures no leading/trailing spaces
+      registerMutation.mutate({
+        username: username.trim(),
+        password,
+        name: name.trim(),
+        email: email.trim().toLowerCase(),
+      });
     }
   };
 
@@ -169,6 +181,25 @@ export default function Login() {
                     onChange={(e) => setName(e.target.value)}
                     placeholder="例：张三"
                     autoFocus
+                    disabled={isPending}
+                    className="border-stone-300 focus:border-amber-400"
+                  />
+                </div>
+              )}
+
+              {/* Register-only: email */}
+              {mode === 'register' && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="email" className="text-stone-700 text-sm">
+                    邮箱 <span className="text-rose-500">*</span>
+                  </Label>
+                  <Input
+                    id="email"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="example@company.com"
+                    autoComplete="email"
                     disabled={isPending}
                     className="border-stone-300 focus:border-amber-400"
                   />
