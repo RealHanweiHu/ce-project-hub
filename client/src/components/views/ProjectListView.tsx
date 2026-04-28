@@ -2,6 +2,7 @@
 // ProjectListView: project cards with category badges and 3-step new project wizard
 
 import { useState } from 'react';
+import { trpc } from '@/lib/trpc';
 import { Plus, Trash2, FolderKanban, ChevronRight, ChevronLeft, Check, Copy, Lock } from 'lucide-react';
 import {
   Project, SOP_PHASES, PHASE_MAP, RISK_CONFIG,
@@ -31,7 +32,10 @@ const STEP_LABELS: Record<WizardStep, string> = {
   3: '确认流程',
 };
 
-const PRODUCT_TYPES = ['可穿戴', '音频', '影像', 'IoT', '移动设备', '其他'];
+const PRODUCT_TYPES = [
+  '汽车充气泵', '自行车充气泵', '户外充气泵', '车载吸尘器',
+  '暴力风扇', '胎压计', '机械式打气筒', '组件',
+];
 
 export function ProjectListView({
   projects,
@@ -70,10 +74,12 @@ export function ProjectListView({
   };
   const [step, setStep] = useState<WizardStep>(1);
   const [selectedCategory, setSelectedCategory] = useState<ProjectCategory>('npd');
+  const { data: userList, isLoading: usersLoading, isError: usersError } = trpc.admin.listUsersForSelect.useQuery();
+
   const [form, setForm] = useState({
     code: '',
     name: '',
-    type: '可穿戴',
+    type: '汽车充气泵',
     pm: '',
     startDate: '',
     targetDate: '',
@@ -83,7 +89,7 @@ export function ProjectListView({
   const resetWizard = () => {
     setStep(1);
     setSelectedCategory('npd');
-    setForm({ code: '', name: '', type: '可穿戴', pm: '', startDate: '', targetDate: '', risk: 'medium' });
+    setForm({ code: '', name: '', type: '汽车充气泵', pm: '', startDate: '', targetDate: '', risk: 'medium' });
   };
 
   const handleClose = () => {
@@ -318,12 +324,21 @@ export function ProjectListView({
                   </div>
                   <div>
                     <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">项目经理</label>
-                    <input
-                      type="text"
+                    <select
                       value={cloneForm.pm}
                       onChange={(e) => setCloneForm({ ...cloneForm, pm: e.target.value })}
-                      className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors"
-                    />
+                      disabled={usersLoading}
+                      className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors bg-white disabled:opacity-50"
+                    >
+                      {usersLoading && <option value="">加载中...</option>}
+                      {usersError && <option value="">加载失败</option>}
+                      {!usersLoading && !usersError && <option value="">选择项目经理...</option>}
+                      {(userList || []).map((u) => (
+                        <option key={u.id} value={u.name || u.username || ''}>
+                          {u.name || u.username}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
@@ -501,13 +516,24 @@ export function ProjectListView({
                     </div>
                     <div>
                       <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">项目经理</label>
-                      <input
-                        type="text"
+                      <select
                         value={form.pm}
                         onChange={(e) => setForm({ ...form, pm: e.target.value })}
-                        className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors"
-                        placeholder="PM 姓名"
-                      />
+                        disabled={usersLoading}
+                        className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors bg-white disabled:opacity-50"
+                      >
+                        {usersLoading && <option value="">加载中...</option>}
+                        {usersError && <option value="">加载失败，可手动输入</option>}
+                        {!usersLoading && !usersError && <option value="">选择项目经理...</option>}
+                        {(userList || []).map((u) => (
+                          <option key={u.id} value={u.name || u.username || ''}>
+                            {u.name || u.username}
+                          </option>
+                        ))}
+                        {!usersLoading && !usersError && (userList?.length ?? 0) === 0 && (
+                          <option value="" disabled>暂无用户，请先在管理员后台创建用户</option>
+                        )}
+                      </select>
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-3">

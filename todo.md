@@ -90,6 +90,15 @@
 - [x] admin.listUsers 返回 username 字段
 - [x] TypeScript 零错误，测试通过
 
+## 创建项目功能改进（已完成）
+
+- [x] 产品类型改为预设下拉（汽车充气泵/自行车充气泵/户外充气泵/车载吸尘器/暴力风扇/胎压计/机械式打气筒/组件）
+- [x] ProjectDetailView 产品类型编辑选项同步更新
+- [x] 后端新增 admin.listUsersForSelect 接口（返回 id+name+username，登录用户均可调用）
+- [x] 创建项目向导和克隆弹窗中项目经理改为用户选择下拉（含 loading/error/empty state）
+- [x] 甘特图按阶段权重比例分配时间（项目有开始/结束日期时按比例缩放，自定义日期优先）
+- [x] TypeScript 零错误
+
 ## Manus OAuth 可选登录（已完成）
 
 - [x] 登录页添加分隔线 + "使用 Manus 账号登录" 按鈕

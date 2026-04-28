@@ -103,12 +103,44 @@ export function GanttView({ project, onUpdate, onPhaseClick, readOnly = false }:
   }
   prevReadOnly.current = readOnly;
 
-  // ── Compute phase bars ────────────────────────────────────────────────────
+    // ── Compute phase bars ────────────────────────────────────────────
   const { bars, totalStart, totalEnd } = useMemo(() => {
     const projectStart = parseDate(project.startDate) || new Date();
     const projectEnd = parseDate(project.targetDate);
 
     const projectPhases = getProjectPhases(project);
+
+    // Split phases into custom (have explicit dates) and default (need proportional allocation)
+    const hasCustomDate = (phaseId: string) =>
+      !!(project.phaseDates?.[phaseId]?.startDate && project.phaseDates?.[phaseId]?.endDate);
+
+    // Sum of default weights for non-custom phases
+    const totalDefaultWeight = projectPhases.reduce((sum, p) =>
+      hasCustomDate(p.id) ? sum : sum + (PHASE_DAYS[p.id] ?? 30), 0);
+
+    // Total project duration in days (if both dates set)
+    const projectTotalDays = projectEnd
+      ? Math.max(1, Math.ceil((projectEnd.getTime() - projectStart.getTime()) / (1000 * 60 * 60 * 24)))
+      : null;
+
+    // Days consumed by custom-dated phases
+    const customConsumedDays = projectPhases.reduce((sum, p) => {
+      if (!hasCustomDate(p.id)) return sum;
+      const s = parseDate(project.phaseDates![p.id].startDate);
+      const e = parseDate(project.phaseDates![p.id].endDate);
+      return s && e ? sum + Math.max(1, Math.ceil((e.getTime() - s.getTime()) / (1000 * 60 * 60 * 24))) : sum;
+    }, 0);
+
+    // Remaining days available for non-custom phases
+    const remainingDays = projectTotalDays
+      ? Math.max(1, projectTotalDays - customConsumedDays)
+      : null;
+
+    // Scale factor: only apply when project has an end date and remaining days differ from defaults
+    const scaleFactor = remainingDays && totalDefaultWeight > 0
+      ? remainingDays / totalDefaultWeight
+      : 1;
+
     let cursor = new Date(projectStart);
     const bars: PhaseBar[] = projectPhases.map((phase) => {
       const custom = project.phaseDates?.[phase.id];
@@ -117,14 +149,17 @@ export function GanttView({ project, onUpdate, onPhaseClick, readOnly = false }:
       let isCustom = false;
 
       if (custom?.startDate && custom?.endDate) {
+        // Custom dates: use exactly as specified
         phaseStart = parseDate(custom.startDate) || cursor;
         phaseEnd = parseDate(custom.endDate) || addDays(phaseStart, PHASE_DAYS[phase.id] ?? 30);
         isCustom = true;
         cursor = new Date(phaseEnd);
       } else {
-        const days = PHASE_DAYS[phase.id] ?? 30;
+        // Proportional allocation: scale default weight by remaining project time
+        const defaultDays = PHASE_DAYS[phase.id] ?? 30;
+        const scaledDays = Math.max(1, Math.round(defaultDays * scaleFactor));
         phaseStart = new Date(cursor);
-        phaseEnd = addDays(cursor, days);
+        phaseEnd = addDays(cursor, scaledDays);
         cursor = new Date(phaseEnd);
       }
 
@@ -138,8 +173,11 @@ export function GanttView({ project, onUpdate, onPhaseClick, readOnly = false }:
       };
     });
 
+    // Clamp totalEnd to projectEnd when all phases fit within the project window
     const computedEnd = cursor;
-    const totalEnd = projectEnd && projectEnd > computedEnd ? projectEnd : computedEnd;
+    const totalEnd = projectEnd
+      ? (computedEnd > projectEnd ? computedEnd : projectEnd)
+      : computedEnd;
     return { bars, totalStart: projectStart, totalEnd };
   }, [project]);
 

@@ -442,7 +442,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                 <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400">类型</span>
                 <EditableSelect
                   value={project.type}
-                  options={['可穿戴', '音频', '影像', 'IoT', '移动设备', '其他']}
+                  options={['汽车充气泵', '自行车充气泵', '户外充气泵', '车载吸尘器', '暴力风扇', '胎压计', '机械式打气筒', '组件']}
                   onChange={(v) => updateField('type', v)}
                   className="text-xs text-stone-700"
                 />

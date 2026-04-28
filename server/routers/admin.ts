@@ -17,6 +17,21 @@ const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
 });
 
 export const adminRouter = router({
+  /** List users for project manager selection (any logged-in user can call) */
+  listUsersForSelect: protectedProcedure.query(async () => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const rows = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        username: users.username,
+      })
+      .from(users)
+      .orderBy(users.name);
+    return rows;
+  }),
+
   /** List all registered users (admin only) */
   listUsers: adminProcedure.query(async () => {
     const db = await getDb();
