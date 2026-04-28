@@ -90,6 +90,16 @@
 - [x] admin.listUsers 返回 username 字段
 - [x] TypeScript 零错误，测试通过
 
+## 初始管理员创建 + 用户自助修改密码（已完成）
+
+- [x] 后端新增 /api/setup 一次性接口：数据库无用户时允许创建管理员
+- [x] 后端新增 /api/setup/status 接口：检查是否需要初始化
+- [x] 后端新增 auth.changePassword tRPC 接口（登录用户验证旧密码后修改）
+- [x] 前端新增 /setup 初始化页面（无用户时显示，已有用户时跳转登录）
+- [x] 前端侧边栏用户区域添加「修改密码」按鈕（hover 显示）
+- [x] 实现 ChangePasswordDialog 组件（验证旧密码、新密码确认）
+- [x] TypeScript 零错误，测试通过
+
 ## 中国大陆访问优化（已完成）
 
 - [x] 将 Google Fonts (fonts.googleapis.com) 替换为自托管字体（上传到 /manus-storage/）

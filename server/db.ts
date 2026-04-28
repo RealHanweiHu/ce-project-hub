@@ -140,6 +140,15 @@ export async function updateUserPassword(userId: number, passwordHash: string): 
   await db.update(users).set({ passwordHash }).where(eq(users.id, userId));
 }
 
+/** Count total users in the database (used by /api/setup to check if setup is needed) */
+export async function countUsers(): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error('Database not available');
+  const result = await db.select({ id: users.id }).from(users).limit(1);
+  // For setup check we only need to know if any user exists
+  return result.length;
+}
+
 // ── Project helpers ───────────────────────────────────────────────────────────
 
 /**

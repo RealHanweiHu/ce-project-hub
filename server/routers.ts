@@ -102,6 +102,29 @@ export const appRouter = router({
         await db.updateUserPassword(input.userId, passwordHash);
         return { success: true } as const;
       }),
+
+    /** Self-service: logged-in user changes their own password */
+    changePassword: protectedProcedure
+      .input(z.object({
+        currentPassword: z.string().min(1, '请输入当前密码'),
+        newPassword: z.string().min(6, '新密码至少6位'),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const user = await db.getUserByOpenId(ctx.user.openId);
+        if (!user || !user.passwordHash) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: '当前账号未设置密码，请联系管理员' });
+        }
+        const valid = await verifyPassword(input.currentPassword, user.passwordHash);
+        if (!valid) {
+          throw new TRPCError({ code: 'UNAUTHORIZED', message: '当前密码不正确' });
+        }
+        if (input.currentPassword === input.newPassword) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: '新密码不能与当前密码相同' });
+        }
+        const newHash = await hashPassword(input.newPassword);
+        await db.updateUserPassword(user.id, newHash);
+        return { success: true } as const;
+      }),
   }),
 
   projects: projectsRouter,

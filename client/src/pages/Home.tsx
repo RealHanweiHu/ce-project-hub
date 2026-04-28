@@ -7,7 +7,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useLocation } from 'wouter';
 import {
   LayoutDashboard, FolderKanban, BookOpen, Save, CheckCircle2,
-  ChevronRight, Menu, X, Cpu, Search, LogIn, Loader2, Cloud, Shield,
+  ChevronRight, Menu, X, Cpu, Search, LogIn, Loader2, Cloud, Shield, KeyRound,
 } from 'lucide-react';
 import { GlobalSearch } from '@/components/GlobalSearch';
 import { nanoid } from 'nanoid';
@@ -24,6 +24,7 @@ import { useAuth } from '@/_core/hooks/useAuth';
 import { getLoginUrl } from '@/const';
 import { useQueryClient } from '@tanstack/react-query';
 import { getQueryKey } from '@trpc/react-query';
+import { ChangePasswordDialog } from '@/components/ChangePasswordDialog';
 
 type View = 'dashboard' | 'projects' | 'sop';
 
@@ -77,6 +78,7 @@ export default function Home() {
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── tRPC queries & mutations ─────────────────────────────────────────────
@@ -386,12 +388,19 @@ export default function Home() {
             </button>
           )}
 
-          {/* User info */}
-          <div className="pt-1 flex items-center gap-2">
+          {/* User info + change password */}
+          <div className="pt-1 flex items-center gap-2 group">
             <div className="w-5 h-5 bg-amber-600 flex items-center justify-center text-[9px] font-mono text-stone-900 uppercase shrink-0">
               {(user.name || user.email || 'U').charAt(0)}
             </div>
-            <span className="text-[10px] text-stone-500 truncate">{user.name || user.email}</span>
+            <span className="text-[10px] text-stone-500 truncate flex-1">{user.name || user.email}</span>
+            <button
+              onClick={() => setChangePasswordOpen(true)}
+              title="修改密码"
+              className="opacity-0 group-hover:opacity-100 transition-opacity text-stone-600 hover:text-amber-400"
+            >
+              <KeyRound size={11} />
+            </button>
           </div>
         </div>
       </aside>
@@ -508,6 +517,11 @@ export default function Home() {
         onClose={() => setSearchOpen(false)}
         projects={projects}
         onNavigate={handleSearchNavigate}
+      />
+      {/* Change Password Dialog */}
+      <ChangePasswordDialog
+        open={changePasswordOpen}
+        onOpenChange={setChangePasswordOpen}
       />
     </div>
   );
