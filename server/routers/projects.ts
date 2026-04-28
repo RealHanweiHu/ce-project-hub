@@ -119,15 +119,29 @@ export const projectsRouter = router({
       return { success: true };
     }),
 
-  /** Delete (archive) a project (requires canDeleteProject = owner only) */
+  /**
+   * Delete (soft-archive) a project.
+   * Allowed for: project owner, project manager role with canDeleteProject,
+   * or system admin (ctx.user.role === 'admin').
+   * Returns the project name so the frontend can show a confirmation message.
+   */
   delete: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const existing = await getProjectById(input.id);
       if (!existing) throw new TRPCError({ code: "NOT_FOUND" });
-      const role = await getEffectiveRole(input.id, ctx.user.id);
-      if (!role || !ROLE_PERMISSIONS[role].canDeleteProject) throw new TRPCError({ code: "FORBIDDEN" });
+      // System admins can delete any project regardless of membership
+      const isSystemAdmin = ctx.user.role === 'admin';
+      if (!isSystemAdmin) {
+        const role = await getEffectiveRole(input.id, ctx.user.id);
+        if (!role || !ROLE_PERMISSIONS[role].canDeleteProject) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "只有项目创建者、管理员或系统管理员可以删除项目",
+          });
+        }
+      }
       await deleteProject(input.id);
-      return { success: true };
+      return { success: true, projectName: existing.name };
     }),
 });

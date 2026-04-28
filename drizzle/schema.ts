@@ -399,6 +399,8 @@ export const projectFiles = mysqlTable(
     projectId: varchar("projectId", { length: 32 }).notNull(),
     /** Optional: associate file with a specific phase */
     phaseId: varchar("phaseId", { length: 32 }),
+    /** Optional: associate file with a specific task within the phase */
+    taskId: varchar("taskId", { length: 32 }),
     /** Original file name as uploaded */
     name: varchar("name", { length: 256 }).notNull(),
     mimeType: varchar("mimeType", { length: 128 }).notNull().default("application/octet-stream"),

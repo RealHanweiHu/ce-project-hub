@@ -232,3 +232,15 @@ CREATE TABLE `activity_logs` (
 CREATE INDEX `idx_activity_logs_project` ON `activity_logs` (`projectId`);
 CREATE INDEX `idx_activity_logs_user` ON `activity_logs` (`userId`);
 CREATE INDEX `idx_activity_logs_project_time` ON `activity_logs` (`projectId`,`createdAt`);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Migration 0004: add taskId column to project_files
+-- ─────────────────────────────────────────────────────────────────────────────
+ALTER TABLE project_files ADD COLUMN task_id VARCHAR(64) NULL;
+CREATE INDEX idx_project_files_task ON project_files (project_id, phase_id, task_id);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Migration 0004: add taskId column to project_files
+-- ─────────────────────────────────────────────────────────────────────────────
+ALTER TABLE project_files ADD COLUMN task_id VARCHAR(64) NULL;
+CREATE INDEX idx_project_files_task ON project_files (project_id, phase_id, task_id);

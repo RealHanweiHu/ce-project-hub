@@ -3,7 +3,11 @@
 
 import { useState } from 'react';
 import { trpc } from '@/lib/trpc';
-import { Plus, Trash2, FolderKanban, ChevronRight, ChevronLeft, Check, Copy, Lock } from 'lucide-react';
+import { Plus, Trash2, FolderKanban, ChevronRight, ChevronLeft, Check, Copy, Lock, AlertTriangle } from 'lucide-react';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import {
   Project, SOP_PHASES, PHASE_MAP, RISK_CONFIG,
   computePhaseProgress, computeOverallProgress,
@@ -48,6 +52,7 @@ export function ProjectListView({
   const [showAdd, setShowAdd] = useState(false);
   const [cloneSource, setCloneSource] = useState<Project | null>(null);
   const [cloneForm, setCloneForm] = useState({ name: '', code: '', pm: '', startDate: '', targetDate: '' });
+  const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
 
   const handleOpenClone = (e: React.MouseEvent, project: Project) => {
     e.stopPropagation();
@@ -180,9 +185,10 @@ export function ProjectListView({
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (confirm(`确定删除项目「${project.name}」？`)) onDeleteProject(project.id);
+                        setDeleteConfirm({ id: project.id, name: project.name });
                       }}
                       className="text-stone-300 hover:text-rose-500 transition-colors p-0.5"
+                      title="删除项目"
                     >
                       <Trash2 size={14} />
                     </button>
@@ -672,6 +678,49 @@ export function ProjectListView({
           </div>
         </div>
       )}
+
+      {/* ── Delete Confirmation Dialog ── */}
+      <AlertDialog open={!!deleteConfirm} onOpenChange={(open) => { if (!open) setDeleteConfirm(null); }}>
+        <AlertDialogContent className="max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 text-rose-700">
+              <AlertTriangle size={18} className="text-rose-600" />
+              删除项目
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-stone-700">
+                <p>
+                  您即将删除项目 <span className="font-semibold text-stone-900">「{deleteConfirm?.name}」</span>。
+                </p>
+                <div className="mt-3 p-3 bg-rose-50 border border-rose-200 rounded text-sm text-rose-800 space-y-1">
+                  <p className="font-medium">此操作将永久删除：</p>
+                  <ul className="list-disc list-inside space-y-0.5 text-xs">
+                    <li>项目所有阶段和任务数据</li>
+                    <li>所有问题记录和关门评审</li>
+                    <li>所有附件文件（S3 存储）</li>
+                    <li>变更日志和操作记录</li>
+                  </ul>
+                  <p className="font-medium mt-2">此操作不可撤销。</p>
+                </div>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setDeleteConfirm(null)}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (deleteConfirm) {
+                  onDeleteProject(deleteConfirm.id);
+                  setDeleteConfirm(null);
+                }
+              }}
+              className="bg-rose-600 hover:bg-rose-700 text-white"
+            >
+              确认删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

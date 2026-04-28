@@ -555,27 +555,40 @@ export async function createProjectFile(record: Omit<InsertProjectFile, "id" | "
   return (result as unknown as [{ insertId: number }, unknown])[0].insertId;
 }
 
-/** List all files for a project, optionally filtered by phase */
+/** List all files for a project, optionally filtered by phase and/or taskId */
 export async function getProjectFiles(
   projectId: string,
-  phaseId?: string
+  phaseId?: string,
+  taskId?: string
 ): Promise<ProjectFile[]> {
   const db = await getDb();
   if (!db) return [];
-  if (phaseId) {
-    return db
-      .select()
-      .from(projectFiles)
-      .where(and(eq(projectFiles.projectId, projectId), eq(projectFiles.phaseId, phaseId)));
-  }
-  return db.select().from(projectFiles).where(eq(projectFiles.projectId, projectId));
+  const conditions: ReturnType<typeof eq>[] = [eq(projectFiles.projectId, projectId)];
+  if (phaseId) conditions.push(eq(projectFiles.phaseId, phaseId));
+  if (taskId) conditions.push(eq(projectFiles.taskId, taskId));
+  return db
+    .select()
+    .from(projectFiles)
+    .where(and(...conditions))
+    .orderBy(projectFiles.createdAt);
 }
 
-/** Delete a file metadata record (caller should also remove from S3 if needed) */
-export async function deleteProjectFile(id: number): Promise<void> {
+/**
+ * Delete a file metadata record.
+ * Returns the storageKey so the caller can invalidate the S3 object.
+ * Returns null if the record was not found.
+ */
+export async function deleteProjectFile(id: number): Promise<{ storageKey: string } | null> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+  const [row] = await db
+    .select({ storageKey: projectFiles.storageKey })
+    .from(projectFiles)
+    .where(eq(projectFiles.id, id))
+    .limit(1);
+  if (!row) return null;
   await db.delete(projectFiles).where(eq(projectFiles.id, id));
+  return { storageKey: row.storageKey };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

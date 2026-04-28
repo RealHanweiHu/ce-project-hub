@@ -10,6 +10,7 @@
  *   - gateReviews.list     → per-phase gate review history
  *   - changelog.list       → project-level change records
  *   - phases.list          → per-phase date overrides + notes
+ *   - files.list           → project files (persisted to DB / S3)
  */
 import { useMemo } from "react";
 import { trpc } from "@/lib/trpc";
@@ -20,6 +21,7 @@ import {
   GateReview,
   ChangeRecord,
   TaskDetails,
+  FileAttachment,
   normalizeProject,
 } from "@/lib/data";
 
@@ -62,13 +64,21 @@ export function useProjectData(projectId: string | null) {
       { enabled, staleTime: 5_000 }
     );
 
+  // ── Persistent file list from DB ──────────────────────────────────────────
+  const { data: fileRows = [], isLoading: loadingFiles } =
+    trpc.files.list.useQuery(
+      { projectId: projectId! },
+      { enabled, staleTime: 10_000 }
+    );
+
   const isLoading =
     loadingProject ||
     loadingTasks ||
     loadingIssues ||
     loadingGates ||
     loadingChangelog ||
-    loadingPhases;
+    loadingPhases ||
+    loadingFiles;
 
   const project: Project | null = useMemo(() => {
     if (!projectRow) return null;
@@ -92,12 +102,25 @@ export function useProjectData(projectId: string | null) {
       const taskDetails: Record<string, TaskDetails> = {};
       for (const t of phaseTasks) {
         tasks[t.taskId] = !!t.completed;
-        if (t.instructions) {
-          taskDetails[t.taskId] = {
-            instructions: t.instructions ?? '',
-            files: [],
-          };
-        }
+
+        // Build DB-backed file list for this task
+        const dbFiles: FileAttachment[] = fileRows
+          .filter((f) => f.phaseId === phaseId && f.taskId === t.taskId)
+          .map((f) => ({
+            id: String(f.id),
+            name: f.name,
+            size: f.size,
+            type: f.mimeType,
+            uploadDate: f.createdAt ? new Date(f.createdAt).toISOString() : new Date().toISOString(),
+            dataUrl: "",
+            storageUrl: f.storageUrl,
+            storageKey: f.storageKey,
+          }));
+
+        taskDetails[t.taskId] = {
+          instructions: t.instructions ?? "",
+          files: dbFiles,
+        };
       }
 
       // Issues
@@ -206,7 +229,7 @@ export function useProjectData(projectId: string | null) {
       taskVisibleRoles: Object.keys(taskVisibleRoles).length > 0 ? taskVisibleRoles : undefined,
       changeLog,
     } as Project);
-  }, [projectRow, taskRows, issueRows, gateRows, changeRows, phaseRows]);
+  }, [projectRow, taskRows, issueRows, gateRows, changeRows, phaseRows, fileRows]);
 
   return { project, isLoading };
 }

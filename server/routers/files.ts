@@ -9,8 +9,14 @@
  *   1. Client POSTs multipart/form-data to /api/files/upload
  *   2. multer buffers the file in memory (16 MB limit)
  *   3. Server calls storagePut → S3
- *   4. Server writes metadata row to project_files
- *   5. Server returns { id, name, storageUrl, size, mimeType }
+ *   4. Server writes metadata row to project_files (with phaseId + taskId)
+ *   5. Server returns { id, name, storageUrl, size, mimeType, taskId }
+ *
+ * Delete flow:
+ *   1. Client calls trpc.files.delete mutation
+ *   2. Server fetches storageKey from DB, deletes DB row
+ *   3. Server attempts to invalidate S3 object (best-effort, non-fatal)
+ *   4. Server writes activity log entry
  */
 
 import { z } from "zod";
@@ -27,7 +33,7 @@ import { TRPCError } from "@trpc/server";
 import { ROLE_PERMISSIONS } from "./members";
 import { storagePut } from "../storage";
 import multer from "multer";
-import type { Express, Request, Response, NextFunction } from "express";
+import type { Express, Request, Response } from "express";
 import { createContext } from "../_core/context";
 
 // ── Permission helper ─────────────────────────────────────────────────────────
@@ -40,15 +46,46 @@ async function getEffectiveRole(projectId: string, userId: number) {
   return member?.role ?? null;
 }
 
+// ── S3 invalidation (best-effort) ────────────────────────────────────────────
+
+/**
+ * Attempt to delete an S3 object by key.
+ * Uses the Manus storage presign/delete endpoint if available.
+ * Non-fatal: logs a warning on failure rather than throwing.
+ */
+async function tryInvalidateS3Object(storageKey: string): Promise<void> {
+  try {
+    const forgeBaseUrl = (process.env.BUILT_IN_FORGE_API_URL || "").replace(/\/+$/, "");
+    const forgeKey = process.env.BUILT_IN_FORGE_API_KEY;
+    if (!forgeBaseUrl || !forgeKey) return; // storage not configured, skip
+    const url = new URL("v1/storage/delete", forgeBaseUrl + "/");
+    url.searchParams.set("path", storageKey);
+    const resp = await fetch(url.toString(), {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${forgeKey}` },
+    });
+    if (!resp.ok) {
+      console.warn(`[FileDelete] S3 invalidation returned ${resp.status} for key: ${storageKey}`);
+    }
+  } catch (err) {
+    console.warn("[FileDelete] S3 invalidation failed (non-fatal):", err);
+  }
+}
+
 // ── tRPC procedures ───────────────────────────────────────────────────────────
 
 export const filesRouter = router({
-  /** List files for a project (optionally filtered by phase) */
+  /**
+   * List files for a project.
+   * Optional filters: phaseId, taskId.
+   * Returns files ordered by upload time (oldest first).
+   */
   list: protectedProcedure
     .input(
       z.object({
         projectId: z.string(),
         phaseId: z.string().optional(),
+        taskId: z.string().optional(),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -56,26 +93,45 @@ export const filesRouter = router({
       if (!role || !ROLE_PERMISSIONS[role].canView) {
         throw new TRPCError({ code: "FORBIDDEN" });
       }
-      return getProjectFiles(input.projectId, input.phaseId);
+      return getProjectFiles(input.projectId, input.phaseId, input.taskId);
     }),
 
-  /** Delete a file record (and effectively removes access to the S3 object) */
+  /**
+   * Delete a file record.
+   * - Removes the DB row
+   * - Attempts to invalidate the S3 object (best-effort)
+   * - Writes an activity log entry
+   */
   delete: protectedProcedure
-    .input(z.object({ id: z.number().int(), projectId: z.string() }))
+    .input(
+      z.object({
+        id: z.number().int(),
+        projectId: z.string(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       const role = await getEffectiveRole(input.projectId, ctx.user.id);
       if (!role || !ROLE_PERMISSIONS[role].canEditProjectInfo) {
         throw new TRPCError({ code: "FORBIDDEN" });
       }
-      await deleteProjectFile(input.id);
+
+      const deleted = await deleteProjectFile(input.id);
+      if (!deleted) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "File not found" });
+      }
+
+      // Best-effort S3 invalidation (non-blocking)
+      void tryInvalidateS3Object(deleted.storageKey);
+
       await createActivityLog({
         projectId: input.projectId,
         userId: ctx.user.id,
         action: "file.delete",
         entityType: "file",
         entityId: String(input.id),
-        meta: {},
+        meta: { storageKey: deleted.storageKey },
       });
+
       return { success: true };
     }),
 });
@@ -98,6 +154,7 @@ const upload = multer({
  *   file      (required) - the file to upload
  *   projectId (required) - target project id
  *   phaseId   (optional) - associate with a specific phase
+ *   taskId    (optional) - associate with a specific task within the phase
  */
 export function registerFileUploadRoute(app: Express) {
   app.post(
@@ -114,9 +171,10 @@ export function registerFileUploadRoute(app: Express) {
           return;
         }
 
-        const { projectId, phaseId } = req.body as {
+        const { projectId, phaseId, taskId } = req.body as {
           projectId?: string;
           phaseId?: string;
+          taskId?: string;
         };
 
         if (!projectId) {
@@ -137,7 +195,9 @@ export function registerFileUploadRoute(app: Express) {
         }
 
         const file = req.file;
-        const storageKey = `projects/${projectId}/files/${Date.now()}_${file.originalname}`;
+        // Sanitize filename to avoid path traversal
+        const safeName = file.originalname.replace(/[^a-zA-Z0-9._\-\u4e00-\u9fff]/g, "_");
+        const storageKey = `projects/${projectId}/files/${Date.now()}_${safeName}`;
 
         // Upload to S3 via storagePut
         const { key, url: storageUrl } = await storagePut(
@@ -146,10 +206,11 @@ export function registerFileUploadRoute(app: Express) {
           file.mimetype
         );
 
-        // Write metadata to DB
+        // Write metadata to DB (including optional taskId)
         const fileId = await createProjectFile({
           projectId,
           phaseId: phaseId || null,
+          taskId: taskId || null,
           name: file.originalname,
           mimeType: file.mimetype,
           size: file.size,
@@ -165,7 +226,13 @@ export function registerFileUploadRoute(app: Express) {
           action: "file.upload",
           entityType: "file",
           entityId: String(fileId),
-          meta: { name: file.originalname, size: file.size, mimeType: file.mimetype },
+          meta: {
+            name: file.originalname,
+            size: file.size,
+            mimeType: file.mimetype,
+            phaseId: phaseId || null,
+            taskId: taskId || null,
+          },
         });
 
         res.json({
@@ -175,11 +242,14 @@ export function registerFileUploadRoute(app: Express) {
           size: file.size,
           storageKey: key,
           storageUrl,
+          taskId: taskId || null,
         });
       } catch (err: any) {
         console.error("[FileUpload] Error:", err);
         if (err.code === "LIMIT_FILE_SIZE") {
-          res.status(413).json({ error: `File too large (max ${MAX_FILE_SIZE_BYTES / 1024 / 1024} MB)` });
+          res.status(413).json({
+            error: `File too large (max ${MAX_FILE_SIZE_BYTES / 1024 / 1024} MB)`,
+          });
           return;
         }
         res.status(500).json({ error: err.message || "Upload failed" });

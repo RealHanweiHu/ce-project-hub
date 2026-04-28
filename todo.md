@@ -214,3 +214,19 @@
 - [x] 更新 drizzle/migrations/migration.sql 规范从零迁移文件（含 TiDB json DEFAULT NULL 修复）
 - [x] 验证空库可从零 migrate 成功（20 条语句全部 OK，11 张表 + 5 个约束/索引验证通过）
 - [x] 补充 vitest 测试：unique-constraints.test.ts（14 tests，验证唯一约束冲突抛出错误 + 索引存在）
+
+## 文件持久化与项目删除权限（已完成）
+
+- [x] project_files 表添加 taskId 字段（可空），推送 migration（0004）
+- [x] db.ts：添加 getProjectFiles / createProjectFile / deleteProjectFile helpers
+- [x] db.ts：deleteProjectFile 同时写 activity log（file_deleted）
+- [x] db.ts：createProjectFile 写 activity log（file_uploaded）
+- [x] routers.ts：files.list 接口（按 projectId + 可选 phaseId/taskId 过滤）
+- [x] routers.ts：files.upload 接口（接收文件 buffer，storagePut，写 DB + activity log）
+- [x] routers.ts：files.delete 接口（删除 DB 记录，S3 key 标记失效/删除，写 activity log）
+- [x] routers.ts：projects.delete 接口开放给 owner/admin/manager 角色（含风险提示返回）
+- [x] useProjectData：新增 files.list.useQuery，将 DB files 注入 taskDetails
+- [x] TaskDetailPanel / 文件展示组件：从 DB files 读取，替代 taskDetails.files
+- [x] 前端文件上传：/api/files/upload 传 taskId，成功后 invalidate files.list
+- [x] 前端文件删除：调用 trpc.files.delete mutation + invalidate，弹出确认对话框
+- [x] 前端项目删除：AlertDialog 风险确认（列出永久删除内容 + 不可撤销警告）

@@ -105,13 +105,14 @@ function EditableSelect({
 }
 
 function FileUploadArea({
-  files, onAdd, onRemove, projectId, phaseId,
+  files, onAdd, onRemove, projectId, phaseId, taskId,
 }: {
   files: FileAttachment[];
   onAdd: (files: FileAttachment[]) => void;
   onRemove: (id: string) => void;
   projectId: string;
   phaseId?: string;
+  taskId?: string;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -132,6 +133,7 @@ function FileUploadArea({
         formData.append('file', file);
         formData.append('projectId', projectId);
         if (phaseId) formData.append('phaseId', phaseId);
+        if (taskId) formData.append('taskId', taskId);
         const resp = await fetch('/api/files/upload', {
           method: 'POST',
           body: formData,
@@ -243,6 +245,13 @@ function TaskDetail({
   const [draft, setDraft] = useState(taskDetails?.instructions || '');
   const [dirty, setDirty] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const utils = trpc.useUtils();
+  const deleteFileMutation = trpc.files.delete.useMutation({
+    onSuccess: () => {
+      // Invalidate files.list so useProjectData re-fetches the updated list
+      utils.files.list.invalidate({ projectId });
+    },
+  });
 
   const handleChange = (val: string) => {
     setDraft(val); setDirty(true);
@@ -255,6 +264,18 @@ function TaskDetail({
   const handleBlur = () => {
     if (timerRef.current) clearTimeout(timerRef.current);
     if (draft !== taskDetails?.instructions) { onUpdate({ ...taskDetails, instructions: draft }); setDirty(false); }
+  };
+
+  const handleRemoveFile = async (id: string) => {
+    if (!confirm('确定删除此文件？该操作不可撤销。')) return;
+    const numId = parseInt(id, 10);
+    if (!isNaN(numId)) {
+      // DB-backed file: delete via tRPC (removes DB row + invalidates S3 object)
+      await deleteFileMutation.mutateAsync({ id: numId, projectId });
+    } else {
+      // Legacy local-only file: just remove from local state
+      onUpdate({ ...taskDetails, files: (taskDetails?.files || []).filter((f) => f.id !== id) });
+    }
   };
 
   return (
@@ -279,10 +300,15 @@ function TaskDetail({
         </div>
         <FileUploadArea
           files={taskDetails?.files || []}
-          onAdd={(newFiles) => onUpdate({ ...taskDetails, files: [...(taskDetails?.files || []), ...newFiles] })}
-          onRemove={(id) => onUpdate({ ...taskDetails, files: (taskDetails?.files || []).filter((f) => f.id !== id) })}
+          onAdd={(newFiles) => {
+            onUpdate({ ...taskDetails, files: [...(taskDetails?.files || []), ...newFiles] });
+            // Invalidate files.list so useProjectData re-fetches the updated list from DB
+            utils.files.list.invalidate({ projectId });
+          }}
+          onRemove={handleRemoveFile}
           projectId={projectId}
           phaseId={phaseId}
+          taskId={taskId}
         />
       </div>
       {/* Visible Roles Selector - only shown to canEditProjectInfo users */}
