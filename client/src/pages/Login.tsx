@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Loader2, Cpu, AlertCircle, Eye, EyeOff } from 'lucide-react';
+import { getManusOAuthUrl } from '@/const';
 
 type Mode = 'login' | 'register';
 
@@ -91,6 +92,10 @@ export default function Login() {
       }
       registerMutation.mutate({ username: username.trim(), password, name: name.trim() });
     }
+  };
+
+  const handleManusLogin = () => {
+    window.location.href = getManusOAuthUrl();
   };
 
   return (
@@ -248,6 +253,34 @@ export default function Login() {
                 )}
               </Button>
             </form>
+
+            {/* Divider */}
+            <div className="relative my-5">
+              <div className="absolute inset-0 flex items-center">
+                <span className="w-full border-t border-stone-200" />
+              </div>
+              <div className="relative flex justify-center text-xs">
+                <span className="bg-white px-3 text-stone-400">或</span>
+              </div>
+            </div>
+
+            {/* Manus OAuth button */}
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full border-stone-300 text-stone-600 hover:bg-stone-50 hover:text-stone-900 gap-2"
+              onClick={handleManusLogin}
+              disabled={isPending}
+            >
+              {/* Manus logo mark */}
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="shrink-0">
+                <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+              使用 Manus 账号登录
+            </Button>
+            <p className="text-center text-[11px] text-stone-400 mt-2">
+              Manus 登录在中国大陆可能不可用
+            </p>
           </CardContent>
         </Card>
 

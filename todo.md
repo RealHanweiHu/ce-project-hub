@@ -90,6 +90,14 @@
 - [x] admin.listUsers 返回 username 字段
 - [x] TypeScript 零错误，测试通过
 
+## Manus OAuth 可选登录（已完成）
+
+- [x] 登录页添加分隔线 + "使用 Manus 账号登录" 按鈕
+- [x] const.ts 新增 getManusOAuthUrl() 函数，保留现有 getLoginUrl() 指向内部路由
+- [x] OAuth 回调后已自动处理（现有 /api/oauth/callback 路由保留）
+- [x] 按鈕下方添加提示「Manus 登录在中国大陆可能不可用」
+- [x] TypeScript 零错误
+
 ## 登录页注册功能（已完成）
 
 - [x] 后端新增 auth.register 公开接口（用户名+密码+显示名，默认 role=user，注册后自动登录）
