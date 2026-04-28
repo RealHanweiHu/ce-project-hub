@@ -52,6 +52,10 @@
 - [x] 项目详情页任务列表按当前用户角色过滤（仅显示 visibleRoles 包含当前角色的任务）
 - [ ] 任务编辑支持修改 visibleRoles（仅 owner/manager/pm 可操作）（暂时跳过，需要进一步讨论需求）
 
+## 成员页权限说明表可见性（已完成）
+
+- [x] 将「权限说明」表格限制为仅 canManage=true 的用户可见（owner/manager/pm）
+
 ## 管理员后台页面（已完成）
 
 - [x] 将当前 Owner 账户提升为 admin（通过数据库操作）
@@ -60,3 +64,8 @@
 - [x] 角色切换：admin 可将用户提升为 admin 或降级为 user
 - [x] canCreateProject 授权：admin 可一键授权/撤销用户的项目创建权限
 - [x] 侧边栏添加「系统管理」入口（仅 admin 角色可见）
+
+## 移除备份与恢复页面（已完成）
+
+- [x] 从 Home.tsx 移除 backup View 类型、navItem、handleImportProjects/handleClearAll 和 BackupPanel 渲染
+- [x] 删除 BackupPanel.tsx 组件文件，清理所有引用

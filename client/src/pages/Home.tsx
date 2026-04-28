@@ -7,7 +7,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useLocation } from 'wouter';
 import {
   LayoutDashboard, FolderKanban, BookOpen, Save, CheckCircle2,
-  ChevronRight, Menu, X, Cpu, DatabaseBackup, Search, LogIn, Loader2, Cloud, Shield,
+  ChevronRight, Menu, X, Cpu, Search, LogIn, Loader2, Cloud, Shield,
 } from 'lucide-react';
 import { GlobalSearch } from '@/components/GlobalSearch';
 import { nanoid } from 'nanoid';
@@ -19,14 +19,13 @@ import { DashboardView } from '@/components/views/DashboardView';
 import { ProjectListView } from '@/components/views/ProjectListView';
 import { ProjectDetailView } from '@/components/views/ProjectDetailView';
 import { SOPLibraryView } from '@/components/views/SOPLibraryView';
-import { BackupPanel } from '@/components/views/BackupPanel';
 import { trpc } from '@/lib/trpc';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { getLoginUrl } from '@/const';
 import { useQueryClient } from '@tanstack/react-query';
 import { getQueryKey } from '@trpc/react-query';
 
-type View = 'dashboard' | 'projects' | 'sop' | 'backup';
+type View = 'dashboard' | 'projects' | 'sop';
 
 // Helper: convert Project to API input shape
 function projectToApiInput(p: Project) {
@@ -194,32 +193,11 @@ export default function Home() {
     }
   };
 
-  const handleImportProjects = async (imported: Project[]) => {
-    try {
-      await bulkImportMutation.mutateAsync(imported.map(projectToApiInput));
-      invalidateProjects();
-      setView('projects');
-      setSelectedProjectId(null);
-    } catch {
-      setSaveStatus('error');
-    }
-  };
-
-  const handleClearAll = async () => {
-    for (const p of projects) {
-      await deleteMutation.mutateAsync({ id: p.id });
-    }
-    invalidateProjects();
-    setSelectedProjectId(null);
-    setView('dashboard');
-  };
-
   // ── Navigation ───────────────────────────────────────────────────────────
   const navItems = [
     { id: 'dashboard' as View, label: '仪表盘', labelEn: 'Dashboard', icon: LayoutDashboard },
     { id: 'projects' as View, label: '项目管理', labelEn: 'Projects', icon: FolderKanban },
     { id: 'sop' as View, label: 'SOP 流程库', labelEn: 'SOP Library', icon: BookOpen },
-    { id: 'backup' as View, label: '备份与恢复', labelEn: 'Backup & Restore', icon: DatabaseBackup },
   ];
 
   const handleNavClick = (v: View) => {
@@ -232,7 +210,6 @@ export default function Home() {
     dashboard: 'Dashboard',
     projects: 'Projects',
     sop: 'SOP Library',
-    backup: 'Backup & Restore',
   };
 
   // ── Auth loading / login gate ────────────────────────────────────────────
@@ -520,13 +497,6 @@ export default function Home() {
                 />
               )}
               {view === 'sop' && <SOPLibraryView />}
-              {view === 'backup' && (
-                <BackupPanel
-                  projects={projects}
-                  onImport={handleImportProjects}
-                  onClearAll={handleClearAll}
-                />
-              )}
             </>
           )}
         </main>
