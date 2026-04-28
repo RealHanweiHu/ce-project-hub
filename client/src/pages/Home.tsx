@@ -12,7 +12,7 @@ import {
 import { GlobalSearch } from '@/components/GlobalSearch';
 import { nanoid } from 'nanoid';
 import {
-  Project, normalizeProject,
+  Project, normalizeProject, Issue, GateReview, ChangeRecord, PhaseData,
 } from '@/lib/data';
 import { buildPhasesDataForCategory, getPhasesForCategory } from '@/lib/sop-templates';
 import { DashboardView } from '@/components/views/DashboardView';
@@ -25,50 +25,393 @@ import { getLoginUrl } from '@/const';
 import { useQueryClient } from '@tanstack/react-query';
 import { getQueryKey } from '@trpc/react-query';
 import { ChangePasswordDialog } from '@/components/ChangePasswordDialog';
+import { useProjectData } from '@/hooks/useProjectData';
 
 type View = 'dashboard' | 'projects' | 'sop';
 
-// Helper: convert Project to API input shape
+// Helper: convert Project to API input shape (meta fields only)
 function projectToApiInput(p: Project) {
-  const { id, name, code, category, pm, risk, currentPhase, startDate, targetDate, phases, phaseDates, changeLog } = p;
+  const { id, name, code, category, pm, risk, currentPhase, startDate, targetDate } = p;
   return {
     id,
     name: name || '',
     projectNumber: code || '',
     category: category || 'npd',
-    pm: pm || '',
-    risk: risk || 'low',
+    pmName: pm || '',
+    risk: (risk || 'low') as 'low' | 'medium' | 'high',
     currentPhase: currentPhase || 'concept',
     progress: 0,
     startDate: startDate || null,
     targetDate: targetDate || null,
-    data: { phases, phaseDates, changeLog } as Record<string, unknown>,
   };
 }
 
-// Helper: convert API row back to Project
+// Helper: convert API row (new schema) back to lightweight Project shape for list views
 function rowToProject(row: {
   id: string; name: string; projectNumber: string; category: string;
-  pm: string; risk: string; currentPhase: string; progress: number;
+  pmName: string; risk: string; currentPhase: string; progress: number;
   startDate: string | null; targetDate: string | null;
-  data: Record<string, unknown>;
 }): Project {
-  const { data, projectNumber, ...meta } = row;
   return normalizeProject({
-    ...meta,
-    code: projectNumber || '',
-    type: (data.type as string) || '',
-    phases: (data.phases as Record<string, unknown>) || {},
-    phaseDates: data.phaseDates as Record<string, unknown> | undefined,
-    changeLog: data.changeLog as unknown[] | undefined,
-  } as unknown as Project);
+    id: row.id,
+    name: row.name,
+    code: row.projectNumber || '',
+    category: (row.category as 'npd' | 'eco' | 'idr') || 'npd',
+    pm: row.pmName || '',
+    risk: (row.risk as 'low' | 'medium' | 'high') || 'low',
+    currentPhase: row.currentPhase || 'concept',
+    startDate: row.startDate || '',
+    targetDate: row.targetDate || '',
+    type: '',
+    phases: {},
+  } as Project);
 }
 
+// ── ProjectDetailWrapper ─────────────────────────────────────────────────────
+// Loads full relational data for the selected project and handles all writes.
+function ProjectDetailWrapper({
+  projectId,
+  onBack,
+  onSaveStatus,
+}: {
+  projectId: string;
+  onBack: () => void;
+  onSaveStatus: (status: 'saved' | 'saving' | 'error', at?: Date) => void;
+}) {
+  const queryClient = useQueryClient();
+  const { project, isLoading } = useProjectData(projectId);
+
+  // ── Mutations ──────────────────────────────────────────────────────────────
+  const updateProjectMutation = trpc.projects.update.useMutation();
+  const setTaskCompletedMutation = trpc.tasks.setCompleted.useMutation();
+  const setTaskInstructionsMutation = trpc.tasks.setInstructions.useMutation();
+  const setTaskVisibleRolesMutation = trpc.tasks.setVisibleRoles.useMutation();
+  const createIssueMutation = trpc.issues.create.useMutation();
+  const updateIssueMutation = trpc.issues.update.useMutation();
+  const deleteIssueMutation = trpc.issues.delete.useMutation();
+  const createGateReviewMutation = trpc.gateReviews.create.useMutation();
+  const updateGateReviewMutation = trpc.gateReviews.update.useMutation();
+  const createChangelogMutation = trpc.changelog.create.useMutation();
+  const updateChangelogMutation = trpc.changelog.update.useMutation();
+  const deleteChangelogMutation = trpc.changelog.delete.useMutation();
+  const upsertPhaseMutation = trpc.phases.upsert.useMutation();
+
+  const invalidate = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: getQueryKey(trpc.tasks.list, { projectId }) });
+    queryClient.invalidateQueries({ queryKey: getQueryKey(trpc.issues.list, { projectId }) });
+    queryClient.invalidateQueries({ queryKey: getQueryKey(trpc.gateReviews.list, { projectId }) });
+    queryClient.invalidateQueries({ queryKey: getQueryKey(trpc.changelog.list, { projectId }) });
+    queryClient.invalidateQueries({ queryKey: getQueryKey(trpc.phases.list, { projectId }) });
+    queryClient.invalidateQueries({ queryKey: getQueryKey(trpc.projects.list) });
+  }, [queryClient, projectId]);
+
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /**
+   * handleUpdate is called by ProjectDetailView with the full updated Project.
+   * We diff it against the current project and call the appropriate tRPC mutations.
+   */
+  const handleUpdate = useCallback(async (updated: Project) => {
+    if (!project) return;
+    onSaveStatus('saving');
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+
+    saveTimerRef.current = setTimeout(async () => {
+      try {
+        const ops: Promise<unknown>[] = [];
+
+        // ── 1. Project meta (name, pm, risk, dates, currentPhase) ─────────────
+        const metaChanged =
+          updated.name !== project.name ||
+          updated.code !== project.code ||
+          updated.pm !== project.pm ||
+          updated.risk !== project.risk ||
+          updated.currentPhase !== project.currentPhase ||
+          updated.startDate !== project.startDate ||
+          updated.targetDate !== project.targetDate ||
+          updated.category !== project.category;
+
+        if (metaChanged) {
+          ops.push(updateProjectMutation.mutateAsync(projectToApiInput(updated)));
+        }
+
+        // ── 2. Tasks ──────────────────────────────────────────────────────────
+        for (const [phaseId, phaseData] of Object.entries(updated.phases || {})) {
+          const oldPhaseData: PhaseData | undefined = project.phases?.[phaseId];
+
+          // Task completion
+          for (const [taskId, completed] of Object.entries(phaseData.tasks || {})) {
+            if (completed !== (oldPhaseData?.tasks?.[taskId] ?? false)) {
+              ops.push(
+                setTaskCompletedMutation.mutateAsync({
+                  projectId, phaseId, taskId, completed: !!completed,
+                })
+              );
+            }
+          }
+
+          // Task instructions
+          for (const [taskId, details] of Object.entries(phaseData.taskDetails || {})) {
+            const oldInstructions = oldPhaseData?.taskDetails?.[taskId]?.instructions ?? null;
+            if (details.instructions !== oldInstructions) {
+              ops.push(
+                setTaskInstructionsMutation.mutateAsync({
+                  projectId, phaseId, taskId,
+                  instructions: details.instructions || null,
+                })
+              );
+            }
+          }
+
+          // Task visibleRoles (stored in project.taskVisibleRoles, keyed by taskId)
+          // We check all tasks in this phase for role changes
+          for (const taskId of Object.keys(phaseData.tasks || {})) {
+            const newRoles: string[] = updated.taskVisibleRoles?.[taskId] ?? [];
+            const oldRoles: string[] = project.taskVisibleRoles?.[taskId] ?? [];
+            if (JSON.stringify([...newRoles].sort()) !== JSON.stringify([...oldRoles].sort())) {
+              ops.push(
+                setTaskVisibleRolesMutation.mutateAsync({
+                  projectId, phaseId, taskId,
+                  visibleRoles: newRoles,
+                })
+              );
+            }
+          }
+
+          // ── 3. Issues ─────────────────────────────────────────────────────
+          const newIssues: Issue[] = phaseData.issues || [];
+          const oldIssues: Issue[] = oldPhaseData?.issues || [];
+
+          // Deleted issues (in old but not in new)
+          for (const oldIssue of oldIssues) {
+            if (!newIssues.find((i) => i.id === oldIssue.id)) {
+              const numId = parseInt(oldIssue.id, 10);
+              if (!isNaN(numId)) {
+                ops.push(deleteIssueMutation.mutateAsync({ id: numId, projectId }));
+              }
+            }
+          }
+
+          // New or updated issues
+          for (const issue of newIssues) {
+            const numId = parseInt(issue.id, 10);
+            const isNew = isNaN(numId) || !oldIssues.find((i) => i.id === issue.id);
+            if (isNew) {
+              ops.push(
+                createIssueMutation.mutateAsync({
+                  projectId, phaseId,
+                  title: issue.title,
+                  description: issue.desc || null,
+                  severity: issue.severity as 'P0' | 'P1' | 'P2' | 'P3',
+                  status: issue.status as 'open' | 'in_progress' | 'resolved' | 'closed' | 'wont_fix',
+                  category: issue.category as 'hardware' | 'software' | 'mechanical' | 'thermal' | 'reliability' | 'safety' | 'performance' | 'other',
+                  owner: issue.owner || null,
+                  reporter: issue.reporter || null,
+                  foundDate: issue.foundDate || null,
+                  targetDate: issue.targetDate || null,
+                  rootCause: issue.rootCause || null,
+                  solution: issue.solution || null,
+                  relatedTaskId: issue.relatedTaskId || null,
+                })
+              );
+            } else {
+              const old = oldIssues.find((i) => i.id === issue.id);
+              if (old && JSON.stringify(old) !== JSON.stringify(issue)) {
+                ops.push(
+                  updateIssueMutation.mutateAsync({
+                    id: numId, projectId,
+                    title: issue.title,
+                    description: issue.desc || null,
+                    severity: issue.severity as 'P0' | 'P1' | 'P2' | 'P3',
+                    status: issue.status as 'open' | 'in_progress' | 'resolved' | 'closed' | 'wont_fix',
+                    category: issue.category as 'hardware' | 'software' | 'mechanical' | 'thermal' | 'reliability' | 'safety' | 'performance' | 'other',
+                    owner: issue.owner || null,
+                    reporter: issue.reporter || null,
+                    foundDate: issue.foundDate || null,
+                    targetDate: issue.targetDate || null,
+                    closedDate: issue.closedDate || null,
+                    rootCause: issue.rootCause || null,
+                    solution: issue.solution || null,
+                    relatedTaskId: issue.relatedTaskId || null,
+                  })
+                );
+              }
+            }
+          }
+
+          // ── 4. Gate Reviews ───────────────────────────────────────────────
+          const newGates: GateReview[] = phaseData.gateReviews || [];
+          const oldGates: GateReview[] = oldPhaseData?.gateReviews || [];
+
+          for (const gate of newGates) {
+            const numId = parseInt(gate.id, 10);
+            const isNew = isNaN(numId) || !oldGates.find((g) => g.id === gate.id);
+            if (isNew) {
+              ops.push(
+                createGateReviewMutation.mutateAsync({
+                  projectId, phaseId,
+                  phaseName: gate.phaseName || '',
+                  gateName: gate.gateName || '',
+                  reviewDate: gate.reviewDate,
+                  participants: gate.participants || null,
+                  decision: gate.decision as 'approved' | 'conditional' | 'rejected',
+                  conditions: gate.conditions || null,
+                  notes: gate.notes || null,
+                  roundNumber: gate.roundNumber ?? 1,
+                })
+              );
+            } else {
+              const old = oldGates.find((g) => g.id === gate.id);
+              if (old && JSON.stringify(old) !== JSON.stringify(gate)) {
+                ops.push(
+                  updateGateReviewMutation.mutateAsync({
+                    id: numId, projectId,
+                    reviewDate: gate.reviewDate,
+                    participants: gate.participants || null,
+                    decision: gate.decision as 'approved' | 'conditional' | 'rejected',
+                    conditions: gate.conditions || null,
+                    notes: gate.notes || null,
+                    roundNumber: gate.roundNumber ?? 1,
+                  })
+                );
+              }
+            }
+          }
+
+          // ── 5. Phase dates / notes ─────────────────────────────────────────
+          const newPhaseDates = updated.phaseDates?.[phaseId];
+          const oldPhaseDates = project.phaseDates?.[phaseId];
+          const newNotes = phaseData.notes;
+          const oldNotes = oldPhaseData?.notes;
+
+          if (
+            newPhaseDates?.startDate !== oldPhaseDates?.startDate ||
+            newPhaseDates?.endDate !== oldPhaseDates?.endDate ||
+            newNotes !== oldNotes
+          ) {
+            ops.push(
+              upsertPhaseMutation.mutateAsync({
+                projectId, phaseId,
+                startDate: newPhaseDates?.startDate ?? null,
+                endDate: newPhaseDates?.endDate ?? null,
+                notes: newNotes ?? null,
+              })
+            );
+          }
+        }
+
+        // ── 6. Changelog ──────────────────────────────────────────────────────
+        const newChangelog: ChangeRecord[] = updated.changeLog || [];
+        const oldChangelog: ChangeRecord[] = project.changeLog || [];
+
+        // Deleted records
+        for (const old of oldChangelog) {
+          if (!newChangelog.find((c) => c.id === old.id)) {
+            const numId = parseInt(old.id, 10);
+            if (!isNaN(numId)) {
+              ops.push(deleteChangelogMutation.mutateAsync({ id: numId, projectId }));
+            }
+          }
+        }
+
+        // New or updated records
+        for (const record of newChangelog) {
+          const numId = parseInt(record.id, 10);
+          const isNew = isNaN(numId) || !oldChangelog.find((c) => c.id === record.id);
+          if (isNew) {
+            ops.push(
+              createChangelogMutation.mutateAsync({
+                projectId,
+                number: record.number || '',
+                type: (['decision','tradeoff','eco','ecn','spec','cost','schedule','supplier','other'].includes(record.type) ? record.type : 'other') as 'decision' | 'tradeoff' | 'eco' | 'ecn' | 'spec' | 'cost' | 'schedule' | 'supplier' | 'other',
+                title: record.title,
+                description: record.description || null,
+                reason: record.reason || null,
+                decisionMaker: record.decisionMaker || null,
+                affectedPhases: record.affectedPhases || [],
+                status: record.status as 'proposed' | 'approved' | 'rejected' | 'implemented' | 'cancelled',
+                costImpact: record.costImpact || null,
+                scheduleImpact: record.scheduleImpact || null,
+                notes: record.notes || null,
+                createdDate: record.createdDate || null,
+                implementedDate: record.implementedDate || null,
+              })
+            );
+          } else {
+            const old = oldChangelog.find((c) => c.id === record.id);
+            if (old && JSON.stringify(old) !== JSON.stringify(record)) {
+              ops.push(
+                updateChangelogMutation.mutateAsync({
+                  id: numId, projectId,
+                  number: record.number || '',
+                  type: (['decision','tradeoff','eco','ecn','spec','cost','schedule','supplier','other'].includes(record.type) ? record.type : 'other') as 'decision' | 'tradeoff' | 'eco' | 'ecn' | 'spec' | 'cost' | 'schedule' | 'supplier' | 'other',
+                  title: record.title,
+                  description: record.description || null,
+                  reason: record.reason || null,
+                  decisionMaker: record.decisionMaker || null,
+                  affectedPhases: record.affectedPhases || [],
+                  status: record.status as 'proposed' | 'approved' | 'rejected' | 'implemented' | 'cancelled',
+                  costImpact: record.costImpact || null,
+                  scheduleImpact: record.scheduleImpact || null,
+                  notes: record.notes || null,
+                  createdDate: record.createdDate || null,
+                  implementedDate: record.implementedDate || null,
+                })
+              );
+            }
+          }
+        }
+
+        await Promise.all(ops);
+        invalidate();
+        onSaveStatus('saved', new Date());
+      } catch (err) {
+        console.error('[handleUpdate] error:', err);
+        onSaveStatus('error');
+      }
+    }, 600);
+  }, [
+    project, projectId, onSaveStatus, invalidate,
+    updateProjectMutation, setTaskCompletedMutation, setTaskInstructionsMutation, setTaskVisibleRolesMutation,
+    createIssueMutation, updateIssueMutation, deleteIssueMutation,
+    createGateReviewMutation, updateGateReviewMutation,
+    createChangelogMutation, updateChangelogMutation, deleteChangelogMutation,
+    upsertPhaseMutation,
+  ]);
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 size={24} className="animate-spin text-amber-500" />
+          <p className="text-sm font-mono text-stone-400 uppercase tracking-widest">加载项目详情...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!project) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <p className="text-sm font-mono text-stone-400">项目不存在或无权访问</p>
+      </div>
+    );
+  }
+
+  return (
+    <ProjectDetailView
+      project={project}
+      onUpdate={handleUpdate}
+      onBack={onBack}
+    />
+  );
+}
+
+// ── Home ─────────────────────────────────────────────────────────────────────
 export default function Home() {
   const { user, loading: authLoading } = useAuth();
   const [, navigate] = useLocation();
   const isAdmin = (user as (typeof user & { role?: string }) | null)?.role === 'admin';
-  // canCreateProject is derived from auth.me (admin always true, others need explicit grant)
   const canCreateProject = !!(user as (typeof user & { canCreateProject?: boolean }) | null)?.canCreateProject;
   const queryClient = useQueryClient();
 
@@ -79,7 +422,6 @@ export default function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── tRPC queries & mutations ─────────────────────────────────────────────
   const { data: projectRows = [], isLoading: projectsLoading } = trpc.projects.list.useQuery(
@@ -90,9 +432,7 @@ export default function Home() {
   const projects: Project[] = projectRows.map(rowToProject);
 
   const createMutation = trpc.projects.create.useMutation();
-  const updateMutation = trpc.projects.update.useMutation();
   const deleteMutation = trpc.projects.delete.useMutation();
-  const bulkImportMutation = trpc.projects.bulkImport.useMutation();
 
   const invalidateProjects = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: getQueryKey(trpc.projects.list) });
@@ -131,20 +471,10 @@ export default function Home() {
     setSidebarOpen(false);
   };
 
-  const handleUpdateProject = async (updated: Project) => {
-    setSaveStatus('saving');
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(async () => {
-      try {
-        await updateMutation.mutateAsync(projectToApiInput(updated));
-        invalidateProjects();
-        setSaveStatus('saved');
-        setLastSavedAt(new Date());
-      } catch {
-        setSaveStatus('error');
-      }
-    }, 600);
-  };
+  const handleSaveStatus = useCallback((status: 'saved' | 'saving' | 'error', at?: Date) => {
+    setSaveStatus(status);
+    if (at) setLastSavedAt(at);
+  }, []);
 
   const handleAddProject = async (data: Omit<Project, 'id' | 'phases'>) => {
     const newProject = normalizeProject({
@@ -488,7 +818,7 @@ export default function Home() {
               {view === 'dashboard' && (
                 <DashboardView projects={projects} onSelectProject={handleSelectProject} />
               )}
-              {view === 'projects' && !selectedProject && (
+              {view === 'projects' && !selectedProjectId && (
                 <ProjectListView
                   projects={projects}
                   onSelectProject={handleSelectProject}
@@ -498,11 +828,11 @@ export default function Home() {
                   canCreateProject={canCreateProject}
                 />
               )}
-              {view === 'projects' && selectedProject && (
-                <ProjectDetailView
-                  project={selectedProject}
-                  onUpdate={handleUpdateProject}
+              {view === 'projects' && selectedProjectId && (
+                <ProjectDetailWrapper
+                  projectId={selectedProjectId}
                   onBack={() => setSelectedProjectId(null)}
+                  onSaveStatus={handleSaveStatus}
                 />
               )}
               {view === 'sop' && <SOPLibraryView />}

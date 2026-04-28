@@ -9,6 +9,11 @@ import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { projectsRouter } from "./routers/projects";
 import { membersRouter } from "./routers/members";
 import { adminRouter } from "./routers/admin";
+import { tasksRouter } from "./routers/tasks";
+import { issuesRouter } from "./routers/issues";
+import { gateReviewsRouter } from "./routers/gateReviews";
+import { changelogRouter } from "./routers/changelog";
+import { phasesRouter } from "./routers/phases";
 import * as db from "./db";
 
 export const appRouter = router({
@@ -178,6 +183,11 @@ export const appRouter = router({
   projects: projectsRouter,
   members: membersRouter,
   admin: adminRouter,
+  tasks: tasksRouter,
+  issues: issuesRouter,
+  gateReviews: gateReviewsRouter,
+  changelog: changelogRouter,
+  phases: phasesRouter,
 });
 
 export type AppRouter = typeof appRouter;

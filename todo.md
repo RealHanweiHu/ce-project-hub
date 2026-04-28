@@ -90,6 +90,28 @@
 - [x] admin.listUsers 返回 username 字段
 - [x] TypeScript 零错误，测试通过
 
+## 架构重构：项目数据拆分为关系型表（已完成）
+
+### Phase 1: 数据库 Schema
+- [x] 设计新 Schema：organizations、projects（移除 data 字段）、project_phases、tasks、issues、gate_reviews、changelog
+- [x] drizzle/schema.ts 全量重写，清空数据库并推送新 Schema
+
+### Phase 2: 后端重构
+- [x] server/db.ts 重写所有查询函数（含 seedProjectPhasesAndTasks）
+- [x] server/routers/projects.ts 拆分为细粒度接口（list/get/create/update/delete）
+- [x] server/routers/tasks.ts 新建（list/setCompleted/setInstructions/setVisibleRoles）
+- [x] server/routers/issues.ts 新建（list/create/update/delete）
+- [x] server/routers/gateReviews.ts 新建（list/create/update/delete）
+- [x] server/routers/changelog.ts 新建（list/create/update/delete）
+- [x] server/routers/phases.ts 新建（list/upsert）
+- [x] server/sop-data.ts 服务端 SOP 模板数据（seedProjectPhasesAndTasks 使用）
+
+### Phase 3: 前端重构
+- [x] 新建 client/src/hooks/useProjectData.ts：并行查询 tasks/issues/gateReviews/changelog/phases，组装 Project 对象
+- [x] Home.tsx 新增 ProjectDetailWrapper 组件：细粒度 diff 写入各 tRPC 路由
+- [x] 移除 handleUpdateProject 的整体 update 方式，改为字段级别 diff 写入
+- [x] TypeScript 零错误，服务器正常运行
+
 ## bulkImport 权限修复 + 注册强制 Email（已完成）
 
 - [x] 分析 bulkImport 接口，确认绕过权限的具体位置（缺少 canCreateProject 校验）

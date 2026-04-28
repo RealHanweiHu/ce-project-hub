@@ -1,15 +1,23 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, json, boolean } from "drizzle-orm/mysql-core";
+import {
+  int,
+  mysqlEnum,
+  mysqlTable,
+  text,
+  timestamp,
+  varchar,
+  json,
+  boolean,
+  tinyint,
+} from "drizzle-orm/mysql-core";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Users
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * Core user table backing auth flow.
- * Extend this file with additional tables as your product grows.
- * Columns use camelCase to match both database fields and generated types.
  */
 export const users = mysqlTable("users", {
-  /**
-   * Surrogate primary key. Auto-incremented numeric value managed by the database.
-   * Use this for relations between tables.
-   */
   id: int("id").autoincrement().primaryKey(),
   /** User identifier - stores username for password auth (kept as openId for DB compatibility) */
   openId: varchar("openId", { length: 64 }).notNull().unique(),
@@ -35,31 +43,43 @@ export const users = mysqlTable("users", {
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Projects (metadata only — no more data JSON blob)
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
- * Projects table - stores CE product development projects.
- * The `data` column holds the full project JSON (phases, tasks, issues, gate reviews, change log, etc.)
+ * Projects table - stores CE product development project metadata.
+ * All phase/task/issue/gate/changelog data live in separate tables.
  */
 export const projects = mysqlTable("projects", {
   id: varchar("id", { length: 32 }).primaryKey(),
   name: varchar("name", { length: 256 }).notNull(),
   projectNumber: varchar("projectNumber", { length: 64 }).notNull().default(""),
-  category: varchar("category", { length: 16 }).notNull().default("npd"),
-  pm: varchar("pm", { length: 128 }).notNull().default(""),
-  risk: varchar("risk", { length: 16 }).notNull().default("low"),
+  /** Product category: maps to SOP template */
+  category: varchar("category", { length: 64 }).notNull().default("npd"),
+  /** Project manager user id (FK to users.id) */
+  pmUserId: int("pmUserId"),
+  /** Display name fallback for PM (in case user is deleted) */
+  pmName: varchar("pmName", { length: 128 }).notNull().default(""),
+  risk: mysqlEnum("risk", ["low", "medium", "high"]).notNull().default("low"),
   currentPhase: varchar("currentPhase", { length: 32 }).notNull().default("concept"),
   progress: int("progress").notNull().default(0),
   startDate: varchar("startDate", { length: 32 }),
   targetDate: varchar("targetDate", { length: 32 }),
-  /** Full project JSON data (phases, tasks, issues, gate reviews, change log, phaseDates) */
-  data: json("data").notNull().$type<Record<string, unknown>>(),
   createdBy: int("createdBy").notNull(),
   archived: boolean("archived").notNull().default(false),
+  /** Reserved for future organization/workspace support */
+  orgId: int("orgId"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 
 export type ProjectRow = typeof projects.$inferSelect;
 export type InsertProject = typeof projects.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Project Member Roles
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * Project member roles in CE product development context.
@@ -87,11 +107,12 @@ export const PROJECT_MEMBER_ROLES = [
   "viewer",
 ] as const;
 
-export type ProjectMemberRole = typeof PROJECT_MEMBER_ROLES[number];
+export type ProjectMemberRole = (typeof PROJECT_MEMBER_ROLES)[number];
 
 /**
  * project_members table - maps users to projects with a specific role.
  * The project creator is automatically added as 'owner'.
+ * External guests (non-registered users) can be invited via invite tokens.
  */
 export const projectMembers = mysqlTable("project_members", {
   id: int("id").autoincrement().primaryKey(),
@@ -108,3 +129,203 @@ export const projectMembers = mysqlTable("project_members", {
 
 export type ProjectMember = typeof projectMembers.$inferSelect;
 export type InsertProjectMember = typeof projectMembers.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Project Phases (per-project phase state & dates)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * project_phases table - stores per-project phase metadata.
+ * One row per (project, phase) pair.
+ */
+export const projectPhases = mysqlTable("project_phases", {
+  id: int("id").autoincrement().primaryKey(),
+  projectId: varchar("projectId", { length: 32 }).notNull(),
+  /** Phase id matching SOP template (e.g. 'concept', 'planning', 'design') */
+  phaseId: varchar("phaseId", { length: 32 }).notNull(),
+  /** Custom start date override (YYYY-MM-DD) */
+  startDate: varchar("startDate", { length: 32 }),
+  /** Custom end date override (YYYY-MM-DD) */
+  endDate: varchar("endDate", { length: 32 }),
+  /** Phase-level notes */
+  notes: text("notes"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type ProjectPhase = typeof projectPhases.$inferSelect;
+export type InsertProjectPhase = typeof projectPhases.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tasks (per-project, per-phase task completion state)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * project_tasks table - tracks completion state and details for each SOP task.
+ * One row per (project, phase, task) triple.
+ */
+export const projectTasks = mysqlTable("project_tasks", {
+  id: int("id").autoincrement().primaryKey(),
+  projectId: varchar("projectId", { length: 32 }).notNull(),
+  phaseId: varchar("phaseId", { length: 32 }).notNull(),
+  /** Task id matching SOP template (e.g. 'c1', 'p3', 'd5') */
+  taskId: varchar("taskId", { length: 32 }).notNull(),
+  /** Whether the task is checked/completed */
+  completed: boolean("completed").notNull().default(false),
+  /** Task-level instructions / notes */
+  instructions: text("instructions"),
+  /**
+   * Roles that can see this task.
+   * JSON array of ProjectMemberRole strings.
+   * Empty array = visible to all members.
+   */
+  visibleRoles: json("visibleRoles").$type<string[]>().default([]),
+  updatedBy: int("updatedBy"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type ProjectTask = typeof projectTasks.$inferSelect;
+export type InsertProjectTask = typeof projectTasks.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Issues
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const ISSUE_SEVERITIES = ["P0", "P1", "P2", "P3"] as const;
+export const ISSUE_STATUSES = ["open", "in_progress", "resolved", "closed", "wont_fix"] as const;
+export const ISSUE_CATEGORIES = [
+  "hardware", "software", "mechanical", "thermal",
+  "reliability", "safety", "performance", "other",
+] as const;
+
+export type IssueSeverity = (typeof ISSUE_SEVERITIES)[number];
+export type IssueStatus = (typeof ISSUE_STATUSES)[number];
+export type IssueCategory = (typeof ISSUE_CATEGORIES)[number];
+
+/**
+ * project_issues table - issue tracking per project/phase.
+ */
+export const projectIssues = mysqlTable("project_issues", {
+  id: int("id").autoincrement().primaryKey(),
+  projectId: varchar("projectId", { length: 32 }).notNull(),
+  phaseId: varchar("phaseId", { length: 32 }).notNull(),
+  title: varchar("title", { length: 256 }).notNull(),
+  description: text("description"),
+  severity: mysqlEnum("severity", ISSUE_SEVERITIES).notNull().default("P2"),
+  status: mysqlEnum("status", ISSUE_STATUSES).notNull().default("open"),
+  category: mysqlEnum("category", ISSUE_CATEGORIES).notNull().default("other"),
+  /** Responsible person (display name) */
+  owner: varchar("owner", { length: 128 }),
+  reporter: varchar("reporter", { length: 128 }),
+  foundDate: varchar("foundDate", { length: 32 }),
+  targetDate: varchar("targetDate", { length: 32 }),
+  closedDate: varchar("closedDate", { length: 32 }),
+  rootCause: text("rootCause"),
+  solution: text("solution"),
+  relatedTaskId: varchar("relatedTaskId", { length: 32 }),
+  /** User id of the creator (for permission checks) */
+  creatorId: int("creatorId"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type ProjectIssue = typeof projectIssues.$inferSelect;
+export type InsertProjectIssue = typeof projectIssues.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Gate Reviews
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const GATE_DECISIONS = ["approved", "conditional", "rejected"] as const;
+export type GateDecision = (typeof GATE_DECISIONS)[number];
+
+/**
+ * project_gate_reviews table - gate review records per project/phase.
+ */
+export const projectGateReviews = mysqlTable("project_gate_reviews", {
+  id: int("id").autoincrement().primaryKey(),
+  projectId: varchar("projectId", { length: 32 }).notNull(),
+  phaseId: varchar("phaseId", { length: 32 }).notNull(),
+  phaseName: varchar("phaseName", { length: 64 }).notNull().default(""),
+  gateName: varchar("gateName", { length: 128 }).notNull().default(""),
+  reviewDate: varchar("reviewDate", { length: 32 }).notNull(),
+  /** Comma-separated participant names */
+  participants: text("participants"),
+  decision: mysqlEnum("decision", GATE_DECISIONS).notNull().default("conditional"),
+  /** Conditions if conditional approval */
+  conditions: text("conditions"),
+  notes: text("notes"),
+  /** Review round number (1 = first, 2 = re-review, etc.) */
+  roundNumber: int("roundNumber").notNull().default(1),
+  createdBy: int("createdBy"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type ProjectGateReview = typeof projectGateReviews.$inferSelect;
+export type InsertProjectGateReview = typeof projectGateReviews.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Change Log / Decisions
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const CHANGE_TYPES = [
+  "decision", "tradeoff", "eco", "ecn", "spec",
+  "cost", "schedule", "supplier", "other",
+] as const;
+export const CHANGE_STATUSES = [
+  "proposed", "approved", "rejected", "implemented", "cancelled",
+] as const;
+
+export type ChangeType = (typeof CHANGE_TYPES)[number];
+export type ChangeStatus = (typeof CHANGE_STATUSES)[number];
+
+/**
+ * project_changelog table - change records and decisions per project.
+ */
+export const projectChangelog = mysqlTable("project_changelog", {
+  id: int("id").autoincrement().primaryKey(),
+  projectId: varchar("projectId", { length: 32 }).notNull(),
+  /** Auto-generated number e.g. ECR-001, ECN-002 */
+  number: varchar("number", { length: 32 }).notNull().default(""),
+  type: mysqlEnum("type", CHANGE_TYPES).notNull().default("other"),
+  title: varchar("title", { length: 256 }).notNull(),
+  description: text("description"),
+  reason: text("reason"),
+  decisionMaker: varchar("decisionMaker", { length: 128 }),
+  /** JSON array of phase ids affected */
+  affectedPhases: json("affectedPhases").$type<string[]>().default([]),
+  status: mysqlEnum("status", CHANGE_STATUSES).notNull().default("proposed"),
+  costImpact: varchar("costImpact", { length: 128 }),
+  scheduleImpact: varchar("scheduleImpact", { length: 128 }),
+  notes: text("notes"),
+  createdDate: varchar("createdDate", { length: 32 }),
+  implementedDate: varchar("implementedDate", { length: 32 }),
+  creatorId: int("creatorId"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type ProjectChangeRecord = typeof projectChangelog.$inferSelect;
+export type InsertProjectChangeRecord = typeof projectChangelog.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Organizations (reserved for future multi-tenant support)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * organizations table - reserved for future organization/workspace support.
+ * Currently not used in application logic; projects have orgId=null.
+ */
+export const organizations = mysqlTable("organizations", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 256 }).notNull(),
+  slug: varchar("slug", { length: 64 }).notNull().unique(),
+  ownerId: int("ownerId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type Organization = typeof organizations.$inferSelect;
+export type InsertOrganization = typeof organizations.$inferInsert;

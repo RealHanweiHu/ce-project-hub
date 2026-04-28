@@ -3,8 +3,14 @@ import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser, users, projects, InsertProject, ProjectRow,
   projectMembers, InsertProjectMember, ProjectMember, ProjectMemberRole,
+  projectPhases, ProjectPhase, InsertProjectPhase,
+  projectTasks, ProjectTask, InsertProjectTask,
+  projectIssues, ProjectIssue, InsertProjectIssue,
+  projectGateReviews, ProjectGateReview, InsertProjectGateReview,
+  projectChangelog, ProjectChangeRecord, InsertProjectChangeRecord,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
+import { getSopPhasesForCategory } from "./sop-data";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -307,4 +313,229 @@ export async function removeProjectMember(projectId: string, userId: number): Pr
   await db
     .delete(projectMembers)
     .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId)));
+}
+
+// ── Project Phases helpers ────────────────────────────────────────────────────
+
+/** Get all phase records for a project */
+export async function getProjectPhases(projectId: string): Promise<ProjectPhase[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(projectPhases)
+    .where(eq(projectPhases.projectId, projectId))
+    .orderBy(projectPhases.id);
+}
+
+/** Upsert a project phase record (create if not exists, update if exists) */
+export async function upsertProjectPhase(
+  projectId: string,
+  phaseId: string,
+  patch: { startDate?: string | null; endDate?: string | null; notes?: string | null }
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const existing = await db
+    .select()
+    .from(projectPhases)
+    .where(and(eq(projectPhases.projectId, projectId), eq(projectPhases.phaseId, phaseId)))
+    .limit(1);
+  if (existing.length > 0) {
+    await db
+      .update(projectPhases)
+      .set(patch)
+      .where(and(eq(projectPhases.projectId, projectId), eq(projectPhases.phaseId, phaseId)));
+  } else {
+    await db.insert(projectPhases).values({ projectId, phaseId, ...patch });
+  }
+}
+
+// ── Project Tasks helpers ─────────────────────────────────────────────────────
+
+/** Get all task records for a project (optionally filtered by phase) */
+export async function getProjectTasks(projectId: string, phaseId?: string): Promise<ProjectTask[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const conditions = phaseId
+    ? and(eq(projectTasks.projectId, projectId), eq(projectTasks.phaseId, phaseId))
+    : eq(projectTasks.projectId, projectId);
+  return db.select().from(projectTasks).where(conditions).orderBy(projectTasks.id);
+}
+
+/** Upsert a task record (create or update by projectId+phaseId+taskId) */
+export async function upsertProjectTask(
+  projectId: string,
+  phaseId: string,
+  taskId: string,
+  patch: { completed?: boolean; instructions?: string | null; visibleRoles?: string[]; updatedBy?: number | null }
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const existing = await db
+    .select()
+    .from(projectTasks)
+    .where(
+      and(
+        eq(projectTasks.projectId, projectId),
+        eq(projectTasks.phaseId, phaseId),
+        eq(projectTasks.taskId, taskId)
+      )
+    )
+    .limit(1);
+  if (existing.length > 0) {
+    await db
+      .update(projectTasks)
+      .set(patch)
+      .where(
+        and(
+          eq(projectTasks.projectId, projectId),
+          eq(projectTasks.phaseId, phaseId),
+          eq(projectTasks.taskId, taskId)
+        )
+      );
+  } else {
+    await db.insert(projectTasks).values({ projectId, phaseId, taskId, ...patch });
+  }
+}
+
+/**
+ * Seed project_phases and project_tasks from SOP template on project creation.
+ * Creates phase records and task records (all unchecked) based on category.
+ */
+export async function seedProjectPhasesAndTasks(
+  projectId: string,
+  category: string,
+  createdBy: number
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const phases = getSopPhasesForCategory(category);
+  for (const phase of phases) {
+    // Insert phase record
+    await db.insert(projectPhases).values({ projectId, phaseId: phase.id });
+    // Insert task records
+    for (const task of phase.tasks) {
+      await db.insert(projectTasks).values({
+        projectId,
+        phaseId: phase.id,
+        taskId: task.id,
+        completed: false,
+        visibleRoles: task.visibleRoles,
+        updatedBy: createdBy,
+      });
+    }
+  }
+}
+
+// ── Project Issues helpers ────────────────────────────────────────────────────
+
+/** Get all issues for a project (optionally filtered by phase) */
+export async function getProjectIssues(projectId: string, phaseId?: string): Promise<ProjectIssue[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const conditions = phaseId
+    ? and(eq(projectIssues.projectId, projectId), eq(projectIssues.phaseId, phaseId))
+    : eq(projectIssues.projectId, projectId);
+  return db.select().from(projectIssues).where(conditions).orderBy(desc(projectIssues.createdAt));
+}
+
+/** Create a new issue */
+export async function createProjectIssue(issue: InsertProjectIssue): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(projectIssues).values(issue);
+  return (result as unknown as [{ insertId: number }, unknown])[0].insertId;
+}
+
+/** Update an issue */
+export async function updateProjectIssue(
+  id: number,
+  patch: Partial<Omit<InsertProjectIssue, "id" | "projectId" | "createdAt">>
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(projectIssues).set(patch).where(eq(projectIssues.id, id));
+}
+
+/** Delete an issue */
+export async function deleteProjectIssue(id: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(projectIssues).where(eq(projectIssues.id, id));
+}
+
+// ── Gate Reviews helpers ──────────────────────────────────────────────────────
+
+/** Get all gate reviews for a project (optionally filtered by phase) */
+export async function getProjectGateReviews(projectId: string, phaseId?: string): Promise<ProjectGateReview[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const conditions = phaseId
+    ? and(eq(projectGateReviews.projectId, projectId), eq(projectGateReviews.phaseId, phaseId))
+    : eq(projectGateReviews.projectId, projectId);
+  return db.select().from(projectGateReviews).where(conditions).orderBy(projectGateReviews.createdAt);
+}
+
+/** Create a gate review */
+export async function createProjectGateReview(review: InsertProjectGateReview): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(projectGateReviews).values(review);
+  return (result as unknown as [{ insertId: number }, unknown])[0].insertId;
+}
+
+/** Update a gate review */
+export async function updateProjectGateReview(
+  id: number,
+  patch: Partial<Omit<InsertProjectGateReview, "id" | "projectId" | "createdAt">>
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(projectGateReviews).set(patch).where(eq(projectGateReviews.id, id));
+}
+
+/** Delete a gate review */
+export async function deleteProjectGateReview(id: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(projectGateReviews).where(eq(projectGateReviews.id, id));
+}
+
+// ── Changelog helpers ─────────────────────────────────────────────────────────
+
+/** Get all changelog records for a project */
+export async function getProjectChangelog(projectId: string): Promise<ProjectChangeRecord[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(projectChangelog)
+    .where(eq(projectChangelog.projectId, projectId))
+    .orderBy(desc(projectChangelog.createdAt));
+}
+
+/** Create a changelog record */
+export async function createProjectChangeRecord(record: InsertProjectChangeRecord): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(projectChangelog).values(record);
+  return (result as unknown as [{ insertId: number }, unknown])[0].insertId;
+}
+
+/** Update a changelog record */
+export async function updateProjectChangeRecord(
+  id: number,
+  patch: Partial<Omit<InsertProjectChangeRecord, "id" | "projectId" | "createdAt">>
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(projectChangelog).set(patch).where(eq(projectChangelog.id, id));
+}
+
+/** Delete a changelog record */
+export async function deleteProjectChangeRecord(id: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(projectChangelog).where(eq(projectChangelog.id, id));
 }

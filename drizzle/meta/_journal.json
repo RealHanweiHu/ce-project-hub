@@ -5,36 +5,8 @@
     {
       "idx": 0,
       "version": "5",
-      "when": 1777260200317,
-      "tag": "0000_robust_sway",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "5",
-      "when": 1777260261743,
-      "tag": "0001_typical_sphinx",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "5",
-      "when": 1777361853381,
-      "tag": "0002_open_namorita",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "5",
-      "when": 1777366404321,
-      "tag": "0003_cuddly_big_bertha",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "5",
-      "when": 1777371329750,
-      "tag": "0004_lucky_next_avengers",
+      "when": 1777392451920,
+      "tag": "0000_clever_the_hood",
       "breakpoints": true
     }
   ]

@@ -7,6 +7,7 @@ import {
   createProject,
   updateProject,
   deleteProject,
+  seedProjectPhasesAndTasks,
 } from "../db";
 import { TRPCError } from "@trpc/server";
 import { ROLE_PERMISSIONS } from "./members";
@@ -21,21 +22,22 @@ async function getEffectiveRole(projectId: string, userId: number) {
   return member?.role ?? null;
 }
 
-// Full project data schema (flexible JSON)
-const projectDataSchema = z.record(z.string(), z.unknown());
+const riskEnum = z.enum(["low", "medium", "high"]).default("low");
 
 const projectInputSchema = z.object({
   id: z.string(),
   name: z.string(),
   projectNumber: z.string().default(""),
   category: z.string().default("npd"),
-  pm: z.string().default(""),
-  risk: z.string().default("low"),
+  /** PM user id (from users table) */
+  pmUserId: z.number().nullable().optional(),
+  /** PM display name (fallback) */
+  pmName: z.string().default(""),
+  risk: riskEnum,
   currentPhase: z.string().default("concept"),
   progress: z.number().default(0),
   startDate: z.string().nullable().optional(),
   targetDate: z.string().nullable().optional(),
-  data: projectDataSchema,
 });
 
 export const projectsRouter = router({
@@ -51,10 +53,7 @@ export const projectsRouter = router({
       seen.add(r.id);
       return true;
     });
-    return all.map((row) => ({
-      ...row,
-      data: row.data as Record<string, unknown>,
-    }));
+    return all;
   }),
 
   /** Get a single project by id (owner or member with canView) */
@@ -65,7 +64,7 @@ export const projectsRouter = router({
       if (!row) throw new TRPCError({ code: "NOT_FOUND" });
       const role = await getEffectiveRole(input.id, ctx.user.id);
       if (!role || !ROLE_PERMISSIONS[role].canView) throw new TRPCError({ code: "FORBIDDEN" });
-      return { ...row, data: row.data as Record<string, unknown> };
+      return row;
     }),
 
   /** Create a new project (requires canCreateProject or admin role) */
@@ -73,7 +72,6 @@ export const projectsRouter = router({
     .input(projectInputSchema)
     .mutation(async ({ ctx, input }) => {
       // Check if user has permission to create projects
-      // admin always can; regular users need canCreateProject=true
       const canCreate = ctx.user.role === 'admin' || ctx.user.canCreateProject;
       if (!canCreate) {
         throw new TRPCError({
@@ -86,39 +84,41 @@ export const projectsRouter = router({
         name: input.name,
         projectNumber: input.projectNumber,
         category: input.category,
-        pm: input.pm,
+        pmUserId: input.pmUserId ?? null,
+        pmName: input.pmName,
         risk: input.risk,
         currentPhase: input.currentPhase,
         progress: input.progress,
         startDate: input.startDate ?? null,
         targetDate: input.targetDate ?? null,
-        data: input.data,
         createdBy: ctx.user.id,
         archived: false,
       });
+      // Seed project_phases and project_tasks from SOP template
+      await seedProjectPhasesAndTasks(input.id, input.category, ctx.user.id);
       return { success: true };
     }),
 
-  /** Update an existing project (requires canEditTasks or above) */
+  /** Update an existing project metadata (requires canEditProjectInfo) */
   update: protectedProcedure
     .input(projectInputSchema)
     .mutation(async ({ ctx, input }) => {
       const existing = await getProjectById(input.id);
       if (!existing) throw new TRPCError({ code: "NOT_FOUND" });
       const role = await getEffectiveRole(input.id, ctx.user.id);
-      if (!role || !ROLE_PERMISSIONS[role].canEditTasks) throw new TRPCError({ code: "FORBIDDEN" });
+      if (!role || !ROLE_PERMISSIONS[role].canEditProjectInfo) throw new TRPCError({ code: "FORBIDDEN" });
 
       await updateProject(input.id, {
         name: input.name,
         projectNumber: input.projectNumber,
         category: input.category,
-        pm: input.pm,
+        pmUserId: input.pmUserId ?? null,
+        pmName: input.pmName,
         risk: input.risk,
         currentPhase: input.currentPhase,
         progress: input.progress,
         startDate: input.startDate ?? null,
         targetDate: input.targetDate ?? null,
-        data: input.data,
       });
       return { success: true };
     }),
@@ -133,56 +133,5 @@ export const projectsRouter = router({
       if (!role || !ROLE_PERMISSIONS[role].canDeleteProject) throw new TRPCError({ code: "FORBIDDEN" });
       await deleteProject(input.id);
       return { success: true };
-    }),
-
-  /** Bulk import projects (for migration from localStorage) */
-  bulkImport: protectedProcedure
-    .input(z.array(projectInputSchema))
-    .mutation(async ({ ctx, input }) => {
-      // Same permission check as create: admin always can; regular users need canCreateProject=true
-      const canCreate = ctx.user.role === 'admin' || ctx.user.canCreateProject;
-      if (!canCreate) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: '您没有创建项目的权限。请联系管理员授权。',
-        });
-      }
-      for (const p of input) {
-        const existing = await getProjectById(p.id);
-        if (existing) {
-          // Update if owned by this user, skip otherwise
-          if (existing.createdBy === ctx.user.id) {
-            await updateProject(p.id, {
-              name: p.name,
-              projectNumber: p.projectNumber,
-              category: p.category,
-              pm: p.pm,
-              risk: p.risk,
-              currentPhase: p.currentPhase,
-              progress: p.progress,
-              startDate: p.startDate ?? null,
-              targetDate: p.targetDate ?? null,
-              data: p.data,
-            });
-          }
-        } else {
-          await createProject({
-            id: p.id,
-            name: p.name,
-            projectNumber: p.projectNumber,
-            category: p.category,
-            pm: p.pm,
-            risk: p.risk,
-            currentPhase: p.currentPhase,
-            progress: p.progress,
-            startDate: p.startDate ?? null,
-            targetDate: p.targetDate ?? null,
-            data: p.data,
-            createdBy: ctx.user.id,
-            archived: false,
-          });
-        }
-      }
-      return { success: true, count: input.length };
     }),
 });
