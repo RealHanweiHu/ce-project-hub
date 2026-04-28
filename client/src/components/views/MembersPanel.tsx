@@ -265,7 +265,8 @@ export function MembersPanel({ projectId, canManage }: MembersPanelProps) {
         </div>
       )}
 
-      {/* Permission Legend */}
+      {/* Permission Legend - only visible to project managers (owner/manager/pm) */}
+      {canManage && (
       <div className="bg-stone-50 border border-stone-200 p-4">
         <div className="text-[10px] font-mono uppercase tracking-wider text-stone-500 mb-3">权限说明</div>
         <div className="overflow-x-auto">
@@ -313,6 +314,7 @@ export function MembersPanel({ projectId, canManage }: MembersPanelProps) {
           </table>
         </div>
       </div>
+      )}
 
       {/* Member List */}
       {isLoading ? (
