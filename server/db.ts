@@ -1,6 +1,9 @@
-import { eq, desc, and } from "drizzle-orm";
+import { eq, desc, and, or, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users, projects, InsertProject, ProjectRow } from "../drizzle/schema";
+import {
+  InsertUser, users, projects, InsertProject, ProjectRow,
+  projectMembers, InsertProjectMember, ProjectMember, ProjectMemberRole,
+} from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -89,11 +92,55 @@ export async function getUserByOpenId(openId: string) {
   return result.length > 0 ? result[0] : undefined;
 }
 
+export async function getUserById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
+  return result[0];
+}
+
+export async function getUserByEmail(email: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  return result[0];
+}
+
 // ── Project helpers ───────────────────────────────────────────────────────────
 
+/**
+ * Get all projects accessible by a user:
+ * - projects they created
+ * - projects they are a member of
+ */
 export async function getProjectsByUser(userId: number): Promise<ProjectRow[]> {
   const db = await getDb();
   if (!db) return [];
+
+  // Get project IDs where user is a member
+  const memberRows = await db
+    .select({ projectId: projectMembers.projectId })
+    .from(projectMembers)
+    .where(eq(projectMembers.userId, userId));
+  const memberProjectIds = memberRows.map((r) => r.projectId);
+
+  // Get projects created by user OR where user is a member
+  if (memberProjectIds.length > 0) {
+    return db
+      .select()
+      .from(projects)
+      .where(
+        and(
+          eq(projects.archived, false),
+          or(
+            eq(projects.createdBy, userId),
+            inArray(projects.id, memberProjectIds)
+          )
+        )
+      )
+      .orderBy(desc(projects.updatedAt));
+  }
+
   return db
     .select()
     .from(projects)
@@ -127,4 +174,92 @@ export async function deleteProject(id: string): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.update(projects).set({ archived: true }).where(eq(projects.id, id));
+}
+
+/** Get projects where user is an explicit member (not creator) */
+export async function getProjectsByMember(userId: number): Promise<ProjectRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const memberRows = await db
+    .select({ projectId: projectMembers.projectId })
+    .from(projectMembers)
+    .where(eq(projectMembers.userId, userId));
+  const memberProjectIds = memberRows.map((r) => r.projectId);
+  if (memberProjectIds.length === 0) return [];
+  return db
+    .select()
+    .from(projects)
+    .where(and(eq(projects.archived, false), inArray(projects.id, memberProjectIds)))
+    .orderBy(desc(projects.updatedAt));
+}
+
+// ── Project Member helpers ────────────────────────────────────────────────────
+
+/** Get all members of a project, joined with user info */
+export async function getProjectMembers(projectId: string): Promise<Array<ProjectMember & {
+  userName: string | null;
+  userEmail: string | null;
+}>> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({
+      id: projectMembers.id,
+      projectId: projectMembers.projectId,
+      userId: projectMembers.userId,
+      role: projectMembers.role,
+      jobTitle: projectMembers.jobTitle,
+      invitedBy: projectMembers.invitedBy,
+      createdAt: projectMembers.createdAt,
+      updatedAt: projectMembers.updatedAt,
+      userName: users.name,
+      userEmail: users.email,
+    })
+    .from(projectMembers)
+    .leftJoin(users, eq(projectMembers.userId, users.id))
+    .where(eq(projectMembers.projectId, projectId))
+    .orderBy(projectMembers.createdAt);
+  return rows as Array<ProjectMember & { userName: string | null; userEmail: string | null }>;
+}
+
+/** Get a specific member's role in a project */
+export async function getProjectMember(projectId: string, userId: number): Promise<ProjectMember | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db
+    .select()
+    .from(projectMembers)
+    .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId)))
+    .limit(1);
+  return result[0];
+}
+
+/** Add a member to a project */
+export async function addProjectMember(member: InsertProjectMember): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.insert(projectMembers).values(member);
+}
+
+/** Update a member's role or jobTitle */
+export async function updateProjectMember(
+  projectId: string,
+  userId: number,
+  patch: { role?: ProjectMemberRole; jobTitle?: string | null }
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db
+    .update(projectMembers)
+    .set(patch)
+    .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId)));
+}
+
+/** Remove a member from a project */
+export async function removeProjectMember(projectId: string, userId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db
+    .delete(projectMembers)
+    .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId)));
 }

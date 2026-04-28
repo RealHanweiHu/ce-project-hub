@@ -19,6 +19,7 @@ interface IssueListProps {
   phaseName: string;
   issues: Issue[];
   onUpdate: (issues: Issue[]) => void;
+  canEdit?: boolean;
 }
 
 // ── Empty Issue Form ──────────────────────────────────────────────────────────
@@ -266,7 +267,7 @@ function IssueFormModal({
 }
 
 // ── Main Component ────────────────────────────────────────────────────────────
-export function IssueList({ phaseId, phaseName, issues, onUpdate }: IssueListProps) {
+export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true }: IssueListProps) {
   const [showForm, setShowForm] = useState(false);
   const [editingIssue, setEditingIssue] = useState<Issue | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -337,13 +338,15 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate }: IssueListPro
             <span className="text-[10px] font-mono uppercase tracking-widest text-stone-400 ml-3">ISSUE LIST · {phaseName}</span>
           </div>
         </div>
-        <button
-          onClick={() => setShowForm(true)}
-          className="flex items-center gap-2 px-3 py-1.5 bg-stone-900 text-stone-50 text-xs font-mono uppercase tracking-wider hover:bg-stone-700 transition-colors"
-        >
-          <Plus size={12} />
-          新建问题
-        </button>
+        {canEdit && (
+          <button
+            onClick={() => setShowForm(true)}
+            className="flex items-center gap-2 px-3 py-1.5 bg-stone-900 text-stone-50 text-xs font-mono uppercase tracking-wider hover:bg-stone-700 transition-colors"
+          >
+            <Plus size={12} />
+            新建问题
+          </button>
+        )}
       </div>
 
       {/* Stats Bar */}
@@ -494,34 +497,42 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate }: IssueListPro
                   </div>
 
                   {/* Status Selector */}
-                  <select
-                    value={issue.status}
-                    onChange={(e) => handleStatusChange(issue.id, e.target.value as IssueStatus)}
-                    onClick={(e) => e.stopPropagation()}
-                    className={`shrink-0 text-[10px] font-mono border px-2 py-1 outline-none cursor-pointer ${sta.bg} ${sta.border} ${sta.color}`}
-                  >
-                    {(['open', 'in_progress', 'resolved', 'closed', 'wont_fix'] as IssueStatus[]).map((s) => (
-                      <option key={s} value={s}>{STATUS_CONFIG[s].label}</option>
-                    ))}
-                  </select>
+                  {canEdit ? (
+                    <select
+                      value={issue.status}
+                      onChange={(e) => handleStatusChange(issue.id, e.target.value as IssueStatus)}
+                      onClick={(e) => e.stopPropagation()}
+                      className={`shrink-0 text-[10px] font-mono border px-2 py-1 outline-none cursor-pointer ${sta.bg} ${sta.border} ${sta.color}`}
+                    >
+                      {(['open', 'in_progress', 'resolved', 'closed', 'wont_fix'] as IssueStatus[]).map((s) => (
+                        <option key={s} value={s}>{STATUS_CONFIG[s].label}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <span className={`shrink-0 text-[10px] font-mono border px-2 py-1 ${sta.bg} ${sta.border} ${sta.color}`}>
+                      {STATUS_CONFIG[issue.status].label}
+                    </span>
+                  )}
 
                   {/* Actions */}
-                  <div className="flex items-center gap-1 shrink-0">
-                    <button
-                      onClick={(e) => { e.stopPropagation(); setEditingIssue(issue); }}
-                      className="p-1.5 text-stone-400 hover:text-stone-700 transition-colors"
-                      title="编辑"
-                    >
-                      <Edit2 size={13} />
-                    </button>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handleDelete(issue.id); }}
-                      className="p-1.5 text-stone-400 hover:text-rose-600 transition-colors"
-                      title="删除"
-                    >
-                      <Trash2 size={13} />
-                    </button>
-                  </div>
+                  {canEdit && (
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setEditingIssue(issue); }}
+                        className="p-1.5 text-stone-400 hover:text-stone-700 transition-colors"
+                        title="编辑"
+                      >
+                        <Edit2 size={13} />
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleDelete(issue.id); }}
+                        className="p-1.5 text-stone-400 hover:text-rose-600 transition-colors"
+                        title="删除"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {/* Expanded Details */}

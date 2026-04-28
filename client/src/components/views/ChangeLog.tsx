@@ -100,9 +100,10 @@ interface ChangeLogProps {
   projectId: string;
   records: ChangeRecord[];
   onUpdate: (records: ChangeRecord[]) => void;
+  canEdit?: boolean;
 }
 
-export function ChangeLog({ records, onUpdate }: ChangeLogProps) {
+export function ChangeLog({ records, onUpdate, canEdit = true }: ChangeLogProps) {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm());
@@ -187,13 +188,15 @@ export function ChangeLog({ records, onUpdate }: ChangeLogProps) {
           <h3 className="font-serif text-lg text-stone-900">变更记录</h3>
           <p className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mt-0.5">CHANGE LOG / ECR</p>
         </div>
-        <button
-          onClick={openCreate}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-stone-900 text-stone-50 text-xs font-mono uppercase tracking-wider hover:bg-stone-700 transition-colors"
-        >
-          <Plus size={13} />
-          新增记录
-        </button>
+        {canEdit && (
+          <button
+            onClick={openCreate}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-stone-900 text-stone-50 text-xs font-mono uppercase tracking-wider hover:bg-stone-700 transition-colors"
+          >
+            <Plus size={13} />
+            新增记录
+          </button>
+        )}
       </div>
 
       {/* Stats Row */}
@@ -297,18 +300,22 @@ export function ChangeLog({ records, onUpdate }: ChangeLogProps) {
                         </div>
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); openEdit(record); }}
-                          className="p-1 text-stone-300 hover:text-amber-500 transition-colors"
-                        >
-                          <Edit2 size={13} />
-                        </button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleDelete(record.id); }}
-                          className="p-1 text-stone-300 hover:text-rose-500 transition-colors"
-                        >
-                          <Trash2 size={13} />
-                        </button>
+                        {canEdit && (
+                          <>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); openEdit(record); }}
+                              className="p-1 text-stone-300 hover:text-amber-500 transition-colors"
+                            >
+                              <Edit2 size={13} />
+                            </button>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleDelete(record.id); }}
+                              className="p-1 text-stone-300 hover:text-rose-500 transition-colors"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </>
+                        )}
                         {isExpanded ? <ChevronUp size={14} className="text-stone-400" /> : <ChevronDown size={14} className="text-stone-400" />}
                       </div>
                     </div>

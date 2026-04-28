@@ -15,6 +15,13 @@
       "when": 1777260261743,
       "tag": "0001_typical_sphinx",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1777361853381,
+      "tag": "0002_open_namorita",
+      "breakpoints": true
     }
   ]
 }

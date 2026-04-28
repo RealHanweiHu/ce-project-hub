@@ -279,10 +279,11 @@ interface GateReviewModalProps {
   existingReviews?: GateReview[];
   onConfirm: (review: GateReview) => void;
   onCancel: () => void;
+  readOnly?: boolean;
 }
 
 export function GateReviewModal({
-  open, phaseId, phaseName, gateName, existingReviews = [], onConfirm, onCancel,
+  open, phaseId, phaseName, gateName, existingReviews = [], onConfirm, onCancel, readOnly = false,
 }: GateReviewModalProps) {
   const [showForm, setShowForm] = useState(existingReviews.length === 0);
   const latestReview = existingReviews[existingReviews.length - 1];
@@ -360,13 +361,18 @@ export function GateReviewModal({
                 <span>上次评审未通过，整改完成后可发起重新评审。</span>
               </div>
             )}
-            <button
-              onClick={() => setShowForm(true)}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium border border-dashed border-amber-400 text-amber-700 hover:bg-amber-50 transition-colors"
-            >
-              <Plus size={14} />
-              {latestReview?.decision === 'rejected' ? '发起重新评审' : '新增评审记录'}
-            </button>
+            {!readOnly && (
+              <button
+                onClick={() => setShowForm(true)}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium border border-dashed border-amber-400 text-amber-700 hover:bg-amber-50 transition-colors"
+              >
+                <Plus size={14} />
+                {latestReview?.decision === 'rejected' ? '发起重新评审' : '新增评审记录'}
+              </button>
+            )}
+            {readOnly && existingReviews.length === 0 && (
+              <p className="text-xs text-stone-400 text-center py-3">暂无评审记录</p>
+            )}
             <button
               onClick={onCancel}
               className="w-full px-4 py-2 text-sm text-stone-500 hover:text-stone-700 transition-colors"

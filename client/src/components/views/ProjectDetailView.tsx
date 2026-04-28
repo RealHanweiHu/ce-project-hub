@@ -21,6 +21,9 @@ import { IssueList } from './IssueList';
 import { ChangeLog } from './ChangeLog';
 import { ISSUE_PHASES, Issue, GateReview, ChangeRecord } from '@/lib/data';
 import { GateReviewModal, GateReviewBadge } from './GateReviewModal';
+import { MembersPanel } from './MembersPanel';
+import { useProjectPermission } from '@/hooks/useProjectPermission';
+import { Users } from 'lucide-react';
 
 const MAX_FILE_SIZE = 2 * 1024 * 1024;
 
@@ -233,7 +236,8 @@ function TaskDetail({
 export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailViewProps) {
   const [activePhaseId, setActivePhaseId] = useState(project.currentPhase);
   const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
-  const [mainTab, setMainTab] = useState<'tasks' | 'gantt' | 'issues' | 'changelog'>('tasks');
+  const [mainTab, setMainTab] = useState<'tasks' | 'gantt' | 'issues' | 'changelog' | 'members'>('tasks');
+  const perms = useProjectPermission(project.id);
 
   // Change Log helpers
   const changeLog: ChangeRecord[] = project.changeLog || [];
@@ -258,6 +262,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
   const toggleTask = (taskId: string) => {
     // Gate lock check: if this phase is locked, disallow toggling
     if (!isPhaseUnlocked(project, activePhaseId)) return;
+    if (!perms.canEditTasks) return;
     const newProject = { ...project };
     newProject.phases = { ...project.phases };
     newProject.phases[activePhaseId] = {
@@ -362,7 +367,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
         <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
-              <EditableText value={project.code} onChange={(v) => updateField('code', v)} className="text-[10px] font-mono uppercase tracking-widest text-stone-400" />
+              <EditableText value={project.code} onChange={perms.canEditProjectInfo ? (v) => updateField('code', v) : () => {}} className="text-[10px] font-mono uppercase tracking-widest text-stone-400" />
               {catConfig && (
                 <span className={`text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 ${catConfig.color} ${catConfig.textColor} border ${catConfig.borderColor}`}>
                   {catConfig.badge}
@@ -372,7 +377,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
             <h1 className="font-serif text-3xl lg:text-4xl text-stone-900 leading-tight">
               <EditableText
                 value={project.name}
-                onChange={(v) => updateField('name', v)}
+                onChange={perms.canEditProjectInfo ? (v) => updateField('name', v) : () => {}}
                 className="font-serif text-3xl lg:text-4xl text-stone-900 leading-tight"
                 inputClassName="font-serif text-3xl lg:text-4xl text-stone-900 leading-tight w-full"
               />
@@ -419,8 +424,8 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
         </div>
       </div>
 
-      {/* Main Tab Bar: Tasks / Issues / Gantt */}
-      <div className="flex items-center gap-0 border-b border-stone-200">
+      {/* Main Tab Bar: Tasks / Issues / Gantt / Members */}
+      <div className="flex items-center gap-0 border-b border-stone-200 overflow-x-auto">
         <button
           onClick={() => setMainTab('tasks')}
           className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all ${
@@ -460,6 +465,17 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
         >
           <BarChart2 size={14} />
           甘特图
+        </button>
+        <button
+          onClick={() => setMainTab('members')}
+          className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all whitespace-nowrap ${
+            mainTab === 'members'
+              ? 'border-b-stone-900 text-stone-900'
+              : 'border-b-transparent text-stone-400 hover:text-stone-700'
+          }`}
+        >
+          <Users size={14} />
+          成员
         </button>
         <button
           onClick={() => setMainTab('changelog')}
@@ -518,6 +534,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
             phaseName={activePhase?.name || activePhaseId}
             issues={activeIssues}
             onUpdate={updateIssues}
+            canEdit={perms.canEditIssues}
           />
         </div>
       )}
@@ -534,7 +551,15 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
             projectId={project.id}
             records={changeLog}
             onUpdate={updateChangeLog}
+            canEdit={perms.canEditChangelog}
           />
+        </div>
+      )}
+
+      {/* ── Members Tab ───────────────────────────────────────────────── */}
+      {mainTab === 'members' && (
+        <div className="p-6">
+          <MembersPanel projectId={project.id} canManage={perms.canManageMembers} />
         </div>
       )}
 
@@ -856,14 +881,15 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
 
       {/* ── Gate Review Modal ──────────────────────────────────────────────── */}
       {gateReviewPending && (
-        <GateReviewModal
+          <GateReviewModal
           open={!!gateReviewPending}
           phaseId={gateReviewPending.phaseId}
           phaseName={activePhase?.name || gateReviewPending.phaseId}
           gateName={activePhase?.gate || 'Gate 评审'}
           existingReviews={activePhaseData?.gateReviews}
-          onConfirm={handleGateReviewConfirm}
+          onConfirm={perms.canGateReview ? handleGateReviewConfirm : () => {}}
           onCancel={() => setGateReviewPending(null)}
+          readOnly={!perms.canGateReview}
         />
       )}
     </div>

@@ -21,3 +21,15 @@
 - [x] 修复 storageProxy.ts TypeScript 类型错误（req.params[0] → req.path）
 - [x] 修复 rowToProject 字段映射（projectNumber → code，补充 type 字段）
 - [x] TypeScript 零错误（pnpm check 通过）
+
+## 团队协作权限功能（已完成）
+
+- [x] 设计职位角色体系（owner/manager/pm/rd_hw/rd_sw/rd_mech/qa/scm/viewer）
+- [x] 扩展数据库 Schema：project_members 表（projectId, userId, role, jobTitle, invitedAt）
+- [x] 推送数据库迁移（pnpm db:push）
+- [x] 后端 tRPC members 路由：invite/list/myRole/updateRole/remove
+- [x] 前端项目详情页「成员」标签页：成员列表、邀请弹窗、角色修改、权限说明表
+- [x] 权限钉子 useProjectPermission：根据当前用户角色返回 canEdit/canManage/canGateReview 等
+- [x] 各视图应用权限控制：只读用户隐藏编辑按鈕，viewer 无法修改任务状态
+- [x] 项目列表显示共享项目（合并自己创建 + 作为成员加入的项目）
+- [x] 后端权限校验：project.get/update/delete 根据角色矩阵授权

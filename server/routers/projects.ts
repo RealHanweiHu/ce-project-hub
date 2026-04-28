@@ -2,12 +2,24 @@ import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import {
   getProjectsByUser,
+  getProjectsByMember,
   getProjectById,
   createProject,
   updateProject,
   deleteProject,
 } from "../db";
 import { TRPCError } from "@trpc/server";
+import { ROLE_PERMISSIONS } from "./members";
+import { getProjectMember } from "../db";
+
+/** Resolve effective role for a user in a project */
+async function getEffectiveRole(projectId: string, userId: number) {
+  const project = await getProjectById(projectId);
+  if (!project) return null;
+  if (project.createdBy === userId) return "owner" as const;
+  const member = await getProjectMember(projectId, userId);
+  return member?.role ?? null;
+}
 
 // Full project data schema (flexible JSON)
 const projectDataSchema = z.record(z.string(), z.unknown());
@@ -27,22 +39,32 @@ const projectInputSchema = z.object({
 });
 
 export const projectsRouter = router({
-  /** List all projects for the current user */
+  /** List all projects for the current user (owned + member) */
   list: protectedProcedure.query(async ({ ctx }) => {
-    const rows = await getProjectsByUser(ctx.user.id);
-    return rows.map((row) => ({
+    const [owned, memberOf] = await Promise.all([
+      getProjectsByUser(ctx.user.id),
+      getProjectsByMember(ctx.user.id),
+    ]);
+    const seen = new Set<string>();
+    const all = [...owned, ...memberOf].filter((r) => {
+      if (seen.has(r.id)) return false;
+      seen.add(r.id);
+      return true;
+    });
+    return all.map((row) => ({
       ...row,
       data: row.data as Record<string, unknown>,
     }));
   }),
 
-  /** Get a single project by id */
+  /** Get a single project by id (owner or member with canView) */
   get: protectedProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
       const row = await getProjectById(input.id);
       if (!row) throw new TRPCError({ code: "NOT_FOUND" });
-      if (row.createdBy !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN" });
+      const role = await getEffectiveRole(input.id, ctx.user.id);
+      if (!role || !ROLE_PERMISSIONS[role].canView) throw new TRPCError({ code: "FORBIDDEN" });
       return { ...row, data: row.data as Record<string, unknown> };
     }),
 
@@ -68,13 +90,14 @@ export const projectsRouter = router({
       return { success: true };
     }),
 
-  /** Update an existing project (full replace of data) */
+  /** Update an existing project (requires canEditTasks or above) */
   update: protectedProcedure
     .input(projectInputSchema)
     .mutation(async ({ ctx, input }) => {
       const existing = await getProjectById(input.id);
       if (!existing) throw new TRPCError({ code: "NOT_FOUND" });
-      if (existing.createdBy !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN" });
+      const role = await getEffectiveRole(input.id, ctx.user.id);
+      if (!role || !ROLE_PERMISSIONS[role].canEditTasks) throw new TRPCError({ code: "FORBIDDEN" });
 
       await updateProject(input.id, {
         name: input.name,
@@ -91,13 +114,14 @@ export const projectsRouter = router({
       return { success: true };
     }),
 
-  /** Delete (archive) a project */
+  /** Delete (archive) a project (requires canDeleteProject = owner only) */
   delete: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const existing = await getProjectById(input.id);
       if (!existing) throw new TRPCError({ code: "NOT_FOUND" });
-      if (existing.createdBy !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN" });
+      const role = await getEffectiveRole(input.id, ctx.user.id);
+      if (!role || !ROLE_PERMISSIONS[role].canDeleteProject) throw new TRPCError({ code: "FORBIDDEN" });
       await deleteProject(input.id);
       return { success: true };
     }),
