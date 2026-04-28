@@ -90,6 +90,14 @@
 - [x] admin.listUsers 返回 username 字段
 - [x] TypeScript 零错误，测试通过
 
+## 登录页注册功能（已完成）
+
+- [x] 后端新增 auth.register 公开接口（用户名+密码+显示名，默认 role=user，注册后自动登录）
+- [x] 移除 /api/setup 和 /api/setup/status 路由
+- [x] 前端登录页添加「登录」/「注册」切换 Tab
+- [x] 移除 /setup 路由和 Setup.tsx 页面
+- [x] TypeScript 零错误，测试通过
+
 ## 初始管理员创建 + 用户自助修改密码（已完成）
 
 - [x] 后端新增 /api/setup 一次性接口：数据库无用户时允许创建管理员

@@ -60,6 +60,39 @@ export const appRouter = router({
       } as const;
     }),
 
+    /** Public: self-registration - creates a regular user account */
+    register: publicProcedure
+      .input(z.object({
+        username: z.string().min(2).max(32).regex(/^[a-zA-Z0-9_\.\-]+$/, '用户名只能包含字母、数字、下划线、点和横线'),
+        password: z.string().min(6, '密码至少6位'),
+        name: z.string().min(1, '请输入显示名称').max(64),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const existing = await db.getUserByUsername(input.username);
+        if (existing) {
+          throw new TRPCError({ code: 'CONFLICT', message: '用户名已被占用，请更换一个' });
+        }
+        const passwordHash = await hashPassword(input.password);
+        await db.createUserWithPassword({
+          username: input.username,
+          passwordHash,
+          name: input.name,
+          role: 'user',
+          canCreateProject: false,
+        });
+        // Auto login after registration
+        const user = await db.getUserByUsername(input.username);
+        if (user) {
+          const sessionToken = await sdk.createSessionToken(user.openId, {
+            name: user.name || user.username || '',
+            expiresInMs: ONE_YEAR_MS,
+          });
+          const cookieOptions = getSessionCookieOptions(ctx.req);
+          ctx.res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+        }
+        return { success: true } as const;
+      }),
+
     /** Admin-only: create a new user with username + password */
     createUser: protectedProcedure
       .input(z.object({
