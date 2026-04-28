@@ -68,10 +68,19 @@ export const projectsRouter = router({
       return { ...row, data: row.data as Record<string, unknown> };
     }),
 
-  /** Create a new project */
+  /** Create a new project (requires canCreateProject or admin role) */
   create: protectedProcedure
     .input(projectInputSchema)
     .mutation(async ({ ctx, input }) => {
+      // Check if user has permission to create projects
+      // admin always can; regular users need canCreateProject=true
+      const canCreate = ctx.user.role === 'admin' || ctx.user.canCreateProject;
+      if (!canCreate) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: '您没有创建项目的权限。请联系管理员授权。',
+        });
+      }
       await createProject({
         id: input.id,
         name: input.name,

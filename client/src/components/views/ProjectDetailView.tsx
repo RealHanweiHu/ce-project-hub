@@ -6,7 +6,7 @@ import {
   ArrowLeft, CheckCircle2, Circle, ChevronDown, ChevronRight,
   Upload, Download, Trash2, Paperclip, FileText, Image as ImageIcon,
   Edit3, Calendar, AlertTriangle, Target, Zap, BarChart2, ListChecks,
-  Lock, ShieldAlert, Flag, Bug, GitBranch,
+  Lock, ShieldAlert, Flag, Bug, GitBranch, Filter,
 } from 'lucide-react';
 import {
   Project, SOP_PHASES, PHASE_MAP, RISK_CONFIG,
@@ -651,9 +651,33 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                 </div>
               )}
 
+              {/* Role-based task filter notice */}
+              {perms.role !== 'owner' && !perms.isLoading && (() => {
+                const totalTasks = activePhase?.tasks.length || 0;
+                const visibleTasks = activePhase?.tasks.filter((task) => {
+                  if (!task.visibleRoles || task.visibleRoles.length === 0) return true;
+                  return task.visibleRoles.includes(perms.role);
+                }).length || 0;
+                const hiddenCount = totalTasks - visibleTasks;
+                if (hiddenCount === 0) return null;
+                return (
+                  <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 text-xs text-amber-700">
+                    <Filter size={11} className="shrink-0" />
+                    <span>已按您的岗位角色过滤，当前显示 <strong>{visibleTasks}</strong> 项相关任务（共 {totalTasks} 项，隐藏 {hiddenCount} 项非本岗位任务）</span>
+                  </div>
+                );
+              })()}
+
               {/* Tasks */}
               <div className="space-y-2">
-                {activePhase?.tasks.map((task) => {
+                {activePhase?.tasks.filter((task) => {
+                  // If visibleRoles is empty or undefined, everyone can see it
+                  if (!task.visibleRoles || task.visibleRoles.length === 0) return true;
+                  // Owner always sees all tasks
+                  if (perms.role === 'owner') return true;
+                  // Filter by role
+                  return task.visibleRoles.includes(perms.role);
+                }).map((task) => {
                   const checked = activePhaseData?.tasks[task.id] || false;
                   const details = activePhaseData?.taskDetails?.[task.id];
                   const expanded = expandedTasks.has(task.id);

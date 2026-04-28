@@ -2,7 +2,7 @@
 // ProjectListView: project cards with category badges and 3-step new project wizard
 
 import { useState } from 'react';
-import { Plus, Trash2, FolderKanban, ChevronRight, ChevronLeft, Check, Copy } from 'lucide-react';
+import { Plus, Trash2, FolderKanban, ChevronRight, ChevronLeft, Check, Copy, Lock } from 'lucide-react';
 import {
   Project, SOP_PHASES, PHASE_MAP, RISK_CONFIG,
   computePhaseProgress, computeOverallProgress,
@@ -18,6 +18,8 @@ interface ProjectListViewProps {
   onAddProject: (project: Omit<Project, 'id' | 'phases'>) => void;
   onDeleteProject: (id: string) => void;
   onCloneProject?: (sourceId: string, overrides: Partial<Omit<Project, 'id' | 'phases'>>) => void;
+  /** Whether the current user can create new projects */
+  canCreateProject?: boolean;
 }
 
 // ── Wizard Steps ──────────────────────────────────────────────────────────────
@@ -37,6 +39,7 @@ export function ProjectListView({
   onAddProject,
   onDeleteProject,
   onCloneProject,
+  canCreateProject = false,
 }: ProjectListViewProps) {
   const [showAdd, setShowAdd] = useState(false);
   const [cloneSource, setCloneSource] = useState<Project | null>(null);
@@ -113,13 +116,20 @@ export function ProjectListView({
             {projects.length} PROJECTS
           </p>
         </div>
-        <button
-          onClick={() => setShowAdd(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-stone-900 text-stone-50 text-xs font-mono uppercase tracking-wider hover:bg-stone-700 transition-colors"
-        >
-          <Plus size={14} />
-          新建项目
-        </button>
+        {canCreateProject ? (
+          <button
+            onClick={() => setShowAdd(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-stone-900 text-stone-50 text-xs font-mono uppercase tracking-wider hover:bg-stone-700 transition-colors"
+          >
+            <Plus size={14} />
+            新建项目
+          </button>
+        ) : (
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-stone-100 border border-stone-200 text-stone-400 text-[10px] font-mono uppercase tracking-wider cursor-not-allowed" title="仅管理员、管理层和 PM 可创建项目">
+            <Lock size={12} />
+            无创建权限
+          </div>
+        )}
       </div>
 
       {/* Project Cards Grid */}

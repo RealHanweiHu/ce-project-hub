@@ -7,6 +7,12 @@ export interface SOPTask {
   desc: string;
   owner: string;
   guide: string;
+  /**
+   * Which project-member roles can see this task.
+   * Empty array (default) = visible to ALL roles.
+   * Non-empty = only listed roles (plus owner/manager/pm who always see everything).
+   */
+  visibleRoles?: string[];
 }
 
 export interface SOPPhase {

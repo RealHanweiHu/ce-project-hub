@@ -65,6 +65,8 @@ function rowToProject(row: {
 
 export default function Home() {
   const { user, loading: authLoading } = useAuth();
+  // canCreateProject is derived from auth.me (admin always true, others need explicit grant)
+  const canCreateProject = !!(user as (typeof user & { canCreateProject?: boolean }) | null)?.canCreateProject;
   const queryClient = useQueryClient();
 
   const [view, setView] = useState<View>('dashboard');
@@ -490,6 +492,7 @@ export default function Home() {
                   onAddProject={handleAddProject}
                   onDeleteProject={handleDeleteProject}
                   onCloneProject={handleCloneProject}
+                  canCreateProject={canCreateProject}
                 />
               )}
               {view === 'projects' && selectedProject && (
