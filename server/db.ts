@@ -1,4 +1,4 @@
-import { eq, desc, and, or, inArray } from "drizzle-orm";
+import { eq, desc, and, or, inArray, sql as drizzleSql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser, users, projects, InsertProject, ProjectRow,
@@ -10,6 +10,7 @@ import {
   projectChangelog, ProjectChangeRecord, InsertProjectChangeRecord,
   projectFiles, InsertProjectFile, ProjectFile,
   activityLogs, InsertActivityLog, ActivityLog,
+  type TaskStatus, type TaskPriority,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { getSopPhasesForCategory } from "./sop-data";
@@ -385,10 +386,11 @@ export async function upsertProjectTask(
       )
     )
     .limit(1);
+  const dbPatch = toDbPatch(patch);
   if (existing.length > 0) {
     await db
       .update(projectTasks)
-      .set(patch)
+      .set(dbPatch)
       .where(
         and(
           eq(projectTasks.projectId, projectId),
@@ -397,7 +399,7 @@ export async function upsertProjectTask(
         )
       );
   } else {
-    await db.insert(projectTasks).values({ projectId, phaseId, taskId, ...patch });
+    await db.insert(projectTasks).values({ projectId, phaseId, taskId, ...dbPatch });
   }
 }
 
@@ -626,6 +628,206 @@ export async function getActivityLogs(
     .where(eq(activityLogs.projectId, projectId))
     .orderBy(desc(activityLogs.createdAt))
     .limit(limit);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task Meta (assignment, due date, status, priority)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type TaskMetaPatch = {
+  assigneeUserId?: number | null;
+  /** YYYY-MM-DD string; will be converted to Date for drizzle */
+  dueDate?: string | null;
+  status?: TaskStatus;
+  priority?: TaskPriority;
+  completedAt?: Date | null;
+  updatedBy?: number | null;
+};
+
+/** Convert TaskMetaPatch to a drizzle-compatible set object */
+function toDbPatch(patch: TaskMetaPatch) {
+  const { dueDate, ...rest } = patch;
+  return {
+    ...rest,
+    ...(dueDate !== undefined ? { dueDate: dueDate ? new Date(dueDate) : null } : {}),
+  };
+}
+
+/**
+ * Update task meta fields (assignee, dueDate, status, priority, completedAt).
+ * Upserts the row if it doesn't exist yet.
+ */
+export async function updateTaskMeta(
+  projectId: string,
+  phaseId: string,
+  taskId: string,
+  patch: TaskMetaPatch
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const existing = await db
+    .select({ id: projectTasks.id })
+    .from(projectTasks)
+    .where(
+      and(
+        eq(projectTasks.projectId, projectId),
+        eq(projectTasks.phaseId, phaseId),
+        eq(projectTasks.taskId, taskId)
+      )
+    )
+    .limit(1);
+  const dbPatch = toDbPatch(patch);
+  if (existing.length > 0) {
+    await db
+      .update(projectTasks)
+      .set(dbPatch)
+      .where(
+        and(
+          eq(projectTasks.projectId, projectId),
+          eq(projectTasks.phaseId, phaseId),
+          eq(projectTasks.taskId, taskId)
+        )
+      );
+  } else {
+    await db.insert(projectTasks).values({ projectId, phaseId, taskId, ...dbPatch });
+  }
+}
+
+export type TaskWithContext = ProjectTask & {
+  projectName: string;
+  projectNumber: string;
+  projectCategory: string;
+};
+
+/**
+ * Return all non-done tasks assigned to a specific user, across all projects.
+ * Ordered by priority (critical→low) then dueDate (earliest first, nulls last).
+ */
+export async function getMyTasks(userId: number): Promise<TaskWithContext[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({
+      id: projectTasks.id,
+      projectId: projectTasks.projectId,
+      phaseId: projectTasks.phaseId,
+      taskId: projectTasks.taskId,
+      completed: projectTasks.completed,
+      instructions: projectTasks.instructions,
+      visibleRoles: projectTasks.visibleRoles,
+      assigneeUserId: projectTasks.assigneeUserId,
+      dueDate: projectTasks.dueDate,
+      status: projectTasks.status,
+      priority: projectTasks.priority,
+      completedAt: projectTasks.completedAt,
+      updatedBy: projectTasks.updatedBy,
+      createdAt: projectTasks.createdAt,
+      updatedAt: projectTasks.updatedAt,
+      projectName: projects.name,
+      projectNumber: projects.projectNumber,
+      projectCategory: projects.category,
+    })
+    .from(projectTasks)
+    .innerJoin(projects, eq(projectTasks.projectId, projects.id))
+    .where(
+      and(
+        eq(projectTasks.assigneeUserId, userId),
+        drizzleSql`${projectTasks.status} != 'done'`
+      )
+    )
+    .orderBy(
+      drizzleSql`FIELD(${projectTasks.priority}, 'critical', 'high', 'medium', 'low')`,
+      drizzleSql`${projectTasks.dueDate} IS NULL`,
+      projectTasks.dueDate
+    );
+  return rows as TaskWithContext[];
+}
+
+/**
+ * Return all tasks where dueDate < today and status != 'done'.
+ * Optionally filtered to specific projectIds.
+ * Ordered by dueDate ASC (most overdue first).
+ */
+export async function getOverdueTasks(projectIds?: string[]): Promise<TaskWithContext[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const today = new Date().toISOString().slice(0, 10);
+  const baseConditions = [
+    drizzleSql`${projectTasks.dueDate} IS NOT NULL`,
+    drizzleSql`${projectTasks.dueDate} < ${today}`,
+    drizzleSql`${projectTasks.status} != 'done'`,
+  ];
+  const whereClause = projectIds && projectIds.length > 0
+    ? and(...baseConditions, inArray(projectTasks.projectId, projectIds))
+    : and(...baseConditions);
+  const rows = await db
+    .select({
+      id: projectTasks.id,
+      projectId: projectTasks.projectId,
+      phaseId: projectTasks.phaseId,
+      taskId: projectTasks.taskId,
+      completed: projectTasks.completed,
+      instructions: projectTasks.instructions,
+      visibleRoles: projectTasks.visibleRoles,
+      assigneeUserId: projectTasks.assigneeUserId,
+      dueDate: projectTasks.dueDate,
+      status: projectTasks.status,
+      priority: projectTasks.priority,
+      completedAt: projectTasks.completedAt,
+      updatedBy: projectTasks.updatedBy,
+      createdAt: projectTasks.createdAt,
+      updatedAt: projectTasks.updatedAt,
+      projectName: projects.name,
+      projectNumber: projects.projectNumber,
+      projectCategory: projects.category,
+    })
+    .from(projectTasks)
+    .innerJoin(projects, eq(projectTasks.projectId, projects.id))
+    .where(whereClause)
+    .orderBy(projectTasks.dueDate);
+  return rows as TaskWithContext[];
+}
+
+/**
+ * Return all tasks with status = 'blocked'.
+ * Optionally filtered to specific projectIds.
+ * Ordered by priority (critical→low) then projectId.
+ */
+export async function getBlockedTasks(projectIds?: string[]): Promise<TaskWithContext[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const whereClause = projectIds && projectIds.length > 0
+    ? and(eq(projectTasks.status, "blocked"), inArray(projectTasks.projectId, projectIds))
+    : eq(projectTasks.status, "blocked");
+  const rows = await db
+    .select({
+      id: projectTasks.id,
+      projectId: projectTasks.projectId,
+      phaseId: projectTasks.phaseId,
+      taskId: projectTasks.taskId,
+      completed: projectTasks.completed,
+      instructions: projectTasks.instructions,
+      visibleRoles: projectTasks.visibleRoles,
+      assigneeUserId: projectTasks.assigneeUserId,
+      dueDate: projectTasks.dueDate,
+      status: projectTasks.status,
+      priority: projectTasks.priority,
+      completedAt: projectTasks.completedAt,
+      updatedBy: projectTasks.updatedBy,
+      createdAt: projectTasks.createdAt,
+      updatedAt: projectTasks.updatedAt,
+      projectName: projects.name,
+      projectNumber: projects.projectNumber,
+      projectCategory: projects.category,
+    })
+    .from(projectTasks)
+    .innerJoin(projects, eq(projectTasks.projectId, projects.id))
+    .where(whereClause)
+    .orderBy(
+      drizzleSql`FIELD(${projectTasks.priority}, 'critical', 'high', 'medium', 'low')`,
+      projectTasks.projectId
+    );
+  return rows as TaskWithContext[];
 }
 
 // ── Test helpers (not used in production code) ────────────────────────────────

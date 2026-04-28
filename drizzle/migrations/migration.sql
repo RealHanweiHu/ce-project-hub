@@ -244,3 +244,12 @@ CREATE INDEX idx_project_files_task ON project_files (project_id, phase_id, task
 -- ─────────────────────────────────────────────────────────────────────────────
 ALTER TABLE project_files ADD COLUMN task_id VARCHAR(64) NULL;
 CREATE INDEX idx_project_files_task ON project_files (project_id, phase_id, task_id);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Migration 0005: Add task meta fields (assigneeUserId, dueDate, status, priority, completedAt)
+-- ─────────────────────────────────────────────────────────────────────────────
+ALTER TABLE `project_tasks` ADD `assigneeUserId` int;
+ALTER TABLE `project_tasks` ADD `dueDate` date;
+ALTER TABLE `project_tasks` ADD `status` enum('todo','in_progress','blocked','done','skipped') NOT NULL DEFAULT 'todo';
+ALTER TABLE `project_tasks` ADD `priority` enum('low','medium','high','critical') NOT NULL DEFAULT 'medium';
+ALTER TABLE `project_tasks` ADD `completedAt` timestamp;

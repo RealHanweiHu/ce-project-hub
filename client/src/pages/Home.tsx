@@ -8,6 +8,7 @@ import { useLocation } from 'wouter';
 import {
   LayoutDashboard, FolderKanban, BookOpen, Save, CheckCircle2,
   ChevronRight, Menu, X, Cpu, Search, LogIn, Loader2, Cloud, Shield, KeyRound,
+  ListTodo, AlertTriangle, ShieldAlert,
 } from 'lucide-react';
 import { GlobalSearch } from '@/components/GlobalSearch';
 import { nanoid } from 'nanoid';
@@ -19,6 +20,9 @@ import { DashboardView } from '@/components/views/DashboardView';
 import { ProjectListView } from '@/components/views/ProjectListView';
 import { ProjectDetailView } from '@/components/views/ProjectDetailView';
 import { SOPLibraryView } from '@/components/views/SOPLibraryView';
+import { MyTasksView } from '@/components/views/MyTasksView';
+import { OverdueTasksView } from '@/components/views/OverdueTasksView';
+import { BlockedTasksView } from '@/components/views/BlockedTasksView';
 import { trpc } from '@/lib/trpc';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { getLoginUrl } from '@/const';
@@ -27,7 +31,7 @@ import { getQueryKey } from '@trpc/react-query';
 import { ChangePasswordDialog } from '@/components/ChangePasswordDialog';
 import { useProjectData } from '@/hooks/useProjectData';
 
-type View = 'dashboard' | 'projects' | 'sop';
+type View = 'dashboard' | 'projects' | 'sop' | 'my-tasks' | 'overdue' | 'blocked';
 
 // Helper: convert Project to API input shape (meta fields only)
 function projectToApiInput(p: Project) {
@@ -87,6 +91,7 @@ function ProjectDetailWrapper({
   const setTaskCompletedMutation = trpc.tasks.setCompleted.useMutation();
   const setTaskInstructionsMutation = trpc.tasks.setInstructions.useMutation();
   const setTaskVisibleRolesMutation = trpc.tasks.setVisibleRoles.useMutation();
+  const setTaskMetaMutation = trpc.tasks.setMeta.useMutation();
   const createIssueMutation = trpc.issues.create.useMutation();
   const updateIssueMutation = trpc.issues.update.useMutation();
   const deleteIssueMutation = trpc.issues.delete.useMutation();
@@ -159,6 +164,24 @@ function ProjectDetailWrapper({
                 setTaskInstructionsMutation.mutateAsync({
                   projectId, phaseId, taskId,
                   instructions: details.instructions || null,
+                })
+              );
+            }
+            // Task meta (assignee, dueDate, status, priority)
+            const oldMeta = oldPhaseData?.taskDetails?.[taskId];
+            const metaChanged =
+              details.assigneeUserId !== (oldMeta?.assigneeUserId ?? null) ||
+              details.dueDate !== (oldMeta?.dueDate ?? null) ||
+              details.taskStatus !== (oldMeta?.taskStatus ?? 'todo') ||
+              details.taskPriority !== (oldMeta?.taskPriority ?? 'medium');
+            if (metaChanged) {
+              ops.push(
+                setTaskMetaMutation.mutateAsync({
+                  projectId, phaseId, taskId,
+                  assigneeUserId: details.assigneeUserId ?? null,
+                  dueDate: details.dueDate ?? null,
+                  status: (details.taskStatus as any) ?? undefined,
+                  priority: (details.taskPriority as any) ?? undefined,
                 })
               );
             }
@@ -434,10 +457,24 @@ export default function Home() {
 
   const createMutation = trpc.projects.create.useMutation();
   const deleteMutation = trpc.projects.delete.useMutation();
-
   const invalidateProjects = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: getQueryKey(trpc.projects.list) });
   }, [queryClient]);
+  // ── Task badge counts for sidebar ────────────────────────────────────────
+  const { data: myTasksData = [] } = trpc.tasks.myTasks.useQuery(undefined, {
+    enabled: !!user, staleTime: 60_000,
+  });
+  const { data: overdueData = [] } = trpc.tasks.overdue.useQuery(undefined, {
+    enabled: !!user, staleTime: 60_000,
+  });
+  const { data: blockedData = [] } = trpc.tasks.blocked.useQuery(undefined, {
+    enabled: !!user, staleTime: 60_000,
+  });
+  const taskBadges: Record<string, number> = {
+    'my-tasks': myTasksData.length,
+    overdue: overdueData.length,
+    blocked: blockedData.length,
+  };
 
   // ── Ctrl+K global shortcut ───────────────────────────────────────────────
   useEffect(() => {
@@ -531,6 +568,9 @@ export default function Home() {
     { id: 'dashboard' as View, label: '仪表盘', labelEn: 'Dashboard', icon: LayoutDashboard },
     { id: 'projects' as View, label: '项目管理', labelEn: 'Projects', icon: FolderKanban },
     { id: 'sop' as View, label: 'SOP 流程库', labelEn: 'SOP Library', icon: BookOpen },
+    { id: 'my-tasks' as View, label: '我的任务', labelEn: 'My Tasks', icon: ListTodo },
+    { id: 'overdue' as View, label: '逾期任务', labelEn: 'Overdue', icon: AlertTriangle },
+    { id: 'blocked' as View, label: '阻塞任务', labelEn: 'Blocked', icon: ShieldAlert },
   ];
 
   const handleNavClick = (v: View) => {
@@ -543,6 +583,9 @@ export default function Home() {
     dashboard: 'Dashboard',
     projects: 'Projects',
     sop: 'SOP Library',
+    'my-tasks': 'My Tasks',
+    overdue: 'Overdue Tasks',
+    blocked: 'Blocked Tasks',
   };
 
   // ── Auth loading / login gate ────────────────────────────────────────────
@@ -634,6 +677,7 @@ export default function Home() {
         <nav className="flex-1 p-3 space-y-0.5 overflow-y-auto">
           {navItems.map(({ id, label, labelEn, icon: Icon }) => {
             const isActive = view === id;
+            const badge = taskBadges[id] ?? 0;
             return (
               <button
                 key={id}
@@ -649,6 +693,13 @@ export default function Home() {
                   <div className="text-sm font-medium leading-tight">{label}</div>
                   <div className="text-[9px] font-mono uppercase tracking-widest text-stone-600 leading-tight mt-0.5">{labelEn}</div>
                 </div>
+                {badge > 0 && !isActive && (
+                  <span className={`shrink-0 text-[10px] font-mono px-1.5 py-0.5 rounded-sm ${
+                    id === 'overdue' ? 'bg-red-900/60 text-red-300' :
+                    id === 'blocked' ? 'bg-orange-900/60 text-orange-300' :
+                    'bg-amber-900/60 text-amber-300'
+                  }`}>{badge}</span>
+                )}
                 {isActive && <ChevronRight size={13} className="text-amber-400 shrink-0" />}
               </button>
             );
@@ -837,6 +888,15 @@ export default function Home() {
                 />
               )}
               {view === 'sop' && <SOPLibraryView />}
+              {view === 'my-tasks' && (
+                <MyTasksView onNavigateToProject={(id) => { handleSelectProject(id); }} />
+              )}
+              {view === 'overdue' && (
+                <OverdueTasksView onNavigateToProject={(id) => { handleSelectProject(id); }} />
+              )}
+              {view === 'blocked' && (
+                <BlockedTasksView onNavigateToProject={(id) => { handleSelectProject(id); }} />
+              )}
             </>
           )}
         </main>

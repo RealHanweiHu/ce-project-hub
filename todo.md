@@ -230,3 +230,31 @@
 - [x] 前端文件上传：/api/files/upload 传 taskId，成功后 invalidate files.list
 - [x] 前端文件删除：调用 trpc.files.delete mutation + invalidate，弹出确认对话框
 - [x] 前端项目删除：AlertDialog 风险确认（列出永久删除内容 + 不可撤销警告）
+
+## 任务增强：指派人/截止日/状态/优先级 + 三个任务视图（已完成）
+
+### Schema & 迁移
+- [x] project_tasks 添加 assigneeUserId (int FK users.id, nullable)
+- [x] project_tasks 添加 dueDate (date, nullable)
+- [x] project_tasks 添加 status (enum: todo/in_progress/blocked/done/skipped, default todo)
+- [x] project_tasks 添加 priority (enum: low/medium/high/critical, default medium)
+- [x] project_tasks 添加 completedAt (timestamp, nullable)
+- [x] 生成并应用 migration 0005，更新 migration.sql
+
+### 后端
+- [x] db.ts：updateTaskMeta helper（更新 assigneeUserId/dueDate/status/priority/completedAt）
+- [x] db.ts：getMyTasks(userId) — 返回指派给当前用户的未完成任务（含项目/阶段信息）
+- [x] db.ts：getOverdueTasks(projectIds?) — 返回 dueDate < today 且 status != done 的任务
+- [x] db.ts：getBlockedTasks(projectIds?) — 返回 status = blocked 的任务
+- [x] tasks.ts router：新增 setMeta 接口（assignee/dueDate/status/priority）
+- [x] tasks.ts router：新增 myTasks 查询接口
+- [x] tasks.ts router：新增 overdueTasks 查询接口
+- [x] tasks.ts router：新增 blockedTasks 查询接口
+
+### 前端
+- [x] 新建 MyTasksView：我的任务列表（按优先级/截止日排序，可直接改状态）
+- [x] 新建 OverdueTasksView：逆期任务列表（按逆期天数排序，显示负责人）
+- [x] 新建 BlockedTasksView：卡住任务列表（按项目/阶段分组，显示负责人）
+- [x] 任务详情面板：添加指派人选择、截止日期、状态、优先级字段（可编辑）
+- [x] 侧边栏导航：添加「我的任务」「逆期任务」「卡住任务」入口
+- [x] TypeScript 零错误，45 tests 全部通过

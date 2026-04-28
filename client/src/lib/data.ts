@@ -32,6 +32,11 @@ export interface SOPPhase {
 export interface TaskDetails {
   instructions: string;
   files: FileAttachment[];
+  // Task meta fields (from DB project_tasks)
+  assigneeUserId?: number | null;
+  dueDate?: string | null;       // YYYY-MM-DD
+  taskStatus?: string;           // TaskStatus (renamed to avoid collision with IssueStatus)
+  taskPriority?: string;         // TaskPriority
 }
 
 export interface FileAttachment {

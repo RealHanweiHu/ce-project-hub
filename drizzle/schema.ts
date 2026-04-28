@@ -10,6 +10,7 @@ import {
   bigint,
   uniqueIndex,
   index,
+  date,
 } from "drizzle-orm/mysql-core";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -179,6 +180,11 @@ export type InsertProjectPhase = typeof projectPhases.$inferInsert;
 // Tasks (per-project, per-phase task completion state)
 // ─────────────────────────────────────────────────────────────────────────────
 
+export const TASK_STATUSES = ["todo", "in_progress", "blocked", "done"] as const;
+export type TaskStatus = (typeof TASK_STATUSES)[number];
+export const TASK_PRIORITIES = ["low", "medium", "high", "critical"] as const;
+export type TaskPriority = (typeof TASK_PRIORITIES)[number];
+
 /**
  * project_tasks table - tracks completion state and details for each SOP task.
  * One row per (project, phase, task) triple.
@@ -201,6 +207,16 @@ export const projectTasks = mysqlTable(
      * Empty array = visible to all members.
      */
     visibleRoles: json("visibleRoles").$type<string[]>().default([]),
+    /** Assigned user (FK → users.id) */
+    assigneeUserId: int("assigneeUserId"),
+    /** Due date for this task (DATE column, YYYY-MM-DD string at runtime) */
+    dueDate: date("dueDate"),
+    /** Task workflow status */
+    status: mysqlEnum("status", TASK_STATUSES).notNull().default("todo"),
+    /** Task priority */
+    priority: mysqlEnum("priority", TASK_PRIORITIES).notNull().default("medium"),
+    /** Timestamp when task was marked done */
+    completedAt: timestamp("completedAt"),
     updatedBy: int("updatedBy"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),

@@ -278,8 +278,76 @@ function TaskDetail({
     }
   };
 
+  // Task meta: users for assignee dropdown
+  const { data: metaUsers = [] } = trpc.admin.listUsersForSelect.useQuery(undefined, { staleTime: 60_000 });
+  const TASK_STATUS_OPTIONS = [
+    { value: 'todo', label: '待开始' },
+    { value: 'in_progress', label: '进行中' },
+    { value: 'blocked', label: '阻塞' },
+    { value: 'done', label: '已完成' },
+    { value: 'skipped', label: '跳过' },
+  ];
+  const TASK_PRIORITY_OPTIONS = [
+    { value: 'critical', label: 'P0 紧急' },
+    { value: 'high', label: 'P1 高' },
+    { value: 'medium', label: 'P2 中' },
+    { value: 'low', label: 'P3 低' },
+  ];
+
   return (
     <div className="mt-3 border-t border-stone-100 pt-3 space-y-3">
+      {/* Task Meta Row: assignee / due date / status / priority */}
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">负责人</div>
+          <select
+            value={taskDetails?.assigneeUserId ?? ''}
+            onChange={(e) => {
+              const val = e.target.value;
+              onUpdate({ ...taskDetails, assigneeUserId: val === '' ? null : Number(val) });
+            }}
+            className="w-full text-xs text-stone-700 bg-stone-50 border border-stone-200 px-2 py-1 outline-none focus:border-amber-400 transition-colors"
+          >
+            <option value="">— 未指定 —</option>
+            {metaUsers.map((u) => (
+              <option key={u.id} value={u.id}>{u.name || u.username}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">截止日期</div>
+          <input
+            type="date"
+            value={taskDetails?.dueDate ?? ''}
+            onChange={(e) => onUpdate({ ...taskDetails, dueDate: e.target.value || null })}
+            className="w-full text-xs text-stone-700 bg-stone-50 border border-stone-200 px-2 py-1 outline-none focus:border-amber-400 transition-colors"
+          />
+        </div>
+        <div>
+          <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">状态</div>
+          <select
+            value={taskDetails?.taskStatus ?? 'todo'}
+            onChange={(e) => onUpdate({ ...taskDetails, taskStatus: e.target.value })}
+            className="w-full text-xs bg-stone-50 border border-stone-200 px-2 py-1 outline-none focus:border-amber-400 transition-colors"
+          >
+            {TASK_STATUS_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">优先级</div>
+          <select
+            value={taskDetails?.taskPriority ?? 'medium'}
+            onChange={(e) => onUpdate({ ...taskDetails, taskPriority: e.target.value })}
+            className="w-full text-xs bg-stone-50 border border-stone-200 px-2 py-1 outline-none focus:border-amber-400 transition-colors"
+          >
+            {TASK_PRIORITY_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+        </div>
+      </div>
       <div>
         <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1.5">执行说明</div>
         <div className="relative">

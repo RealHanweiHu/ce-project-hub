@@ -6,8 +6,14 @@ import {
   getProjectMember,
   getProjectTasks,
   upsertProjectTask,
+  updateTaskMeta,
+  getMyTasks,
+  getOverdueTasks,
+  getBlockedTasks,
+  getProjectsByUser,
 } from "../db";
 import { ROLE_PERMISSIONS } from "./members";
+import { TASK_STATUSES, TASK_PRIORITIES } from "../../drizzle/schema";
 
 async function getEffectiveRole(projectId: string, userId: number) {
   const project = await getProjectById(projectId);
@@ -90,5 +96,72 @@ export const tasksRouter = router({
         updatedBy: ctx.user.id,
       });
       return { success: true };
+    }),
+
+  /**
+   * Update task meta fields: assignee, dueDate, status, priority.
+   * Requires canEditTasks permission.
+   */
+  setMeta: protectedProcedure
+    .input(z.object({
+      projectId: z.string(),
+      phaseId: z.string(),
+      taskId: z.string(),
+      assigneeUserId: z.number().nullable().optional(),
+      dueDate: z.string().nullable().optional(),   // YYYY-MM-DD
+      status: z.enum(TASK_STATUSES).optional(),
+      priority: z.enum(TASK_PRIORITIES).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const role = await getEffectiveRole(input.projectId, ctx.user.id);
+      if (!role || !ROLE_PERMISSIONS[role].canEditTasks) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "没有编辑任务的权限" });
+      }
+      const { projectId, phaseId, taskId, ...patch } = input;
+      const metaPatch = {
+        ...patch,
+        updatedBy: ctx.user.id,
+        ...(patch.status === "done" ? { completedAt: new Date() } : {}),
+        ...(patch.status && patch.status !== "done" ? { completedAt: null } : {}),
+      };
+      await updateTaskMeta(projectId, phaseId, taskId, metaPatch);
+      return { success: true };
+    }),
+
+  /**
+   * Return all non-done tasks assigned to the current user, across all projects.
+   * Ordered by priority then dueDate.
+   */
+  myTasks: protectedProcedure
+    .query(async ({ ctx }) => {
+      return getMyTasks(ctx.user.id);
+    }),
+
+  /**
+   * Return all overdue tasks (dueDate < today, status != done).
+   * Admin sees all projects; regular users see only their accessible projects.
+   */
+  overdue: protectedProcedure
+    .query(async ({ ctx }) => {
+      if (ctx.user.role === "admin") {
+        return getOverdueTasks();
+      }
+      const userProjects = await getProjectsByUser(ctx.user.id);
+      const projectIds = userProjects.map((p) => p.id);
+      return getOverdueTasks(projectIds);
+    }),
+
+  /**
+   * Return all blocked tasks (status = 'blocked').
+   * Admin sees all projects; regular users see only their accessible projects.
+   */
+  blocked: protectedProcedure
+    .query(async ({ ctx }) => {
+      if (ctx.user.role === "admin") {
+        return getBlockedTasks();
+      }
+      const userProjects = await getProjectsByUser(ctx.user.id);
+      const projectIds = userProjects.map((p) => p.id);
+      return getBlockedTasks(projectIds);
     }),
 });
