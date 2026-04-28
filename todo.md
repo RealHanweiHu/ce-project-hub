@@ -41,13 +41,22 @@
 - [x] 在 ProjectDetailView 中根据 canEditProjectInfo 传入 readOnly prop
 - [x] 只读时显示角色权限提示（"仅 Owner / 管理层 / PM 可修改阶段日期"）
 
-## 项目创建权限 + 任务岗位可见性（进行中）
+## 项目创建权限 + 任务岗位可见性（已完成）
 
-- [ ] 数据库 user 表添加 canCreateProject 字段（默认 false，admin/owner 可授权）
-- [ ] SOP 任务数据结构添加 visibleRoles 字段（空数组=所有人可见）
-- [ ] 后端 projects.create 接口校验用户 canCreateProject 权限
-- [ ] 后端新增 auth.me 返回 canCreateProject 标志
-- [ ] 前端项目列表：无权限用户隐藏「新建项目」按钮，显示权限说明
-- [ ] SOP 任务模板为每个任务配置默认 visibleRoles（按岗位分配）
-- [ ] 项目详情页任务列表按当前用户角色过滤（仅显示 visibleRoles 包含当前角色的任务）
-- [ ] 任务编辑支持修改 visibleRoles（仅 owner/manager/pm 可操作）
+- [x] 数据库 user 表添加 canCreateProject 字段（默认 false，admin/owner 可授权）
+- [x] SOP 任务数据结构添加 visibleRoles 字段（空数组=所有人可见）
+- [x] 后端 projects.create 接口校验用户 canCreateProject 权限
+- [x] 后端新增 auth.me 返回 canCreateProject 标志
+- [x] 前端项目列表：无权限用户隐藏「新建项目」按鈕，显示权限说明
+- [x] SOP 任务模板为每个任务配置默认 visibleRoles（按岗位分配）
+- [x] 项目详情页任务列表按当前用户角色过滤（仅显示 visibleRoles 包含当前角色的任务）
+- [ ] 任务编辑支持修改 visibleRoles（仅 owner/manager/pm 可操作）（暂时跳过，需要进一步讨论需求）
+
+## 管理员后台页面（已完成）
+
+- [x] 将当前 Owner 账户提升为 admin（通过数据库操作）
+- [x] 实现 /admin 路由和管理员后台页面
+- [x] 用户列表：显示所有用户的姓名、邮筱、系统角色、canCreateProject 状态
+- [x] 角色切换：admin 可将用户提升为 admin 或降级为 user
+- [x] canCreateProject 授权：admin 可一键授权/撤销用户的项目创建权限
+- [x] 侧边栏添加「系统管理」入口（仅 admin 角色可见）

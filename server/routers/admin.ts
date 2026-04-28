@@ -68,9 +68,14 @@ export const adminRouter = router({
           message: "不能撤销自己的管理员权限",
         });
       }
+      // When promoting to admin, also grant canCreateProject automatically
+      const updates: Partial<typeof users.$inferInsert> = { role: input.role };
+      if (input.role === 'admin') {
+        updates.canCreateProject = true;
+      }
       await db
         .update(users)
-        .set({ role: input.role })
+        .set(updates)
         .where(eq(users.id, input.userId));
       return { success: true };
     }),

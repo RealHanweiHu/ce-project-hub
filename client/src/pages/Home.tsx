@@ -4,9 +4,10 @@
 // Colors: stone-900 sidebar, stone-50 background, amber-500 accent
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useLocation } from 'wouter';
 import {
   LayoutDashboard, FolderKanban, BookOpen, Save, CheckCircle2,
-  ChevronRight, Menu, X, Cpu, DatabaseBackup, Search, LogIn, Loader2, Cloud,
+  ChevronRight, Menu, X, Cpu, DatabaseBackup, Search, LogIn, Loader2, Cloud, Shield,
 } from 'lucide-react';
 import { GlobalSearch } from '@/components/GlobalSearch';
 import { nanoid } from 'nanoid';
@@ -65,6 +66,8 @@ function rowToProject(row: {
 
 export default function Home() {
   const { user, loading: authLoading } = useAuth();
+  const [, navigate] = useLocation();
+  const isAdmin = (user as (typeof user & { role?: string }) | null)?.role === 'admin';
   // canCreateProject is derived from auth.me (admin always true, others need explicit grant)
   const canCreateProject = !!(user as (typeof user & { canCreateProject?: boolean }) | null)?.canCreateProject;
   const queryClient = useQueryClient();
@@ -392,6 +395,20 @@ export default function Home() {
           <div className="text-[9px] font-mono text-stone-700">
             {projects.length} PROJECTS · CLOUD DB
           </div>
+          {/* Admin link - only visible to admin users */}
+          {isAdmin && (
+            <button
+              onClick={() => navigate('/admin')}
+              className="w-full flex items-center gap-2 px-2 py-1.5 text-left text-amber-500 hover:text-amber-300 hover:bg-stone-800/60 transition-colors"
+            >
+              <Shield size={12} className="shrink-0" />
+              <div>
+                <div className="text-[10px] font-mono uppercase tracking-wider">系统管理</div>
+                <div className="text-[9px] font-mono text-stone-600">Admin Panel</div>
+              </div>
+            </button>
+          )}
+
           {/* User info */}
           <div className="pt-1 flex items-center gap-2">
             <div className="w-5 h-5 bg-amber-600 flex items-center justify-center text-[9px] font-mono text-stone-900 uppercase shrink-0">
