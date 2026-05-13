@@ -258,3 +258,12 @@
 - [x] 任务详情面板：添加指派人选择、截止日期、状态、优先级字段（可编辑）
 - [x] 侧边栏导航：添加「我的任务」「逆期任务」「卡住任务」入口
 - [x] TypeScript 零错误，45 tests 全部通过
+
+## 项目邀请成员（已完成）
+
+- [x] 后端：admin.searchUsersForInvite tRPC 路由（按姓名/用户名/邮符1字模糊搜索，排除已是成员的用户 + 项目 owner，返回最多 10 条）
+- [x] 后端：members.invite 支持 userId 直接邀请（保留 email 兼容）
+- [x] 前端：MembersPanel 邀请区域改为 UserSearchCombobox（实时搜索 + 下拉候选列表）
+- [x] 前端：选中用户显示用户卡片，选择角色，点击确认邀请（提交 userId）
+- [x] 前端：邀请成功后 invalidate members.list
+- [x] TypeScript 零错误，45 tests 全部通过

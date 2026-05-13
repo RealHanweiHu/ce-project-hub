@@ -214,9 +214,13 @@ export const membersRouter = router({
   invite: protectedProcedure
     .input(z.object({
       projectId: z.string(),
-      email: z.string().email(),
+      // Prefer userId (direct invite from search); email is kept for backward compat
+      userId: z.number().optional(),
+      email: z.string().email().optional(),
       role: z.enum(PROJECT_MEMBER_ROLES),
       jobTitle: z.string().optional(),
+    }).refine((d) => d.userId != null || d.email != null, {
+      message: "userId 或 email 至少提供一个",
     }))
     .mutation(async ({ ctx, input }) => {
       const myRole = await getUserProjectRole(input.projectId, ctx.user.id);
@@ -228,9 +232,18 @@ export const membersRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "不能邀请为创建者角色" });
       }
 
-      const targetUser = await getUserByEmail(input.email);
-      if (!targetUser) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "未找到该邮箱对应的用户，请确认对方已注册" });
+      // Resolve target user: prefer userId, fall back to email lookup
+      let targetUser: Awaited<ReturnType<typeof getUserById>> | null = null;
+      if (input.userId != null) {
+        targetUser = await getUserById(input.userId);
+        if (!targetUser) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "未找到该用户" });
+        }
+      } else {
+        targetUser = await getUserByEmail(input.email!);
+        if (!targetUser) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "未找到该邮箱对应的用户，请确认对方已注册" });
+        }
       }
 
       // Check if already a member

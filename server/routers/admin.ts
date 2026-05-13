@@ -2,8 +2,8 @@ import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { getDb } from "../db";
-import { users } from "../../drizzle/schema";
-import { eq, desc } from "drizzle-orm";
+import { users, projectMembers, projects } from "../../drizzle/schema";
+import { eq, desc, and, notInArray, or, like } from "drizzle-orm";
 
 /** Middleware: only system admins can call these procedures */
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -17,6 +17,61 @@ const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
 });
 
 export const adminRouter = router({
+  /**
+   * Search registered users for project invite.
+   * Returns up to 10 matches on name/username/email, excluding existing members.
+   * Any logged-in user can call this.
+   */
+  searchUsersForInvite: protectedProcedure
+    .input(z.object({
+      query: z.string().min(1).max(50),
+      projectId: z.string(),
+    }))
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Collect existing member userIds AND project owner to exclude
+      const [existingMembers, projectRow] = await Promise.all([
+        db
+          .select({ userId: projectMembers.userId })
+          .from(projectMembers)
+          .where(eq(projectMembers.projectId, input.projectId)),
+        db
+          .select({ createdBy: projects.createdBy })
+          .from(projects)
+          .where(eq(projects.id, input.projectId))
+          .limit(1),
+      ]);
+      const ownerIds: number[] = projectRow.length > 0 && projectRow[0].createdBy != null
+        ? [projectRow[0].createdBy]
+        : [];
+      const existingIds = [
+        ...existingMembers.map((m) => m.userId),
+        ...ownerIds,
+      ].filter((id, i, arr) => arr.indexOf(id) === i); // deduplicate
+      const q = `%${input.query}%`;
+      const matchCondition = or(
+        like(users.name, q),
+        like(users.username, q),
+        like(users.email, q),
+      )!;
+      const whereClause = existingIds.length > 0
+        ? and(matchCondition, notInArray(users.id, existingIds))!
+        : matchCondition;
+      const rows = await db
+        .select({
+          id: users.id,
+          name: users.name,
+          username: users.username,
+          email: users.email,
+        })
+        .from(users)
+        .where(whereClause)
+        .orderBy(users.name)
+        .limit(10);
+      return rows;
+    }),
+
   /** List users for project manager selection (any logged-in user can call) */
   listUsersForSelect: protectedProcedure.query(async () => {
     const db = await getDb();

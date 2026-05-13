@@ -1,10 +1,10 @@
 // MembersPanel: project team member management
-// Shows member list, invite by email, change roles, remove members
+// Shows member list, invite by searching registered users, change roles, remove members
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import {
-  Users, UserPlus, Shield, Trash2, ChevronDown, Crown,
-  Eye, Edit3, CheckCircle2, X, AlertCircle, Loader2,
+  Users, UserPlus, Shield, Trash2, Crown,
+  Eye, Edit3, CheckCircle2, X, AlertCircle, Loader2, Search, UserCheck,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { useQueryClient } from '@tanstack/react-query';
@@ -79,15 +79,120 @@ const ROLE_META: Record<string, {
 const ASSIGNABLE_ROLES = ['manager', 'pm', 'rd_hw', 'rd_sw', 'rd_mech', 'qa', 'scm', 'viewer'] as const;
 type AssignableRole = typeof ASSIGNABLE_ROLES[number];
 
+type SearchUser = { id: number; name: string | null; username: string | null; email: string | null };
+
 interface MembersPanelProps {
   projectId: string;
   canManage: boolean;
 }
 
+/** Searchable user picker for inviting members */
+function UserSearchCombobox({
+  projectId,
+  selectedUser,
+  onSelect,
+}: {
+  projectId: string;
+  selectedUser: SearchUser | null;
+  onSelect: (user: SearchUser | null) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Debounce: only search when query >= 1 char
+  const { data: results = [], isFetching } = trpc.admin.searchUsersForInvite.useQuery(
+    { query: query.trim(), projectId },
+    { enabled: query.trim().length >= 1 }
+  );
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  if (selectedUser) {
+    return (
+      <div className="flex items-center gap-3 px-3 py-2 bg-amber-50 border border-amber-300">
+        <div className="w-7 h-7 bg-amber-200 flex items-center justify-center text-xs font-mono text-amber-800 uppercase shrink-0">
+          {(selectedUser.name || selectedUser.username || '?').charAt(0)}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-medium text-stone-900 truncate">
+            {selectedUser.name || selectedUser.username}
+          </div>
+          <div className="text-[10px] font-mono text-stone-400 truncate">{selectedUser.email}</div>
+        </div>
+        <button
+          onClick={() => { onSelect(null); setQuery(''); }}
+          className="text-stone-400 hover:text-stone-700 shrink-0"
+        >
+          <X size={14} />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div ref={containerRef} className="relative">
+      <div className="relative">
+        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 pointer-events-none" />
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+          onFocus={() => { if (query.trim().length >= 1) setOpen(true); }}
+          placeholder="输入姓名、用户名或邮箱搜索…"
+          className="w-full pl-9 pr-3 py-2 text-sm border border-stone-300 bg-white focus:outline-none focus:border-amber-500"
+        />
+        {isFetching && (
+          <Loader2 size={12} className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-stone-400" />
+        )}
+      </div>
+      {open && query.trim().length >= 1 && (
+        <div className="absolute z-50 w-full mt-1 bg-white border border-stone-200 shadow-lg max-h-52 overflow-y-auto">
+          {results.length === 0 && !isFetching && (
+            <div className="px-4 py-3 text-sm text-stone-400 text-center">
+              未找到匹配用户（已注册且不在项目中）
+            </div>
+          )}
+          {results.map((user) => (
+            <button
+              key={user.id}
+              onClick={() => { onSelect(user); setOpen(false); setQuery(''); }}
+              className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-amber-50 transition-colors text-left"
+            >
+              <div className="w-7 h-7 bg-stone-200 flex items-center justify-center text-xs font-mono text-stone-600 uppercase shrink-0">
+                {(user.name || user.username || '?').charAt(0)}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-stone-900 truncate">
+                  {user.name || user.username}
+                </div>
+                <div className="text-[10px] font-mono text-stone-400 truncate">
+                  {user.username && <span className="mr-2">@{user.username}</span>}
+                  {user.email}
+                </div>
+              </div>
+              <UserCheck size={14} className="text-amber-500 shrink-0" />
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function MembersPanel({ projectId, canManage }: MembersPanelProps) {
   const queryClient = useQueryClient();
   const [showInvite, setShowInvite] = useState(false);
-  const [inviteEmail, setInviteEmail] = useState('');
+  const [selectedUser, setSelectedUser] = useState<SearchUser | null>(null);
   const [inviteRole, setInviteRole] = useState<AssignableRole>('viewer');
   const [inviteJobTitle, setInviteJobTitle] = useState('');
   const [inviteError, setInviteError] = useState('');
@@ -106,7 +211,7 @@ export function MembersPanel({ projectId, canManage }: MembersPanelProps) {
     onSuccess: (res) => {
       invalidate();
       setInviteSuccess(res.updated ? '已更新该成员的角色' : '邀请成功！对方现在可以访问此项目');
-      setInviteEmail('');
+      setSelectedUser(null);
       setInviteJobTitle('');
       setInviteError('');
       setTimeout(() => { setInviteSuccess(''); setShowInvite(false); }, 2000);
@@ -126,10 +231,10 @@ export function MembersPanel({ projectId, canManage }: MembersPanelProps) {
 
   const handleInvite = () => {
     setInviteError('');
-    if (!inviteEmail.trim()) { setInviteError('请输入邮箱地址'); return; }
+    if (!selectedUser) { setInviteError('请先搜索并选择一位用户'); return; }
     inviteMutation.mutate({
       projectId,
-      email: inviteEmail.trim(),
+      userId: selectedUser.id,
       role: inviteRole,
       jobTitle: inviteJobTitle.trim() || undefined,
     });
@@ -179,34 +284,48 @@ export function MembersPanel({ projectId, canManage }: MembersPanelProps) {
         <div className="bg-amber-50 border border-amber-200 p-5 space-y-4">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-stone-800">邀请新成员</h3>
-            <button onClick={() => setShowInvite(false)} className="text-stone-400 hover:text-stone-700">
+            <button
+              onClick={() => { setShowInvite(false); setSelectedUser(null); }}
+              className="text-stone-400 hover:text-stone-700"
+            >
               <X size={16} />
             </button>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-[10px] font-mono uppercase tracking-wider text-stone-500 mb-1">邮箱地址 *</label>
-              <input
-                type="email"
-                value={inviteEmail}
-                onChange={(e) => setInviteEmail(e.target.value)}
-                placeholder="user@example.com"
-                className="w-full px-3 py-2 text-sm border border-stone-300 bg-white focus:outline-none focus:border-amber-500 font-mono"
-              />
-            </div>
-            <div>
-              <label className="block text-[10px] font-mono uppercase tracking-wider text-stone-500 mb-1">职位/头衔（可选）</label>
-              <input
-                type="text"
-                value={inviteJobTitle}
-                onChange={(e) => setInviteJobTitle(e.target.value)}
-                placeholder="如：硬件工程师、测试主管"
-                className="w-full px-3 py-2 text-sm border border-stone-300 bg-white focus:outline-none focus:border-amber-500"
-              />
-            </div>
-          </div>
+
+          {/* User search */}
           <div>
-            <label className="block text-[10px] font-mono uppercase tracking-wider text-stone-500 mb-2">项目角色 *</label>
+            <label className="block text-[10px] font-mono uppercase tracking-wider text-stone-500 mb-1">
+              搜索用户 *
+            </label>
+            <UserSearchCombobox
+              projectId={projectId}
+              selectedUser={selectedUser}
+              onSelect={setSelectedUser}
+            />
+            <p className="text-[10px] text-stone-400 mt-1">
+              输入姓名、用户名或邮箱，仅显示已注册且不在本项目中的用户
+            </p>
+          </div>
+
+          {/* Job title */}
+          <div>
+            <label className="block text-[10px] font-mono uppercase tracking-wider text-stone-500 mb-1">
+              职位/头衔（可选）
+            </label>
+            <input
+              type="text"
+              value={inviteJobTitle}
+              onChange={(e) => setInviteJobTitle(e.target.value)}
+              placeholder="如：硬件工程师、测试主管"
+              className="w-full px-3 py-2 text-sm border border-stone-300 bg-white focus:outline-none focus:border-amber-500"
+            />
+          </div>
+
+          {/* Role selection */}
+          <div>
+            <label className="block text-[10px] font-mono uppercase tracking-wider text-stone-500 mb-2">
+              项目角色 *
+            </label>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {ASSIGNABLE_ROLES.map((role) => {
                 const meta = ROLE_META[role];
@@ -231,6 +350,7 @@ export function MembersPanel({ projectId, canManage }: MembersPanelProps) {
               })}
             </div>
           </div>
+
           {inviteError && (
             <div className="flex items-center gap-2 text-sm text-rose-700 bg-rose-50 border border-rose-200 px-3 py-2">
               <AlertCircle size={14} />
@@ -243,77 +363,75 @@ export function MembersPanel({ projectId, canManage }: MembersPanelProps) {
               {inviteSuccess}
             </div>
           )}
+
           <div className="flex gap-2">
             <button
               onClick={handleInvite}
-              disabled={inviteMutation.isPending}
+              disabled={inviteMutation.isPending || !selectedUser}
               className="flex items-center gap-2 px-4 py-2 bg-stone-900 hover:bg-stone-700 text-white text-sm font-medium transition-colors disabled:opacity-50"
             >
               {inviteMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <UserPlus size={14} />}
-              发送邀请
+              确认邀请
             </button>
             <button
-              onClick={() => setShowInvite(false)}
+              onClick={() => { setShowInvite(false); setSelectedUser(null); }}
               className="px-4 py-2 border border-stone-300 text-stone-600 text-sm hover:bg-stone-50 transition-colors"
             >
               取消
             </button>
           </div>
-          <p className="text-[10px] text-stone-400">
-            注意：被邀请的用户必须已注册 CE Project Hub 账号，系统将通过邮箱匹配用户。
-          </p>
         </div>
       )}
 
       {/* Permission Legend - only visible to project managers (owner/manager/pm) */}
       {canManage && (
-      <div className="bg-stone-50 border border-stone-200 p-4">
-        <div className="text-[10px] font-mono uppercase tracking-wider text-stone-500 mb-3">权限说明</div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-[11px]">
-            <thead>
-              <tr className="border-b border-stone-200">
-                <th className="text-left py-1.5 pr-4 font-mono text-stone-500 font-normal">角色</th>
-                <th className="text-center py-1.5 px-2 font-mono text-stone-500 font-normal">任务</th>
-                <th className="text-center py-1.5 px-2 font-mono text-stone-500 font-normal">问题</th>
-                <th className="text-center py-1.5 px-2 font-mono text-stone-500 font-normal">变更</th>
-                <th className="text-center py-1.5 px-2 font-mono text-stone-500 font-normal">项目信息</th>
-                <th className="text-center py-1.5 px-2 font-mono text-stone-500 font-normal">Gate评审</th>
-                <th className="text-center py-1.5 px-2 font-mono text-stone-500 font-normal">管理成员</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(['owner', 'manager', 'pm', 'rd_hw', 'rd_sw', 'rd_mech', 'qa', 'scm', 'viewer'] as const).map((role) => {
-                const meta = ROLE_META[role];
-                const perms = {
-                  canEditTasks: role !== 'qa' && role !== 'scm' && role !== 'viewer',
-                  canEditIssues: role !== 'scm' && role !== 'viewer',
-                  canEditChangelog: ['owner', 'manager', 'pm', 'scm'].includes(role),
-                  canEditProjectInfo: ['owner', 'manager', 'pm'].includes(role),
-                  canGateReview: ['owner', 'manager'].includes(role),
-                  canManageMembers: ['owner', 'manager', 'pm'].includes(role),
-                };
-                return (
-                  <tr key={role} className="border-b border-stone-100">
-                    <td className="py-1.5 pr-4">
-                      <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono ${meta.color} ${meta.bg} border ${meta.border}`}>
-                        {meta.icon}{meta.label}
-                      </span>
-                    </td>
-                    {[perms.canEditTasks, perms.canEditIssues, perms.canEditChangelog, perms.canEditProjectInfo, perms.canGateReview, perms.canManageMembers].map((can, i) => (
-                      <td key={i} className="text-center py-1.5 px-2">
-                        {can
-                          ? <span className="text-emerald-600">✓</span>
-                          : <span className="text-stone-300">—</span>}
+        <div className="bg-stone-50 border border-stone-200 p-4">
+          <div className="text-[10px] font-mono uppercase tracking-wider text-stone-500 mb-3">权限说明</div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-[11px]">
+              <thead>
+                <tr className="border-b border-stone-200">
+                  <th className="text-left py-1.5 pr-4 font-mono text-stone-500 font-normal">角色</th>
+                  <th className="text-center py-1.5 px-2 font-mono text-stone-500 font-normal">任务</th>
+                  <th className="text-center py-1.5 px-2 font-mono text-stone-500 font-normal">问题</th>
+                  <th className="text-center py-1.5 px-2 font-mono text-stone-500 font-normal">变更</th>
+                  <th className="text-center py-1.5 px-2 font-mono text-stone-500 font-normal">项目信息</th>
+                  <th className="text-center py-1.5 px-2 font-mono text-stone-500 font-normal">Gate评审</th>
+                  <th className="text-center py-1.5 px-2 font-mono text-stone-500 font-normal">管理成员</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(['owner', 'manager', 'pm', 'rd_hw', 'rd_sw', 'rd_mech', 'qa', 'scm', 'viewer'] as const).map((role) => {
+                  const meta = ROLE_META[role];
+                  const perms = {
+                    canEditTasks: role !== 'qa' && role !== 'scm' && role !== 'viewer',
+                    canEditIssues: role !== 'scm' && role !== 'viewer',
+                    canEditChangelog: ['owner', 'manager', 'pm', 'scm'].includes(role),
+                    canEditProjectInfo: ['owner', 'manager', 'pm'].includes(role),
+                    canGateReview: ['owner', 'manager'].includes(role),
+                    canManageMembers: ['owner', 'manager', 'pm'].includes(role),
+                  };
+                  return (
+                    <tr key={role} className="border-b border-stone-100">
+                      <td className="py-1.5 pr-4">
+                        <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono ${meta.color} ${meta.bg} border ${meta.border}`}>
+                          {meta.icon}{meta.label}
+                        </span>
                       </td>
-                    ))}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                      {[perms.canEditTasks, perms.canEditIssues, perms.canEditChangelog, perms.canEditProjectInfo, perms.canGateReview, perms.canManageMembers].map((can, i) => (
+                        <td key={i} className="text-center py-1.5 px-2">
+                          {can
+                            ? <span className="text-emerald-600">✓</span>
+                            : <span className="text-stone-300">—</span>}
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
       )}
 
       {/* Member List */}
@@ -408,7 +526,7 @@ export function MembersPanel({ projectId, canManage }: MembersPanelProps) {
                         )}
                       </div>
                     </div>
-                    {/* Permission badges */}
+                    {/* Permission description */}
                     <div className="hidden md:flex items-center gap-1 shrink-0">
                       {meta.description && (
                         <span className="text-[10px] text-stone-400 max-w-[160px] text-right leading-tight">{meta.description}</span>
