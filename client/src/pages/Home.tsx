@@ -8,7 +8,7 @@ import { useLocation } from 'wouter';
 import {
   LayoutDashboard, FolderKanban, BookOpen, Save, CheckCircle2,
   ChevronRight, Menu, X, Cpu, Search, LogIn, Loader2, Cloud, Shield, KeyRound,
-  ListTodo, AlertTriangle, ShieldAlert,
+  ListTodo, AlertTriangle, ShieldAlert, LogOut,
 } from 'lucide-react';
 import { GlobalSearch } from '@/components/GlobalSearch';
 import { nanoid } from 'nanoid';
@@ -433,7 +433,7 @@ function ProjectDetailWrapper({
 
 // ── Home ─────────────────────────────────────────────────────────────────────
 export default function Home() {
-  const { user, loading: authLoading } = useAuth();
+  const { user, loading: authLoading, logout } = useAuth();
   const [, navigate] = useLocation();
   const isAdmin = (user as (typeof user & { role?: string }) | null)?.role === 'admin';
   const canCreateProject = !!(user as (typeof user & { canCreateProject?: boolean }) | null)?.canCreateProject;
@@ -770,7 +770,7 @@ export default function Home() {
             </button>
           )}
 
-          {/* User info + change password */}
+          {/* User info + change password + logout */}
           <div className="pt-1 flex items-center gap-2 group">
             <div className="w-5 h-5 bg-amber-600 flex items-center justify-center text-[9px] font-mono text-stone-900 uppercase shrink-0">
               {(user.name || user.email || 'U').charAt(0)}
@@ -782,6 +782,14 @@ export default function Home() {
               className="opacity-0 group-hover:opacity-100 transition-opacity text-stone-600 hover:text-amber-400"
             >
               <KeyRound size={11} />
+            </button>
+            <button
+              onClick={() => logout()}
+              title="退出登录"
+              aria-label="退出登录"
+              className="text-stone-600 hover:text-rose-400 transition-colors"
+            >
+              <LogOut size={11} />
             </button>
           </div>
         </div>

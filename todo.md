@@ -267,3 +267,8 @@
 - [x] 前端：选中用户显示用户卡片，选择角色，点击确认邀请（提交 userId）
 - [x] 前端：邀请成功后 invalidate members.list
 - [x] TypeScript 零错误，45 tests 全部通过
+
+## 网页登出功能（已完成）
+
+- [x] 侧边栏底部用户区域添加「退出登录」按钮，调用 useAuth().logout()
+- [x] TypeScript 零错误，45 tests 全部通过
