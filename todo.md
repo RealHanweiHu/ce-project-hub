@@ -272,3 +272,9 @@
 
 - [x] 侧边栏底部用户区域添加「退出登录」按钮，调用 useAuth().logout()
 - [x] TypeScript 零错误，45 tests 全部通过
+
+## 任务截止日期设置修复（已完成）
+
+- [x] 排查 TaskDetail 面板截止日期输入无法保存的原因（drizzle date() 默认返回 Date 对象，String() 转换后格式错误）
+- [x] 修复：schema.ts 中 dueDate 改为 date('dueDate', { mode: 'string' })，toDbPatch 移除 new Date() 转换
+- [x] TypeScript 零错误，45 tests 全部通过

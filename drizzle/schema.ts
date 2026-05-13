@@ -210,7 +210,7 @@ export const projectTasks = mysqlTable(
     /** Assigned user (FK → users.id) */
     assigneeUserId: int("assigneeUserId"),
     /** Due date for this task (DATE column, YYYY-MM-DD string at runtime) */
-    dueDate: date("dueDate"),
+    dueDate: date("dueDate", { mode: "string" }),
     /** Task workflow status */
     status: mysqlEnum("status", TASK_STATUSES).notNull().default("todo"),
     /** Task priority */

@@ -636,7 +636,7 @@ export async function getActivityLogs(
 
 export type TaskMetaPatch = {
   assigneeUserId?: number | null;
-  /** YYYY-MM-DD string; will be converted to Date for drizzle */
+  /** YYYY-MM-DD string (column is mode:'string', so pass as-is) */
   dueDate?: string | null;
   status?: TaskStatus;
   priority?: TaskPriority;
@@ -646,11 +646,8 @@ export type TaskMetaPatch = {
 
 /** Convert TaskMetaPatch to a drizzle-compatible set object */
 function toDbPatch(patch: TaskMetaPatch) {
-  const { dueDate, ...rest } = patch;
-  return {
-    ...rest,
-    ...(dueDate !== undefined ? { dueDate: dueDate ? new Date(dueDate) : null } : {}),
-  };
+  // dueDate column uses mode:'string', so pass the YYYY-MM-DD string directly
+  return { ...patch };
 }
 
 /**
