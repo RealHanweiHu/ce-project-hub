@@ -278,3 +278,10 @@
 - [x] 排查 TaskDetail 面板截止日期输入无法保存的原因（drizzle date() 默认返回 Date 对象，String() 转换后格式错误）
 - [x] 修复：schema.ts 中 dueDate 改为 date('dueDate', { mode: 'string' })，toDbPatch 移除 new Date() 转换
 - [x] TypeScript 零错误，45 tests 全部通过
+
+## [P2] 新建项目 PM 未保存修复（已完成）
+
+- [x] 找到新建项目向导中 PM 下拉框，改为存储 pmUserId（number）而非姓名字符串
+- [x] 克隆项目弹窗同样修复，cloneForm.pmUserId 替代 cloneForm.pm
+- [x] option value 改为 u.id，onChange 转换为 Number
+- [x] TypeScript 零错误，45 tests 全部通过

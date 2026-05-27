@@ -51,7 +51,7 @@ export function ProjectListView({
 }: ProjectListViewProps) {
   const [showAdd, setShowAdd] = useState(false);
   const [cloneSource, setCloneSource] = useState<Project | null>(null);
-  const [cloneForm, setCloneForm] = useState({ name: '', code: '', pm: '', startDate: '', targetDate: '' });
+  const [cloneForm, setCloneForm] = useState({ name: '', code: '', pmUserId: null as number | null, startDate: '', targetDate: '' });
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
 
   const handleOpenClone = (e: React.MouseEvent, project: Project) => {
@@ -60,7 +60,7 @@ export function ProjectListView({
     setCloneForm({
       name: `${project.name}（副本）`,
       code: '',
-      pm: project.pm,
+      pmUserId: project.pmUserId ?? null,
       startDate: '',
       targetDate: '',
     });
@@ -71,7 +71,7 @@ export function ProjectListView({
     onCloneProject?.(cloneSource.id, {
       name: cloneForm.name.trim(),
       code: cloneForm.code.trim() || undefined as unknown as string,
-      pm: cloneForm.pm.trim(),
+      pmUserId: cloneForm.pmUserId,
       startDate: cloneForm.startDate,
       targetDate: cloneForm.targetDate,
     });
@@ -85,7 +85,7 @@ export function ProjectListView({
     code: '',
     name: '',
     type: '汽车充气泵',
-    pm: '',
+    pmUserId: null as number | null,
     startDate: '',
     targetDate: '',
     risk: 'medium' as 'low' | 'medium' | 'high',
@@ -94,7 +94,7 @@ export function ProjectListView({
   const resetWizard = () => {
     setStep(1);
     setSelectedCategory('npd');
-    setForm({ code: '', name: '', type: '汽车充气泵', pm: '', startDate: '', targetDate: '', risk: 'medium' });
+    setForm({ code: '', name: '', type: '汽车充气泵', pmUserId: null, startDate: '', targetDate: '', risk: 'medium' });
   };
 
   const handleClose = () => {
@@ -108,6 +108,7 @@ export function ProjectListView({
     const firstPhaseId = phases[0]?.id || 'concept';
     onAddProject({
       ...form,
+      pm: '',
       currentPhase: firstPhaseId,
       category: selectedCategory,
     });
@@ -331,8 +332,8 @@ export function ProjectListView({
                   <div>
                     <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">项目经理</label>
                     <select
-                      value={cloneForm.pm}
-                      onChange={(e) => setCloneForm({ ...cloneForm, pm: e.target.value })}
+                      value={cloneForm.pmUserId ?? ''}
+                      onChange={(e) => setCloneForm({ ...cloneForm, pmUserId: e.target.value ? Number(e.target.value) : null })}
                       disabled={usersLoading}
                       className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors bg-white disabled:opacity-50"
                     >
@@ -340,7 +341,7 @@ export function ProjectListView({
                       {usersError && <option value="">加载失败</option>}
                       {!usersLoading && !usersError && <option value="">选择项目经理...</option>}
                       {(userList || []).map((u) => (
-                        <option key={u.id} value={u.name || u.username || ''}>
+                        <option key={u.id} value={u.id}>
                           {u.name || u.username}
                         </option>
                       ))}
@@ -523,8 +524,8 @@ export function ProjectListView({
                     <div>
                       <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">项目经理</label>
                       <select
-                        value={form.pm}
-                        onChange={(e) => setForm({ ...form, pm: e.target.value })}
+                        value={form.pmUserId ?? ''}
+                        onChange={(e) => setForm({ ...form, pmUserId: e.target.value ? Number(e.target.value) : null })}
                         disabled={usersLoading}
                         className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors bg-white disabled:opacity-50"
                       >
@@ -532,7 +533,7 @@ export function ProjectListView({
                         {usersError && <option value="">加载失败，可手动输入</option>}
                         {!usersLoading && !usersError && <option value="">选择项目经理...</option>}
                         {(userList || []).map((u) => (
-                          <option key={u.id} value={u.name || u.username || ''}>
+                          <option key={u.id} value={u.id}>
                             {u.name || u.username}
                           </option>
                         ))}
@@ -599,7 +600,7 @@ export function ProjectListView({
                       </div>
                       <div className="text-xs text-stone-500 font-mono">
                         {form.code && <span className="mr-3">{form.code}</span>}
-                        {form.pm && <span className="mr-3">PM: {form.pm}</span>}
+                        {form.pmUserId && <span className="mr-3">PM: {userList?.find(u => u.id === form.pmUserId)?.name || userList?.find(u => u.id === form.pmUserId)?.username || ''}</span>}
                         {form.startDate && <span>{form.startDate} → {form.targetDate || '?'}</span>}
                       </div>
                     </div>
