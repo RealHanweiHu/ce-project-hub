@@ -43,6 +43,13 @@
       "when": 1777402895048,
       "tag": "0005_chilly_blue_marvel",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1780479086696,
+      "tag": "0006_acoustic_victor_mancha",
+      "breakpoints": true
     }
   ]
 }
