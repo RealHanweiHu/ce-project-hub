@@ -39,20 +39,67 @@ const projectInputSchema = z.object({
 });
 
 export const projectsRouter = router({
-  /** List all projects for the current user (owned + member) */
-  list: protectedProcedure.query(async ({ ctx }) => {
-    const [owned, memberOf] = await Promise.all([
-      getProjectsByUser(ctx.user.id),
-      getProjectsByMember(ctx.user.id),
-    ]);
-    const seen = new Set<string>();
-    const all = [...owned, ...memberOf].filter((r) => {
-      if (seen.has(r.id)) return false;
-      seen.add(r.id);
-      return true;
-    });
-    return all;
-  }),
+  /**
+   * List all projects for the current user (owned + member).
+   * Supports cursor-based pagination and server-side sorting.
+   */
+  list: protectedProcedure
+    .input(z.object({
+      cursor: z.number().int().optional(),
+      limit: z.number().int().min(1).max(100).default(50),
+      sortBy: z.enum(["updatedAt", "createdAt", "name"]).default("updatedAt"),
+      sortOrder: z.enum(["asc", "desc"]).default("desc"),
+      search: z.string().optional(),
+    }).optional())
+    .query(async ({ ctx, input }) => {
+      const { cursor, limit = 50, sortBy = "updatedAt", sortOrder = "desc", search } = input ?? {};
+
+      // Fetch owned + member projects (will be optimized to single SQL in db.ts)
+      const [owned, memberOf] = await Promise.all([
+        getProjectsByUser(ctx.user.id),
+        getProjectsByMember(ctx.user.id),
+      ]);
+      const seen = new Set<string>();
+      let all = [...owned, ...memberOf].filter((r) => {
+        if (seen.has(r.id)) return false;
+        seen.add(r.id);
+        return true;
+      });
+
+      // Server-side search filter
+      if (search) {
+        const q = search.toLowerCase();
+        all = all.filter(
+          (p) =>
+            p.name.toLowerCase().includes(q) ||
+            p.projectNumber.toLowerCase().includes(q)
+        );
+      }
+
+      // Server-side sort
+      all.sort((a, b) => {
+        let cmp = 0;
+        if (sortBy === "name") {
+          cmp = a.name.localeCompare(b.name);
+        } else {
+          const aDate = new Date(a[sortBy] ?? 0).getTime();
+          const bDate = new Date(b[sortBy] ?? 0).getTime();
+          cmp = aDate - bDate;
+        }
+        return sortOrder === "desc" ? -cmp : cmp;
+      });
+
+      // Cursor-based pagination (cursor = last item index)
+      const startIdx = cursor ?? 0;
+      const items = all.slice(startIdx, startIdx + limit);
+      const nextCursor = startIdx + limit < all.length ? startIdx + limit : undefined;
+
+      return {
+        items,
+        nextCursor,
+        total: all.length,
+      };
+    }),
 
   /** Get a single project by id (owner or member with canView) */
   get: protectedProcedure

@@ -227,8 +227,8 @@ function ProjectDetailWrapper({
                   title: issue.title,
                   description: issue.desc || null,
                   severity: issue.severity as 'P0' | 'P1' | 'P2' | 'P3',
-                  status: issue.status as 'open' | 'in_progress' | 'resolved' | 'closed' | 'wont_fix',
-                  category: issue.category as 'hardware' | 'software' | 'mechanical' | 'thermal' | 'reliability' | 'safety' | 'performance' | 'other',
+                  status: issue.status as any,
+                  category: issue.category as any,
                   owner: issue.owner || null,
                   reporter: issue.reporter || null,
                   foundDate: issue.foundDate || null,
@@ -247,8 +247,8 @@ function ProjectDetailWrapper({
                     title: issue.title,
                     description: issue.desc || null,
                     severity: issue.severity as 'P0' | 'P1' | 'P2' | 'P3',
-                    status: issue.status as 'open' | 'in_progress' | 'resolved' | 'closed' | 'wont_fix',
-                    category: issue.category as 'hardware' | 'software' | 'mechanical' | 'thermal' | 'reliability' | 'safety' | 'performance' | 'other',
+                    status: issue.status as any,
+                    category: issue.category as any,
                     owner: issue.owner || null,
                     reporter: issue.reporter || null,
                     foundDate: issue.foundDate || null,
@@ -448,11 +448,11 @@ export default function Home() {
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
 
   // ── tRPC queries & mutations ─────────────────────────────────────────────
-  const { data: projectRows = [], isLoading: projectsLoading } = trpc.projects.list.useQuery(
+  const { data: projectListData, isLoading: projectsLoading } = trpc.projects.list.useQuery(
     undefined,
     { enabled: !!user }
   );
-
+  const projectRows = projectListData?.items ?? [];
   const projects: Project[] = projectRows.map(rowToProject);
 
   const createMutation = trpc.projects.create.useMutation();

@@ -327,7 +327,7 @@ function TaskDetail({
           <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">状态</div>
           <select
             value={taskDetails?.taskStatus ?? 'todo'}
-            onChange={(e) => onUpdate({ ...taskDetails, taskStatus: e.target.value })}
+            onChange={(e) => onUpdate({ ...taskDetails, taskStatus: e.target.value as any })}
             className="w-full text-xs bg-stone-50 border border-stone-200 px-2 py-1 outline-none focus:border-amber-400 transition-colors"
           >
             {TASK_STATUS_OPTIONS.map((o) => (
@@ -339,7 +339,7 @@ function TaskDetail({
           <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">优先级</div>
           <select
             value={taskDetails?.taskPriority ?? 'medium'}
-            onChange={(e) => onUpdate({ ...taskDetails, taskPriority: e.target.value })}
+            onChange={(e) => onUpdate({ ...taskDetails, taskPriority: e.target.value as any })}
             className="w-full text-xs bg-stone-50 border border-stone-200 px-2 py-1 outline-none focus:border-amber-400 transition-colors"
           >
             {TASK_PRIORITY_OPTIONS.map((o) => (

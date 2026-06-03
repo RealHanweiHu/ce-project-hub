@@ -55,6 +55,7 @@ const STATUS_CONFIG: Record<TaskStatus, { label: string; color: string }> = {
   in_progress: { label: '进行中',  color: 'bg-blue-50 text-blue-700 border-blue-200' },
   blocked:     { label: '已阻塞',  color: 'bg-red-50 text-red-700 border-red-200' },
   done:        { label: '已完成',  color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  cancelled:   { label: '已取消',  color: 'bg-stone-50 text-stone-400 border-stone-200' },
 };
 
 const PRIORITY_CONFIG: Record<TaskPriority, { label: string; color: string; dot: string }> = {

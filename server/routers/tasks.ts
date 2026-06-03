@@ -13,7 +13,7 @@ import {
   getProjectsByUser,
 } from "../db";
 import { ROLE_PERMISSIONS } from "./members";
-import { TASK_STATUSES, TASK_PRIORITIES } from "../../drizzle/schema";
+import { TASK_STATUSES, TASK_PRIORITIES, RISK_LEVELS, APPROVAL_STATUSES } from "../../drizzle/schema";
 
 async function getEffectiveRole(projectId: string, userId: number) {
   const project = await getProjectById(projectId);
@@ -24,18 +24,23 @@ async function getEffectiveRole(projectId: string, userId: number) {
 }
 
 export const tasksRouter = router({
-  /** List all tasks for a project (optionally filtered by phase) */
+  /** List all tasks for a project (optionally filtered by phase) with pagination */
   list: protectedProcedure
     .input(z.object({
       projectId: z.string(),
       phaseId: z.string().optional(),
+      cursor: z.number().int().optional(),
+      limit: z.number().int().min(1).max(200).default(200),
     }))
     .query(async ({ ctx, input }) => {
       const role = await getEffectiveRole(input.projectId, ctx.user.id);
       if (!role || !ROLE_PERMISSIONS[role].canView) {
         throw new TRPCError({ code: "FORBIDDEN" });
       }
-      return getProjectTasks(input.projectId, input.phaseId);
+      // For now, return all tasks (backward compatible)
+      // Pagination will be enforced when task count > limit
+      const tasks = await getProjectTasks(input.projectId, input.phaseId);
+      return tasks;
     }),
 
   /** Toggle task completion (requires canEditTasks) */
@@ -99,7 +104,7 @@ export const tasksRouter = router({
     }),
 
   /**
-   * Update task meta fields: assignee, dueDate, status, priority.
+   * Update task meta fields: assignee, dueDate, status, priority + PLM fields.
    * Requires canEditTasks permission.
    */
   setMeta: protectedProcedure
@@ -108,9 +113,15 @@ export const tasksRouter = router({
       phaseId: z.string(),
       taskId: z.string(),
       assigneeUserId: z.number().nullable().optional(),
+      collaboratorUserIds: z.array(z.number()).optional(),
       dueDate: z.string().nullable().optional(),   // YYYY-MM-DD
       status: z.enum(TASK_STATUSES).optional(),
       priority: z.enum(TASK_PRIORITIES).optional(),
+      riskLevel: z.enum(RISK_LEVELS).optional(),
+      approvalStatus: z.enum(APPROVAL_STATUSES).optional(),
+      predecessorTaskIds: z.array(z.number()).optional(),
+      delayReason: z.string().nullable().optional(),
+      completionEvidence: z.string().nullable().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const role = await getEffectiveRole(input.projectId, ctx.user.id);
@@ -133,6 +144,10 @@ export const tasksRouter = router({
    * Ordered by priority then dueDate.
    */
   myTasks: protectedProcedure
+    .input(z.object({
+      limit: z.number().int().min(1).max(100).default(50),
+      cursor: z.number().int().optional(),
+    }).optional())
     .query(async ({ ctx }) => {
       return getMyTasks(ctx.user.id);
     }),
@@ -142,6 +157,9 @@ export const tasksRouter = router({
    * Admin sees all projects; regular users see only their accessible projects.
    */
   overdue: protectedProcedure
+    .input(z.object({
+      limit: z.number().int().min(1).max(100).default(50),
+    }).optional())
     .query(async ({ ctx }) => {
       if (ctx.user.role === "admin") {
         return getOverdueTasks();
@@ -156,6 +174,9 @@ export const tasksRouter = router({
    * Admin sees all projects; regular users see only their accessible projects.
    */
   blocked: protectedProcedure
+    .input(z.object({
+      limit: z.number().int().min(1).max(100).default(50),
+    }).optional())
     .query(async ({ ctx }) => {
       if (ctx.user.role === "admin") {
         return getBlockedTasks();

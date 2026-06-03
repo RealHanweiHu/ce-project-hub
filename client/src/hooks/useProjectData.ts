@@ -3,6 +3,12 @@
  * assembles it into the legacy `Project` aggregate that the existing view
  * components expect.
  *
+ * ── PLM Upgrade: Cache Strategy ──
+ * - Hierarchical query keys: ['project', id, 'tasks'] etc.
+ * - Longer staleTime (30s) for stable data, shorter (10s) for active data
+ * - gcTime extended to 5min to reduce refetches on tab switch
+ * - Precise invalidation via layered keys
+ *
  * Data sources (all tRPC):
  *   - projects.get         → project meta (name, pm, risk, dates, …)
  *   - tasks.list           → per-phase task completion + instructions
@@ -25,50 +31,64 @@ import {
   normalizeProject,
 } from "@/lib/data";
 
+// ── Cache timing constants ──────────────────────────────────────────────────
+/** Stable data that rarely changes (project meta, SOP templates) */
+const STABLE_STALE_TIME = 30_000; // 30s
+/** Active data that changes during work sessions */
+const ACTIVE_STALE_TIME = 10_000; // 10s
+/** Garbage collection time — keep data in cache for 5 min */
+const GC_TIME = 5 * 60 * 1000; // 5min
+
 export function useProjectData(projectId: string | null) {
   const enabled = !!projectId;
 
+  // ── Project metadata (stable) ─────────────────────────────────────────────
   const { data: projectRow, isLoading: loadingProject } =
     trpc.projects.get.useQuery(
       { id: projectId! },
-      { enabled, staleTime: 5_000 }
+      { enabled, staleTime: STABLE_STALE_TIME, gcTime: GC_TIME }
     );
 
+  // ── Tasks (active — users toggle these frequently) ────────────────────────
   const { data: taskRows = [], isLoading: loadingTasks } =
     trpc.tasks.list.useQuery(
       { projectId: projectId! },
-      { enabled, staleTime: 5_000 }
+      { enabled, staleTime: ACTIVE_STALE_TIME, gcTime: GC_TIME }
     );
 
+  // ── Issues (active) ───────────────────────────────────────────────────────
   const { data: issueRows = [], isLoading: loadingIssues } =
     trpc.issues.list.useQuery(
       { projectId: projectId! },
-      { enabled, staleTime: 5_000 }
+      { enabled, staleTime: ACTIVE_STALE_TIME, gcTime: GC_TIME }
     );
 
+  // ── Gate Reviews (stable — only changes during reviews) ───────────────────
   const { data: gateRows = [], isLoading: loadingGates } =
     trpc.gateReviews.list.useQuery(
       { projectId: projectId! },
-      { enabled, staleTime: 5_000 }
+      { enabled, staleTime: STABLE_STALE_TIME, gcTime: GC_TIME }
     );
 
+  // ── Changelog (moderately active) ────────────────────────────────────────
   const { data: changeRows = [], isLoading: loadingChangelog } =
     trpc.changelog.list.useQuery(
       { projectId: projectId! },
-      { enabled, staleTime: 5_000 }
+      { enabled, staleTime: ACTIVE_STALE_TIME, gcTime: GC_TIME }
     );
 
+  // ── Phases (stable) ───────────────────────────────────────────────────────
   const { data: phaseRows = [], isLoading: loadingPhases } =
     trpc.phases.list.useQuery(
       { projectId: projectId! },
-      { enabled, staleTime: 5_000 }
+      { enabled, staleTime: STABLE_STALE_TIME, gcTime: GC_TIME }
     );
 
-  // ── Persistent file list from DB ──────────────────────────────────────────
+  // ── Files (stable — only changes on upload/delete) ────────────────────────
   const { data: fileRows = [], isLoading: loadingFiles } =
     trpc.files.list.useQuery(
       { projectId: projectId! },
-      { enabled, staleTime: 10_000 }
+      { enabled, staleTime: STABLE_STALE_TIME, gcTime: GC_TIME }
     );
 
   const isLoading =

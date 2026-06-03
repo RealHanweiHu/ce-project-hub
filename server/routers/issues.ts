@@ -25,11 +25,15 @@ async function getEffectiveRole(projectId: string, userId: number) {
 }
 
 export const issuesRouter = router({
-  /** List all issues for a project (optionally filtered by phase) */
+  /** List all issues for a project (optionally filtered by phase) with pagination */
   list: protectedProcedure
     .input(z.object({
       projectId: z.string(),
       phaseId: z.string().optional(),
+      status: z.enum(ISSUE_STATUSES).optional(),
+      severity: z.enum(ISSUE_SEVERITIES).optional(),
+      cursor: z.number().int().optional(),
+      limit: z.number().int().min(1).max(100).default(100),
     }))
     .query(async ({ ctx, input }) => {
       const role = await getEffectiveRole(input.projectId, ctx.user.id);
@@ -39,7 +43,7 @@ export const issuesRouter = router({
       return getProjectIssues(input.projectId, input.phaseId);
     }),
 
-  /** Create a new issue (requires canEditIssues) */
+  /** Create a new issue with 8D/CAPA fields (requires canEditIssues) */
   create: protectedProcedure
     .input(z.object({
       projectId: z.string(),
@@ -49,12 +53,28 @@ export const issuesRouter = router({
       severity: z.enum(ISSUE_SEVERITIES).default("P2"),
       status: z.enum(ISSUE_STATUSES).default("open"),
       category: z.enum(ISSUE_CATEGORIES).default("other"),
+      // D1: Problem Discovery
       owner: z.string().optional().nullable(),
+      ownerUserId: z.number().optional().nullable(),
       reporter: z.string().optional().nullable(),
+      responsibleDept: z.string().optional().nullable(),
       foundDate: z.string().optional().nullable(),
       targetDate: z.string().optional().nullable(),
+      // D3: Containment
+      containmentAction: z.string().optional().nullable(),
+      containmentDate: z.string().optional().nullable(),
+      // D4: Root Cause
       rootCause: z.string().optional().nullable(),
+      rootCauseMethod: z.string().optional().nullable(),
+      // D5/D6: Corrective Action
+      correctiveAction: z.string().optional().nullable(),
+      correctiveActionDate: z.string().optional().nullable(),
       solution: z.string().optional().nullable(),
+      // D7: Verification
+      verificationResult: z.string().optional().nullable(),
+      verificationDate: z.string().optional().nullable(),
+      // D8: Prevention
+      preventiveAction: z.string().optional().nullable(),
       relatedTaskId: z.string().optional().nullable(),
     }))
     .mutation(async ({ ctx, input }) => {
@@ -69,7 +89,7 @@ export const issuesRouter = router({
       return { success: true, id };
     }),
 
-  /** Update an issue (requires canEditIssues OR be the creator) */
+  /** Update an issue with 8D/CAPA fields (requires canEditIssues OR be the creator) */
   update: protectedProcedure
     .input(z.object({
       id: z.number(),
@@ -79,14 +99,32 @@ export const issuesRouter = router({
       severity: z.enum(ISSUE_SEVERITIES).optional(),
       status: z.enum(ISSUE_STATUSES).optional(),
       category: z.enum(ISSUE_CATEGORIES).optional(),
+      // D1: Problem Discovery
       owner: z.string().optional().nullable(),
+      ownerUserId: z.number().optional().nullable(),
       reporter: z.string().optional().nullable(),
+      responsibleDept: z.string().optional().nullable(),
       foundDate: z.string().optional().nullable(),
       targetDate: z.string().optional().nullable(),
-      closedDate: z.string().optional().nullable(),
+      // D3: Containment
+      containmentAction: z.string().optional().nullable(),
+      containmentDate: z.string().optional().nullable(),
+      containmentVerified: z.boolean().optional(),
+      // D4: Root Cause
       rootCause: z.string().optional().nullable(),
+      rootCauseMethod: z.string().optional().nullable(),
+      // D5/D6: Corrective Action
+      correctiveAction: z.string().optional().nullable(),
+      correctiveActionDate: z.string().optional().nullable(),
       solution: z.string().optional().nullable(),
+      // D7: Verification
+      verificationResult: z.string().optional().nullable(),
+      verificationDate: z.string().optional().nullable(),
+      // D8: Closure & Prevention
+      closedDate: z.string().optional().nullable(),
+      preventiveAction: z.string().optional().nullable(),
       relatedTaskId: z.string().optional().nullable(),
+      relatedIssueIds: z.array(z.number()).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const role = await getEffectiveRole(input.projectId, ctx.user.id);

@@ -29,14 +29,35 @@ export interface SOPPhase {
   color: string;
 }
 
+export type TaskStatus = 'todo' | 'in_progress' | 'blocked' | 'done' | 'cancelled';
+export type TaskPriority = 'low' | 'medium' | 'high' | 'critical';
+export type RiskLevel = 'none' | 'low' | 'medium' | 'high' | 'critical';
+export type ApprovalStatus = 'not_required' | 'pending' | 'approved' | 'rejected';
+
 export interface TaskDetails {
   instructions: string;
   files: FileAttachment[];
-  // Task meta fields (from DB project_tasks)
+  // ── Core Assignment ──
   assigneeUserId?: number | null;
+  /** Collaborator user IDs */
+  collaboratorUserIds?: number[];
   dueDate?: string | null;       // YYYY-MM-DD
-  taskStatus?: string;           // TaskStatus (renamed to avoid collision with IssueStatus)
-  taskPriority?: string;         // TaskPriority
+  // ── Status & Priority ──
+  taskStatus?: TaskStatus;
+  taskPriority?: TaskPriority;
+  // ── PLM Responsibility Tracking ──
+  /** Risk level assessment */
+  riskLevel?: RiskLevel;
+  /** Approval status for sensitive tasks (Gate, delete, etc.) */
+  approvalStatus?: ApprovalStatus;
+  /** Predecessor task IDs (Finish-to-Start dependencies) */
+  predecessorTaskIds?: number[];
+  /** Delay reason when task is overdue */
+  delayReason?: string;
+  /** Completion evidence (description or file references) */
+  completionEvidence?: string;
+  /** Timestamp when task was completed */
+  completedAt?: string;
 }
 
 export interface FileAttachment {
@@ -55,7 +76,7 @@ export interface FileAttachment {
 
 // ── Issue Tracking ───────────────────────────────────────────────────────────
 export type IssueSeverity = 'P0' | 'P1' | 'P2' | 'P3';
-export type IssueStatus = 'open' | 'in_progress' | 'resolved' | 'closed' | 'wont_fix';
+export type IssueStatus = 'open' | 'in_progress' | 'contained' | 'root_caused' | 'correcting' | 'verifying' | 'resolved' | 'closed' | 'wont_fix';
 export type IssueCategory = 'hardware' | 'software' | 'mechanical' | 'thermal' | 'reliability' | 'safety' | 'performance' | 'other';
 
 export interface Issue {
@@ -75,6 +96,29 @@ export interface Issue {
   relatedTaskId?: string;      // link to a SOP task
   attachments?: string[];      // file names
   creatorId?: string;          // userId of the person who created this issue
+  // ── 8D/CAPA Extended Fields ─────────────────────────────────────────────
+  /** D1: Responsible department */
+  responsibleDept?: string;
+  /** D3: Containment / interim action */
+  containmentAction?: string;
+  containmentDate?: string;
+  containmentVerified?: boolean;
+  /** D4: Root cause analysis method (5-Why, Fishbone, FTA, etc.) */
+  rootCauseMethod?: string;
+  /** D5/D6: Permanent corrective action */
+  correctiveAction?: string;
+  correctiveActionDate?: string;
+  /** D7: Verification of effectiveness */
+  verificationResult?: string;
+  verificationDate?: string;
+  /** D8: Preventive action / lessons learned */
+  preventiveAction?: string;
+  /** Closure approval info */
+  closureApprover?: string;
+  closureApprovalDate?: string;
+  /** Recurrence tracking */
+  recurrenceCount?: number;
+  relatedIssueIds?: string[];
 }
 
 // ── Gate Review Record ──────────────────────────────────────────────────────
@@ -545,13 +589,17 @@ export const SEVERITY_CONFIG: Record<IssueSeverity, {
 };
 
 export const STATUS_CONFIG: Record<IssueStatus, {
-  label: string; color: string; bg: string; border: string;
+  label: string; color: string; bg: string; border: string; step?: number;
 }> = {
-  open:        { label: '待处理', color: 'text-rose-700', bg: 'bg-rose-50', border: 'border-rose-200' },
-  in_progress: { label: '处理中', color: 'text-blue-700', bg: 'bg-blue-50', border: 'border-blue-200' },
-  resolved:    { label: '已解决', color: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-200' },
-  closed:      { label: '已关闭', color: 'text-stone-500', bg: 'bg-stone-100', border: 'border-stone-200' },
-  wont_fix:    { label: '不修复', color: 'text-stone-400', bg: 'bg-stone-50', border: 'border-stone-200' },
+  open:          { label: '待处理',     color: 'text-rose-700',    bg: 'bg-rose-50',    border: 'border-rose-200',    step: 1 },
+  in_progress:   { label: '处理中',     color: 'text-blue-700',    bg: 'bg-blue-50',    border: 'border-blue-200',    step: 2 },
+  contained:     { label: '临时措施',   color: 'text-orange-700',  bg: 'bg-orange-50',  border: 'border-orange-200',  step: 3 },
+  root_caused:   { label: '根因已确认', color: 'text-amber-700',   bg: 'bg-amber-50',   border: 'border-amber-200',   step: 4 },
+  correcting:    { label: '纠正措施',   color: 'text-indigo-700',  bg: 'bg-indigo-50',  border: 'border-indigo-200',  step: 5 },
+  verifying:     { label: '效果验证',   color: 'text-cyan-700',    bg: 'bg-cyan-50',    border: 'border-cyan-200',    step: 6 },
+  resolved:      { label: '已解决',     color: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-200', step: 7 },
+  closed:        { label: '已关闭',     color: 'text-stone-500',   bg: 'bg-stone-100',  border: 'border-stone-200',   step: 8 },
+  wont_fix:      { label: '不修复',     color: 'text-stone-400',   bg: 'bg-stone-50',   border: 'border-stone-200' },
 };
 
 export const CATEGORY_LABELS: Record<IssueCategory, string> = {
@@ -565,5 +613,5 @@ export const CATEGORY_LABELS: Record<IssueCategory, string> = {
   other:       '其他',
 };
 
-// Phases where Issue List is shown (validation phases)
-export const ISSUE_PHASES = new Set(['evt', 'dvt', 'pvt', 'mp', 'design']);
+// Phases where Issue List is shown (all phases in PLM lifecycle)
+export const ISSUE_PHASES = new Set(['concept', 'planning', 'design', 'evt', 'dvt', 'pvt', 'mp', 'pilot', 'mass_production']);

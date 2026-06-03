@@ -20,6 +20,7 @@ export const CHANGE_TYPE_CONFIG: Record<ChangeType, {
   tradeoff:  { label: '方案取舍', labelEn: 'Tradeoff',  color: 'bg-blue-50',    textColor: 'text-blue-700',   borderColor: 'border-blue-200',   icon: <Scale size={12} />,     badge: 'TRADEOFF' },
   eco:       { label: 'ECO',      labelEn: 'ECO',        color: 'bg-amber-50',   textColor: 'text-amber-700',  borderColor: 'border-amber-200',  icon: <GitBranch size={12} />, badge: 'ECO' },
   ecn:       { label: 'ECN',      labelEn: 'ECN',        color: 'bg-orange-50',  textColor: 'text-orange-700', borderColor: 'border-orange-200', icon: <GitBranch size={12} />, badge: 'ECN' },
+  ecr:       { label: 'ECR',      labelEn: 'ECR',        color: 'bg-yellow-50',  textColor: 'text-yellow-700', borderColor: 'border-yellow-200', icon: <GitBranch size={12} />, badge: 'ECR' },
   spec:      { label: '规格变更', labelEn: 'Spec',       color: 'bg-sky-50',     textColor: 'text-sky-700',    borderColor: 'border-sky-200',    icon: <Package size={12} />,   badge: 'SPEC' },
   cost:      { label: '成本变更', labelEn: 'Cost',       color: 'bg-emerald-50', textColor: 'text-emerald-700',borderColor: 'border-emerald-200',icon: <DollarSign size={12} />,badge: 'COST' },
   schedule:  { label: '进度变更', labelEn: 'Schedule',   color: 'bg-rose-50',    textColor: 'text-rose-700',   borderColor: 'border-rose-200',   icon: <Clock size={12} />,     badge: 'SCHED' },
