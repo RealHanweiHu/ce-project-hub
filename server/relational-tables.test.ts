@@ -164,10 +164,10 @@ describe("project_issues", () => {
   });
 
   it("can update an issue", async () => {
-    await updateProjectIssue(issueId, { status: "resolved", solution: "Fixed it" });
+    await updateProjectIssue(issueId, { status: "closed", solution: "Fixed it" });
     const issues = await getProjectIssues(TEST_PROJECT_ID);
     const found = issues.find((i) => i.id === issueId);
-    expect(found?.status).toBe("resolved");
+    expect(found?.status).toBe("closed");
     expect(found?.solution).toBe("Fixed it");
   });
 

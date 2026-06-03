@@ -1,0 +1,112 @@
+{
+  "query": "\nSELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, CHARACTER_MAXIMUM_LENGTH\nFROM INFORMATION_SCHEMA.COLUMNS\nWHERE TABLE_SCHEMA = DATABASE()\n  AND TABLE_NAME IN ('project_changelog','project_issues','project_phases','project_tasks','projects')\n  AND COLUMN_NAME IN ('costImpact','scheduleImpact','createdAt','updatedAt','relatedTaskId','category','risk','type')\nORDER BY TABLE_NAME, COLUMN_NAME\n",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway04.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 2UraMdNSh7w9Y5V.f955b98aaba5 --database KRSmEkFUnyCLf45UNPETAr --execute \nSELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, CHARACTER_MAXIMUM_LENGTH\nFROM INFORMATION_SCHEMA.COLUMNS\nWHERE TABLE_SCHEMA = DATABASE()\n  AND TABLE_NAME IN ('project_changelog','project_issues','project_phases','project_tasks','projects')\n  AND COLUMN_NAME IN ('costImpact','scheduleImpact','createdAt','updatedAt','relatedTaskId','category','risk','type')\nORDER BY TABLE_NAME, COLUMN_NAME\n",
+  "rows": [
+    {
+      "TABLE_NAME": "project_changelog",
+      "COLUMN_NAME": "costImpact",
+      "COLUMN_TYPE": "varchar(256)",
+      "CHARACTER_MAXIMUM_LENGTH": "256"
+    },
+    {
+      "TABLE_NAME": "project_changelog",
+      "COLUMN_NAME": "createdAt",
+      "COLUMN_TYPE": "datetime",
+      "CHARACTER_MAXIMUM_LENGTH": "NULL"
+    },
+    {
+      "TABLE_NAME": "project_changelog",
+      "COLUMN_NAME": "scheduleImpact",
+      "COLUMN_TYPE": "varchar(256)",
+      "CHARACTER_MAXIMUM_LENGTH": "256"
+    },
+    {
+      "TABLE_NAME": "project_changelog",
+      "COLUMN_NAME": "type",
+      "COLUMN_TYPE": "enum('decision','tradeoff','eco','ecn','ecr','spec','cost','schedule','supplier','other')",
+      "CHARACTER_MAXIMUM_LENGTH": "8"
+    },
+    {
+      "TABLE_NAME": "project_changelog",
+      "COLUMN_NAME": "updatedAt",
+      "COLUMN_TYPE": "datetime",
+      "CHARACTER_MAXIMUM_LENGTH": "NULL"
+    },
+    {
+      "TABLE_NAME": "project_issues",
+      "COLUMN_NAME": "category",
+      "COLUMN_TYPE": "enum('hardware','software','mechanical','thermal','reliability','safety','performance','other')",
+      "CHARACTER_MAXIMUM_LENGTH": "11"
+    },
+    {
+      "TABLE_NAME": "project_issues",
+      "COLUMN_NAME": "createdAt",
+      "COLUMN_TYPE": "datetime",
+      "CHARACTER_MAXIMUM_LENGTH": "NULL"
+    },
+    {
+      "TABLE_NAME": "project_issues",
+      "COLUMN_NAME": "relatedTaskId",
+      "COLUMN_TYPE": "varchar(64)",
+      "CHARACTER_MAXIMUM_LENGTH": "64"
+    },
+    {
+      "TABLE_NAME": "project_issues",
+      "COLUMN_NAME": "updatedAt",
+      "COLUMN_TYPE": "datetime",
+      "CHARACTER_MAXIMUM_LENGTH": "NULL"
+    },
+    {
+      "TABLE_NAME": "project_phases",
+      "COLUMN_NAME": "createdAt",
+      "COLUMN_TYPE": "datetime",
+      "CHARACTER_MAXIMUM_LENGTH": "NULL"
+    },
+    {
+      "TABLE_NAME": "project_phases",
+      "COLUMN_NAME": "updatedAt",
+      "COLUMN_TYPE": "datetime",
+      "CHARACTER_MAXIMUM_LENGTH": "NULL"
+    },
+    {
+      "TABLE_NAME": "project_tasks",
+      "COLUMN_NAME": "createdAt",
+      "COLUMN_TYPE": "datetime",
+      "CHARACTER_MAXIMUM_LENGTH": "NULL"
+    },
+    {
+      "TABLE_NAME": "project_tasks",
+      "COLUMN_NAME": "updatedAt",
+      "COLUMN_TYPE": "datetime",
+      "CHARACTER_MAXIMUM_LENGTH": "NULL"
+    },
+    {
+      "TABLE_NAME": "projects",
+      "COLUMN_NAME": "category",
+      "COLUMN_TYPE": "varchar(16)",
+      "CHARACTER_MAXIMUM_LENGTH": "16"
+    },
+    {
+      "TABLE_NAME": "projects",
+      "COLUMN_NAME": "createdAt",
+      "COLUMN_TYPE": "timestamp",
+      "CHARACTER_MAXIMUM_LENGTH": "NULL"
+    },
+    {
+      "TABLE_NAME": "projects",
+      "COLUMN_NAME": "risk",
+      "COLUMN_TYPE": "varchar(16)",
+      "CHARACTER_MAXIMUM_LENGTH": "16"
+    },
+    {
+      "TABLE_NAME": "projects",
+      "COLUMN_NAME": "updatedAt",
+      "COLUMN_TYPE": "timestamp",
+      "CHARACTER_MAXIMUM_LENGTH": "NULL"
+    }
+  ],
+  "messages": [],
+  "stdout": "TABLE_NAME\tCOLUMN_NAME\tCOLUMN_TYPE\tCHARACTER_MAXIMUM_LENGTH\nproject_changelog\tcostImpact\tvarchar(256)\t256\nproject_changelog\tcreatedAt\tdatetime\tNULL\nproject_changelog\tscheduleImpact\tvarchar(256)\t256\nproject_changelog\ttype\tenum('decision','tradeoff','eco','ecn','ecr','spec','cost','schedule','supplier','other')\t8\nproject_changelog\tupdatedAt\tdatetime\tNULL\nproject_issues\tcategory\tenum('hardware','software','mechanical','thermal','reliability','safety','performance','other')\t11\nproject_issues\tcreatedAt\tdatetime\tNULL\nproject_issues\trelatedTaskId\tvarchar(64)\t64\nproject_issues\tupdatedAt\tdatetime\tNULL\nproject_phases\tcreatedAt\tdatetime\tNULL\nproject_phases\tupdatedAt\tdatetime\tNULL\nproject_tasks\tcreatedAt\tdatetime\tNULL\nproject_tasks\tupdatedAt\tdatetime\tNULL\nprojects\tcategory\tvarchar(16)\t16\nprojects\tcreatedAt\ttimestamp\tNULL\nprojects\trisk\tvarchar(16)\t16\nprojects\tupdatedAt\ttimestamp\tNULL\n",
+  "stderr": "",
+  "execution_time_ms": 263
+}

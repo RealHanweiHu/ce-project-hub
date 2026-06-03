@@ -1,0 +1,9 @@
+{
+  "query": "SHOW TABLES LIKE 'comments'; SHOW TABLES LIKE 'notifications'; SHOW TABLES LIKE 'project_bom'",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway04.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 2UraMdNSh7w9Y5V.f955b98aaba5 --database KRSmEkFUnyCLf45UNPETAr --execute SHOW TABLES LIKE 'comments'; SHOW TABLES LIKE 'notifications'; SHOW TABLES LIKE 'project_bom'",
+  "rows": [],
+  "messages": [],
+  "stdout": "",
+  "stderr": "",
+  "execution_time_ms": 273
+}

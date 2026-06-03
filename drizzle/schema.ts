@@ -4,6 +4,7 @@ import {
   mysqlTable,
   text,
   timestamp,
+  datetime,
   varchar,
   json,
   boolean,
@@ -65,7 +66,7 @@ export const projects = mysqlTable("projects", {
    * Use JOIN to get display name; no pmName string field.
    */
   pmUserId: int("pmUserId"),
-  risk: mysqlEnum("risk", ["low", "medium", "high"]).notNull().default("low"),
+  risk: varchar("risk", { length: 16 }).notNull().default("low"),
   currentPhase: varchar("currentPhase", { length: 32 }).notNull().default("concept"),
   progress: int("progress").notNull().default(0),
   startDate: varchar("startDate", { length: 32 }),
@@ -166,8 +167,8 @@ export const projectPhases = mysqlTable(
     endDate: varchar("endDate", { length: 32 }),
     /** Phase-level notes */
     notes: text("notes"),
-    createdAt: timestamp("createdAt").defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+    createdAt: datetime("createdAt").notNull().default(new Date(0)),
+    updatedAt: datetime("updatedAt").notNull().default(new Date(0)),
   },
   (table) => ({
     /** Each project can only have one row per phase */
@@ -238,8 +239,8 @@ export const projectTasks = mysqlTable(
     updatedBy: int("updatedBy"),
     /** Soft delete */
     deletedAt: timestamp("deletedAt"),
-    createdAt: timestamp("createdAt").defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+    createdAt: datetime("createdAt").notNull().default(new Date(0)),
+    updatedAt: datetime("updatedAt").notNull().default(new Date(0)),
   },
   (table) => ({
     /** Each project/phase can only have one row per task template id */
@@ -341,13 +342,13 @@ export const projectIssues = mysqlTable(
     /** Link to related recurrence issue IDs */
     relatedIssueIds: json("relatedIssueIds").$type<number[]>().default([]),
 
-    relatedTaskId: varchar("relatedTaskId", { length: 32 }),
+    relatedTaskId: varchar("relatedTaskId", { length: 64 }),
     /** User id of the creator (for permission checks) */
     creatorId: int("creatorId"),
     /** Soft delete */
     deletedAt: timestamp("deletedAt"),
-    createdAt: timestamp("createdAt").defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+    createdAt: datetime("createdAt").notNull().default(new Date(0)),
+    updatedAt: datetime("updatedAt").notNull().default(new Date(0)),
   },
   (table) => ({
     /** Speed up issue list queries filtered by project/phase/status/severity */
@@ -457,16 +458,16 @@ export const projectChangelog = mysqlTable(
     /** Affected BOM item IDs */
     affectedBomItemIds: json("affectedBomItemIds").$type<number[]>().default([]),
     status: mysqlEnum("status", CHANGE_STATUSES).notNull().default("proposed"),
-    costImpact: varchar("costImpact", { length: 128 }),
-    scheduleImpact: varchar("scheduleImpact", { length: 128 }),
+    costImpact: varchar("costImpact", { length: 256 }),
+    scheduleImpact: varchar("scheduleImpact", { length: 256 }),
     notes: text("notes"),
     createdDate: varchar("createdDate", { length: 32 }),
     implementedDate: varchar("implementedDate", { length: 32 }),
     creatorId: int("creatorId"),
     /** Soft delete */
     deletedAt: timestamp("deletedAt"),
-    createdAt: timestamp("createdAt").defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+    createdAt: datetime("createdAt").notNull().default(new Date(0)),
+    updatedAt: datetime("updatedAt").notNull().default(new Date(0)),
   },
   (table) => ({
     /** Speed up changelog list queries filtered by project/type/status */
