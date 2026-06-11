@@ -63,6 +63,21 @@ export async function storageGet(relKey: string): Promise<{ key: string; url: st
   return { key, url: `/storage/${key}` };
 }
 
+export async function storageGetObject(relKey: string): Promise<{
+  body: NodeJS.ReadableStream;
+  contentType?: string;
+  contentLength?: number;
+}> {
+  const { client, bucket } = getS3Config();
+  const key = normalizeKey(relKey);
+  const resp = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  return {
+    body: resp.Body as NodeJS.ReadableStream,
+    contentType: resp.ContentType,
+    contentLength: resp.ContentLength,
+  };
+}
+
 export async function storageGetSignedUrl(
   relKey: string,
   expiresInSeconds = 3600,

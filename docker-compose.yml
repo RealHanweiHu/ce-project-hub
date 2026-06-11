@@ -1,0 +1,37 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file: .env
+    depends_on:
+      - db
+      - minio
+
+  # Local Postgres — remove this service and point DATABASE_URL at
+  # Aliyun RDS PostgreSQL in production if you prefer managed DB.
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: cehub
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cehub}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  # S3-compatible object storage — remove this service and point S3_*
+  # at Aliyun OSS in production if you prefer managed storage.
+  minio:
+    image: minio/minio
+    restart: unless-stopped
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - miniodata:/data
+
+volumes:
+  pgdata:
+  miniodata:
