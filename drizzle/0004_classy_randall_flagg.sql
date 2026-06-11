@@ -1,1 +1,0 @@
-ALTER TABLE `project_files` ADD `taskId` varchar(32);

@@ -1,27 +1,30 @@
 import {
-  int,
-  mysqlEnum,
-  mysqlTable,
+  integer,
+  serial,
+  pgEnum,
+  pgTable,
   text,
   timestamp,
   varchar,
-  json,
+  jsonb,
   boolean,
   bigint,
   uniqueIndex,
   index,
   date,
-} from "drizzle-orm/mysql-core";
+} from "drizzle-orm/pg-core";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Users
 // ─────────────────────────────────────────────────────────────────────────────
 
+export const userRoleEnum = pgEnum("user_role", ["user", "admin"]);
+
 /**
  * Core user table backing auth flow.
  */
-export const users = mysqlTable("users", {
-  id: int("id").autoincrement().primaryKey(),
+export const users = pgTable("users", {
+  id: serial("id").primaryKey(),
   /** User identifier - stores username for password auth (kept as openId for DB compatibility) */
   openId: varchar("openId", { length: 64 }).notNull().unique(),
   /** Username for login - same as openId for password-auth users */
@@ -31,7 +34,7 @@ export const users = mysqlTable("users", {
   name: text("name"),
   email: varchar("email", { length: 320 }),
   loginMethod: varchar("loginMethod", { length: 64 }),
-  role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
+  role: userRoleEnum("role").default("user").notNull(),
   /**
    * Whether this user can create new projects.
    * Granted by admin. Typically given to PM, managers, and project leads.
@@ -39,7 +42,7 @@ export const users = mysqlTable("users", {
    */
   canCreateProject: boolean("canCreateProject").notNull().default(false),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
 });
 
@@ -50,11 +53,13 @@ export type InsertUser = typeof users.$inferInsert;
 // Projects (metadata only — no more data JSON blob)
 // ─────────────────────────────────────────────────────────────────────────────
 
+export const projectRiskEnum = pgEnum("project_risk", ["low", "medium", "high"]);
+
 /**
  * Projects table - stores CE product development project metadata.
  * All phase/task/issue/gate/changelog data live in separate tables.
  */
-export const projects = mysqlTable("projects", {
+export const projects = pgTable("projects", {
   id: varchar("id", { length: 32 }).primaryKey(),
   name: varchar("name", { length: 256 }).notNull(),
   projectNumber: varchar("projectNumber", { length: 64 }).notNull().default(""),
@@ -64,18 +69,18 @@ export const projects = mysqlTable("projects", {
    * Project manager user id (FK to users.id).
    * Use JOIN to get display name; no pmName string field.
    */
-  pmUserId: int("pmUserId"),
-  risk: mysqlEnum("risk", ["low", "medium", "high"]).notNull().default("low"),
+  pmUserId: integer("pmUserId"),
+  risk: projectRiskEnum("risk").notNull().default("low"),
   currentPhase: varchar("currentPhase", { length: 32 }).notNull().default("concept"),
-  progress: int("progress").notNull().default(0),
+  progress: integer("progress").notNull().default(0),
   startDate: varchar("startDate", { length: 32 }),
   targetDate: varchar("targetDate", { length: 32 }),
-  createdBy: int("createdBy").notNull(),
+  createdBy: integer("createdBy").notNull(),
   archived: boolean("archived").notNull().default(false),
   /** Reserved for future organization/workspace support */
-  orgId: int("orgId"),
+  orgId: integer("orgId"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
 });
 
 export type ProjectRow = typeof projects.$inferSelect;
@@ -113,24 +118,26 @@ export const PROJECT_MEMBER_ROLES = [
 
 export type ProjectMemberRole = (typeof PROJECT_MEMBER_ROLES)[number];
 
+export const projectMemberRoleEnum = pgEnum("project_member_role", PROJECT_MEMBER_ROLES);
+
 /**
  * project_members table - maps users to projects with a specific role.
  * The project creator is automatically added as 'owner'.
  * UNIQUE(projectId, userId) prevents duplicate membership.
  */
-export const projectMembers = mysqlTable(
+export const projectMembers = pgTable(
   "project_members",
   {
-    id: int("id").autoincrement().primaryKey(),
+    id: serial("id").primaryKey(),
     projectId: varchar("projectId", { length: 32 }).notNull(),
-    userId: int("userId").notNull(),
+    userId: integer("userId").notNull(),
     /** Role determines what the member can do in this project */
-    role: mysqlEnum("role", PROJECT_MEMBER_ROLES).notNull().default("viewer"),
+    role: projectMemberRoleEnum("role").notNull().default("viewer"),
     /** Display name for this member's job title (e.g. "硬件工程师", "测试主管") */
     jobTitle: varchar("jobTitle", { length: 64 }),
-    invitedBy: int("invitedBy").notNull(),
+    invitedBy: integer("invitedBy").notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
   },
   (table) => ({
     /** Prevent the same user from being added to a project twice */
@@ -151,10 +158,10 @@ export type InsertProjectMember = typeof projectMembers.$inferInsert;
  * project_phases table - stores per-project phase metadata.
  * One row per (project, phase) pair.
  */
-export const projectPhases = mysqlTable(
+export const projectPhases = pgTable(
   "project_phases",
   {
-    id: int("id").autoincrement().primaryKey(),
+    id: serial("id").primaryKey(),
     projectId: varchar("projectId", { length: 32 }).notNull(),
     /** Phase id matching SOP template (e.g. 'concept', 'planning', 'design') */
     phaseId: varchar("phaseId", { length: 32 }).notNull(),
@@ -165,7 +172,7 @@ export const projectPhases = mysqlTable(
     /** Phase-level notes */
     notes: text("notes"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
   },
   (table) => ({
     /** Each project can only have one row per phase */
@@ -185,14 +192,17 @@ export type TaskStatus = (typeof TASK_STATUSES)[number];
 export const TASK_PRIORITIES = ["low", "medium", "high", "critical"] as const;
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 
+export const taskStatusEnum = pgEnum("task_status", TASK_STATUSES);
+export const taskPriorityEnum = pgEnum("task_priority", TASK_PRIORITIES);
+
 /**
  * project_tasks table - tracks completion state and details for each SOP task.
  * One row per (project, phase, task) triple.
  */
-export const projectTasks = mysqlTable(
+export const projectTasks = pgTable(
   "project_tasks",
   {
-    id: int("id").autoincrement().primaryKey(),
+    id: serial("id").primaryKey(),
     projectId: varchar("projectId", { length: 32 }).notNull(),
     phaseId: varchar("phaseId", { length: 32 }).notNull(),
     /** Task id matching SOP template (e.g. 'c1', 'p3', 'd5') */
@@ -206,20 +216,20 @@ export const projectTasks = mysqlTable(
      * JSON array of ProjectMemberRole strings.
      * Empty array = visible to all members.
      */
-    visibleRoles: json("visibleRoles").$type<string[]>().default([]),
+    visibleRoles: jsonb("visibleRoles").$type<string[]>().default([]),
     /** Assigned user (FK → users.id) */
-    assigneeUserId: int("assigneeUserId"),
+    assigneeUserId: integer("assigneeUserId"),
     /** Due date for this task (DATE column, YYYY-MM-DD string at runtime) */
     dueDate: date("dueDate", { mode: "string" }),
     /** Task workflow status */
-    status: mysqlEnum("status", TASK_STATUSES).notNull().default("todo"),
+    status: taskStatusEnum("status").notNull().default("todo"),
     /** Task priority */
-    priority: mysqlEnum("priority", TASK_PRIORITIES).notNull().default("medium"),
+    priority: taskPriorityEnum("priority").notNull().default("medium"),
     /** Timestamp when task was marked done */
     completedAt: timestamp("completedAt"),
-    updatedBy: int("updatedBy"),
+    updatedBy: integer("updatedBy"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
   },
   (table) => ({
     /** Each project/phase can only have one row per task template id */
@@ -249,20 +259,24 @@ export type IssueSeverity = (typeof ISSUE_SEVERITIES)[number];
 export type IssueStatus = (typeof ISSUE_STATUSES)[number];
 export type IssueCategory = (typeof ISSUE_CATEGORIES)[number];
 
+export const issueSeverityEnum = pgEnum("issue_severity", ISSUE_SEVERITIES);
+export const issueStatusEnum = pgEnum("issue_status", ISSUE_STATUSES);
+export const issueCategoryEnum = pgEnum("issue_category", ISSUE_CATEGORIES);
+
 /**
  * project_issues table - issue tracking per project/phase.
  */
-export const projectIssues = mysqlTable(
+export const projectIssues = pgTable(
   "project_issues",
   {
-    id: int("id").autoincrement().primaryKey(),
+    id: serial("id").primaryKey(),
     projectId: varchar("projectId", { length: 32 }).notNull(),
     phaseId: varchar("phaseId", { length: 32 }).notNull(),
     title: varchar("title", { length: 512 }).notNull(),
     description: text("description"),
-    severity: mysqlEnum("severity", ISSUE_SEVERITIES).notNull().default("P2"),
-    status: mysqlEnum("status", ISSUE_STATUSES).notNull().default("open"),
-    category: mysqlEnum("category", ISSUE_CATEGORIES).notNull().default("other"),
+    severity: issueSeverityEnum("severity").notNull().default("P2"),
+    status: issueStatusEnum("status").notNull().default("open"),
+    category: issueCategoryEnum("category").notNull().default("other"),
     /** Responsible person (display name) */
     owner: varchar("owner", { length: 256 }),
     reporter: varchar("reporter", { length: 256 }),
@@ -273,9 +287,9 @@ export const projectIssues = mysqlTable(
     solution: text("solution"),
     relatedTaskId: varchar("relatedTaskId", { length: 32 }),
     /** User id of the creator (for permission checks) */
-    creatorId: int("creatorId"),
+    creatorId: integer("creatorId"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
   },
   (table) => ({
     /** Speed up issue list queries filtered by project/phase/status/severity */
@@ -298,13 +312,15 @@ export type InsertProjectIssue = typeof projectIssues.$inferInsert;
 export const GATE_DECISIONS = ["approved", "conditional", "rejected"] as const;
 export type GateDecision = (typeof GATE_DECISIONS)[number];
 
+export const gateDecisionEnum = pgEnum("gate_decision", GATE_DECISIONS);
+
 /**
  * project_gate_reviews table - gate review records per project/phase.
  */
-export const projectGateReviews = mysqlTable(
+export const projectGateReviews = pgTable(
   "project_gate_reviews",
   {
-    id: int("id").autoincrement().primaryKey(),
+    id: serial("id").primaryKey(),
     projectId: varchar("projectId", { length: 32 }).notNull(),
     phaseId: varchar("phaseId", { length: 32 }).notNull(),
     phaseName: varchar("phaseName", { length: 256 }).notNull().default(""),
@@ -312,15 +328,15 @@ export const projectGateReviews = mysqlTable(
     reviewDate: varchar("reviewDate", { length: 32 }).notNull(),
     /** Comma-separated participant names */
     participants: text("participants"),
-    decision: mysqlEnum("decision", GATE_DECISIONS).notNull().default("conditional"),
+    decision: gateDecisionEnum("decision").notNull().default("conditional"),
     /** Conditions if conditional approval */
     conditions: text("conditions"),
     notes: text("notes"),
     /** Review round number (1 = first, 2 = re-review, etc.) */
-    roundNumber: int("roundNumber").notNull().default(1),
-    createdBy: int("createdBy"),
+    roundNumber: integer("roundNumber").notNull().default(1),
+    createdBy: integer("createdBy"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
   },
   (table) => ({
     /** Speed up gate review list queries per project/phase */
@@ -360,32 +376,35 @@ export const CHANGE_STATUSES = [
 export type ChangeType = (typeof CHANGE_TYPES)[number];
 export type ChangeStatus = (typeof CHANGE_STATUSES)[number];
 
+export const changeTypeEnum = pgEnum("change_type", CHANGE_TYPES);
+export const changeStatusEnum = pgEnum("change_status", CHANGE_STATUSES);
+
 /**
  * project_changelog table - change records and decisions per project.
  */
-export const projectChangelog = mysqlTable(
+export const projectChangelog = pgTable(
   "project_changelog",
   {
-    id: int("id").autoincrement().primaryKey(),
+    id: serial("id").primaryKey(),
     projectId: varchar("projectId", { length: 32 }).notNull(),
     /** Auto-generated number e.g. ECR-001, ECN-002 */
     number: varchar("number", { length: 64 }).notNull().default(""),
-    type: mysqlEnum("type", CHANGE_TYPES).notNull().default("other"),
+    type: changeTypeEnum("type").notNull().default("other"),
     title: varchar("title", { length: 512 }).notNull(),
     description: text("description"),
     reason: text("reason"),
     decisionMaker: varchar("decisionMaker", { length: 256 }),
     /** JSON array of phase ids affected */
-    affectedPhases: json("affectedPhases").$type<string[]>().default([]),
-    status: mysqlEnum("status", CHANGE_STATUSES).notNull().default("proposed"),
+    affectedPhases: jsonb("affectedPhases").$type<string[]>().default([]),
+    status: changeStatusEnum("status").notNull().default("proposed"),
     costImpact: varchar("costImpact", { length: 128 }),
     scheduleImpact: varchar("scheduleImpact", { length: 128 }),
     notes: text("notes"),
     createdDate: varchar("createdDate", { length: 32 }),
     implementedDate: varchar("implementedDate", { length: 32 }),
-    creatorId: int("creatorId"),
+    creatorId: integer("creatorId"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
   },
   (table) => ({
     /** Speed up changelog list queries filtered by project/type/status */
@@ -406,12 +425,12 @@ export type InsertProjectChangeRecord = typeof projectChangelog.$inferInsert;
 
 /**
  * project_files table - metadata for files uploaded to object storage.
- * Actual file bytes live in S3; this table stores the reference.
+ * Actual file bytes live in S3-compatible storage; this table stores the reference.
  */
-export const projectFiles = mysqlTable(
+export const projectFiles = pgTable(
   "project_files",
   {
-    id: int("id").autoincrement().primaryKey(),
+    id: serial("id").primaryKey(),
     projectId: varchar("projectId", { length: 32 }).notNull(),
     /** Optional: associate file with a specific phase */
     phaseId: varchar("phaseId", { length: 32 }),
@@ -424,10 +443,10 @@ export const projectFiles = mysqlTable(
     size: bigint("size", { mode: "number" }).notNull().default(0),
     /** S3 object key (relative path within the bucket) */
     storageKey: varchar("storageKey", { length: 512 }).notNull(),
-    /** Served URL path (e.g. /manus-storage/{key}) */
+    /** Served URL path (e.g. /storage/{key}) */
     storageUrl: varchar("storageUrl", { length: 512 }).notNull(),
     /** User id of the uploader */
-    uploadedBy: int("uploadedBy").notNull(),
+    uploadedBy: integer("uploadedBy").notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (table) => ({
@@ -486,14 +505,14 @@ export type ActivityAction = (typeof ACTIVITY_ACTIONS)[number];
  * activity_logs table - immutable audit trail for key project operations.
  * Written on every significant mutation; never updated or deleted.
  */
-export const activityLogs = mysqlTable(
+export const activityLogs = pgTable(
   "activity_logs",
   {
-    id: int("id").autoincrement().primaryKey(),
+    id: serial("id").primaryKey(),
     /** Project this activity belongs to */
     projectId: varchar("projectId", { length: 32 }).notNull(),
     /** User who performed the action */
-    userId: int("userId").notNull(),
+    userId: integer("userId").notNull(),
     /** Action type (see ACTIVITY_ACTIONS) */
     action: varchar("action", { length: 64 }).notNull(),
     /** Entity type affected (e.g. 'issue', 'task', 'file') */
@@ -501,7 +520,7 @@ export const activityLogs = mysqlTable(
     /** Entity id affected (numeric or string id) */
     entityId: varchar("entityId", { length: 64 }),
     /** Additional context as JSON (e.g. { title, from, to }) */
-    meta: json("meta").$type<Record<string, unknown>>(),
+    meta: jsonb("meta").$type<Record<string, unknown>>(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (table) => ({
@@ -528,13 +547,13 @@ export type InsertActivityLog = typeof activityLogs.$inferInsert;
  * organizations table - reserved for future organization/workspace support.
  * Currently not used in application logic; projects have orgId=null.
  */
-export const organizations = mysqlTable("organizations", {
-  id: int("id").autoincrement().primaryKey(),
+export const organizations = pgTable("organizations", {
+  id: serial("id").primaryKey(),
   name: varchar("name", { length: 256 }).notNull(),
   slug: varchar("slug", { length: 64 }).notNull().unique(),
-  ownerId: int("ownerId").notNull(),
+  ownerId: integer("ownerId").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
 });
 
 export type Organization = typeof organizations.$inferSelect;
