@@ -31,7 +31,7 @@ import {
 } from "../db";
 import { TRPCError } from "@trpc/server";
 import { ROLE_PERMISSIONS } from "./members";
-import { storagePut } from "../storage";
+import { storagePut, storageDelete } from "../storage";
 import multer from "multer";
 import type { Express, Request, Response } from "express";
 import { createContext } from "../_core/context";
@@ -50,23 +50,11 @@ async function getEffectiveRole(projectId: string, userId: number) {
 
 /**
  * Attempt to delete an S3 object by key.
- * Uses the Manus storage presign/delete endpoint if available.
  * Non-fatal: logs a warning on failure rather than throwing.
  */
 async function tryInvalidateS3Object(storageKey: string): Promise<void> {
   try {
-    const forgeBaseUrl = (process.env.BUILT_IN_FORGE_API_URL || "").replace(/\/+$/, "");
-    const forgeKey = process.env.BUILT_IN_FORGE_API_KEY;
-    if (!forgeBaseUrl || !forgeKey) return; // storage not configured, skip
-    const url = new URL("v1/storage/delete", forgeBaseUrl + "/");
-    url.searchParams.set("path", storageKey);
-    const resp = await fetch(url.toString(), {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${forgeKey}` },
-    });
-    if (!resp.ok) {
-      console.warn(`[FileDelete] S3 invalidation returned ${resp.status} for key: ${storageKey}`);
-    }
+    await storageDelete(storageKey);
   } catch (err) {
     console.warn("[FileDelete] S3 invalidation failed (non-fatal):", err);
   }

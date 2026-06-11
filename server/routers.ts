@@ -31,7 +31,7 @@ export const appRouter = router({
       };
     }),
 
-    /** Password-based login - replaces Manus OAuth */
+    /** Password-based login */
     login: publicProcedure
       .input(z.object({
         username: z.string().min(1),

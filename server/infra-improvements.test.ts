@@ -59,7 +59,7 @@ describe("project_files", () => {
       mimeType: "application/pdf",
       size: 12345,
       storageKey: "projects/test/test-doc_abc12345.pdf",
-      storageUrl: "/manus-storage/projects/test/test-doc_abc12345.pdf",
+      storageUrl: "/storage/projects/test/test-doc_abc12345.pdf",
       uploadedBy: 1,
     });
 
@@ -83,7 +83,7 @@ describe("project_files", () => {
       mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       size: 54321,
       storageKey: "projects/test/design-spec_def67890.docx",
-      storageUrl: "/manus-storage/projects/test/design-spec_def67890.docx",
+      storageUrl: "/storage/projects/test/design-spec_def67890.docx",
       uploadedBy: 1,
     });
 
@@ -103,7 +103,7 @@ describe("project_files", () => {
       mimeType: "text/plain",
       size: 100,
       storageKey: "projects/test/to-delete_xyz.txt",
-      storageUrl: "/manus-storage/projects/test/to-delete_xyz.txt",
+      storageUrl: "/storage/projects/test/to-delete_xyz.txt",
       uploadedBy: 1,
     });
 

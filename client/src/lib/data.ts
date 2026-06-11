@@ -47,7 +47,7 @@ export interface FileAttachment {
   uploadDate: string;
   /** Base64 data URL (legacy) or empty string when storageUrl is set */
   dataUrl: string;
-  /** S3-backed URL path (e.g. /manus-storage/{key}). Present for server-uploaded files. */
+  /** S3-backed URL path (e.g. /storage/{key}). Present for server-uploaded files. */
   storageUrl?: string;
   /** S3 storage key. Present for server-uploaded files. */
   storageKey?: string;
