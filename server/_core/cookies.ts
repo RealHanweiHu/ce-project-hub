@@ -39,10 +39,13 @@ export function getSessionCookieOptions(
   //       ? hostname
   //       : undefined;
 
+  // The SPA is served by this same Express server, so the cookie is always
+  // first-party: "lax" works over both http (local/dev) and https (production).
+  // ("none" requires Secure and gets dropped by browsers on plain http.)
   return {
     httpOnly: true,
     path: "/",
-    sameSite: "none",
+    sameSite: "lax",
     secure: isSecureRequest(req),
   };
 }
