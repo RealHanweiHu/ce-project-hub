@@ -1,5 +1,5 @@
 import { eq, desc, and, or, inArray, sql as drizzleSql } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/mysql2";
+import { drizzle } from "drizzle-orm/node-postgres";
 import {
   InsertUser, users, projects, InsertProject, ProjectRow,
   projectMembers, InsertProjectMember, ProjectMember, ProjectMemberRole,
@@ -80,7 +80,8 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       updateSet.lastSignedIn = new Date();
     }
 
-    await db.insert(users).values(values).onDuplicateKeyUpdate({
+    await db.insert(users).values(values).onConflictDoUpdate({
+      target: users.openId,
       set: updateSet,
     });
   } catch (error) {
@@ -448,8 +449,8 @@ export async function getProjectIssues(projectId: string, phaseId?: string): Pro
 export async function createProjectIssue(issue: InsertProjectIssue): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(projectIssues).values(issue);
-  return (result as unknown as [{ insertId: number }, unknown])[0].insertId;
+  const result = await db.insert(projectIssues).values(issue).returning({ id: projectIssues.id });
+  return result[0].id;
 }
 
 /** Update an issue */
@@ -485,8 +486,8 @@ export async function getProjectGateReviews(projectId: string, phaseId?: string)
 export async function createProjectGateReview(review: InsertProjectGateReview): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(projectGateReviews).values(review);
-  return (result as unknown as [{ insertId: number }, unknown])[0].insertId;
+  const result = await db.insert(projectGateReviews).values(review).returning({ id: projectGateReviews.id });
+  return result[0].id;
 }
 
 /** Update a gate review */
@@ -523,8 +524,8 @@ export async function getProjectChangelog(projectId: string): Promise<ProjectCha
 export async function createProjectChangeRecord(record: InsertProjectChangeRecord): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(projectChangelog).values(record);
-  return (result as unknown as [{ insertId: number }, unknown])[0].insertId;
+  const result = await db.insert(projectChangelog).values(record).returning({ id: projectChangelog.id });
+  return result[0].id;
 }
 
 /** Update a changelog record */
@@ -553,8 +554,8 @@ export async function deleteProjectChangeRecord(id: number): Promise<void> {
 export async function createProjectFile(record: Omit<InsertProjectFile, "id" | "createdAt">): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(projectFiles).values(record);
-  return (result as unknown as [{ insertId: number }, unknown])[0].insertId;
+  const result = await db.insert(projectFiles).values(record).returning({ id: projectFiles.id });
+  return result[0].id;
 }
 
 /** List all files for a project, optionally filtered by phase and/or taskId */
@@ -733,7 +734,7 @@ export async function getMyTasks(userId: number): Promise<TaskWithContext[]> {
       )
     )
     .orderBy(
-      drizzleSql`FIELD(${projectTasks.priority}, 'critical', 'high', 'medium', 'low')`,
+      drizzleSql`CASE ${projectTasks.priority} WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END`,
       drizzleSql`${projectTasks.dueDate} IS NULL`,
       projectTasks.dueDate
     );
@@ -821,7 +822,7 @@ export async function getBlockedTasks(projectIds?: string[]): Promise<TaskWithCo
     .innerJoin(projects, eq(projectTasks.projectId, projects.id))
     .where(whereClause)
     .orderBy(
-      drizzleSql`FIELD(${projectTasks.priority}, 'critical', 'high', 'medium', 'low')`,
+      drizzleSql`CASE ${projectTasks.priority} WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END`,
       projectTasks.projectId
     );
   return rows as TaskWithContext[];
