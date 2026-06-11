@@ -74,10 +74,31 @@ DNS 切换（在域名注册商处）：
 2. 确认无误后，把 `beepump.io` 的 A 记录从 Manus 改指到服务器 IP。
 3. Manus 上的旧实例保留几天作为回退，确认稳定后停掉。
 
-## 五、使用阿里云 RDS / OSS（可选）
+## 五、使用阿里云 RDS / OSS（本项目实际方案）
 
-- **RDS PostgreSQL**：`DATABASE_URL=postgres://user:pass@pgm-xxxx.pg.rds.aliyuncs.com:5432/cehub`，并在 RDS 白名单中放行服务器 IP；compose 中删除 `db` 服务。
-- **OSS**：开通 S3 兼容访问，`S3_ENDPOINT` 用**内网** endpoint（应用与 OSS 同地域时，如 `https://oss-cn-shenzhen-internal.aliyuncs.com`），`S3_FORCE_PATH_STYLE=false`；compose 中删除 `minio` 服务。
+实际部署目标与 erp-management-dashboard（beepump.net）**同一套基础设施**，真实参数已写入 `.env.production`（不入库）：
+
+| 项 | 值 |
+|---|---|
+| ECS 公网 IP | 8.140.197.68（Ubuntu 22.04，已装 Docker，跑着 ERP 看板） |
+| ECS 内网 IP | 172.19.142.146（已在 RDS 白名单） |
+| RDS 实例 | pgm-2ze135h6045td5ujvo.pg.rds.aliyuncs.com:5432（PostgreSQL，与 ERP 共用实例） |
+| 本看板数据库 | `cehub`（独立数据库，与 erp_dashboard 隔离） |
+| RDS CA 证书 | 本机 `~/.certs/aliyun-rds/ApsaraDB-CA-Chain.pem` |
+
+使用 RDS 的步骤：
+
+1. **创建 cehub 数据库**（一次性，本机或 ECS 上执行均可）：
+   ```bash
+   psql "postgres://erp_app:<密码>@pgm-2ze135h6045td5ujvo.pg.rds.aliyuncs.com:5432/postgres?sslmode=verify-ca&sslrootcert=$HOME/.certs/aliyun-rds/ApsaraDB-CA-Chain.pem" \
+     -c "CREATE DATABASE cehub;"
+   ```
+2. **复制 CA 证书到项目**：`mkdir -p certs && cp ~/.certs/aliyun-rds/ApsaraDB-CA-Chain.pem certs/`，并取消 docker-compose.yml 中 app 服务的 `./certs:/app/certs:ro` 挂载注释。
+3. `cp .env.production .env`，compose 中删除（或忽略）`db` 服务。
+4. **应用迁移**：`docker compose run --rm app sh -c "npx drizzle-kit migrate"`。
+5. ECS 上若与 RDS 同 VPC，可把 DATABASE_URL 的主机换成 RDS **内网地址**（更快且不走公网）。
+
+- **OSS（可选替代 MinIO）**：开通 S3 兼容访问，`S3_ENDPOINT` 用**内网** endpoint（应用与 OSS 同地域时，如 `https://oss-cn-shenzhen-internal.aliyuncs.com`），`S3_FORCE_PATH_STYLE=false`；compose 中删除 `minio` 服务。当前默认方案是 compose 内置 MinIO，文件存 ECS 磁盘卷。
 
 ## 六、备份
 
