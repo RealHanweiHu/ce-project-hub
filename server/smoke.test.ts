@@ -47,11 +47,10 @@ const TEST_PROJECT_ID = "smoke_test_proj_01";
 
 async function getTableNames(): Promise<string[]> {
   const db = await getDb();
-  const rows = await db.execute(sql`SHOW TABLES`);
-  // mysql2 returns rows as array of objects; key is "Tables_in_<dbname>"
-  return (rows[0] as Record<string, string>[]).map(
-    (r) => Object.values(r)[0] as string
+  const result = await db.execute(
+    sql`SELECT tablename FROM pg_tables WHERE schemaname = 'public'`
   );
+  return (result.rows as Array<{ tablename: string }>).map((r) => r.tablename);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

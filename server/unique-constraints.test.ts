@@ -7,7 +7,7 @@
  * - project_issues, project_gate_reviews, project_changelog: indexes exist in DB
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import mysql from "mysql2/promise";
+import { Client } from "pg";
 import {
   createProject,
   deleteProject,
@@ -26,19 +26,21 @@ import {
 const TEST_PROJECT_ID = `test-constraints-${Date.now()}`;
 const TEST_USER_ID = 999998;
 
-let conn: mysql.Connection;
+let conn: Client;
+
+/** Look up an index definition in pg_indexes; returns [] if it doesn't exist */
+async function getIndexDefs(table: string, indexName: string): Promise<string[]> {
+  const res = await conn.query(
+    "SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename = $1 AND indexname = $2",
+    [table, indexName]
+  );
+  return res.rows.map((r: { indexdef: string }) => r.indexdef);
+}
 
 beforeAll(async () => {
-  // Create raw mysql connection for SHOW INDEX queries
-  const url = new URL(process.env.DATABASE_URL!);
-  conn = await mysql.createConnection({
-    host: url.hostname,
-    port: parseInt(url.port || "3306"),
-    user: url.username,
-    password: url.password,
-    database: url.pathname.replace(/^\//, ""),
-    ssl: { rejectUnauthorized: false },
-  });
+  // Create raw pg connection for index catalog queries
+  conn = new Client({ connectionString: process.env.DATABASE_URL });
+  await conn.connect();
 
   await createProject({
     id: TEST_PROJECT_ID,
@@ -68,11 +70,9 @@ afterAll(async () => {
 
 describe("project_phases unique constraint", () => {
   it("unique index uniq_project_phase exists in DB", async () => {
-    const [rows] = await conn.execute(
-      "SHOW INDEX FROM `project_phases` WHERE Key_name = 'uniq_project_phase'"
-    ) as [any[], any];
-    expect(rows.length).toBeGreaterThan(0);
-    expect(rows[0].Non_unique).toBe(0); // 0 = unique
+    const defs = await getIndexDefs("project_phases", "uniq_project_phase");
+    expect(defs.length).toBeGreaterThan(0);
+    expect(defs[0]).toContain("UNIQUE");
   });
 
   it("allows inserting a phase row via upsertProjectPhase", async () => {
@@ -117,11 +117,9 @@ describe("project_phases unique constraint", () => {
 
 describe("project_tasks unique constraint", () => {
   it("unique index uniq_project_phase_task exists in DB", async () => {
-    const [rows] = await conn.execute(
-      "SHOW INDEX FROM `project_tasks` WHERE Key_name = 'uniq_project_phase_task'"
-    ) as [any[], any];
-    expect(rows.length).toBeGreaterThan(0);
-    expect(rows[0].Non_unique).toBe(0);
+    const defs = await getIndexDefs("project_tasks", "uniq_project_phase_task");
+    expect(defs.length).toBeGreaterThan(0);
+    expect(defs[0]).toContain("UNIQUE");
   });
 
   it("allows inserting a task row via upsertProjectTask", async () => {
@@ -172,11 +170,9 @@ describe("project_tasks unique constraint", () => {
 
 describe("project_issues index", () => {
   it("index idx_issues_project_phase_status_severity exists in DB", async () => {
-    const [rows] = await conn.execute(
-      "SHOW INDEX FROM `project_issues` WHERE Key_name = 'idx_issues_project_phase_status_severity'"
-    ) as [any[], any];
-    expect(rows.length).toBeGreaterThan(0);
-    expect(rows[0].Non_unique).toBe(1); // non-unique index
+    const defs = await getIndexDefs("project_issues", "idx_issues_project_phase_status_severity");
+    expect(defs.length).toBeGreaterThan(0);
+    expect(defs[0]).not.toContain("UNIQUE"); // non-unique index
   });
 
   it("can create and query issues using the indexed columns", async () => {
@@ -199,11 +195,9 @@ describe("project_issues index", () => {
 
 describe("project_gate_reviews index", () => {
   it("index idx_gate_reviews_project_phase exists in DB", async () => {
-    const [rows] = await conn.execute(
-      "SHOW INDEX FROM `project_gate_reviews` WHERE Key_name = 'idx_gate_reviews_project_phase'"
-    ) as [any[], any];
-    expect(rows.length).toBeGreaterThan(0);
-    expect(rows[0].Non_unique).toBe(1);
+    const defs = await getIndexDefs("project_gate_reviews", "idx_gate_reviews_project_phase");
+    expect(defs.length).toBeGreaterThan(0);
+    expect(defs[0]).not.toContain("UNIQUE");
   });
 
   it("can create a gate review using the indexed columns", async () => {
@@ -227,11 +221,9 @@ describe("project_gate_reviews index", () => {
 
 describe("project_changelog index", () => {
   it("index idx_changelog_project_type_status exists in DB", async () => {
-    const [rows] = await conn.execute(
-      "SHOW INDEX FROM `project_changelog` WHERE Key_name = 'idx_changelog_project_type_status'"
-    ) as [any[], any];
-    expect(rows.length).toBeGreaterThan(0);
-    expect(rows[0].Non_unique).toBe(1);
+    const defs = await getIndexDefs("project_changelog", "idx_changelog_project_type_status");
+    expect(defs.length).toBeGreaterThan(0);
+    expect(defs[0]).not.toContain("UNIQUE");
   });
 
   it("can create a change record using the indexed columns", async () => {
