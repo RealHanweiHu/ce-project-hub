@@ -84,19 +84,19 @@ DNS 切换（在域名注册商处）：
 | ECS 内网 IP | 172.19.142.146（已在 RDS 白名单） |
 | RDS 实例 | pgm-2ze135h6045td5ujvo.pg.rds.aliyuncs.com:5432（PostgreSQL，与 ERP 共用实例） |
 | 本看板数据库 | `cehub`（独立数据库，与 erp_dashboard 隔离） |
-| RDS CA 证书 | 本机 `~/.certs/aliyun-rds/ApsaraDB-CA-Chain.pem` |
+| RDS 账号 | `ce_hub`（本看板专用账号，与 ERP 的账号分离） |
+| RDS CA 证书 | 已随仓库携带：`certs/ApsaraDB-CA-Chain.pem`（公开 CA 链，compose 已挂载到容器 `/app/certs/`） |
 
 使用 RDS 的步骤：
 
-1. **创建 cehub 数据库**（一次性，本机或 ECS 上执行均可）：
+1. **创建账号与数据库**（一次性，RDS 控制台「账号管理」创建高权限/普通账号 `ce_hub`，或用已有高权限账号执行）：
    ```bash
-   psql "postgres://erp_app:<密码>@pgm-2ze135h6045td5ujvo.pg.rds.aliyuncs.com:5432/postgres?sslmode=verify-ca&sslrootcert=$HOME/.certs/aliyun-rds/ApsaraDB-CA-Chain.pem" \
-     -c "CREATE DATABASE cehub;"
+   psql "postgres://<高权限账号>:<密码>@pgm-2ze135h6045td5ujvo.pg.rds.aliyuncs.com:5432/postgres?sslmode=verify-ca&sslrootcert=certs/ApsaraDB-CA-Chain.pem" \
+     -c "CREATE DATABASE cehub OWNER ce_hub;"
    ```
-2. **复制 CA 证书到项目**：`mkdir -p certs && cp ~/.certs/aliyun-rds/ApsaraDB-CA-Chain.pem certs/`，并取消 docker-compose.yml 中 app 服务的 `./certs:/app/certs:ro` 挂载注释。
-3. `cp .env.production .env`，compose 中删除（或忽略）`db` 服务。
-4. **应用迁移**：`docker compose run --rm app sh -c "npx drizzle-kit migrate"`。
-5. ECS 上若与 RDS 同 VPC，可把 DATABASE_URL 的主机换成 RDS **内网地址**（更快且不走公网）。
+2. `cp .env.production .env`，compose 中删除（或忽略）`db` 服务。
+3. **应用迁移**：`docker compose run --rm app sh -c "npx drizzle-kit migrate"`。
+4. ECS 上若与 RDS 同 VPC，可把 DATABASE_URL 的主机换成 RDS **内网地址**（更快且不走公网）。
 
 - **OSS（可选替代 MinIO）**：开通 S3 兼容访问，`S3_ENDPOINT` 用**内网** endpoint（应用与 OSS 同地域时，如 `https://oss-cn-shenzhen-internal.aliyuncs.com`），`S3_FORCE_PATH_STYLE=false`；compose 中删除 `minio` 服务。当前默认方案是 compose 内置 MinIO，文件存 ECS 磁盘卷。
 
