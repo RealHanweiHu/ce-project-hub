@@ -6,6 +6,7 @@ import { ChevronDown, ChevronRight, Zap, Target } from 'lucide-react';
 import {
   PROJECT_CATEGORIES, CATEGORY_MAP, getPhasesForCategory, ProjectCategory,
 } from '@/lib/sop-templates';
+import { GateStandardPanel } from '@/components/shared/GateStandardPanel';
 
 export function SOPLibraryView() {
   const [activeCategory, setActiveCategory] = useState<ProjectCategory>('npd');
@@ -172,6 +173,13 @@ export function SOPLibraryView() {
                     </div>
                   </div>
                 </div>
+
+                {phase.gateStandard && (
+                  <div className="p-6 border-b border-stone-100 bg-stone-50/40">
+                    <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-4">Gate 管理标准</div>
+                    <GateStandardPanel standard={phase.gateStandard} />
+                  </div>
+                )}
 
                 <div className="p-6">
                   <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-4">子任务清单</div>

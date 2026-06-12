@@ -10,6 +10,8 @@ import {
   FileText, ClipboardCheck, Plus, ChevronDown, ChevronRight, RotateCcw,
 } from 'lucide-react';
 import { GateReview } from '@/lib/data';
+import type { SOPGateStandard } from '@/lib/sop-templates';
+import { GateStandardPanel } from '@/components/shared/GateStandardPanel';
 import { nanoid } from 'nanoid';
 
 // ── Decision config ───────────────────────────────────────────────────────────
@@ -276,6 +278,7 @@ interface GateReviewModalProps {
   phaseId: string;
   phaseName: string;
   gateName: string;
+  gateStandard?: SOPGateStandard;
   existingReviews?: GateReview[];
   onConfirm: (review: GateReview) => void;
   onCancel: () => void;
@@ -283,7 +286,7 @@ interface GateReviewModalProps {
 }
 
 export function GateReviewModal({
-  open, phaseId, phaseName, gateName, existingReviews = [], onConfirm, onCancel, readOnly = false,
+  open, phaseId, phaseName, gateName, gateStandard, existingReviews = [], onConfirm, onCancel, readOnly = false,
 }: GateReviewModalProps) {
   const [showForm, setShowForm] = useState(existingReviews.length === 0);
   const latestReview = existingReviews[existingReviews.length - 1];
@@ -331,6 +334,15 @@ export function GateReviewModal({
           <div className="text-sm font-medium text-stone-900">{phaseName}</div>
           <div className="text-xs text-stone-500 font-mono">{gateName}</div>
         </div>
+
+        {gateStandard && (
+          <div className="border border-stone-200 p-3 mb-4">
+            <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-2">
+              Gate 管理标准
+            </div>
+            <GateStandardPanel standard={gateStandard} compact evidenceHint />
+          </div>
+        )}
 
         {/* History */}
         {existingReviews.length > 0 && (

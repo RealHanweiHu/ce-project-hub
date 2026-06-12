@@ -16,6 +16,7 @@ import {
 } from '@/lib/data';
 import { CATEGORY_MAP } from '@/lib/sop-templates';
 import { ProgressBar } from '@/components/shared/ProgressBar';
+import { GateStandardPanel } from '@/components/shared/GateStandardPanel';
 import { GanttView } from './GanttView';
 import { IssueList } from './IssueList';
 import { ChangeLog } from './ChangeLog';
@@ -105,7 +106,7 @@ function EditableSelect({
 }
 
 function FileUploadArea({
-  files, onAdd, onRemove, projectId, phaseId, taskId,
+  files, onAdd, onRemove, projectId, phaseId, taskId, readOnly = false,
 }: {
   files: FileAttachment[];
   onAdd: (files: FileAttachment[]) => void;
@@ -113,6 +114,7 @@ function FileUploadArea({
   projectId: string;
   phaseId?: string;
   taskId?: string;
+  readOnly?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -120,6 +122,7 @@ function FileUploadArea({
   const [uploading, setUploading] = useState(false);
 
   const handleFiles = async (fileList: FileList) => {
+    if (readOnly) return;
     setError('');
     const newFiles: FileAttachment[] = [];
     for (const file of Array.from(fileList)) {
@@ -178,16 +181,19 @@ function FileUploadArea({
   return (
     <div>
       <div
-        onClick={() => inputRef.current?.click()}
-        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onClick={() => !readOnly && inputRef.current?.click()}
+        onDragOver={(e) => { e.preventDefault(); if (!readOnly) setDragOver(true); }}
         onDragLeave={() => setDragOver(false)}
         onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files); }}
-        className={`border-2 border-dashed p-4 text-center cursor-pointer transition-colors ${dragOver ? 'border-amber-500 bg-amber-50' : 'border-stone-300 hover:border-stone-400'}`}
+        className={`border-2 border-dashed p-4 text-center transition-colors ${
+          readOnly ? 'cursor-not-allowed border-stone-200 bg-stone-50 opacity-70' :
+          dragOver ? 'cursor-pointer border-amber-500 bg-amber-50' : 'cursor-pointer border-stone-300 hover:border-stone-400'
+        }`}
       >
-        <input ref={inputRef} type="file" multiple onChange={(e) => handleFiles(e.target.files!)} className="hidden" disabled={uploading} />
+        <input ref={inputRef} type="file" multiple onChange={(e) => handleFiles(e.target.files!)} className="hidden" disabled={uploading || readOnly} />
         <Upload size={18} className={`mx-auto mb-2 ${uploading ? 'text-amber-400 animate-pulse' : 'text-stone-400'}`} />
         <div className="text-sm text-stone-700">
-          {uploading ? '上传中...' : <><span className="font-medium">点击上传</span>或拖拽文件</>}
+          {readOnly ? '仅可查看附件' : uploading ? '上传中...' : <><span className="font-medium">点击上传</span>或拖拽文件</>}
         </div>
         <div className="text-[10px] font-mono uppercase tracking-wider text-stone-400 mt-1">
           单个文件最大 {formatBytes(MAX_FILE_SIZE)} · 支持 PDF / 图片 / Office 文档
@@ -206,9 +212,11 @@ function FileUploadArea({
               <button onClick={(e) => { e.stopPropagation(); downloadFile(file); }} className="p-1.5 text-stone-400 hover:text-stone-900 hover:bg-stone-100 transition-colors">
                 <Download size={13} />
               </button>
-              <button onClick={(e) => { e.stopPropagation(); if (confirm('删除文件？')) onRemove(file.id); }} className="p-1.5 text-stone-400 hover:text-rose-600 hover:bg-rose-50 transition-colors">
-                <Trash2 size={13} />
-              </button>
+              {!readOnly && (
+                <button onClick={(e) => { e.stopPropagation(); if (confirm('删除文件？')) onRemove(file.id); }} className="p-1.5 text-stone-400 hover:text-rose-600 hover:bg-rose-50 transition-colors">
+                  <Trash2 size={13} />
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -231,7 +239,7 @@ const ROLE_OPTIONS = [
 
 function TaskDetail({
   taskId, taskDetails, onUpdate, visibleRoles, onVisibleRolesChange, canEditRoles,
-  projectId, phaseId,
+  projectId, phaseId, canEdit = true,
 }: {
   taskId: string;
   taskDetails: TaskDetails;
@@ -241,6 +249,7 @@ function TaskDetail({
   canEditRoles?: boolean;
   projectId: string;
   phaseId?: string;
+  canEdit?: boolean;
 }) {
   const [draft, setDraft] = useState(taskDetails?.instructions || '');
   const [dirty, setDirty] = useState(false);
@@ -254,6 +263,7 @@ function TaskDetail({
   });
 
   const handleChange = (val: string) => {
+    if (!canEdit) return;
     setDraft(val); setDirty(true);
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
@@ -262,11 +272,13 @@ function TaskDetail({
   };
 
   const handleBlur = () => {
+    if (!canEdit) return;
     if (timerRef.current) clearTimeout(timerRef.current);
     if (draft !== taskDetails?.instructions) { onUpdate({ ...taskDetails, instructions: draft }); setDirty(false); }
   };
 
   const handleRemoveFile = async (id: string) => {
+    if (!canEdit) return;
     if (!confirm('确定删除此文件？该操作不可撤销。')) return;
     const numId = parseInt(id, 10);
     if (!isNaN(numId)) {
@@ -302,6 +314,7 @@ function TaskDetail({
           <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">负责人</div>
           <select
             value={taskDetails?.assigneeUserId ?? ''}
+            disabled={!canEdit}
             onChange={(e) => {
               const val = e.target.value;
               onUpdate({ ...taskDetails, assigneeUserId: val === '' ? null : Number(val) });
@@ -319,6 +332,7 @@ function TaskDetail({
           <input
             type="date"
             value={taskDetails?.dueDate ?? ''}
+            disabled={!canEdit}
             onChange={(e) => onUpdate({ ...taskDetails, dueDate: e.target.value || null })}
             className="w-full text-xs text-stone-700 bg-stone-50 border border-stone-200 px-2 py-1 outline-none focus:border-amber-400 transition-colors"
           />
@@ -327,6 +341,7 @@ function TaskDetail({
           <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">状态</div>
           <select
             value={taskDetails?.taskStatus ?? 'todo'}
+            disabled={!canEdit}
             onChange={(e) => onUpdate({ ...taskDetails, taskStatus: e.target.value })}
             className="w-full text-xs bg-stone-50 border border-stone-200 px-2 py-1 outline-none focus:border-amber-400 transition-colors"
           >
@@ -339,6 +354,7 @@ function TaskDetail({
           <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">优先级</div>
           <select
             value={taskDetails?.taskPriority ?? 'medium'}
+            disabled={!canEdit}
             onChange={(e) => onUpdate({ ...taskDetails, taskPriority: e.target.value })}
             className="w-full text-xs bg-stone-50 border border-stone-200 px-2 py-1 outline-none focus:border-amber-400 transition-colors"
           >
@@ -355,6 +371,7 @@ function TaskDetail({
             value={draft}
             onChange={(e) => handleChange(e.target.value)}
             onBlur={handleBlur}
+            disabled={!canEdit}
             rows={4}
             placeholder="记录执行说明、注意事项、进展备注..."
             className="w-full px-3 py-2 border border-stone-200 focus:border-stone-400 outline-none text-xs text-stone-700 resize-none transition-colors"
@@ -377,6 +394,7 @@ function TaskDetail({
           projectId={projectId}
           phaseId={phaseId}
           taskId={taskId}
+          readOnly={!canEdit}
         />
       </div>
       {/* Visible Roles Selector - only shown to canEditProjectInfo users */}
@@ -509,6 +527,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
   };
 
   const updateTaskDetails = (taskId: string, details: TaskDetails) => {
+    if (!perms.canEditTasks) return;
     const newProject = { ...project };
     newProject.phases = { ...project.phases };
     newProject.phases[activePhaseId] = {
@@ -1001,6 +1020,12 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
 
                       {!locked && expanded && (
                         <div className="px-3 pb-3">
+                          {isGateTask && activePhase.gateStandard && (
+                            <div className="p-3 border-l-2 border-l-stone-900 bg-stone-50 mb-3">
+                              <div className="text-[10px] font-mono uppercase tracking-widest text-stone-500 mb-2">Gate 管理标准</div>
+                              <GateStandardPanel standard={activePhase.gateStandard} compact evidenceHint />
+                            </div>
+                          )}
                           {task.guide && (
                             <div className={`p-3 border-l-2 mb-3 ${
                               isGateTask ? 'border-amber-500 bg-amber-50' : 'border-amber-500 bg-amber-50'
@@ -1027,6 +1052,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                               });
                             }}
                             canEditRoles={perms.canEditProjectInfo}
+                            canEdit={perms.canEditTasks}
                             projectId={project.id}
                             phaseId={activePhaseId}
                           />
@@ -1097,6 +1123,14 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
 
             {/* Side Panel: Deliverables + Notes */}
             <div className="space-y-4">
+              {/* Gate Standard */}
+              {activePhase?.gateStandard && (
+                <div className="bg-white border border-stone-200 p-5">
+                  <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-3">Gate 管理标准</div>
+                  <GateStandardPanel standard={activePhase.gateStandard} evidenceHint />
+                </div>
+              )}
+
               {/* Deliverables */}
               <div className="bg-white border border-stone-200 p-5">
                 <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-3">交付物</div>
@@ -1170,6 +1204,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
           phaseId={gateReviewPending.phaseId}
           phaseName={activePhase?.name || gateReviewPending.phaseId}
           gateName={activePhase?.gate || 'Gate 评审'}
+          gateStandard={activePhase?.gateStandard}
           existingReviews={activePhaseData?.gateReviews}
           onConfirm={perms.canGateReview ? handleGateReviewConfirm : () => {}}
           onCancel={() => setGateReviewPending(null)}
