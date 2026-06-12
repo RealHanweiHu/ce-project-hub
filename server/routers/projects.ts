@@ -4,10 +4,10 @@ import {
   getProjectsByUser,
   getProjectsByMember,
   getProjectById,
-  createProject,
+  createProjectWithSeed,
   updateProject,
   deleteProject,
-  seedProjectPhasesAndTasks,
+  createActivityLog,
 } from "../db";
 import { TRPCError } from "@trpc/server";
 import { ROLE_PERMISSIONS } from "./members";
@@ -77,7 +77,7 @@ export const projectsRouter = router({
           message: '您没有创建项目的权限。请联系管理员授权。',
         });
       }
-      await createProject({
+      await createProjectWithSeed({
         id: input.id,
         name: input.name,
         projectNumber: input.projectNumber,
@@ -90,9 +90,19 @@ export const projectsRouter = router({
         targetDate: input.targetDate ?? null,
         createdBy: ctx.user.id,
         archived: false,
+      }, input.category, ctx.user.id);
+      await createActivityLog({
+        projectId: input.id,
+        userId: ctx.user.id,
+        action: "project.create",
+        entityType: "project",
+        entityId: input.id,
+        meta: {
+          name: input.name,
+          category: input.category,
+          projectNumber: input.projectNumber,
+        },
       });
-      // Seed project_phases and project_tasks from SOP template
-      await seedProjectPhasesAndTasks(input.id, input.category, ctx.user.id);
       return { success: true };
     }),
 
@@ -115,6 +125,19 @@ export const projectsRouter = router({
         progress: input.progress,
         startDate: input.startDate ?? null,
         targetDate: input.targetDate ?? null,
+      });
+      await createActivityLog({
+        projectId: input.id,
+        userId: ctx.user.id,
+        action: "project.update",
+        entityType: "project",
+        entityId: input.id,
+        meta: {
+          name: input.name,
+          projectNumber: input.projectNumber,
+          category: input.category,
+          currentPhase: input.currentPhase,
+        },
       });
       return { success: true };
     }),
@@ -142,6 +165,14 @@ export const projectsRouter = router({
         }
       }
       await deleteProject(input.id);
+      await createActivityLog({
+        projectId: input.id,
+        userId: ctx.user.id,
+        action: "project.delete",
+        entityType: "project",
+        entityId: input.id,
+        meta: { name: existing.name },
+      });
       return { success: true, projectName: existing.name };
     }),
 });

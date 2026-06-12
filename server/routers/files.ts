@@ -24,6 +24,7 @@ import { protectedProcedure, router } from "../_core/trpc";
 import {
   createProjectFile,
   getProjectFiles,
+  getProjectFileById,
   deleteProjectFile,
   getProjectById,
   getProjectMember,
@@ -44,6 +45,11 @@ async function getEffectiveRole(projectId: string, userId: number) {
   if (project.createdBy === userId) return "owner" as const;
   const member = await getProjectMember(projectId, userId);
   return member?.role ?? null;
+}
+
+function canMutateFile(role: keyof typeof ROLE_PERMISSIONS, taskScoped: boolean) {
+  const permissions = ROLE_PERMISSIONS[role];
+  return permissions.canEditProjectInfo || (taskScoped && permissions.canEditTasks);
 }
 
 // ── S3 invalidation (best-effort) ────────────────────────────────────────────
@@ -99,7 +105,11 @@ export const filesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const role = await getEffectiveRole(input.projectId, ctx.user.id);
-      if (!role || !ROLE_PERMISSIONS[role].canEditProjectInfo) {
+      const file = await getProjectFileById(input.id);
+      if (!file || file.projectId !== input.projectId) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "File not found" });
+      }
+      if (!role || !canMutateFile(role, !!file.taskId)) {
         throw new TRPCError({ code: "FORBIDDEN" });
       }
 
@@ -177,7 +187,7 @@ export function registerFileUploadRoute(app: Express) {
 
         // Permission check
         const role = await getEffectiveRole(projectId, ctx.user.id);
-        if (!role || !ROLE_PERMISSIONS[role].canEditProjectInfo) {
+        if (!role || !canMutateFile(role, !!taskId)) {
           res.status(403).json({ error: "Forbidden" });
           return;
         }

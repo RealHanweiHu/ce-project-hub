@@ -216,6 +216,32 @@ export async function createProject(project: InsertProject): Promise<void> {
   await db.insert(projects).values(project);
 }
 
+export async function createProjectWithSeed(
+  project: InsertProject,
+  category: string,
+  createdBy: number
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const phases = getSopPhasesForCategory(category);
+  await db.transaction(async (tx) => {
+    await tx.insert(projects).values(project);
+    for (const phase of phases) {
+      await tx.insert(projectPhases).values({ projectId: project.id, phaseId: phase.id });
+      for (const task of phase.tasks) {
+        await tx.insert(projectTasks).values({
+          projectId: project.id,
+          phaseId: phase.id,
+          taskId: task.id,
+          completed: false,
+          visibleRoles: task.visibleRoles,
+          updatedBy: createdBy,
+        });
+      }
+    }
+  });
+}
+
 export async function updateProject(
   id: string,
   patch: Partial<Omit<InsertProject, "id" | "createdBy" | "createdAt">>
@@ -576,6 +602,17 @@ export async function getProjectFiles(
     .orderBy(projectFiles.createdAt);
 }
 
+export async function getProjectFileById(id: number): Promise<ProjectFile | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const [row] = await db
+    .select()
+    .from(projectFiles)
+    .where(eq(projectFiles.id, id))
+    .limit(1);
+  return row;
+}
+
 /**
  * Delete a file metadata record.
  * Returns the storageKey so the caller can invalidate the S3 object.
@@ -730,7 +767,9 @@ export async function getMyTasks(userId: number): Promise<TaskWithContext[]> {
     .where(
       and(
         eq(projectTasks.assigneeUserId, userId),
-        drizzleSql`${projectTasks.status} != 'done'`
+        eq(projects.archived, false),
+        drizzleSql`${projectTasks.status} != 'done'`,
+        drizzleSql`${projectTasks.status} != 'skipped'`
       )
     )
     .orderBy(
@@ -749,13 +788,16 @@ export async function getMyTasks(userId: number): Promise<TaskWithContext[]> {
 export async function getOverdueTasks(projectIds?: string[]): Promise<TaskWithContext[]> {
   const db = await getDb();
   if (!db) return [];
+  if (projectIds && projectIds.length === 0) return [];
   const today = new Date().toISOString().slice(0, 10);
   const baseConditions = [
+    eq(projects.archived, false),
     drizzleSql`${projectTasks.dueDate} IS NOT NULL`,
     drizzleSql`${projectTasks.dueDate} < ${today}`,
     drizzleSql`${projectTasks.status} != 'done'`,
+    drizzleSql`${projectTasks.status} != 'skipped'`,
   ];
-  const whereClause = projectIds && projectIds.length > 0
+  const whereClause = projectIds
     ? and(...baseConditions, inArray(projectTasks.projectId, projectIds))
     : and(...baseConditions);
   const rows = await db
@@ -794,9 +836,14 @@ export async function getOverdueTasks(projectIds?: string[]): Promise<TaskWithCo
 export async function getBlockedTasks(projectIds?: string[]): Promise<TaskWithContext[]> {
   const db = await getDb();
   if (!db) return [];
-  const whereClause = projectIds && projectIds.length > 0
-    ? and(eq(projectTasks.status, "blocked"), inArray(projectTasks.projectId, projectIds))
-    : eq(projectTasks.status, "blocked");
+  if (projectIds && projectIds.length === 0) return [];
+  const baseConditions = [
+    eq(projectTasks.status, "blocked"),
+    eq(projects.archived, false),
+  ];
+  const whereClause = projectIds
+    ? and(...baseConditions, inArray(projectTasks.projectId, projectIds))
+    : and(...baseConditions);
   const rows = await db
     .select({
       id: projectTasks.id,

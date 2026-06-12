@@ -8,6 +8,7 @@ import {
   createProjectGateReview,
   updateProjectGateReview,
   deleteProjectGateReview,
+  createActivityLog,
 } from "../db";
 import { ROLE_PERMISSIONS } from "./members";
 import { GATE_DECISIONS } from "../../drizzle/schema";
@@ -58,6 +59,18 @@ export const gateReviewsRouter = router({
         ...input,
         createdBy: ctx.user.id,
       });
+      await createActivityLog({
+        projectId: input.projectId,
+        userId: ctx.user.id,
+        action: "gate.create",
+        entityType: "gate_review",
+        entityId: String(id),
+        meta: {
+          phaseId: input.phaseId,
+          decision: input.decision,
+          roundNumber: input.roundNumber,
+        },
+      });
       return { success: true, id };
     }),
 
@@ -82,6 +95,14 @@ export const gateReviewsRouter = router({
       }
       const { id, projectId, ...patch } = input;
       await updateProjectGateReview(id, patch);
+      await createActivityLog({
+        projectId,
+        userId: ctx.user.id,
+        action: "gate.update",
+        entityType: "gate_review",
+        entityId: String(id),
+        meta: { patch },
+      });
       return { success: true };
     }),
 
@@ -97,6 +118,13 @@ export const gateReviewsRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "只有管理层可以删除门评审" });
       }
       await deleteProjectGateReview(input.id);
+      await createActivityLog({
+        projectId: input.projectId,
+        userId: ctx.user.id,
+        action: "gate.delete",
+        entityType: "gate_review",
+        entityId: String(input.id),
+      });
       return { success: true };
     }),
 });

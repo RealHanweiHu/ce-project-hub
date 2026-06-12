@@ -6,6 +6,7 @@ import {
   getProjectMember,
   getProjectPhases,
   upsertProjectPhase,
+  createActivityLog,
 } from "../db";
 import { ROLE_PERMISSIONS } from "./members";
 
@@ -47,6 +48,18 @@ export const phasesRouter = router({
         startDate: input.startDate ?? null,
         endDate: input.endDate ?? null,
         notes: input.notes ?? null,
+      });
+      await createActivityLog({
+        projectId: input.projectId,
+        userId: ctx.user.id,
+        action: "phase.update_dates",
+        entityType: "phase",
+        entityId: input.phaseId,
+        meta: {
+          startDate: input.startDate ?? null,
+          endDate: input.endDate ?? null,
+          notesChanged: input.notes !== undefined,
+        },
       });
       return { success: true };
     }),

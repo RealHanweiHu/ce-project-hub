@@ -10,6 +10,7 @@ import {
   removeProjectMember,
   getUserByEmail,
   getUserById,
+  createActivityLog,
 } from "../db";
 import { PROJECT_MEMBER_ROLES, ProjectMemberRole } from "../../drizzle/schema";
 
@@ -260,6 +261,14 @@ export const membersRouter = router({
           role: input.role,
           jobTitle: input.jobTitle ?? null,
         });
+        await createActivityLog({
+          projectId: input.projectId,
+          userId: ctx.user.id,
+          action: "member.update_role",
+          entityType: "member",
+          entityId: String(targetUser.id),
+          meta: { role: input.role, jobTitle: input.jobTitle ?? null },
+        });
         return { success: true, updated: true };
       }
 
@@ -269,6 +278,14 @@ export const membersRouter = router({
         role: input.role,
         jobTitle: input.jobTitle ?? null,
         invitedBy: ctx.user.id,
+      });
+      await createActivityLog({
+        projectId: input.projectId,
+        userId: ctx.user.id,
+        action: "member.invite",
+        entityType: "member",
+        entityId: String(targetUser.id),
+        meta: { role: input.role, jobTitle: input.jobTitle ?? null },
       });
       return { success: true, updated: false };
     }),
@@ -298,6 +315,14 @@ export const membersRouter = router({
         role: input.role,
         jobTitle: input.jobTitle ?? null,
       });
+      await createActivityLog({
+        projectId: input.projectId,
+        userId: ctx.user.id,
+        action: "member.update_role",
+        entityType: "member",
+        entityId: String(input.userId),
+        meta: { role: input.role, jobTitle: input.jobTitle ?? null },
+      });
       return { success: true };
     }),
 
@@ -317,6 +342,13 @@ export const membersRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "不能移除项目创建者" });
       }
       await removeProjectMember(input.projectId, input.userId);
+      await createActivityLog({
+        projectId: input.projectId,
+        userId: ctx.user.id,
+        action: "member.remove",
+        entityType: "member",
+        entityId: String(input.userId),
+      });
       return { success: true };
     }),
 });

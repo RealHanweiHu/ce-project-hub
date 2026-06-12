@@ -8,6 +8,7 @@ import {
   createProjectIssue,
   updateProjectIssue,
   deleteProjectIssue,
+  createActivityLog,
 } from "../db";
 import { ROLE_PERMISSIONS } from "./members";
 import {
@@ -66,6 +67,14 @@ export const issuesRouter = router({
         ...input,
         creatorId: ctx.user.id,
       });
+      await createActivityLog({
+        projectId: input.projectId,
+        userId: ctx.user.id,
+        action: "issue.create",
+        entityType: "issue",
+        entityId: String(id),
+        meta: { phaseId: input.phaseId, title: input.title, severity: input.severity },
+      });
       return { success: true, id };
     }),
 
@@ -105,6 +114,14 @@ export const issuesRouter = router({
 
       const { id, projectId, ...patch } = input;
       await updateProjectIssue(id, patch);
+      await createActivityLog({
+        projectId,
+        userId: ctx.user.id,
+        action: patch.status === "closed" ? "issue.close" : "issue.update",
+        entityType: "issue",
+        entityId: String(id),
+        meta: { patch },
+      });
       return { success: true };
     }),
 
@@ -129,6 +146,14 @@ export const issuesRouter = router({
       }
 
       await deleteProjectIssue(input.id);
+      await createActivityLog({
+        projectId: input.projectId,
+        userId: ctx.user.id,
+        action: "issue.delete",
+        entityType: "issue",
+        entityId: String(input.id),
+        meta: { title: issue.title },
+      });
       return { success: true };
     }),
 });

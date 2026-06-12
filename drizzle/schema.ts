@@ -187,7 +187,7 @@ export type InsertProjectPhase = typeof projectPhases.$inferInsert;
 // Tasks (per-project, per-phase task completion state)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const TASK_STATUSES = ["todo", "in_progress", "blocked", "done"] as const;
+export const TASK_STATUSES = ["todo", "in_progress", "blocked", "done", "skipped"] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export const TASK_PRIORITIES = ["low", "medium", "high", "critical"] as const;
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
@@ -477,6 +477,7 @@ export const ACTIVITY_ACTIONS = [
   "task.complete",
   "task.uncomplete",
   "task.update_instructions",
+  "task.update_meta",
   "task.update_visible_roles",
   // Issues
   "issue.create",
@@ -486,6 +487,7 @@ export const ACTIVITY_ACTIONS = [
   // Gate reviews
   "gate.create",
   "gate.update",
+  "gate.delete",
   // Changelog
   "change.create",
   "change.update",

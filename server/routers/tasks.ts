@@ -11,6 +11,7 @@ import {
   getOverdueTasks,
   getBlockedTasks,
   getProjectsByUser,
+  createActivityLog,
 } from "../db";
 import { ROLE_PERMISSIONS } from "./members";
 import { TASK_STATUSES, TASK_PRIORITIES } from "../../drizzle/schema";
@@ -55,6 +56,14 @@ export const tasksRouter = router({
         completed: input.completed,
         updatedBy: ctx.user.id,
       });
+      await createActivityLog({
+        projectId: input.projectId,
+        userId: ctx.user.id,
+        action: input.completed ? "task.complete" : "task.uncomplete",
+        entityType: "task",
+        entityId: input.taskId,
+        meta: { phaseId: input.phaseId, completed: input.completed },
+      });
       return { success: true };
     }),
 
@@ -75,6 +84,14 @@ export const tasksRouter = router({
         instructions: input.instructions,
         updatedBy: ctx.user.id,
       });
+      await createActivityLog({
+        projectId: input.projectId,
+        userId: ctx.user.id,
+        action: "task.update_instructions",
+        entityType: "task",
+        entityId: input.taskId,
+        meta: { phaseId: input.phaseId },
+      });
       return { success: true };
     }),
 
@@ -94,6 +111,14 @@ export const tasksRouter = router({
       await upsertProjectTask(input.projectId, input.phaseId, input.taskId, {
         visibleRoles: input.visibleRoles,
         updatedBy: ctx.user.id,
+      });
+      await createActivityLog({
+        projectId: input.projectId,
+        userId: ctx.user.id,
+        action: "task.update_visible_roles",
+        entityType: "task",
+        entityId: input.taskId,
+        meta: { phaseId: input.phaseId, visibleRoles: input.visibleRoles },
       });
       return { success: true };
     }),
@@ -125,6 +150,14 @@ export const tasksRouter = router({
         ...(patch.status && patch.status !== "done" ? { completedAt: null } : {}),
       };
       await updateTaskMeta(projectId, phaseId, taskId, metaPatch);
+      await createActivityLog({
+        projectId,
+        userId: ctx.user.id,
+        action: "task.update_meta",
+        entityType: "task",
+        entityId: taskId,
+        meta: { phaseId, patch },
+      });
       return { success: true };
     }),
 

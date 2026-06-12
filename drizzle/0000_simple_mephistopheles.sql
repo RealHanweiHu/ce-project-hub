@@ -7,7 +7,7 @@ CREATE TYPE "public"."issue_status" AS ENUM('open', 'in_progress', 'resolved', '
 CREATE TYPE "public"."project_member_role" AS ENUM('owner', 'manager', 'pm', 'rd_hw', 'rd_sw', 'rd_mech', 'qa', 'scm', 'viewer');--> statement-breakpoint
 CREATE TYPE "public"."project_risk" AS ENUM('low', 'medium', 'high');--> statement-breakpoint
 CREATE TYPE "public"."task_priority" AS ENUM('low', 'medium', 'high', 'critical');--> statement-breakpoint
-CREATE TYPE "public"."task_status" AS ENUM('todo', 'in_progress', 'blocked', 'done');--> statement-breakpoint
+CREATE TYPE "public"."task_status" AS ENUM('todo', 'in_progress', 'blocked', 'done', 'skipped');--> statement-breakpoint
 CREATE TYPE "public"."user_role" AS ENUM('user', 'admin');--> statement-breakpoint
 CREATE TABLE "activity_logs" (
 	"id" serial PRIMARY KEY NOT NULL,

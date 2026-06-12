@@ -8,6 +8,7 @@ import {
   createProjectChangeRecord,
   updateProjectChangeRecord,
   deleteProjectChangeRecord,
+  createActivityLog,
 } from "../db";
 import { ROLE_PERMISSIONS } from "./members";
 import { CHANGE_TYPES, CHANGE_STATUSES } from "../../drizzle/schema";
@@ -59,6 +60,14 @@ export const changelogRouter = router({
         ...input,
         creatorId: ctx.user.id,
       });
+      await createActivityLog({
+        projectId: input.projectId,
+        userId: ctx.user.id,
+        action: "change.create",
+        entityType: "change",
+        entityId: String(id),
+        meta: { title: input.title, type: input.type, status: input.status },
+      });
       return { success: true, id };
     }),
 
@@ -97,6 +106,14 @@ export const changelogRouter = router({
 
       const { id, projectId, ...patch } = input;
       await updateProjectChangeRecord(id, patch);
+      await createActivityLog({
+        projectId,
+        userId: ctx.user.id,
+        action: "change.update",
+        entityType: "change",
+        entityId: String(id),
+        meta: { patch },
+      });
       return { success: true };
     }),
 
@@ -121,6 +138,14 @@ export const changelogRouter = router({
       }
 
       await deleteProjectChangeRecord(input.id);
+      await createActivityLog({
+        projectId: input.projectId,
+        userId: ctx.user.id,
+        action: "change.delete",
+        entityType: "change",
+        entityId: String(input.id),
+        meta: { title: record.title, type: record.type },
+      });
       return { success: true };
     }),
 });
