@@ -404,7 +404,7 @@ export default function AdminPanel() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-sm text-stone-700">邮筱</Label>
+              <Label className="text-sm text-stone-700">邮箱</Label>
               <Input
                 type="email"
                 value={newEmail}

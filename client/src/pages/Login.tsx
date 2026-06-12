@@ -24,13 +24,16 @@ export default function Login() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
 
   const utils = trpc.useUtils();
 
-  // 注册开关由服务端 ALLOW_REGISTRATION 控制；关闭时隐藏注册入口
-  const { data: registrationEnabled } = trpc.auth.registrationEnabled.useQuery(undefined, {
+  // 注册开关由服务端 ALLOW_REGISTRATION / REGISTRATION_INVITE_CODE 控制
+  const { data: registration } = trpc.auth.registrationEnabled.useQuery(undefined, {
     refetchOnWindowFocus: false,
   });
+  const registrationEnabled = registration?.enabled;
+  const requiresInviteCode = registration?.requiresInviteCode === true;
 
   const loginMutation = trpc.auth.login.useMutation({
     onSuccess: async () => {
@@ -68,6 +71,7 @@ export default function Login() {
     setConfirmPassword('');
     setName('');
     setEmail('');
+    setInviteCode('');
     setShowPassword(false);
   };
 
@@ -111,11 +115,16 @@ export default function Login() {
         setError('两次输入的密码不一致');
         return;
       }
+      if (requiresInviteCode && !inviteCode.trim()) {
+        setError('请输入邀请码');
+        return;
+      }
       registerMutation.mutate({
         username: username.trim(),
         password,
         name: name.trim(),
         email: email.trim().toLowerCase(),
+        inviteCode: requiresInviteCode ? inviteCode.trim() : undefined,
       });
     }
   };
@@ -208,6 +217,24 @@ export default function Login() {
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="example@company.com"
                     autoComplete="email"
+                    disabled={isPending}
+                    className="border-stone-300 focus:border-amber-400"
+                  />
+                </div>
+              )}
+
+              {/* Register-only: invite code (shown when server requires it) */}
+              {mode === 'register' && requiresInviteCode && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="inviteCode" className="text-stone-700 text-sm">
+                    邀请码 <span className="text-rose-500">*</span>
+                  </Label>
+                  <Input
+                    id="inviteCode"
+                    type="text"
+                    value={inviteCode}
+                    onChange={(e) => setInviteCode(e.target.value)}
+                    placeholder="请向管理员索取"
                     disabled={isPending}
                     className="border-stone-300 focus:border-amber-400"
                   />

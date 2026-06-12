@@ -22,8 +22,11 @@ export const appRouter = router({
   // if you need to use socket.io, read and register route in server/_core/index.ts, all api should start with '/api/' so that the gateway can route correctly
   system: systemRouter,
   auth: router({
-    /** Public: whether self-registration is enabled (drives Login page UI) */
-    registrationEnabled: publicProcedure.query(() => ENV.allowRegistration),
+    /** Public: registration mode (drives Login page UI) */
+    registrationEnabled: publicProcedure.query(() => ({
+      enabled: ENV.allowRegistration,
+      requiresInviteCode: ENV.allowRegistration && ENV.registrationInviteCode.length > 0,
+    })),
 
     me: publicProcedure.query(opts => {
       const user = opts.ctx.user;
@@ -78,11 +81,15 @@ export const appRouter = router({
         username: z.string().min(2).max(32).regex(/^[a-zA-Z0-9_\.\-]+$/, '用户名只能包含字母、数字、下划线、点和横线'),
         password: z.string().min(6, '密码至少6位'),
         name: z.string().trim().min(1, '请输入显示名称').max(64),
-        email: z.string().trim().email('请输入有效的邮筱地址').toLowerCase(),
+        email: z.string().trim().email('请输入有效的邮箱地址').toLowerCase(),
+        inviteCode: z.string().trim().optional(),
       }))
       .mutation(async ({ input, ctx }) => {
         if (!ENV.allowRegistration) {
           throw new TRPCError({ code: 'FORBIDDEN', message: '注册已关闭，请联系管理员开通账号' });
+        }
+        if (ENV.registrationInviteCode && input.inviteCode !== ENV.registrationInviteCode) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: '邀请码不正确，请向管理员索取' });
         }
         const existing = await db.getUserByUsername(input.username);
         if (existing) {
@@ -91,7 +98,7 @@ export const appRouter = router({
         // Check email uniqueness
         const existingEmail = await db.getUserByEmail(input.email);
         if (existingEmail) {
-          throw new TRPCError({ code: 'CONFLICT', message: '该邮筱地址已被注册，请更换一个' });
+          throw new TRPCError({ code: 'CONFLICT', message: '该邮箱地址已被注册，请更换一个' });
         }
         const passwordHash = await hashPassword(input.password);
         await db.createUserWithPassword({
@@ -121,7 +128,7 @@ export const appRouter = router({
         username: z.string().min(2).max(32).regex(/^[a-zA-Z0-9_.\-]+$/, '用户名只能包含字母、数字、下划线、点和横线'),
         password: z.string().min(6, '密码至少6位'),
         name: z.string().trim().min(1, '请输入显示名称').max(64),
-        email: z.string().trim().email('请输入有效的邮筱地址').toLowerCase().optional(),
+        email: z.string().trim().email('请输入有效的邮箱地址').toLowerCase().optional(),
         role: z.enum(['user', 'admin']).default('user'),
         canCreateProject: z.boolean().default(false),
       }))
@@ -136,7 +143,7 @@ export const appRouter = router({
         if (input.email) {
           const existingEmail = await db.getUserByEmail(input.email);
           if (existingEmail) {
-            throw new TRPCError({ code: 'CONFLICT', message: '该邮筱地址已被占用' });
+            throw new TRPCError({ code: 'CONFLICT', message: '该邮箱地址已被占用' });
           }
         }
         const passwordHash = await hashPassword(input.password);

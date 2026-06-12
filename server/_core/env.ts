@@ -5,6 +5,8 @@ export const ENV = {
   isProduction: process.env.NODE_ENV === "production",
   /** 是否开放自助注册。设为 "false" 关闭后，新用户只能由管理员在后台创建 */
   allowRegistration: process.env.ALLOW_REGISTRATION !== "false",
+  /** 注册邀请码。非空时注册必须提供匹配的邀请码；留空则注册无需邀请码 */
+  registrationInviteCode: (process.env.REGISTRATION_INVITE_CODE ?? "").trim(),
   // S3-compatible object storage (MinIO / Aliyun OSS / AWS S3)
   s3Endpoint: process.env.S3_ENDPOINT ?? "",
   s3Region: process.env.S3_REGION ?? "us-east-1",
