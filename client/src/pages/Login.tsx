@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
@@ -27,6 +27,11 @@ export default function Login() {
 
   const utils = trpc.useUtils();
 
+  // 注册开关由服务端 ALLOW_REGISTRATION 控制；关闭时隐藏注册入口
+  const { data: registrationEnabled } = trpc.auth.registrationEnabled.useQuery(undefined, {
+    refetchOnWindowFocus: false,
+  });
+
   const loginMutation = trpc.auth.login.useMutation({
     onSuccess: async () => {
       await utils.auth.me.invalidate();
@@ -48,6 +53,12 @@ export default function Login() {
   });
 
   const isPending = loginMutation.isPending || registerMutation.isPending;
+
+  useEffect(() => {
+    if (registrationEnabled === false && mode === 'register') {
+      setMode('login');
+    }
+  }, [registrationEnabled, mode]);
 
   const switchMode = (m: Mode) => {
     setMode(m);
@@ -140,17 +151,19 @@ export default function Login() {
               >
                 登录
               </button>
-              <button
-                type="button"
-                onClick={() => switchMode('register')}
-                className={`flex-1 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
-                  mode === 'register'
-                    ? 'border-amber-500 text-amber-600'
-                    : 'border-transparent text-stone-400 hover:text-stone-600'
-                }`}
-              >
-                注册
-              </button>
+              {registrationEnabled !== false && (
+                <button
+                  type="button"
+                  onClick={() => switchMode('register')}
+                  className={`flex-1 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
+                    mode === 'register'
+                      ? 'border-amber-500 text-amber-600'
+                      : 'border-transparent text-stone-400 hover:text-stone-600'
+                  }`}
+                >
+                  注册
+                </button>
+              )}
             </div>
           </CardHeader>
 

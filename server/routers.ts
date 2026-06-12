@@ -2,6 +2,7 @@ import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { getSessionCookieOptions } from "./_core/cookies";
+import { ENV } from "./_core/env";
 import { hashPassword, verifyPassword } from "./_core/password";
 import { sdk } from "./_core/sdk";
 import { systemRouter } from "./_core/systemRouter";
@@ -21,6 +22,9 @@ export const appRouter = router({
   // if you need to use socket.io, read and register route in server/_core/index.ts, all api should start with '/api/' so that the gateway can route correctly
   system: systemRouter,
   auth: router({
+    /** Public: whether self-registration is enabled (drives Login page UI) */
+    registrationEnabled: publicProcedure.query(() => ENV.allowRegistration),
+
     me: publicProcedure.query(opts => {
       const user = opts.ctx.user;
       if (!user) return null;
@@ -77,6 +81,9 @@ export const appRouter = router({
         email: z.string().trim().email('请输入有效的邮筱地址').toLowerCase(),
       }))
       .mutation(async ({ input, ctx }) => {
+        if (!ENV.allowRegistration) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: '注册已关闭，请联系管理员开通账号' });
+        }
         const existing = await db.getUserByUsername(input.username);
         if (existing) {
           throw new TRPCError({ code: 'CONFLICT', message: '用户名已被占用，请更换一个' });
