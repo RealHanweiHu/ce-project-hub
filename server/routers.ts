@@ -24,8 +24,10 @@ export const appRouter = router({
     me: publicProcedure.query(opts => {
       const user = opts.ctx.user;
       if (!user) return null;
+      // Never expose the password hash to the client
+      const { passwordHash: _passwordHash, ...safeUser } = user;
       return {
-        ...user,
+        ...safeUser,
         // Derived permission: admin always can create projects
         canCreateProject: user.role === 'admin' || user.canCreateProject,
       };
