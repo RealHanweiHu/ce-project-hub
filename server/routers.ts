@@ -17,6 +17,7 @@ import { changelogRouter } from "./routers/changelog";
 import { phasesRouter } from "./routers/phases";
 import { filesRouter } from "./routers/files";
 import { productsRouter } from "./routers/products";
+import { modulesRouter } from "./routers/modules";
 import * as db from "./db";
 
 export const appRouter = router({
@@ -208,6 +209,7 @@ export const appRouter = router({
   phases: phasesRouter,
   files: filesRouter,
   products: productsRouter,
+  modules: modulesRouter,
 });
 
 export type AppRouter = typeof appRouter;
