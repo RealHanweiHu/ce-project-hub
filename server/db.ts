@@ -13,6 +13,7 @@ import {
   platforms, InsertPlatform,
   products, InsertProduct, ProductRow,
   productRevisions, InsertProductRevision, ProductRevision,
+  mpReleases, InsertMpRelease,
   type TaskStatus, type TaskPriority,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -941,4 +942,84 @@ export async function listProductRevisions(productId: string): Promise<ProductRe
   return db.select().from(productRevisions)
     .where(eq(productRevisions.productId, productId))
     .orderBy(productRevisions.id);
+}
+
+// ── MP Release 量产发布 ───────────────────────────────────────────────────────
+
+/** 关联项目到产品；同时把项目派生起点设为产品当前版本 */
+export async function setProjectProduct(projectId: string, productId: string): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const product = await getProductById(productId);
+  await db.update(projects)
+    .set({ productId, baseRevisionId: product?.currentRevisionId ?? null })
+    .where(eq(projects.id, projectId));
+}
+
+/** 开放的 P0/P1 问题数（未 resolved/closed/wont_fix） */
+export async function getOpenP0P1Count(projectId: string): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const rows = await db.select({ id: projectIssues.id })
+    .from(projectIssues)
+    .where(and(
+      eq(projectIssues.projectId, projectId),
+      inArray(projectIssues.severity, ["P0", "P1"]),
+      drizzleSql`${projectIssues.status} NOT IN ('resolved','closed','wont_fix')`
+    ));
+  return rows.length;
+}
+
+/** 下一个版本号字母 Rev A/B/C… */
+export async function nextRevisionLabel(productId: string): Promise<string> {
+  const revs = await listProductRevisions(productId);
+  return `Rev ${String.fromCharCode(65 + revs.length)}`;
+}
+
+/**
+ * 量产发布：前置校验 → 事务内 生成 Revision + 发布记录 + 产品转量产态 + 项目归档。
+ * 抛错表示校验未过（绕不过去的硬闸）。
+ */
+export async function releaseProject(input: {
+  projectId: string; releasedBy: number; notes?: string;
+}): Promise<{ revisionId: number; revisionLabel: string }> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const project = await getProjectById(input.projectId);
+  if (!project) throw new Error("项目不存在");
+  if (!project.productId) throw new Error("项目未关联产品，无法发布");
+  const openCount = await getOpenP0P1Count(input.projectId);
+  if (openCount > 0) throw new Error(`存在 ${openCount} 个未关闭的 P0/P1 问题，不能发布`);
+
+  const productId = project.productId;
+  const label = await nextRevisionLabel(productId);
+
+  return db.transaction(async (tx) => {
+    const open = await tx.select().from(projectIssues)
+      .where(and(eq(projectIssues.projectId, input.projectId),
+        drizzleSql`${projectIssues.status} NOT IN ('resolved','closed','wont_fix')`));
+
+    const [rev] = await tx.insert(productRevisions).values({
+      productId, revisionLabel: label,
+      parentRevisionId: project.baseRevisionId ?? null,
+      createdByProjectId: input.projectId,
+      status: "released", releasedAt: new Date(), releasedBy: input.releasedBy,
+    }).returning({ id: productRevisions.id });
+
+    await tx.insert(mpReleases).values({
+      productId, revisionId: rev.id, projectId: input.projectId,
+      openIssues: open as unknown[], notes: input.notes ?? null,
+      releasedBy: input.releasedBy,
+    } as InsertMpRelease);
+
+    await tx.update(products)
+      .set({ currentRevisionId: rev.id, lifecycleState: "mass_production" })
+      .where(eq(products.id, productId));
+
+    await tx.update(projects)
+      .set({ resultRevisionId: rev.id, archived: true })
+      .where(eq(projects.id, input.projectId));
+
+    return { revisionId: rev.id, revisionLabel: label };
+  });
 }
