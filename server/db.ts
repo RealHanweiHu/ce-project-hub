@@ -10,6 +10,9 @@ import {
   projectChangelog, ProjectChangeRecord, InsertProjectChangeRecord,
   projectFiles, InsertProjectFile, ProjectFile,
   activityLogs, InsertActivityLog, ActivityLog,
+  platforms, InsertPlatform,
+  products, InsertProduct, ProductRow,
+  productRevisions, InsertProductRevision, ProductRevision,
   type TaskStatus, type TaskPriority,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -893,4 +896,49 @@ export async function hardDeleteProjectForTest(projectId: string): Promise<void>
   await db.delete(projectPhases).where(eq(projectPhases.projectId, projectId));
   await db.delete(projectMembers).where(eq(projectMembers.projectId, projectId));
   await db.delete(projects).where(eq(projects.id, projectId));
+}
+
+// ── PLM spine: platforms / products / revisions ───────────────────────────────
+
+export async function createPlatform(p: InsertPlatform): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.insert(platforms).values(p);
+}
+
+export async function createProduct(p: InsertProduct): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.insert(products).values(p);
+}
+
+export async function getProductById(id: string): Promise<ProductRow | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const r = await db.select().from(products).where(eq(products.id, id)).limit(1);
+  return r[0];
+}
+
+export async function listProductsByCategory(category?: string): Promise<ProductRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  if (category) {
+    return db.select().from(products).where(eq(products.category, category)).orderBy(desc(products.updatedAt));
+  }
+  return db.select().from(products).orderBy(desc(products.updatedAt));
+}
+
+export async function createProductRevision(r: InsertProductRevision): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const res = await db.insert(productRevisions).values(r).returning({ id: productRevisions.id });
+  return res[0].id;
+}
+
+export async function listProductRevisions(productId: string): Promise<ProductRevision[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(productRevisions)
+    .where(eq(productRevisions.productId, productId))
+    .orderBy(productRevisions.id);
 }
