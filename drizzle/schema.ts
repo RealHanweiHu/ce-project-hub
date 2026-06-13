@@ -723,3 +723,31 @@ export const projectModules = pgTable(
 );
 export type ProjectModuleRow = typeof projectModules.$inferSelect;
 export type InsertProjectModule = typeof projectModules.$inferInsert;
+
+/** BOM 行：工作态(projectId) 或 冻结态(revisionId)；可引用零部件产品（where-used 基础） */
+export const bomItems = pgTable(
+  "bom_items",
+  {
+    id: serial("id").primaryKey(),
+    revisionId: integer("revisionId"),
+    projectId: varchar("projectId", { length: 32 }),
+    partNumber: varchar("partNumber", { length: 64 }).notNull().default(""),
+    name: varchar("name", { length: 256 }).notNull(),
+    spec: varchar("spec", { length: 256 }).notNull().default(""),
+    quantity: integer("quantity").notNull().default(1),
+    refDesignator: varchar("refDesignator", { length: 128 }).notNull().default(""),
+    componentProductId: varchar("componentProductId", { length: 32 }),
+    componentRevisionId: integer("componentRevisionId"),
+    supplierName: varchar("supplierName", { length: 128 }).notNull().default(""),
+    unitCost: varchar("unitCost", { length: 64 }).notNull().default(""),
+    sortOrder: integer("sortOrder").notNull().default(0),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    idxRevision: index("idx_bom_revision").on(t.revisionId),
+    idxProject: index("idx_bom_project").on(t.projectId),
+    idxComponent: index("idx_bom_component").on(t.componentProductId),
+  })
+);
+export type BomItem = typeof bomItems.$inferSelect;
+export type InsertBomItem = typeof bomItems.$inferInsert;
