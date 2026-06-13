@@ -193,8 +193,11 @@ export function registerFileUploadRoute(app: Express) {
         }
 
         const file = req.file;
+        // multer decodes the multipart filename as latin1, but browsers send it
+        // as UTF-8 \u2014 re-decode so non-ASCII names (e.g. Chinese) aren't mojibake.
+        const originalName = Buffer.from(file.originalname, "latin1").toString("utf8");
         // Sanitize filename to avoid path traversal
-        const safeName = file.originalname.replace(/[^a-zA-Z0-9._\-\u4e00-\u9fff]/g, "_");
+        const safeName = originalName.replace(/[^a-zA-Z0-9._\-\u4e00-\u9fff]/g, "_");
         const storageKey = `projects/${projectId}/files/${Date.now()}_${safeName}`;
 
         // Upload to S3 via storagePut
@@ -209,7 +212,7 @@ export function registerFileUploadRoute(app: Express) {
           projectId,
           phaseId: phaseId || null,
           taskId: taskId || null,
-          name: file.originalname,
+          name: originalName,
           mimeType: file.mimetype,
           size: file.size,
           storageKey: key,
@@ -225,7 +228,7 @@ export function registerFileUploadRoute(app: Express) {
           entityType: "file",
           entityId: String(fileId),
           meta: {
-            name: file.originalname,
+            name: originalName,
             size: file.size,
             mimeType: file.mimetype,
             phaseId: phaseId || null,
@@ -235,7 +238,7 @@ export function registerFileUploadRoute(app: Express) {
 
         res.json({
           id: fileId,
-          name: file.originalname,
+          name: originalName,
           mimeType: file.mimetype,
           size: file.size,
           storageKey: key,
