@@ -15,6 +15,13 @@
       "when": 1781251200000,
       "tag": "0001_add_skipped_task_status",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1781339770324,
+      "tag": "0002_yummy_fabian_cortez",
+      "breakpoints": true
     }
   ]
 }
