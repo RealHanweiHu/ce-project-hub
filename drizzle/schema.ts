@@ -645,3 +645,24 @@ export const productRevisions = pgTable(
 );
 export type ProductRevision = typeof productRevisions.$inferSelect;
 export type InsertProductRevision = typeof productRevisions.$inferInsert;
+
+/** 量产发布记录 = 冻结快照（两轴交接点） */
+export const mpReleases = pgTable("mp_releases", {
+  id: serial("id").primaryKey(),
+  productId: varchar("productId", { length: 32 }).notNull(),
+  revisionId: integer("revisionId").notNull(),
+  projectId: varchar("projectId", { length: 32 }).notNull(),
+  /** 冻结的 BOM 快照（第四刀填充） */
+  snapshotBom: jsonb("snapshotBom").$type<unknown[]>().default([]),
+  /** 冻结的受控文档快照（第四刀填充） */
+  snapshotDocs: jsonb("snapshotDocs").$type<unknown[]>().default([]),
+  /** 发布时未关闭问题清单 */
+  openIssues: jsonb("openIssues").$type<unknown[]>().default([]),
+  /** 关键规格 */
+  specs: jsonb("specs").$type<Record<string, unknown>>().default({}),
+  notes: text("notes"),
+  releasedBy: integer("releasedBy").notNull(),
+  releasedAt: timestamp("releasedAt").defaultNow().notNull(),
+});
+export type MpRelease = typeof mpReleases.$inferSelect;
+export type InsertMpRelease = typeof mpReleases.$inferInsert;
