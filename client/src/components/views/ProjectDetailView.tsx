@@ -6,7 +6,7 @@ import {
   ArrowLeft, CheckCircle2, Circle, ChevronDown, ChevronRight,
   Upload, Download, Trash2, Paperclip, FileText, Image as ImageIcon,
   Edit3, Calendar, AlertTriangle, Target, Zap, BarChart2, ListChecks,
-  Lock, ShieldAlert, Flag, Bug, GitBranch, Filter,
+  Lock, ShieldAlert, Flag, Bug, GitBranch, Filter, Rocket,
 } from 'lucide-react';
 import {
   Project, SOP_PHASES, PHASE_MAP, RISK_CONFIG,
@@ -23,6 +23,7 @@ import { ChangeLog } from './ChangeLog';
 import { ISSUE_PHASES, Issue, GateReview, ChangeRecord } from '@/lib/data';
 import { GateReviewModal, GateReviewBadge } from './GateReviewModal';
 import { MembersPanel } from './MembersPanel';
+import { ReleaseDialog } from './ReleaseDialog';
 import { useProjectPermission } from '@/hooks/useProjectPermission';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { trpc } from '@/lib/trpc';
@@ -565,6 +566,8 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
 
   // Gate Review Modal state
   const [gateReviewPending, setGateReviewPending] = useState<{ phaseId: string } | null>(null);
+  // MP Release dialog state
+  const [releaseOpen, setReleaseOpen] = useState(false);
 
   const handleGateTaskToggle = (taskId: string) => {
     // If checking a gate task (not unchecking), show review modal
@@ -606,12 +609,22 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <button
-          onClick={onBack}
-          className="flex items-center gap-1.5 text-xs font-mono text-stone-500 hover:text-stone-900 transition-colors mb-4"
-        >
-          <ArrowLeft size={14} /> 返回项目列表
-        </button>
+        <div className="flex items-center justify-between mb-4">
+          <button
+            onClick={onBack}
+            className="flex items-center gap-1.5 text-xs font-mono text-stone-500 hover:text-stone-900 transition-colors"
+          >
+            <ArrowLeft size={14} /> 返回项目列表
+          </button>
+          {perms.canGateReview && (
+            <button
+              onClick={() => setReleaseOpen(true)}
+              className="flex items-center gap-1.5 text-xs font-medium bg-stone-900 hover:bg-stone-800 text-stone-50 px-3 py-1.5 transition-colors"
+            >
+              <Rocket size={13} /> 量产发布
+            </button>
+          )}
+        </div>
         <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
@@ -1209,6 +1222,14 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
           onConfirm={perms.canGateReview ? handleGateReviewConfirm : () => {}}
           onCancel={() => setGateReviewPending(null)}
           readOnly={!perms.canGateReview}
+        />
+      )}
+      {releaseOpen && (
+        <ReleaseDialog
+          projectId={project.id}
+          open={releaseOpen}
+          onOpenChange={setReleaseOpen}
+          onReleased={() => { setReleaseOpen(false); onBack(); }}
         />
       )}
     </div>

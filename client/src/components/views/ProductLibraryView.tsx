@@ -44,6 +44,7 @@ export function ProductLibraryView() {
   });
 
   const [open, setOpen] = useState(false);
+  const [revProduct, setRevProduct] = useState<ProductRow | null>(null);
   const [name, setName] = useState('');
   const [productNumber, setProductNumber] = useState('');
   const [type, setType] = useState<'finished' | 'component'>('finished');
@@ -112,7 +113,7 @@ export function ProductLibraryView() {
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {rows.map((p) => (
-                  <div key={p.id} className="border border-stone-200 bg-white p-4 hover:border-stone-400 transition-colors">
+                  <div key={p.id} onClick={() => setRevProduct(p)} className="border border-stone-200 bg-white p-4 hover:border-stone-400 transition-colors cursor-pointer">
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-[10px] font-mono text-stone-400">{p.productNumber || '—'}</span>
                       <span className={`text-[10px] font-mono px-1.5 py-0.5 ${
@@ -141,6 +142,11 @@ export function ProductLibraryView() {
             </div>
           ))}
         </div>
+      )}
+
+      {/* Revision timeline dialog */}
+      {revProduct && (
+        <RevisionsDialog product={revProduct} onClose={() => setRevProduct(null)} />
       )}
 
       {/* New product dialog */}
@@ -199,5 +205,52 @@ export function ProductLibraryView() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+// 版本时间线弹窗
+function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: () => void }) {
+  const { data: revisions = [], isLoading } = trpc.products.revisions.useQuery({ productId: product.id });
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="font-serif flex items-center gap-2">
+            <Boxes size={16} className="text-amber-500" /> {product.name} · 版本时间线
+          </DialogTitle>
+        </DialogHeader>
+        <div className="py-2">
+          {isLoading ? (
+            <div className="flex justify-center py-6"><Loader2 className="animate-spin text-amber-500" /></div>
+          ) : revisions.length === 0 ? (
+            <p className="text-sm text-stone-400 py-6 text-center">还没有版本。项目「量产发布」后会在这里出现 Rev A。</p>
+          ) : (
+            <div className="space-y-0">
+              {(revisions as { id: number; revisionLabel: string; status: string; releasedAt: string | null; createdByProjectId: string | null }[]).map((r, i) => (
+                <div key={r.id} className="flex items-start gap-3 pb-4 relative">
+                  <div className="flex flex-col items-center">
+                    <div className="w-2.5 h-2.5 rounded-full bg-amber-500 mt-1.5 shrink-0" />
+                    {i < revisions.length - 1 && <div className="w-px flex-1 bg-stone-200 mt-1" />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-serif text-base text-stone-900">{r.revisionLabel}</span>
+                      <span className={`text-[10px] font-mono px-1.5 py-0.5 ${
+                        r.status === 'released' ? 'bg-emerald-50 text-emerald-600' :
+                        r.status === 'superseded' ? 'bg-stone-100 text-stone-400' : 'bg-amber-50 text-amber-600'
+                      }`}>{r.status}</span>
+                    </div>
+                    <div className="text-[11px] font-mono text-stone-400 mt-0.5">
+                      {r.releasedAt ? new Date(r.releasedAt).toLocaleString('zh-CN') : '—'}
+                      {r.createdByProjectId ? ` · 来源项目 ${r.createdByProjectId}` : ''}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
