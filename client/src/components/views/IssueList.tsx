@@ -4,6 +4,7 @@
 
 import { useState } from 'react';
 import { nanoid } from 'nanoid';
+import { CommentThread } from '@/components/CommentThread';
 import {
   Plus, X, Edit2, Trash2, ChevronDown, ChevronRight,
   AlertCircle, CheckCircle2, Clock, Ban, Search, Filter,
@@ -574,6 +575,11 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true
                       <div className="text-[10px] font-mono text-stone-400">
                         发现人: {issue.reporter}
                         {issue.closedDate && <span className="ml-4">关闭日期: {issue.closedDate}</span>}
+                      </div>
+                    )}
+                    {/^\d+$/.test(issue.id) && (
+                      <div className="border-t border-stone-200 pt-3">
+                        <CommentThread entityType="issue" entityId={issue.id} />
                       </div>
                     )}
                   </div>

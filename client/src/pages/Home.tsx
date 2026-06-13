@@ -21,6 +21,7 @@ import { getLoginUrl } from '@/const';
 import { useQueryClient } from '@tanstack/react-query';
 import { getQueryKey } from '@trpc/react-query';
 import { useProjectData } from '@/hooks/useProjectData';
+import { NotificationBell } from '@/components/NotificationBell';
 
 type View = 'dashboard' | 'projects' | 'products' | 'modules' | 'sop' | 'my-tasks' | 'overdue' | 'blocked';
 
@@ -862,6 +863,7 @@ export default function Home() {
           </div>
 
           <div className="ml-auto flex items-center gap-3">
+            <NotificationBell />
             {/* Search trigger */}
             <button
               onClick={() => setSearchOpen(true)}
