@@ -10,7 +10,15 @@ function signDingtalkUrl(url: string, secret: string): string {
   return `${url}${sep}timestamp=${ts}&sign=${encodeURIComponent(sign)}`;
 }
 
-export async function pushWebhook(text: string): Promise<void> {
+/**
+ * 推送群机器人消息。
+ * @param text     纯文本兜底内容（飞书、以及钉钉未提供 markdown 时使用）
+ * @param opts     可选：title + markdown。钉钉在提供 markdown 时发 markdown 卡片（支持 [链接]）。
+ */
+export async function pushWebhook(
+  text: string,
+  opts?: { title?: string; markdown?: string }
+): Promise<void> {
   const baseUrl = ENV.notifyWebhookUrl;
   if (!baseUrl) return; // 未配置 → 仅站内通知
   try {
@@ -19,8 +27,10 @@ export async function pushWebhook(text: string): Promise<void> {
       ? signDingtalkUrl(baseUrl, ENV.notifyWebhookSecret)
       : baseUrl;
     const body = isFeishu
-      ? { msg_type: "text", content: { text } }
-      : { msgtype: "text", text: { content: text } }; // 默认钉钉
+      ? { msg_type: "text", content: { text } } // 飞书 text（含内联 URL）
+      : opts?.markdown
+        ? { msgtype: "markdown", markdown: { title: opts.title ?? "通知", text: opts.markdown } }
+        : { msgtype: "text", text: { content: text } }; // 默认钉钉
     const resp = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

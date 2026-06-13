@@ -1296,7 +1296,23 @@ export async function addComment(input: {
   }
   if (mentions.length > 0) {
     const { pushWebhook } = await import("./_core/notify");
-    await pushWebhook(`💬 ${author?.name || "有人"} @了 ${mentions.length} 人：${input.body.slice(0, 100)}`);
+    const authorName = author?.name || author?.username || "有人";
+    const mentionedNames = candidates
+      .filter((u) => mentions.includes(u.id))
+      .map((u) => `@${u.username || u.id}`)
+      .join(" ");
+    const entityLabel = ({ issue: "问题", task: "任务", change: "变更", changelog: "变更", project: "项目" } as Record<string, string>)[input.entityType] || input.entityType;
+    const projName = input.projectId ? (await getProjectById(input.projectId))?.name : null;
+    const where = projName ? `「${projName}」的${entityLabel}` : entityLabel;
+    const excerpt = input.body.slice(0, 140);
+    const link = ENV.appBaseUrl ? `${ENV.appBaseUrl}/` : null;
+    const plain = `💬 ${authorName} 在${where}评论中提到了 ${mentionedNames}：${excerpt}${link ? `\n${link}` : ""}`;
+    const markdown =
+      `#### 💬 有人在评论中 @ 了你\n` +
+      `**${authorName}** 在${where}评论中提到了 ${mentionedNames}\n\n` +
+      `> ${excerpt}\n\n` +
+      (link ? `[在 CE Project Hub 中查看](${link})` : "");
+    await pushWebhook(plain, { title: "有人@了你", markdown });
   }
   return c;
 }

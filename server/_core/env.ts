@@ -21,4 +21,6 @@ export const ENV = {
   notifyWebhookType: (process.env.NOTIFY_WEBHOOK_TYPE ?? "dingtalk").toLowerCase(),
   /** 钉钉「加签」密钥（SEC 开头）；配了则按加签模式签名请求 */
   notifyWebhookSecret: process.env.NOTIFY_WEBHOOK_SECRET ?? "",
+  /** 站点对外地址（用于通知里的跳转链接），如 https://hub.beepump.net；留空则不带链接 */
+  appBaseUrl: (process.env.APP_BASE_URL ?? "").replace(/\/+$/, ""),
 };
