@@ -19,4 +19,6 @@ export const ENV = {
   notifyWebhookUrl: process.env.NOTIFY_WEBHOOK_URL ?? "",
   /** dingtalk | feishu */
   notifyWebhookType: (process.env.NOTIFY_WEBHOOK_TYPE ?? "dingtalk").toLowerCase(),
+  /** 钉钉「加签」密钥（SEC 开头）；配了则按加签模式签名请求 */
+  notifyWebhookSecret: process.env.NOTIFY_WEBHOOK_SECRET ?? "",
 };
