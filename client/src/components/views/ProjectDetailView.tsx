@@ -6,7 +6,7 @@ import {
   ArrowLeft, CheckCircle2, Circle, ChevronDown, ChevronRight,
   Upload, Download, Trash2, Paperclip, FileText, Image as ImageIcon,
   Edit3, Calendar, AlertTriangle, Target, Zap, BarChart2, ListChecks,
-  Lock, ShieldAlert, Flag, Bug, GitBranch, Filter, Rocket,
+  Lock, ShieldAlert, Flag, Bug, GitBranch, Filter, Rocket, Layers,
 } from 'lucide-react';
 import {
   Project, SOP_PHASES, PHASE_MAP, RISK_CONFIG,
@@ -24,6 +24,7 @@ import { ISSUE_PHASES, Issue, GateReview, ChangeRecord } from '@/lib/data';
 import { GateReviewModal, GateReviewBadge } from './GateReviewModal';
 import { MembersPanel } from './MembersPanel';
 import { ReleaseDialog } from './ReleaseDialog';
+import { ReuseSetPanel } from './ReuseSetPanel';
 import { useProjectPermission } from '@/hooks/useProjectPermission';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { trpc } from '@/lib/trpc';
@@ -481,7 +482,7 @@ function PmSelector({
 export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailViewProps) {
   const [activePhaseId, setActivePhaseId] = useState(project.currentPhase);
   const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
-  const [mainTab, setMainTab] = useState<'tasks' | 'gantt' | 'issues' | 'changelog' | 'members'>('tasks');
+  const [mainTab, setMainTab] = useState<'tasks' | 'gantt' | 'issues' | 'changelog' | 'members' | 'reuseset'>('tasks');
   const perms = useProjectPermission(project.id);
   const { user: currentUser } = useAuth();
 
@@ -743,6 +744,17 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
           成员
         </button>
         <button
+          onClick={() => setMainTab('reuseset')}
+          className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all whitespace-nowrap ${
+            mainTab === 'reuseset'
+              ? 'border-b-stone-900 text-stone-900'
+              : 'border-b-transparent text-stone-400 hover:text-stone-700'
+          }`}
+        >
+          <Layers size={14} />
+          复用集
+        </button>
+        <button
           onClick={() => setMainTab('changelog')}
           className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all ${
             mainTab === 'changelog'
@@ -832,6 +844,12 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
       {mainTab === 'members' && (
         <div className="p-6">
           <MembersPanel projectId={project.id} canManage={perms.canManageMembers} />
+        </div>
+      )}
+
+      {mainTab === 'reuseset' && (
+        <div className="p-6">
+          <ReuseSetPanel projectId={project.id} canEdit={perms.canEditProjectInfo} />
         </div>
       )}
 
