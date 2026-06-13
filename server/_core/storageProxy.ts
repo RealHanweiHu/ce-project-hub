@@ -10,7 +10,13 @@ import { storageGetObject } from "../storage";
  */
 export function registerStorageProxy(app: Express) {
   app.get("/storage/*", async (req, res) => {
-    const key = req.path.replace(/^\/storage\//, "");
+    // req.path 仍是百分号编码的；S3 对象 key 是原始（可能含中文）字节，需先解码才能匹配
+    let key: string;
+    try {
+      key = decodeURIComponent(req.path.replace(/^\/storage\//, ""));
+    } catch {
+      key = req.path.replace(/^\/storage\//, "");
+    }
     if (!key) {
       res.status(400).send("Missing storage key");
       return;

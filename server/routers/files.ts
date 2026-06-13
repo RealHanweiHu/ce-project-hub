@@ -196,9 +196,14 @@ export function registerFileUploadRoute(app: Express) {
         // multer decodes the multipart filename as latin1, but browsers send it
         // as UTF-8 \u2014 re-decode so non-ASCII names (e.g. Chinese) aren't mojibake.
         const originalName = Buffer.from(file.originalname, "latin1").toString("utf8");
-        // Sanitize filename to avoid path traversal
-        const safeName = originalName.replace(/[^a-zA-Z0-9._\-\u4e00-\u9fff]/g, "_");
-        const storageKey = `projects/${projectId}/files/${Date.now()}_${safeName}`;
+        // \u5b58\u50a8 key \u53ea\u7528 ASCII\uff08\u907f\u514d S3/URL \u5bf9\u4e2d\u6587 key \u7684\u7f16\u7801\u95ee\u9898\uff09\uff1b\u5c55\u793a\u540d originalName \u4ecd\u5b58\u4e2d\u6587\u3002
+        const dot = originalName.lastIndexOf(".");
+        const ext = dot >= 0 ? originalName.slice(dot).replace(/[^a-zA-Z0-9.]/g, "") : "";
+        const asciiBase = (dot >= 0 ? originalName.slice(0, dot) : originalName)
+          .replace(/[^a-zA-Z0-9._-]/g, "_")
+          .replace(/_+/g, "_")
+          .replace(/^_|_$/g, "") || "file";
+        const storageKey = `projects/${projectId}/files/${Date.now()}_${asciiBase}${ext}`;
 
         // Upload to S3 via storagePut
         const { key, url: storageUrl } = await storagePut(
