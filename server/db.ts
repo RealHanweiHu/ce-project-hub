@@ -18,6 +18,8 @@ import {
   moduleTasks, ModuleTaskRow,
   projectModules, ProjectModuleRow,
   bomItems, BomItem, InsertBomItem,
+  comments, Comment,
+  notifications,
   type TaskStatus, type TaskPriority,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -1160,4 +1162,85 @@ export async function bomDiff(revA: number, revB: number): Promise<{ added: BomI
     return o && (o.quantity !== x.quantity || o.unitCost !== x.unitCost);
   });
   return { added, removed, changed };
+}
+
+// ── 协作：评论 + @提及 + 通知 ─────────────────────────────────────────────────
+
+/** 从正文提取 @username，匹配候选用户名（不区分大小写），返回命中用户 id */
+export function parseMentions(body: string, candidates: { id: number; username: string | null }[]): number[] {
+  const names = new Set((body.match(/@([A-Za-z0-9_.\-]+)/g) || []).map((m) => m.slice(1).toLowerCase()));
+  if (names.size === 0) return [];
+  return candidates.filter((c) => c.username && names.has(c.username.toLowerCase())).map((c) => c.id);
+}
+
+export async function createNotification(n: {
+  userId: number; type: string; title: string; body?: string | null;
+  entityType?: string | null; entityId?: string | null;
+}): Promise<void> {
+  const db = await getDb(); if (!db) return;
+  await db.insert(notifications).values({
+    userId: n.userId, type: n.type, title: n.title,
+    body: n.body ?? null, entityType: n.entityType ?? null, entityId: n.entityId ?? null,
+  });
+}
+
+export async function addComment(input: {
+  entityType: string; entityId: string; projectId?: string | null; authorId: number; body: string;
+}): Promise<Comment> {
+  const db = await getDb(); if (!db) throw new Error("Database not available");
+  const candidates = await db.select({ id: users.id, username: users.username }).from(users);
+  const mentions = parseMentions(input.body, candidates);
+  const [c] = await db.insert(comments).values({
+    entityType: input.entityType, entityId: input.entityId,
+    projectId: input.projectId ?? null, authorId: input.authorId, body: input.body, mentions,
+  }).returning();
+  const author = await getUserById(input.authorId);
+  for (const uid of mentions) {
+    if (uid === input.authorId) continue;
+    await createNotification({
+      userId: uid, type: "mention",
+      title: `${author?.name || "有人"} 在评论中提到了你`,
+      body: input.body.slice(0, 140), entityType: input.entityType, entityId: input.entityId,
+    });
+  }
+  if (mentions.length > 0) {
+    const { pushWebhook } = await import("./_core/notify");
+    await pushWebhook(`💬 ${author?.name || "有人"} @了 ${mentions.length} 人：${input.body.slice(0, 100)}`);
+  }
+  return c;
+}
+
+export async function listComments(entityType: string, entityId: string) {
+  const db = await getDb(); if (!db) return [];
+  return db.select({
+    id: comments.id, body: comments.body, authorId: comments.authorId,
+    authorName: users.name, mentions: comments.mentions, createdAt: comments.createdAt,
+  }).from(comments).leftJoin(users, eq(comments.authorId, users.id))
+    .where(and(eq(comments.entityType, entityType), eq(comments.entityId, entityId)))
+    .orderBy(comments.createdAt);
+}
+
+export async function listNotifications(userId: number, unreadOnly = false) {
+  const db = await getDb(); if (!db) return [];
+  const cond = unreadOnly
+    ? and(eq(notifications.userId, userId), eq(notifications.read, false))
+    : eq(notifications.userId, userId);
+  return db.select().from(notifications).where(cond).orderBy(desc(notifications.createdAt)).limit(50);
+}
+
+export async function unreadCount(userId: number): Promise<number> {
+  const db = await getDb(); if (!db) return 0;
+  const r = await db.select({ id: notifications.id }).from(notifications)
+    .where(and(eq(notifications.userId, userId), eq(notifications.read, false)));
+  return r.length;
+}
+
+export async function markRead(id: number): Promise<void> {
+  const db = await getDb(); if (!db) return;
+  await db.update(notifications).set({ read: true }).where(eq(notifications.id, id));
+}
+
+export async function markAllRead(userId: number): Promise<void> {
+  const db = await getDb(); if (!db) return;
+  await db.update(notifications).set({ read: true }).where(eq(notifications.userId, userId));
 }

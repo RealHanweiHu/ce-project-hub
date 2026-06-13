@@ -15,4 +15,8 @@ export const ENV = {
   s3SecretAccessKey: process.env.S3_SECRET_ACCESS_KEY ?? "",
   // path-style is required for MinIO; Aliyun OSS uses virtual-hosted style
   s3ForcePathStyle: process.env.S3_FORCE_PATH_STYLE === "true",
+  // 群机器人通知（配了才推送；未配仅站内通知）
+  notifyWebhookUrl: process.env.NOTIFY_WEBHOOK_URL ?? "",
+  /** dingtalk | feishu */
+  notifyWebhookType: (process.env.NOTIFY_WEBHOOK_TYPE ?? "dingtalk").toLowerCase(),
 };
