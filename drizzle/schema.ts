@@ -79,6 +79,16 @@ export const projects = pgTable("projects", {
   archived: boolean("archived").notNull().default(false),
   /** Reserved for future organization/workspace support */
   orgId: integer("orgId"),
+  /** 派生自哪个产品（PLM 脊梁）。现有项目为空。 */
+  productId: varchar("productId", { length: 32 }),
+  /** 开发模式：npd_new_category | npd_new_platform | npd_derivative | eco | idr */
+  mode: varchar("mode", { length: 32 }).notNull().default("npd"),
+  /** 开发对象：finished | component */
+  objectType: varchar("objectType", { length: 16 }).notNull().default("finished"),
+  /** 派生起点版本（量产后项目指向当前 Rev） */
+  baseRevisionId: integer("baseRevisionId"),
+  /** 发布时回填的产出版本 */
+  resultRevisionId: integer("resultRevisionId"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
 });
@@ -113,6 +123,11 @@ export const PROJECT_MEMBER_ROLES = [
   "rd_mech",
   "qa",
   "scm",
+  "pe",
+  "mfg",
+  "sales",
+  "cert",
+  "battery_safety",
   "viewer",
 ] as const;
 
@@ -560,3 +575,73 @@ export const organizations = pgTable("organizations", {
 
 export type Organization = typeof organizations.$inferSelect;
 export type InsertOrganization = typeof organizations.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PLM Spine: Platforms / Products / Product Revisions
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 平台 = 一组可复用核心模块版本的捆绑；整机派生自平台 */
+export const platforms = pgTable("platforms", {
+  id: varchar("id", { length: 32 }).primaryKey(),
+  name: varchar("name", { length: 256 }).notNull(),
+  category: varchar("category", { length: 64 }).notNull().default(""),
+  description: text("description"),
+  createdBy: integer("createdBy").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+});
+export type Platform = typeof platforms.$inferSelect;
+export type InsertPlatform = typeof platforms.$inferInsert;
+
+/** 产品 = 长期主数据；type 区分整机/零部件 */
+export const products = pgTable("products", {
+  id: varchar("id", { length: 32 }).primaryKey(),
+  productNumber: varchar("productNumber", { length: 64 }).notNull().default(""),
+  name: varchar("name", { length: 256 }).notNull(),
+  /** finished（整机）| component（零部件：机芯/电机/电池包） */
+  type: varchar("type", { length: 16 }).notNull().default("finished"),
+  /** 开放品类：风扇 / 充气泵 / … */
+  category: varchar("category", { length: 64 }).notNull().default(""),
+  /** 派生自哪个平台（可空） */
+  platformId: varchar("platformId", { length: 32 }),
+  /** 目标市场字符串数组 EU/US/JP… */
+  targetMarkets: jsonb("targetMarkets").$type<string[]>().default([]),
+  /** concept | development | mass_production | maintenance | eol */
+  lifecycleState: varchar("lifecycleState", { length: 32 }).notNull().default("concept"),
+  /** 当前生产版本（FK product_revisions.id，可空） */
+  currentRevisionId: integer("currentRevisionId"),
+  createdBy: integer("createdBy").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+});
+export type ProductRow = typeof products.$inferSelect;
+export type InsertProduct = typeof products.$inferInsert;
+
+/** 产品版本 = 冻结版本（PLM 轴）；版本链由项目串起 */
+export const productRevisions = pgTable(
+  "product_revisions",
+  {
+    id: serial("id").primaryKey(),
+    productId: varchar("productId", { length: 32 }).notNull(),
+    /** Rev A / B / C */
+    revisionLabel: varchar("revisionLabel", { length: 16 }).notNull(),
+    /** 父版本（自引用，量产后版本链） */
+    parentRevisionId: integer("parentRevisionId"),
+    /** 产出该版本的来源项目 */
+    createdByProjectId: varchar("createdByProjectId", { length: 32 }),
+    /** draft | released | superseded */
+    status: varchar("status", { length: 16 }).notNull().default("draft"),
+    releasedAt: timestamp("releasedAt"),
+    releasedBy: integer("releasedBy"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    uniqProductRevision: uniqueIndex("uniq_product_revision").on(
+      table.productId,
+      table.revisionLabel
+    ),
+    idxProduct: index("idx_product_revisions_product").on(table.productId),
+  })
+);
+export type ProductRevision = typeof productRevisions.$inferSelect;
+export type InsertProductRevision = typeof productRevisions.$inferInsert;
