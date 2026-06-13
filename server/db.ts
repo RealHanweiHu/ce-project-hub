@@ -14,10 +14,14 @@ import {
   products, InsertProduct, ProductRow,
   productRevisions, InsertProductRevision, ProductRevision,
   mpReleases, InsertMpRelease,
+  moduleLibrary, ModuleLibraryRow,
+  moduleTasks, ModuleTaskRow,
+  projectModules, ProjectModuleRow,
   type TaskStatus, type TaskPriority,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { getSopPhasesForCategory } from "./sop-data";
+import { MODULE_SEED } from "./module-seed";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -1022,4 +1026,67 @@ export async function releaseProject(input: {
 
     return { revisionId: rev.id, revisionLabel: label };
   });
+}
+
+// ── 模块化 SOP：模块库 + 复用集 ───────────────────────────────────────────────
+
+/** 幂等填充模块库（按 moduleKey upsert；任务块整体替换） */
+export async function seedModuleLibrary(): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  let order = 0;
+  for (const m of MODULE_SEED) {
+    order += 1;
+    await db.insert(moduleLibrary).values({
+      moduleKey: m.moduleKey, name: m.name, scope: m.scope,
+      category: m.category ?? "", ownerRoles: m.ownerRoles, sortOrder: order,
+    }).onConflictDoUpdate({
+      target: moduleLibrary.moduleKey,
+      set: { name: m.name, scope: m.scope, category: m.category ?? "", ownerRoles: m.ownerRoles, sortOrder: order },
+    });
+    await db.delete(moduleTasks).where(eq(moduleTasks.moduleKey, m.moduleKey));
+    let i = 0;
+    for (const t of m.tasks) {
+      i += 1;
+      await db.insert(moduleTasks).values({
+        moduleKey: m.moduleKey, phase: t.phase, task: t.task,
+        executor: t.executor ?? "internal", ownerRoles: t.ownerRoles,
+        gateName: t.gateName ?? null, checklist: t.checklist ?? [], sortOrder: i,
+      });
+    }
+  }
+}
+
+export async function listModuleLibrary(): Promise<ModuleLibraryRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(moduleLibrary).orderBy(moduleLibrary.sortOrder);
+}
+
+export async function getModuleTasks(moduleKey: string): Promise<ModuleTaskRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(moduleTasks)
+    .where(eq(moduleTasks.moduleKey, moduleKey))
+    .orderBy(moduleTasks.sortOrder);
+}
+
+/** 声明项目某模块的变更等级（upsert by projectId+moduleKey） */
+export async function setProjectModule(
+  projectId: string, moduleKey: string, changeLevel: string, reusedRevisionId?: number | null
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.insert(projectModules)
+    .values({ projectId, moduleKey, changeLevel, reusedRevisionId: reusedRevisionId ?? null })
+    .onConflictDoUpdate({
+      target: [projectModules.projectId, projectModules.moduleKey],
+      set: { changeLevel, reusedRevisionId: reusedRevisionId ?? null },
+    });
+}
+
+export async function listProjectModules(projectId: string): Promise<ProjectModuleRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(projectModules).where(eq(projectModules.projectId, projectId));
 }
