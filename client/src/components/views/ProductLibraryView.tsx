@@ -211,6 +211,10 @@ export function ProductLibraryView() {
 // 版本时间线弹窗
 function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: () => void }) {
   const { data: revisions = [], isLoading } = trpc.products.revisions.useQuery({ productId: product.id });
+  const { data: usedBy = [] } = trpc.bom.whereUsed.useQuery(
+    { componentProductId: product.id },
+    { enabled: product.type === 'component' },
+  );
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent className="sm:max-w-lg">
@@ -247,6 +251,20 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+          {product.type === 'component' && (
+            <div className="mt-4 pt-3 border-t border-stone-100">
+              <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-2">被以下整机引用 (where-used)</div>
+              {usedBy.length === 0 ? (
+                <p className="text-xs text-stone-400">暂无整机引用此零部件。</p>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {(usedBy as { productId: string; productName: string; revisionLabel: string }[]).map((u, i) => (
+                    <span key={i} className="text-[11px] px-2 py-0.5 bg-blue-50 text-blue-600">{u.productName} · {u.revisionLabel}</span>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>

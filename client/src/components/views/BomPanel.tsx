@@ -1,0 +1,113 @@
+// 项目工作态 BOM 面板：增/删/改行，可引用零部件产品。
+import { useState } from 'react';
+import { Plus, Trash2, Loader2, Boxes } from 'lucide-react';
+import { trpc } from '@/lib/trpc';
+import { toast } from 'sonner';
+
+type BomRow = {
+  id: number; partNumber: string; name: string; spec: string; quantity: number;
+  refDesignator: string; supplierName: string; unitCost: string;
+  componentProductId: string | null;
+};
+
+const EMPTY = { partNumber: '', name: '', spec: '', quantity: 1, refDesignator: '', supplierName: '', unitCost: '', componentProductId: '' };
+
+export function BomPanel({ projectId, canEdit }: { projectId: string; canEdit: boolean }) {
+  const utils = trpc.useUtils();
+  const { data: rows = [], isLoading } = trpc.bom.working.useQuery({ projectId });
+  const { data: products = [] } = trpc.products.list.useQuery();
+  const components = (products as { id: string; name: string; type: string }[]).filter((p) => p.type === 'component');
+
+  const inval = () => utils.bom.working.invalidate({ projectId });
+  const addM = trpc.bom.add.useMutation({ onSuccess: inval, onError: (e) => toast.error(e.message) });
+  const updM = trpc.bom.update.useMutation({ onSuccess: inval });
+  const delM = trpc.bom.delete.useMutation({ onSuccess: inval });
+
+  const [draft, setDraft] = useState({ ...EMPTY });
+
+  const totalCost = (rows as BomRow[]).reduce((s, r) => s + (parseFloat(r.unitCost) || 0) * r.quantity, 0);
+
+  if (isLoading) return <div className="flex justify-center py-10"><Loader2 className="animate-spin text-amber-500" /></div>;
+
+  const Cell = ({ r, field, type = 'text', w }: { r: BomRow; field: keyof BomRow; type?: string; w: string }) => (
+    <input
+      type={type} defaultValue={String(r[field] ?? '')} disabled={!canEdit}
+      onBlur={(e) => {
+        const v: string | number = type === 'number' ? (parseInt(e.target.value) || 0) : e.target.value;
+        if (String(v) !== String(r[field] ?? '')) updM.mutate({ id: r.id, patch: { [field]: v } });
+      }}
+      className={`${w} border border-transparent hover:border-stone-200 focus:border-stone-400 px-1.5 py-1 text-sm bg-transparent`}
+    />
+  );
+
+  return (
+    <div className="space-y-3 py-2">
+      <div className="flex items-center justify-between">
+        <div className="text-[11px] font-mono text-stone-400">工作态 BOM · {rows.length} 行 · 估算成本 {totalCost.toFixed(2)}</div>
+      </div>
+      <div className="border border-stone-200 overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-[10px] font-mono uppercase tracking-wider text-stone-400 text-left bg-stone-50">
+              <th className="px-2 py-2">料号</th><th className="px-2 py-2">名称</th><th className="px-2 py-2">规格</th>
+              <th className="px-2 py-2">用量</th><th className="px-2 py-2">位号</th><th className="px-2 py-2">供应商</th>
+              <th className="px-2 py-2">单价</th><th className="px-2 py-2">引用零部件</th><th className="px-2 py-2"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {(rows as BomRow[]).map((r) => (
+              <tr key={r.id} className="border-t border-stone-100">
+                <td><Cell r={r} field="partNumber" w="w-24" /></td>
+                <td><Cell r={r} field="name" w="w-40" /></td>
+                <td><Cell r={r} field="spec" w="w-32" /></td>
+                <td><Cell r={r} field="quantity" type="number" w="w-14" /></td>
+                <td><Cell r={r} field="refDesignator" w="w-20" /></td>
+                <td><Cell r={r} field="supplierName" w="w-24" /></td>
+                <td><Cell r={r} field="unitCost" w="w-16" /></td>
+                <td className="px-2">
+                  {r.componentProductId
+                    ? <span className="text-[11px] text-blue-600 flex items-center gap-1"><Boxes size={11} />{components.find((c) => c.id === r.componentProductId)?.name || '零部件'}</span>
+                    : <span className="text-stone-300 text-xs">—</span>}
+                </td>
+                <td className="px-2">
+                  {canEdit && (
+                    <button onClick={() => { if (confirm('删除此行？')) delM.mutate({ id: r.id }); }} className="text-stone-400 hover:text-rose-600">
+                      <Trash2 size={13} />
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {canEdit && (
+              <tr className="border-t border-stone-200 bg-stone-50/50">
+                <td><input value={draft.partNumber} onChange={(e) => setDraft({ ...draft, partNumber: e.target.value })} placeholder="料号" className="w-24 px-1.5 py-1.5 text-sm bg-transparent" /></td>
+                <td><input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="名称*" className="w-40 px-1.5 py-1.5 text-sm bg-transparent" /></td>
+                <td><input value={draft.spec} onChange={(e) => setDraft({ ...draft, spec: e.target.value })} placeholder="规格" className="w-32 px-1.5 py-1.5 text-sm bg-transparent" /></td>
+                <td><input type="number" value={draft.quantity} onChange={(e) => setDraft({ ...draft, quantity: parseInt(e.target.value) || 1 })} className="w-14 px-1.5 py-1.5 text-sm bg-transparent" /></td>
+                <td><input value={draft.refDesignator} onChange={(e) => setDraft({ ...draft, refDesignator: e.target.value })} placeholder="位号" className="w-20 px-1.5 py-1.5 text-sm bg-transparent" /></td>
+                <td><input value={draft.supplierName} onChange={(e) => setDraft({ ...draft, supplierName: e.target.value })} placeholder="供应商" className="w-24 px-1.5 py-1.5 text-sm bg-transparent" /></td>
+                <td><input value={draft.unitCost} onChange={(e) => setDraft({ ...draft, unitCost: e.target.value })} placeholder="单价" className="w-16 px-1.5 py-1.5 text-sm bg-transparent" /></td>
+                <td>
+                  <select value={draft.componentProductId} onChange={(e) => setDraft({ ...draft, componentProductId: e.target.value })} className="w-28 px-1 py-1.5 text-xs bg-white border border-stone-200">
+                    <option value="">无</option>
+                    {components.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </td>
+                <td className="px-2">
+                  <button
+                    onClick={() => {
+                      if (!draft.name.trim()) { toast.error('请输入名称'); return; }
+                      addM.mutate({ projectId, line: { ...draft, componentProductId: draft.componentProductId || null } });
+                      setDraft({ ...EMPTY });
+                    }}
+                    className="text-amber-600 hover:text-amber-700"
+                  ><Plus size={15} /></button>
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
