@@ -751,3 +751,41 @@ export const bomItems = pgTable(
 );
 export type BomItem = typeof bomItems.$inferSelect;
 export type InsertBomItem = typeof bomItems.$inferInsert;
+
+// ── 协作：评论 + 通知 ─────────────────────────────────────────────────────────
+/** 通用评论：挂在任意实体上（entityType+entityId） */
+export const comments = pgTable(
+  "comments",
+  {
+    id: serial("id").primaryKey(),
+    entityType: varchar("entityType", { length: 24 }).notNull(),
+    entityId: varchar("entityId", { length: 64 }).notNull(),
+    projectId: varchar("projectId", { length: 32 }),
+    authorId: integer("authorId").notNull(),
+    body: text("body").notNull(),
+    mentions: jsonb("mentions").$type<number[]>().default([]),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ idxEntity: index("idx_comments_entity").on(t.entityType, t.entityId) })
+);
+export type Comment = typeof comments.$inferSelect;
+export type InsertComment = typeof comments.$inferInsert;
+
+/** 站内通知 */
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("userId").notNull(),
+    type: varchar("type", { length: 24 }).notNull(),
+    title: varchar("title", { length: 256 }).notNull(),
+    body: text("body"),
+    entityType: varchar("entityType", { length: 24 }),
+    entityId: varchar("entityId", { length: 64 }),
+    read: boolean("read").notNull().default(false),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ idxUser: index("idx_notifications_user").on(t.userId, t.read) })
+);
+export type Notification = typeof notifications.$inferSelect;
+export type InsertNotification = typeof notifications.$inferInsert;
