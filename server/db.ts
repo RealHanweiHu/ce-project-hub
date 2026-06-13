@@ -17,6 +17,7 @@ import {
   moduleLibrary, ModuleLibraryRow,
   moduleTasks, ModuleTaskRow,
   projectModules, ProjectModuleRow,
+  bomItems, BomItem, InsertBomItem,
   type TaskStatus, type TaskPriority,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -1010,8 +1011,12 @@ export async function releaseProject(input: {
       status: "released", releasedAt: new Date(), releasedBy: input.releasedBy,
     }).returning({ id: productRevisions.id });
 
+    // 冻结工作态 BOM 进新版本，并写入发布快照
+    const frozenBom = await freezeBomToRevision(input.projectId, rev.id, tx);
+
     await tx.insert(mpReleases).values({
       productId, revisionId: rev.id, projectId: input.projectId,
+      snapshotBom: frozenBom as unknown[],
       openIssues: open as unknown[], notes: input.notes ?? null,
       releasedBy: input.releasedBy,
     } as InsertMpRelease);
@@ -1089,4 +1094,70 @@ export async function listProjectModules(projectId: string): Promise<ProjectModu
   const db = await getDb();
   if (!db) return [];
   return db.select().from(projectModules).where(eq(projectModules.projectId, projectId));
+}
+
+// ── BOM ───────────────────────────────────────────────────────────────────────
+
+export async function addBomLine(projectId: string, line: Partial<InsertBomItem> & { name: string }): Promise<number> {
+  const db = await getDb(); if (!db) throw new Error("Database not available");
+  const r = await db.insert(bomItems).values({ ...line, projectId, revisionId: null }).returning({ id: bomItems.id });
+  return r[0].id;
+}
+export async function updateBomLine(id: number, patch: Partial<InsertBomItem>): Promise<void> {
+  const db = await getDb(); if (!db) throw new Error("Database not available");
+  await db.update(bomItems).set(patch).where(eq(bomItems.id, id));
+}
+export async function deleteBomLine(id: number): Promise<void> {
+  const db = await getDb(); if (!db) throw new Error("Database not available");
+  await db.delete(bomItems).where(eq(bomItems.id, id));
+}
+export async function listWorkingBom(projectId: string): Promise<BomItem[]> {
+  const db = await getDb(); if (!db) return [];
+  return db.select().from(bomItems).where(eq(bomItems.projectId, projectId)).orderBy(bomItems.sortOrder, bomItems.id);
+}
+export async function listFrozenBom(revisionId: number): Promise<BomItem[]> {
+  const db = await getDb(); if (!db) return [];
+  return db.select().from(bomItems).where(eq(bomItems.revisionId, revisionId)).orderBy(bomItems.sortOrder, bomItems.id);
+}
+
+/** 把项目工作态 BOM 复制冻结到某版本。exec 传入事务则用之。返回被冻结的行。 */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function freezeBomToRevision(projectId: string, revisionId: number, exec?: any): Promise<BomItem[]> {
+  const db = exec ?? (await getDb()); if (!db) throw new Error("Database not available");
+  const rows: BomItem[] = await db.select().from(bomItems).where(eq(bomItems.projectId, projectId));
+  for (const r of rows) {
+    await db.insert(bomItems).values({
+      revisionId, projectId: null,
+      partNumber: r.partNumber, name: r.name, spec: r.spec, quantity: r.quantity,
+      refDesignator: r.refDesignator, componentProductId: r.componentProductId,
+      componentRevisionId: r.componentRevisionId, supplierName: r.supplierName,
+      unitCost: r.unitCost, sortOrder: r.sortOrder,
+    });
+  }
+  return rows;
+}
+
+/** where-used：某零部件产品被哪些整机产品的冻结 BOM 引用 */
+export async function whereUsed(componentProductId: string): Promise<{ productId: string; productName: string; revisionLabel: string }[]> {
+  const db = await getDb(); if (!db) return [];
+  return db.select({
+    productId: products.id, productName: products.name, revisionLabel: productRevisions.revisionLabel,
+  }).from(bomItems)
+    .innerJoin(productRevisions, eq(bomItems.revisionId, productRevisions.id))
+    .innerJoin(products, eq(productRevisions.productId, products.id))
+    .where(eq(bomItems.componentProductId, componentProductId));
+}
+
+/** 两版本 BOM diff（按 partNumber+name 匹配） */
+export async function bomDiff(revA: number, revB: number): Promise<{ added: BomItem[]; removed: BomItem[]; changed: BomItem[] }> {
+  const a = await listFrozenBom(revA); const b = await listFrozenBom(revB);
+  const key = (x: BomItem) => `${x.partNumber}|${x.name}`;
+  const am = new Map(a.map((x) => [key(x), x])); const bm = new Map(b.map((x) => [key(x), x]));
+  const added = b.filter((x) => !am.has(key(x)));
+  const removed = a.filter((x) => !bm.has(key(x)));
+  const changed = b.filter((x) => {
+    const o = am.get(key(x));
+    return o && (o.quantity !== x.quantity || o.unitCost !== x.unitCost);
+  });
+  return { added, removed, changed };
 }
