@@ -7,7 +7,7 @@ import {
   Upload, Download, Trash2, Paperclip, FileText, Image as ImageIcon,
   Edit3, Calendar, AlertTriangle, Target, Zap, BarChart2, ListChecks,
   Lock, ShieldAlert, Flag, Bug, GitBranch, Filter, Rocket, Layers,
-  Inbox, LayoutGrid, SlidersHorizontal,
+  Inbox, LayoutGrid, SlidersHorizontal, Eye,
 } from 'lucide-react';
 import {
   Project, SOP_PHASES, PHASE_MAP, RISK_CONFIG,
@@ -30,6 +30,7 @@ import { BomPanel } from './BomPanel';
 import { RequirementPoolPanel } from './RequirementPoolPanel';
 import { KanbanBoard } from './KanbanBoard';
 import { CustomFieldsPanel } from './CustomFieldsPanel';
+import { FilePreviewModal, canPreview } from './FilePreviewModal';
 import { useProjectPermission } from '@/hooks/useProjectPermission';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { trpc } from '@/lib/trpc';
@@ -127,6 +128,7 @@ function FileUploadArea({
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState('');
   const [uploading, setUploading] = useState(false);
+  const [previewFile, setPreviewFile] = useState<FileAttachment | null>(null);
 
   const handleFiles = async (fileList: FileList) => {
     if (readOnly) return;
@@ -209,14 +211,24 @@ function FileUploadArea({
       {error && <div className="mt-2 text-xs text-rose-600 bg-rose-50 border border-rose-200 px-3 py-1.5">{error}</div>}
       {files && files.length > 0 && (
         <div className="mt-3 space-y-1.5">
-          {files.map((file) => (
+          {files.map((file) => {
+            const previewable = canPreview(file);
+            return (
             <div key={file.id} className="flex items-center gap-3 p-2.5 bg-white border border-stone-200 group">
               <span className="text-stone-500 shrink-0">{getIcon(file.type)}</span>
-              <div className="flex-1 min-w-0">
-                <div className="text-sm text-stone-900 truncate">{file.name}</div>
+              <div
+                className={`flex-1 min-w-0 ${previewable ? 'cursor-pointer' : ''}`}
+                onClick={(e) => { if (previewable) { e.stopPropagation(); setPreviewFile(file); } }}
+              >
+                <div className={`text-sm text-stone-900 truncate ${previewable ? 'group-hover:text-amber-700' : ''}`}>{file.name}</div>
                 <div className="text-[10px] font-mono text-stone-500">{formatBytes(file.size)}</div>
               </div>
-              <button onClick={(e) => { e.stopPropagation(); downloadFile(file); }} className="p-1.5 text-stone-400 hover:text-stone-900 hover:bg-stone-100 transition-colors">
+              {previewable && (
+                <button onClick={(e) => { e.stopPropagation(); setPreviewFile(file); }} title="预览" className="p-1.5 text-stone-400 hover:text-stone-900 hover:bg-stone-100 transition-colors">
+                  <Eye size={13} />
+                </button>
+              )}
+              <button onClick={(e) => { e.stopPropagation(); downloadFile(file); }} title="下载" className="p-1.5 text-stone-400 hover:text-stone-900 hover:bg-stone-100 transition-colors">
                 <Download size={13} />
               </button>
               {!readOnly && (
@@ -225,9 +237,11 @@ function FileUploadArea({
                 </button>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
+      <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} />
     </div>
   );
 }
