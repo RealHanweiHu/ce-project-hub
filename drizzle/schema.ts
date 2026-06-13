@@ -303,6 +303,8 @@ export const projectIssues = pgTable(
     relatedTaskId: varchar("relatedTaskId", { length: 32 }),
     /** User id of the creator (for permission checks) */
     creatorId: integer("creatorId"),
+    /** 溯源：问题挂在产品上（永久），projectId 为来源项目（可空，量产后客诉无项目） */
+    productId: varchar("productId", { length: 32 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
   },
@@ -418,6 +420,8 @@ export const projectChangelog = pgTable(
     createdDate: varchar("createdDate", { length: 32 }),
     implementedDate: varchar("implementedDate", { length: 32 }),
     creatorId: integer("creatorId"),
+    /** 溯源：变更挂在产品上（永久），projectId 为来源项目（可空） */
+    productId: varchar("productId", { length: 32 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
   },
@@ -666,3 +670,56 @@ export const mpReleases = pgTable("mp_releases", {
 });
 export type MpRelease = typeof mpReleases.$inferSelect;
 export type InsertMpRelease = typeof mpReleases.$inferInsert;
+
+// ── 模块化 SOP ────────────────────────────────────────────────────────────────
+export const MODULE_CHANGE_LEVELS = ["carryover", "reuse_verify", "minor", "redesign", "new"] as const;
+export type ModuleChangeLevel = (typeof MODULE_CHANGE_LEVELS)[number];
+
+/** 模块库：共享模块 + 品类核心模块 */
+export const moduleLibrary = pgTable("module_library", {
+  id: serial("id").primaryKey(),
+  moduleKey: varchar("moduleKey", { length: 48 }).notNull().unique(),
+  name: varchar("name", { length: 128 }).notNull(),
+  /** shared | core */
+  scope: varchar("scope", { length: 16 }).notNull().default("shared"),
+  /** 核心模块所属品类（shared 留空） */
+  category: varchar("category", { length: 64 }).notNull().default(""),
+  ownerRoles: jsonb("ownerRoles").$type<string[]>().default([]),
+  sortOrder: integer("sortOrder").notNull().default(0),
+});
+export type ModuleLibraryRow = typeof moduleLibrary.$inferSelect;
+export type InsertModuleLibrary = typeof moduleLibrary.$inferInsert;
+
+/** 模块任务块：任务 × 阶段 × 执行方 × 责任职能 × 门禁 × 检查项 */
+export const moduleTasks = pgTable("module_tasks", {
+  id: serial("id").primaryKey(),
+  moduleKey: varchar("moduleKey", { length: 48 }).notNull(),
+  phase: varchar("phase", { length: 32 }).notNull(),
+  task: varchar("task", { length: 256 }).notNull(),
+  /** internal | supplier | lab */
+  executor: varchar("executor", { length: 16 }).notNull().default("internal"),
+  ownerRoles: jsonb("ownerRoles").$type<string[]>().default([]),
+  gateName: varchar("gateName", { length: 64 }),
+  checklist: jsonb("checklist").$type<string[]>().default([]),
+  sortOrder: integer("sortOrder").notNull().default(0),
+});
+export type ModuleTaskRow = typeof moduleTasks.$inferSelect;
+export type InsertModuleTask = typeof moduleTasks.$inferInsert;
+
+/** 项目复用集：每模块的变更等级 */
+export const projectModules = pgTable(
+  "project_modules",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 }).notNull(),
+    moduleKey: varchar("moduleKey", { length: 48 }).notNull(),
+    /** carryover | reuse_verify | minor | redesign | new */
+    changeLevel: varchar("changeLevel", { length: 16 }).notNull().default("redesign"),
+    reusedRevisionId: integer("reusedRevisionId"),
+  },
+  (t) => ({
+    uniq: uniqueIndex("uniq_project_module").on(t.projectId, t.moduleKey),
+  })
+);
+export type ProjectModuleRow = typeof projectModules.$inferSelect;
+export type InsertProjectModule = typeof projectModules.$inferInsert;
