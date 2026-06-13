@@ -8,7 +8,7 @@ import { useLocation } from 'wouter';
 import {
   LayoutDashboard, FolderKanban, BookOpen, Save, CheckCircle2,
   ChevronRight, Menu, X, Cpu, Search, LogIn, Loader2, Cloud, Shield, KeyRound,
-  ListTodo, AlertTriangle, ShieldAlert, LogOut,
+  ListTodo, AlertTriangle, ShieldAlert, LogOut, Package,
 } from 'lucide-react';
 import { nanoid } from 'nanoid';
 import {
@@ -22,7 +22,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { getQueryKey } from '@trpc/react-query';
 import { useProjectData } from '@/hooks/useProjectData';
 
-type View = 'dashboard' | 'projects' | 'sop' | 'my-tasks' | 'overdue' | 'blocked';
+type View = 'dashboard' | 'projects' | 'products' | 'sop' | 'my-tasks' | 'overdue' | 'blocked';
 
 const DashboardView = lazy(() =>
   import('@/components/views/DashboardView').then((module) => ({ default: module.DashboardView }))
@@ -44,6 +44,9 @@ const OverdueTasksView = lazy(() =>
 );
 const BlockedTasksView = lazy(() =>
   import('@/components/views/BlockedTasksView').then((module) => ({ default: module.BlockedTasksView }))
+);
+const ProductLibraryView = lazy(() =>
+  import('@/components/views/ProductLibraryView').then((module) => ({ default: module.ProductLibraryView }))
 );
 const GlobalSearch = lazy(() =>
   import('@/components/GlobalSearch').then((module) => ({ default: module.GlobalSearch }))
@@ -597,6 +600,7 @@ export default function Home() {
   const navItems = [
     { id: 'dashboard' as View, label: '仪表盘', labelEn: 'Dashboard', icon: LayoutDashboard },
     { id: 'projects' as View, label: '项目管理', labelEn: 'Projects', icon: FolderKanban },
+    { id: 'products' as View, label: '产品库', labelEn: 'Products', icon: Package },
     { id: 'sop' as View, label: 'SOP 流程库', labelEn: 'SOP Library', icon: BookOpen },
     { id: 'my-tasks' as View, label: '我的任务', labelEn: 'My Tasks', icon: ListTodo },
     { id: 'overdue' as View, label: '逾期任务', labelEn: 'Overdue', icon: AlertTriangle },
@@ -612,6 +616,7 @@ export default function Home() {
   const viewLabels: Record<View, string> = {
     dashboard: 'Dashboard',
     projects: 'Projects',
+    products: 'Products',
     sop: 'SOP Library',
     'my-tasks': 'My Tasks',
     overdue: 'Overdue Tasks',
@@ -925,6 +930,7 @@ export default function Home() {
                   onSaveStatus={handleSaveStatus}
                 />
               )}
+              {view === 'products' && <ProductLibraryView />}
               {view === 'sop' && <SOPLibraryView />}
               {view === 'my-tasks' && (
                 <MyTasksView onNavigateToProject={(id) => { handleSelectProject(id); }} />
