@@ -232,6 +232,7 @@ export function useProjectData(projectId: string | null) {
       phaseDates: Object.keys(phaseDates).length > 0 ? phaseDates : undefined,
       taskVisibleRoles: Object.keys(taskVisibleRoles).length > 0 ? taskVisibleRoles : undefined,
       changeLog,
+      customFields: (projectRow as { customFields?: Record<string, unknown> }).customFields ?? {},
     } as Project);
   }, [projectRow, taskRows, issueRows, gateRows, changeRows, phaseRows, fileRows]);
 

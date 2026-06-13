@@ -157,6 +157,8 @@ export interface Project {
   changeLog?: ChangeRecord[];          // project-level change & decision log
   /** Per-task visibleRoles overrides: taskId -> roles[] (empty = all can see) */
   taskVisibleRoles?: Record<string, string[]>;
+  /** 自定义字段值：fieldKey -> value（定义见后端 custom_field_defs） */
+  customFields?: Record<string, unknown>;
 }
 
 import { NPD_PHASES } from '@shared/sop-templates';

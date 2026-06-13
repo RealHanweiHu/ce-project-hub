@@ -21,6 +21,7 @@ import {
   bomItems, BomItem, InsertBomItem,
   comments, Comment,
   notifications,
+  customFieldDefs, CustomFieldDef, InsertCustomFieldDef,
   type TaskStatus, type TaskPriority,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -550,6 +551,50 @@ export async function deleteProjectRequirement(id: number): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.delete(projectRequirements).where(eq(projectRequirements.id, id));
+}
+
+// ── Custom Field Definition helpers ──────────────────────────────────────────
+
+/** List custom field definitions for an entity type (active only by default). */
+export async function getCustomFieldDefs(
+  entityType = "project",
+  includeArchived = false
+): Promise<CustomFieldDef[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const conditions = includeArchived
+    ? eq(customFieldDefs.entityType, entityType)
+    : and(eq(customFieldDefs.entityType, entityType), eq(customFieldDefs.archived, false));
+  return db
+    .select()
+    .from(customFieldDefs)
+    .where(conditions)
+    .orderBy(customFieldDefs.sortOrder, customFieldDefs.id);
+}
+
+/** Create a custom field definition. */
+export async function createCustomFieldDef(def: InsertCustomFieldDef): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(customFieldDefs).values(def).returning({ id: customFieldDefs.id });
+  return result[0].id;
+}
+
+/** Update a custom field definition. */
+export async function updateCustomFieldDef(
+  id: number,
+  patch: Partial<Omit<InsertCustomFieldDef, "id" | "createdAt">>
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(customFieldDefs).set(patch).where(eq(customFieldDefs.id, id));
+}
+
+/** Delete a custom field definition. */
+export async function deleteCustomFieldDef(id: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(customFieldDefs).where(eq(customFieldDefs.id, id));
 }
 
 // ── Gate Reviews helpers ──────────────────────────────────────────────────────

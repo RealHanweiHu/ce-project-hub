@@ -84,6 +84,7 @@ function projectToApiInput(p: Project) {
     progress: 0,
     startDate: startDate || null,
     targetDate: targetDate || null,
+    customFields: p.customFields ?? {},
   };
 }
 
@@ -172,7 +173,8 @@ function ProjectDetailWrapper({
           updated.currentPhase !== project.currentPhase ||
           updated.startDate !== project.startDate ||
           updated.targetDate !== project.targetDate ||
-          updated.category !== project.category;
+          updated.category !== project.category ||
+          JSON.stringify(updated.customFields ?? {}) !== JSON.stringify(project.customFields ?? {});
 
         if (metaChanged) {
           ops.push(updateProjectMutation.mutateAsync(projectToApiInput(updated)));

@@ -57,6 +57,13 @@
       "when": 1781359672467,
       "tag": "0007_regular_toxin",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1781360784481,
+      "tag": "0008_custom_fields",
+      "breakpoints": true
     }
   ]
 }

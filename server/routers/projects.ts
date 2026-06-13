@@ -36,6 +36,8 @@ const projectInputSchema = z.object({
   progress: z.number().default(0),
   startDate: z.string().nullable().optional(),
   targetDate: z.string().nullable().optional(),
+  /** 自定义字段值 fieldKey -> value */
+  customFields: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const projectsRouter = router({
@@ -125,6 +127,7 @@ export const projectsRouter = router({
         progress: input.progress,
         startDate: input.startDate ?? null,
         targetDate: input.targetDate ?? null,
+        ...(input.customFields !== undefined ? { customFields: input.customFields } : {}),
       });
       await createActivityLog({
         projectId: input.id,

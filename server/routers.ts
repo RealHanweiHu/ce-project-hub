@@ -21,6 +21,7 @@ import { productsRouter } from "./routers/products";
 import { modulesRouter } from "./routers/modules";
 import { bomRouter } from "./routers/bom";
 import { commentsRouter, notificationsRouter } from "./routers/collab";
+import { customFieldsRouter } from "./routers/customFields";
 import * as db from "./db";
 
 export const appRouter = router({
@@ -212,6 +213,7 @@ export const appRouter = router({
   phases: phasesRouter,
   files: filesRouter,
   requirements: requirementsRouter,
+  customFields: customFieldsRouter,
   products: productsRouter,
   modules: modulesRouter,
   bom: bomRouter,

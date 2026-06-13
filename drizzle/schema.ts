@@ -89,6 +89,8 @@ export const projects = pgTable("projects", {
   baseRevisionId: integer("baseRevisionId"),
   /** 发布时回填的产出版本 */
   resultRevisionId: integer("resultRevisionId"),
+  /** 自定义字段值：fieldKey -> value（定义见 custom_field_defs） */
+  customFields: jsonb("customFields").$type<Record<string, unknown>>().notNull().default({}),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
 });
@@ -884,3 +886,31 @@ export const notifications = pgTable(
 );
 export type Notification = typeof notifications.$inferSelect;
 export type InsertNotification = typeof notifications.$inferInsert;
+
+// ── 自定义字段（管理员定义，项目级填值）─────────────────────────────────
+export const CUSTOM_FIELD_TYPES = ["text", "number", "date", "select", "boolean"] as const;
+export const customFieldTypeEnum = pgEnum("custom_field_type", CUSTOM_FIELD_TYPES);
+
+/** 字段定义：全局由管理员维护。values 存在各实体的 customFields jsonb 里，按 fieldKey 取。 */
+export const customFieldDefs = pgTable(
+  "custom_field_defs",
+  {
+    id: serial("id").primaryKey(),
+    /** 归属实体类型，目前仅 'project' */
+    entityType: varchar("entityType", { length: 24 }).notNull().default("project"),
+    /** 稳定 key（slug），实体 customFields 里以此为键 */
+    fieldKey: varchar("fieldKey", { length: 64 }).notNull(),
+    label: varchar("label", { length: 128 }).notNull(),
+    fieldType: customFieldTypeEnum("fieldType").notNull().default("text"),
+    /** select 类型的可选项（字符串数组） */
+    options: jsonb("options").$type<string[]>().notNull().default([]),
+    required: boolean("required").notNull().default(false),
+    sortOrder: integer("sortOrder").notNull().default(0),
+    archived: boolean("archived").notNull().default(false),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (t) => ({ uqKey: uniqueIndex("uq_custom_field_key").on(t.entityType, t.fieldKey) })
+);
+export type CustomFieldDef = typeof customFieldDefs.$inferSelect;
+export type InsertCustomFieldDef = typeof customFieldDefs.$inferInsert;
