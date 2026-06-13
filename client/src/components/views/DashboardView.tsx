@@ -1,10 +1,7 @@
 // Design: Industrial Precision - stone/amber color system
 // DashboardView: overview stats, phase distribution chart, upcoming gates, P0/P1 issue alerts, project table
 
-import { useMemo, useState } from 'react';
-import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
-} from 'recharts';
+import { lazy, Suspense, useMemo, useState } from 'react';
 import {
   Layers, Hash, Target, TrendingUp, AlertTriangle, Activity, Bug, ChevronRight, ShieldAlert,
 } from 'lucide-react';
@@ -18,6 +15,10 @@ import { CATEGORY_MAP } from '@/lib/sop-templates';
 import { StatCard } from '@/components/shared/StatCard';
 import { ProgressBar } from '@/components/shared/ProgressBar';
 
+const PhaseDistributionChart = lazy(() =>
+  import('./PhaseDistributionChart').then((module) => ({ default: module.PhaseDistributionChart }))
+);
+
 interface DashboardViewProps {
   projects: Project[];
   onSelectProject: (id: string) => void;
@@ -28,6 +29,26 @@ interface CriticalIssueRow {
   project: Project;
   phaseId: string;
   phaseName: string;
+}
+
+const PHASE_CODE_COLORS: Record<string, string> = {
+  P1: '#78716c',
+  P2: '#a16207',
+  P3: '#0369a1',
+  P4: '#7c3aed',
+  P5: '#0f766e',
+  P6: '#b45309',
+  P7: '#166534',
+};
+
+function ChartLoading() {
+  return (
+    <div className="h-[220px] flex items-center justify-center border border-dashed border-stone-200 bg-stone-50/60">
+      <span className="text-[10px] font-mono uppercase tracking-widest text-stone-400">
+        Loading chart...
+      </span>
+    </div>
+  );
 }
 
 export function DashboardView({ projects, onSelectProject }: DashboardViewProps) {
@@ -77,24 +98,46 @@ export function DashboardView({ projects, onSelectProject }: DashboardViewProps)
   const displayedCritical = showAllCritical ? criticalIssues : criticalIssues.slice(0, 5);
 
   const phaseDistribution = useMemo(() => {
-    const phaseMap = new Map<string, { name: string; code: string; color: string; count: number }>();
+    const phaseMap = new Map<string, { names: Set<string>; color: string; count: number }>();
+
+    const ensureBucket = (code: string, phaseName: string) => {
+      if (!phaseMap.has(code)) {
+        phaseMap.set(code, {
+          names: new Set(),
+          color: PHASE_CODE_COLORS[code] ?? '#78716c',
+          count: 0,
+        });
+      }
+      phaseMap.get(code)?.names.add(phaseName);
+    };
+
     projects.forEach((p) => {
       const phases = getProjectPhases(p);
       phases.forEach((ph) => {
-        if (!phaseMap.has(ph.id)) {
-          phaseMap.set(ph.id, { name: ph.name, code: ph.code, color: ph.color, count: 0 });
-        }
+        ensureBucket(ph.code, ph.name);
       });
-      const cur = phaseMap.get(p.currentPhase);
-      if (cur) cur.count++;
+
+      const currentPhase = phases.find((ph) => ph.id === p.currentPhase) || PHASE_MAP[p.currentPhase];
+      if (currentPhase) {
+        ensureBucket(currentPhase.code, currentPhase.name);
+        const cur = phaseMap.get(currentPhase.code);
+        if (cur) cur.count++;
+      }
     });
-    const order = ['concept', 'planning', 'design', 'evt', 'dvt', 'pvt', 'mp'];
+
     return Array.from(phaseMap.entries())
       .sort(([a], [b]) => {
-        const ai = order.indexOf(a), bi = order.indexOf(b);
-        return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+        const ai = Number(a.replace(/\D/g, ''));
+        const bi = Number(b.replace(/\D/g, ''));
+        return ai - bi;
       })
-      .map(([, v]) => ({ name: v.code, fullName: v.name, count: v.count, color: v.color, label: v.name }));
+      .map(([code, v]) => ({
+        name: code,
+        fullName: Array.from(v.names).join(' / '),
+        count: v.count,
+        color: v.color,
+        label: code,
+      }));
   }, [projects]);
 
   const upcomingMilestones = useMemo(
@@ -248,41 +291,9 @@ export function DashboardView({ projects, onSelectProject }: DashboardViewProps)
             </div>
             <Layers size={20} className="text-stone-300" />
           </div>
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={phaseDistribution} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e7e5e4" vertical={false} />
-              <XAxis
-                dataKey="name"
-                tick={{ fontSize: 11, fontFamily: 'JetBrains Mono, monospace', fill: '#78716c' }}
-                axisLine={false}
-                tickLine={false}
-              />
-              <YAxis
-                tick={{ fontSize: 11, fontFamily: 'JetBrains Mono, monospace', fill: '#78716c' }}
-                axisLine={false}
-                tickLine={false}
-                allowDecimals={false}
-              />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: '#fff',
-                  border: '1px solid #e7e5e4',
-                  borderRadius: '2px',
-                  fontFamily: 'JetBrains Mono, monospace',
-                  fontSize: 11,
-                }}
-                formatter={(value, _, props) => [
-                  `${value} 个项目`,
-                  phaseDistribution.find((p) => p.name === props.payload?.name)?.fullName || '',
-                ]}
-              />
-              <Bar dataKey="count" radius={[2, 2, 0, 0]}>
-                {phaseDistribution.map((entry, idx) => (
-                  <Cell key={idx} fill={entry.color} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
+          <Suspense fallback={<ChartLoading />}>
+            <PhaseDistributionChart data={phaseDistribution} />
+          </Suspense>
         </div>
 
         {/* Upcoming Gates */}

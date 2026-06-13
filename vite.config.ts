@@ -4,7 +4,12 @@ import react from "@vitejs/plugin-react";
 import path from "node:path";
 import { defineConfig } from "vite";
 
-const plugins = [react(), tailwindcss(), jsxLocPlugin()];
+const enableJsxLoc = process.env.VITE_ENABLE_JSX_LOC === "true";
+const plugins = [
+  react(),
+  tailwindcss(),
+  ...(enableJsxLoc ? [jsxLocPlugin()] : []),
+];
 
 export default defineConfig({
   plugins,

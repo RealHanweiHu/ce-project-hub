@@ -3,35 +3,65 @@
 // Font: Playfair Display (serif) + JetBrains Mono (mono) + Source Sans 3 (body)
 // Colors: stone-900 sidebar, stone-50 background, amber-500 accent
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { lazy, Suspense, useState, useEffect, useRef, useCallback } from 'react';
 import { useLocation } from 'wouter';
 import {
   LayoutDashboard, FolderKanban, BookOpen, Save, CheckCircle2,
   ChevronRight, Menu, X, Cpu, Search, LogIn, Loader2, Cloud, Shield, KeyRound,
   ListTodo, AlertTriangle, ShieldAlert, LogOut,
 } from 'lucide-react';
-import { GlobalSearch } from '@/components/GlobalSearch';
 import { nanoid } from 'nanoid';
 import {
   Project, normalizeProject, Issue, GateReview, ChangeRecord, PhaseData,
 } from '@/lib/data';
 import { buildPhasesDataForCategory, getPhasesForCategory } from '@/lib/sop-templates';
-import { DashboardView } from '@/components/views/DashboardView';
-import { ProjectListView } from '@/components/views/ProjectListView';
-import { ProjectDetailView } from '@/components/views/ProjectDetailView';
-import { SOPLibraryView } from '@/components/views/SOPLibraryView';
-import { MyTasksView } from '@/components/views/MyTasksView';
-import { OverdueTasksView } from '@/components/views/OverdueTasksView';
-import { BlockedTasksView } from '@/components/views/BlockedTasksView';
 import { trpc } from '@/lib/trpc';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { getLoginUrl } from '@/const';
 import { useQueryClient } from '@tanstack/react-query';
 import { getQueryKey } from '@trpc/react-query';
-import { ChangePasswordDialog } from '@/components/ChangePasswordDialog';
 import { useProjectData } from '@/hooks/useProjectData';
 
 type View = 'dashboard' | 'projects' | 'sop' | 'my-tasks' | 'overdue' | 'blocked';
+
+const DashboardView = lazy(() =>
+  import('@/components/views/DashboardView').then((module) => ({ default: module.DashboardView }))
+);
+const ProjectListView = lazy(() =>
+  import('@/components/views/ProjectListView').then((module) => ({ default: module.ProjectListView }))
+);
+const ProjectDetailView = lazy(() =>
+  import('@/components/views/ProjectDetailView').then((module) => ({ default: module.ProjectDetailView }))
+);
+const SOPLibraryView = lazy(() =>
+  import('@/components/views/SOPLibraryView').then((module) => ({ default: module.SOPLibraryView }))
+);
+const MyTasksView = lazy(() =>
+  import('@/components/views/MyTasksView').then((module) => ({ default: module.MyTasksView }))
+);
+const OverdueTasksView = lazy(() =>
+  import('@/components/views/OverdueTasksView').then((module) => ({ default: module.OverdueTasksView }))
+);
+const BlockedTasksView = lazy(() =>
+  import('@/components/views/BlockedTasksView').then((module) => ({ default: module.BlockedTasksView }))
+);
+const GlobalSearch = lazy(() =>
+  import('@/components/GlobalSearch').then((module) => ({ default: module.GlobalSearch }))
+);
+const ChangePasswordDialog = lazy(() =>
+  import('@/components/ChangePasswordDialog').then((module) => ({ default: module.ChangePasswordDialog }))
+);
+
+function ViewLoading() {
+  return (
+    <div className="flex items-center justify-center h-64">
+      <div className="flex flex-col items-center gap-3">
+        <Loader2 size={24} className="animate-spin text-amber-500" />
+        <p className="text-sm font-mono text-stone-400 uppercase tracking-widest">加载中...</p>
+      </div>
+    </div>
+  );
+}
 
 // Helper: convert Project to API input shape (meta fields only)
 function projectToApiInput(p: Project) {
@@ -874,7 +904,7 @@ export default function Home() {
               </div>
             </div>
           ) : (
-            <>
+            <Suspense fallback={<ViewLoading />}>
               {view === 'dashboard' && (
                 <DashboardView projects={projects} onSelectProject={handleSelectProject} />
               )}
@@ -905,23 +935,31 @@ export default function Home() {
               {view === 'blocked' && (
                 <BlockedTasksView onNavigateToProject={(id) => { handleSelectProject(id); }} />
               )}
-            </>
+            </Suspense>
           )}
         </main>
       </div>
 
       {/* Global Search */}
-      <GlobalSearch
-        open={searchOpen}
-        onClose={() => setSearchOpen(false)}
-        projects={projects}
-        onNavigate={handleSearchNavigate}
-      />
+      {searchOpen && (
+        <Suspense fallback={null}>
+          <GlobalSearch
+            open={searchOpen}
+            onClose={() => setSearchOpen(false)}
+            projects={projects}
+            onNavigate={handleSearchNavigate}
+          />
+        </Suspense>
+      )}
       {/* Change Password Dialog */}
-      <ChangePasswordDialog
-        open={changePasswordOpen}
-        onOpenChange={setChangePasswordOpen}
-      />
+      {changePasswordOpen && (
+        <Suspense fallback={null}>
+          <ChangePasswordDialog
+            open={changePasswordOpen}
+            onOpenChange={setChangePasswordOpen}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }
