@@ -323,6 +323,97 @@ export type ProjectIssue = typeof projectIssues.$inferSelect;
 export type InsertProjectIssue = typeof projectIssues.$inferInsert;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Requirements Pool
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const REQUIREMENT_STATUSES = [
+  "new",
+  "triaged",
+  "planned",
+  "in_progress",
+  "accepted",
+  "deferred",
+  "rejected",
+] as const;
+export const REQUIREMENT_PRIORITIES = ["P0", "P1", "P2", "P3"] as const;
+export const REQUIREMENT_SOURCES = [
+  "customer",
+  "sales",
+  "market",
+  "internal",
+  "regulatory",
+  "manufacturing",
+  "quality",
+  "supplier",
+  "other",
+] as const;
+export const REQUIREMENT_TYPES = [
+  "functional",
+  "performance",
+  "compliance",
+  "cost",
+  "schedule",
+  "quality",
+  "manufacturing",
+  "ux",
+  "packaging",
+  "other",
+] as const;
+
+export type RequirementStatus = (typeof REQUIREMENT_STATUSES)[number];
+export type RequirementPriority = (typeof REQUIREMENT_PRIORITIES)[number];
+export type RequirementSource = (typeof REQUIREMENT_SOURCES)[number];
+export type RequirementType = (typeof REQUIREMENT_TYPES)[number];
+
+export const requirementStatusEnum = pgEnum("requirement_status", REQUIREMENT_STATUSES);
+export const requirementPriorityEnum = pgEnum("requirement_priority", REQUIREMENT_PRIORITIES);
+export const requirementSourceEnum = pgEnum("requirement_source", REQUIREMENT_SOURCES);
+export const requirementTypeEnum = pgEnum("requirement_type", REQUIREMENT_TYPES);
+
+/**
+ * project_requirements table - raw product/project requirements before they
+ * become SOP tasks, issues, or formal change records.
+ */
+export const projectRequirements = pgTable(
+  "project_requirements",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 }).notNull(),
+    title: varchar("title", { length: 512 }).notNull(),
+    description: text("description"),
+    source: requirementSourceEnum("source").notNull().default("internal"),
+    sourceDetail: varchar("sourceDetail", { length: 256 }),
+    type: requirementTypeEnum("type").notNull().default("functional"),
+    priority: requirementPriorityEnum("priority").notNull().default("P2"),
+    status: requirementStatusEnum("status").notNull().default("new"),
+    owner: varchar("owner", { length: 256 }),
+    targetPhaseId: varchar("targetPhaseId", { length: 32 }),
+    linkedTaskId: varchar("linkedTaskId", { length: 32 }),
+    acceptanceCriteria: text("acceptanceCriteria"),
+    decisionNote: text("decisionNote"),
+    creatorId: integer("creatorId"),
+    /** 溯源：需求挂在产品上（永久），projectId 为来源项目 */
+    productId: varchar("productId", { length: 32 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    idxProjectStatusPriority: index("idx_requirements_project_status_priority").on(
+      table.projectId,
+      table.status,
+      table.priority
+    ),
+    idxProjectCreatedAt: index("idx_requirements_project_created").on(
+      table.projectId,
+      table.createdAt
+    ),
+  })
+);
+
+export type ProjectRequirement = typeof projectRequirements.$inferSelect;
+export type InsertProjectRequirement = typeof projectRequirements.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Gate Reviews
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -503,6 +594,10 @@ export const ACTIVITY_ACTIONS = [
   "issue.update",
   "issue.close",
   "issue.delete",
+  // Requirements
+  "requirement.create",
+  "requirement.update",
+  "requirement.delete",
   // Gate reviews
   "gate.create",
   "gate.update",

@@ -16,6 +16,7 @@ import { gateReviewsRouter } from "./routers/gateReviews";
 import { changelogRouter } from "./routers/changelog";
 import { phasesRouter } from "./routers/phases";
 import { filesRouter } from "./routers/files";
+import { requirementsRouter } from "./routers/requirements";
 import { productsRouter } from "./routers/products";
 import { modulesRouter } from "./routers/modules";
 import { bomRouter } from "./routers/bom";
@@ -210,6 +211,7 @@ export const appRouter = router({
   changelog: changelogRouter,
   phases: phasesRouter,
   files: filesRouter,
+  requirements: requirementsRouter,
   products: productsRouter,
   modules: modulesRouter,
   bom: bomRouter,

@@ -7,6 +7,7 @@ import {
   Upload, Download, Trash2, Paperclip, FileText, Image as ImageIcon,
   Edit3, Calendar, AlertTriangle, Target, Zap, BarChart2, ListChecks,
   Lock, ShieldAlert, Flag, Bug, GitBranch, Filter, Rocket, Layers,
+  Inbox,
 } from 'lucide-react';
 import {
   Project, SOP_PHASES, PHASE_MAP, RISK_CONFIG,
@@ -26,6 +27,7 @@ import { MembersPanel } from './MembersPanel';
 import { ReleaseDialog } from './ReleaseDialog';
 import { ReuseSetPanel } from './ReuseSetPanel';
 import { BomPanel } from './BomPanel';
+import { RequirementPoolPanel } from './RequirementPoolPanel';
 import { useProjectPermission } from '@/hooks/useProjectPermission';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { trpc } from '@/lib/trpc';
@@ -483,7 +485,7 @@ function PmSelector({
 export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailViewProps) {
   const [activePhaseId, setActivePhaseId] = useState(project.currentPhase);
   const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
-  const [mainTab, setMainTab] = useState<'tasks' | 'gantt' | 'issues' | 'changelog' | 'members' | 'reuseset' | 'bom'>('tasks');
+  const [mainTab, setMainTab] = useState<'tasks' | 'requirements' | 'gantt' | 'issues' | 'changelog' | 'members' | 'reuseset' | 'bom'>('tasks');
   const perms = useProjectPermission(project.id);
   const { user: currentUser } = useAuth();
 
@@ -704,6 +706,17 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
           <ListChecks size={14} />
           任务清单
         </button>
+        <button
+          onClick={() => setMainTab('requirements')}
+          className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all whitespace-nowrap ${
+            mainTab === 'requirements'
+              ? 'border-b-stone-900 text-stone-900'
+              : 'border-b-transparent text-stone-400 hover:text-stone-700'
+          }`}
+        >
+          <Inbox size={14} />
+          需求池
+        </button>
         {isIssuePhase && (
           <button
             onClick={() => setMainTab('issues')}
@@ -826,6 +839,17 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
             canEdit={perms.canEditIssues}
             currentUserId={currentUser?.id !== undefined ? String(currentUser.id) : undefined}
             canManage={perms.canManageMembers}
+          />
+        </div>
+      )}
+
+      {/* ── Requirement Pool Tab ─────────────────────────────────────────── */}
+      {mainTab === 'requirements' && (
+        <div className="p-6">
+          <RequirementPoolPanel
+            projectId={project.id}
+            phases={projectPhases}
+            canEdit={perms.canEditRequirements}
           />
         </div>
       )}

@@ -5,6 +5,7 @@ export type ProjectPermissions = {
   canView: boolean;
   canEditTasks: boolean;
   canEditIssues: boolean;
+  canEditRequirements: boolean;
   canEditChangelog: boolean;
   canEditProjectInfo: boolean;
   canGateReview: boolean;
@@ -17,6 +18,7 @@ const FULL_PERMISSIONS: ProjectPermissions = {
   canView: true,
   canEditTasks: true,
   canEditIssues: true,
+  canEditRequirements: true,
   canEditChangelog: true,
   canEditProjectInfo: true,
   canGateReview: true,
@@ -29,6 +31,7 @@ const NO_PERMISSIONS: ProjectPermissions = {
   canView: false,
   canEditTasks: false,
   canEditIssues: false,
+  canEditRequirements: false,
   canEditChangelog: false,
   canEditProjectInfo: false,
   canGateReview: false,

@@ -6,6 +6,7 @@ import {
   projectPhases, ProjectPhase, InsertProjectPhase,
   projectTasks, ProjectTask, InsertProjectTask,
   projectIssues, ProjectIssue, InsertProjectIssue,
+  projectRequirements, ProjectRequirement, InsertProjectRequirement,
   projectGateReviews, ProjectGateReview, InsertProjectGateReview,
   projectChangelog, ProjectChangeRecord, InsertProjectChangeRecord,
   projectFiles, InsertProjectFile, ProjectFile,
@@ -507,6 +508,50 @@ export async function deleteProjectIssue(id: number): Promise<void> {
   await db.delete(projectIssues).where(eq(projectIssues.id, id));
 }
 
+// ── Project Requirements helpers ─────────────────────────────────────────────
+
+/** Get all requirements for a project. */
+export async function getProjectRequirements(projectId: string): Promise<ProjectRequirement[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(projectRequirements)
+    .where(eq(projectRequirements.projectId, projectId))
+    .orderBy(
+      drizzleSql`CASE ${projectRequirements.priority} WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END`,
+      desc(projectRequirements.createdAt)
+    );
+}
+
+/** Create a new requirement pool item. */
+export async function createProjectRequirement(requirement: InsertProjectRequirement): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db
+    .insert(projectRequirements)
+    .values(requirement)
+    .returning({ id: projectRequirements.id });
+  return result[0].id;
+}
+
+/** Update a requirement pool item. */
+export async function updateProjectRequirement(
+  id: number,
+  patch: Partial<Omit<InsertProjectRequirement, "id" | "projectId" | "createdAt">>
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(projectRequirements).set(patch).where(eq(projectRequirements.id, id));
+}
+
+/** Delete a requirement pool item. */
+export async function deleteProjectRequirement(id: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(projectRequirements).where(eq(projectRequirements.id, id));
+}
+
 // ── Gate Reviews helpers ──────────────────────────────────────────────────────
 
 /** Get all gate reviews for a project (optionally filtered by phase) */
@@ -898,6 +943,7 @@ export async function hardDeleteProjectForTest(projectId: string): Promise<void>
   await db.delete(projectChangelog).where(eq(projectChangelog.projectId, projectId));
   await db.delete(projectGateReviews).where(eq(projectGateReviews.projectId, projectId));
   await db.delete(projectIssues).where(eq(projectIssues.projectId, projectId));
+  await db.delete(projectRequirements).where(eq(projectRequirements.projectId, projectId));
   await db.delete(projectFiles).where(eq(projectFiles.projectId, projectId));
   await db.delete(activityLogs).where(eq(activityLogs.projectId, projectId));
   await db.delete(projectTasks).where(eq(projectTasks.projectId, projectId));
