@@ -16,6 +16,7 @@ import { gateReviewsRouter } from "./routers/gateReviews";
 import { changelogRouter } from "./routers/changelog";
 import { phasesRouter } from "./routers/phases";
 import { filesRouter } from "./routers/files";
+import { productsRouter } from "./routers/products";
 import * as db from "./db";
 
 export const appRouter = router({
@@ -206,6 +207,7 @@ export const appRouter = router({
   changelog: changelogRouter,
   phases: phasesRouter,
   files: filesRouter,
+  products: productsRouter,
 });
 
 export type AppRouter = typeof appRouter;
