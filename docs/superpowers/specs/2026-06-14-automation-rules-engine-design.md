@@ -61,7 +61,7 @@ id          serial PK
 ruleKey     varchar(64)
 projectId   varchar(32)          -- 可空（全局事件）
 eventType   varchar(64)          -- 触发的 action / 'scheduled'
-entityType  varchar(32)          -- task | issue | gate | mp_release | ...
+entityType  varchar(32)          -- task | issue | gate_review | mp_release | ...
 entityId    varchar(64)
 status      varchar(16)          -- fired | skipped | error
 recipients  jsonb                -- [{userId, channel}] / {group:true}
@@ -78,11 +78,17 @@ createdAt   timestamp default now()
 | ruleKey | 触发 | 条件（可配） | 动作 | 默认启用 | 默认推群 |
 |---|---|---|---|---|---|
 | `overdue_reminder` | 定时扫描 | task/issue 过 dueDate 且状态未完成；`graceDays`(默认0)；`cadenceHours`(默认24)；`scope`(tasks/issues/both)；`notifyRoles`(默认 assignee,pm) | 通知“X 已逾期 N 天” | 是 | 否 |
-| `high_severity_issue` | issue 创建；issue 更新且 severity 升入集合 | `severities`(默认 [P0,P1]) | 通知 pm,manager,assignee | 是 | 是 |
-| `status_change_notify` | issue 状态变；task 状态变；gate 决议落定 | `transitions`(默认 issue→resolved/closed、gate→approved/rejected) | 通知 reporter/assignee,pm | 否 | 否 |
+| `high_severity_issue` | issue 创建；issue 更新且严重度**变更严重**并落在观察集 | `severities`(默认 [P0,P1])。严重度排序 P0>P1>P2>P3；触发条件=after∈severities 且（创建 或 after 比 before 更严重）。**含集合内升级 P1→P0**，降级不发。 | 通知 pm,manager,assignee | 是 | 是 |
+| `status_change_notify` | issue 状态变（**含关闭**）；task 状态变；gate 决议落定（**含创建即终态**） | `transitions`(默认 issue→resolved/closed、gate→approved/rejected) | 通知 reporter/assignee,pm | 否 | 否 |
 | `mp_release_broadcast` | MP Release 完成 | 无 | 群播报发布摘要（产品/版本/项目）+ 通知成员 | 是 | 是 |
 
 各规则 `config` 的形状由 `rules.ts` 里该规则的默认参数定义；`updateRule` 用 zod 按规则校验传入的 config 子集（合并进默认值）。
+
+**规则契约（rules.ts 里每条规则的形状，避免逻辑散进 engine）**：
+- `matches(event, config): boolean` — 判定（纯函数，依赖 `event.before/after`）。
+- `recipientSpec: RecipientRole[]` — 声明要通知哪些角色；engine 用统一的 `resolveRecipients(roles, event, projectCtx)` 把角色解析成 userId 列表 + 是否推群（assignee/reporter 从实体取，pm/owner 从项目取，manager 从成员取）。
+- `buildMessage(event, ctx): { title, text }` — 该规则的消息文案（站内 + 钉钉 markdown 复用 §`pushWebhook`）。
+- 实现现状：partial `rules.ts` 已有 `matches` 与 `recipientRoles`；`buildMessage` 与 engine 侧 `resolveRecipients` 随 engine 一并落地。
 
 ## 5. 执行流
 
@@ -102,12 +108,15 @@ createdAt   timestamp default now()
 3. 防重发：触发前查 `automation_runs` 是否存在同 `(ruleKey, entityId, status='fired')` 且在 `cadenceHours` 窗口内 → 命中则记 `skipped`（或直接不记），否则 fire。
 4. 派发同事件型；落 run。
 
-### 需要补的埋点
-现有 `createActivityLog` 未覆盖以下事件，需在对应路由补 `emitAutomationEvent`（并按需补 activity log）：
-- `issue.update`（状态/严重度变化）、`issue.close`
-- `task.update_meta` 的状态变化（已落 activity，但需带 before/after 给引擎）
-- `gate.update`（决议落定）
-- `mp.release`（MP Release 完成）
+### 埋点与事件构造（关键修订）
+**自动化事件词表独立于 activity-log action 词表**，由 `emitAutomationEvent` 在各路由发出；且 activity-log 的 `meta` 只有 `{ patch }`，没有全量 before/after，所以 emit 层必须**自己取旧实体 + 套 patch 拼出 `before/after`** 再发事件。
+
+各路由需补的 `emitAutomationEvent`：
+- **issue 更新**：统一发 `action:"issue.update"`、`entityType:"issue"`，带 `before/after`（**关闭只是 `status→closed/resolved` 的一种**，不另设事件）。注：activity-log 仍按原逻辑记 `issue.close`/`issue.update`，二者互不影响。规则的 `status_change` issue 分支同时接受 `issue.update` 与 `issue.close` 两种 action（防御性），均按 status 变化判定。
+- **task**：`action:"task.update_meta"`、`entityType:"task"`，带 before/after（status 变化）。
+- **gate**：`entityType:"gate_review"`（对齐现有路由，**非 "gate"**）。`gate.update` 带 before/after；**创建即终态**时（create 的 decision 直接是 approved/rejected）也发一次，规则按“decision 落在目标集”判定（create 时 before 缺省视为变入）。
+- **mp release**：`action:"mp.release"`、`entityType:"mp_release"`。
+- 逾期（时间型）：由 scheduler 构造 `action:"scheduled"` 事件，`after` 填实体当前 dueDate/status。
 
 ## 6. 错误处理
 
@@ -125,8 +134,11 @@ createdAt   timestamp default now()
 4. 防重发：同一逾期实体二次扫描在 `cadenceHours` 内 → 记 `skipped`，不重复通知。
 5. 关闭的规则 → no-op。
 6. 隔离性：一条规则 `matches`/派发抛错 → 写 error run，其余规则仍正常执行。
+7. 严重度升级：issue P1→P0 → 触发（变更严重）；P0→P1 → 不触发（降级）；P2→P3 → 不触发。
+8. issue 关闭：`issue.close` 与 `issue.update`(status→closed) 两种 action 都能触发 `status_change`。
+9. gate 对齐：`entityType:"gate_review"`；gate 创建即终态（decision=approved/rejected）也触发。
 
-引擎对 `pushWebhook` 做注入/桩，避免测试真发钉钉。
+**分层测试**：predicate 层（`rules.test.ts`，纯函数，已有，补 7/8/9 用例）与集成层（`automation.test.ts`，引擎建好后覆盖 1/4/5/6）。引擎对 `pushWebhook` 做注入/桩，避免测试真发钉钉。
 
 ## 8. 配置项
 
