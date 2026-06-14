@@ -97,6 +97,7 @@ export const adminRouter = router({
         name: users.name,
         username: users.username,
         email: users.email,
+        mobile: users.mobile,
         role: users.role,
         canCreateProject: users.canCreateProject,
         createdAt: users.createdAt,

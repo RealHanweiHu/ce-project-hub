@@ -12,6 +12,10 @@ export interface SOPTask {
    * Empty array (default) = visible to ALL roles.
    */
   visibleRoles?: string[];
+  /** 自动排期：任务工期（日历日）。缺省按 1 天处理。 */
+  durationDays?: number;
+  /** 自动排期：前置任务 id（finish-to-start；可指向上一阶段 gateTaskId）。缺省=阶段入口。 */
+  dependsOn?: string[];
 }
 
 export interface SOPGateStandard {
@@ -42,6 +46,8 @@ export interface SOPPhase {
   gateStandard: SOPGateStandard;
   tasks: SOPTask[];
   color: string;
+  /** 自动排期：进入本阶段前的缓冲天数（加在入口任务 start 前）。缺省 0。 */
+  bufferDays?: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

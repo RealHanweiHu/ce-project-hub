@@ -34,6 +34,7 @@ type UserRow = {
   name: string;
   username: string | null;
   email: string | null;
+  mobile: string | null;
   role: 'admin' | 'user';
   canCreateProject: boolean;
   createdAt: Date | null;
@@ -51,6 +52,7 @@ export default function AdminPanel() {
   const [newPassword, setNewPassword] = useState('');
   const [newName, setNewName] = useState('');
   const [newEmail, setNewEmail] = useState('');
+  const [newMobile, setNewMobile] = useState('');
   const [newRole, setNewRole] = useState<'user' | 'admin'>('user');
   const [newCanCreate, setNewCanCreate] = useState(false);
 
@@ -86,8 +88,13 @@ export default function AdminPanel() {
       toast.success('用户已创建');
       setCreateOpen(false);
       setNewUsername(''); setNewPassword(''); setNewName('');
-      setNewRole('user'); setNewCanCreate(false); setNewEmail('');
+      setNewRole('user'); setNewCanCreate(false); setNewEmail(''); setNewMobile('');
     },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const setMobileMutation = trpc.auth.setUserMobile.useMutation({
+    onSuccess: () => { refetch(); toast.success('手机号已更新'); },
     onError: (err) => toast.error(err.message),
   });
 
@@ -215,6 +222,7 @@ export default function AdminPanel() {
                 <tr className="border-b border-stone-100 bg-stone-50">
                   <th className="text-left px-4 py-2.5 text-[10px] font-mono uppercase tracking-wider text-stone-400">用户</th>
                   <th className="text-left px-4 py-2.5 text-[10px] font-mono uppercase tracking-wider text-stone-400">用户名</th>
+                  <th className="text-left px-4 py-2.5 text-[10px] font-mono uppercase tracking-wider text-stone-400">手机号(钉钉)</th>
                   <th className="text-center px-4 py-2.5 text-[10px] font-mono uppercase tracking-wider text-stone-400">系统角色</th>
                   <th className="text-center px-4 py-2.5 text-[10px] font-mono uppercase tracking-wider text-stone-400">可创建项目</th>
                   <th className="text-left px-4 py-2.5 text-[10px] font-mono uppercase tracking-wider text-stone-400">最近登录</th>
@@ -238,6 +246,19 @@ export default function AdminPanel() {
                       </div>
                     </td>
                     <td className="px-4 py-3 text-stone-500 font-mono text-xs">{u.username || '—'}</td>
+                    <td className="px-4 py-3 font-mono text-xs">
+                      <button
+                        className={`hover:underline ${u.mobile ? 'text-stone-600' : 'text-stone-300'}`}
+                        title="点击设置/修改手机号(用于钉钉日程映射)"
+                        onClick={() => {
+                          const v = window.prompt(`设置 ${u.name} 的手机号(与钉钉一致):`, u.mobile || '');
+                          if (v === null) return;
+                          setMobileMutation.mutate({ userId: u.id, mobile: v.trim() });
+                        }}
+                      >
+                        {u.mobile || '＋ 设置'}
+                      </button>
+                    </td>
                     <td className="px-4 py-3 text-center">
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
@@ -417,6 +438,15 @@ export default function AdminPanel() {
               />
             </div>
             <div className="space-y-1.5">
+              <Label className="text-sm text-stone-700">手机号（钉钉日程）</Label>
+              <Input
+                value={newMobile}
+                onChange={(e) => setNewMobile(e.target.value)}
+                placeholder="与钉钉一致，留空则不建日程"
+                className="text-sm"
+              />
+            </div>
+            <div className="space-y-1.5">
               <Label className="text-sm text-stone-700">初始密码 <span className="text-rose-500">*</span></Label>
               <Input
                 type="password"
@@ -466,6 +496,7 @@ export default function AdminPanel() {
                   password: newPassword,
                   name: newName.trim(),
                   email: newEmail.trim() || undefined,
+                  mobile: newMobile.trim() || undefined,
                   role: newRole,
                   canCreateProject: newCanCreate,
                 });

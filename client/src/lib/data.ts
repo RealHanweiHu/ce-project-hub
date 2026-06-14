@@ -44,6 +44,7 @@ export interface TaskDetails {
   files: FileAttachment[];
   // Task meta fields (from DB project_tasks)
   assigneeUserId?: number | null;
+  startDate?: string | null;     // YYYY-MM-DD（自动排期生成）
   dueDate?: string | null;       // YYYY-MM-DD
   taskStatus?: string;           // TaskStatus (renamed to avoid collision with IssueStatus)
   taskPriority?: string;         // TaskPriority

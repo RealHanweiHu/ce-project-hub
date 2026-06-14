@@ -12,6 +12,8 @@ import {
   getBlockedTasks,
   getProjectsByUser,
   createActivityLog,
+  applyProjectSchedule,
+  rescheduleProjectFromTask,
 } from "../db";
 import { ROLE_PERMISSIONS } from "./members";
 import { TASK_STATUSES, TASK_PRIORITIES } from "../../drizzle/schema";
@@ -180,6 +182,35 @@ export const tasksRouter = router({
         after: { ...beforeTask, ...metaPatch } as Record<string, unknown>,
       });
       return { success: true };
+    }),
+
+  /** 按项目开始日重新生成整套排期（覆盖任务起止日，需 canEditProjectInfo） */
+  regenerateSchedule: protectedProcedure
+    .input(z.object({ projectId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const role = await getEffectiveRole(input.projectId, ctx.user.id);
+      if (!role || !ROLE_PERMISSIONS[role].canEditProjectInfo) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "没有重排排期的权限" });
+      }
+      const count = await applyProjectSchedule(input.projectId);
+      return { success: true, count } as const;
+    }),
+
+  /** 改某任务起止 → 只向后联动重排其传递后继（需 canEditTasks） */
+  reschedule: protectedProcedure
+    .input(z.object({
+      projectId: z.string(),
+      taskId: z.string(),
+      startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const role = await getEffectiveRole(input.projectId, ctx.user.id);
+      if (!role || !ROLE_PERMISSIONS[role].canEditTasks) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "没有调整排期的权限" });
+      }
+      const count = await rescheduleProjectFromTask(input.projectId, input.taskId, input.startDate, input.dueDate);
+      return { success: true, count } as const;
     }),
 
   /**
