@@ -8,7 +8,7 @@ describe("syncProjectMeeting", () => {
   it("degrades to group push when PM has no dingtalk id", async () => {
     const pushed: string[] = [];
     const res = await syncProjectMeeting({
-      project: baseProject, config, members: [{ id: 1, dingtalkUserId: null, mobile: null }],
+      project: baseProject, config, todayISO: "2026-06-15", members: [{ id: 1, dingtalkUserId: null, mobile: null }],
       deps: {
         resolveUserId: async () => null,
         upsert: async () => "should-not-be-called",
@@ -23,7 +23,7 @@ describe("syncProjectMeeting", () => {
   it("creates dingtalk event when PM resolvable", async () => {
     let savedEvent = "";
     const res = await syncProjectMeeting({
-      project: baseProject, config, members: [{ id: 1, dingtalkUserId: "pm-x", mobile: null }],
+      project: baseProject, config, todayISO: "2026-06-15", members: [{ id: 1, dingtalkUserId: "pm-x", mobile: null }],
       deps: {
         resolveUserId: async (u) => u.dingtalkUserId ?? null,
         upsert: async () => "evt-1",
@@ -37,7 +37,7 @@ describe("syncProjectMeeting", () => {
 
   it("does nothing when meeting disabled", async () => {
     const res = await syncProjectMeeting({
-      project: baseProject, config: { ...config, enabled: false }, members: [],
+      project: baseProject, config: { ...config, enabled: false }, todayISO: "2026-06-15", members: [],
       deps: { resolveUserId: async () => null, upsert: async () => null, saveEventId: async () => {}, groupPush: async () => {} },
     });
     expect(res.mode).toBe("skipped");

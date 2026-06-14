@@ -8,7 +8,7 @@ import {
   updateProject,
   deleteProject,
   createActivityLog,
-  getProjectMembers,
+  getMeetingParticipants,
   updateProjectMeetingConfig,
   updateProjectDingtalkEvent,
   setUserDingtalkId,
@@ -124,11 +124,12 @@ export const projectsRouter = router({
       try {
         await updateProjectMeetingConfig(input.id, DEFAULT_MEETING);
         const project = await getProjectById(input.id);
-        const members = await getProjectMembers(input.id);
+        const members = await getMeetingParticipants(input.id, project?.pmUserId ?? null);
         await syncProjectMeeting({
           project: project as never,
           config: DEFAULT_MEETING,
-          members: members as never,
+          members,
+          todayISO: new Date().toISOString().slice(0, 10),
           deps: {
             resolveUserId: (u) => resolveDingtalkUserId(u, setUserDingtalkId),
             upsert: upsertWeeklyMeeting,
