@@ -8,10 +8,20 @@ import {
   updateProject,
   deleteProject,
   createActivityLog,
+  getProjectMembers,
+  updateProjectMeetingConfig,
+  updateProjectDingtalkEvent,
+  setUserDingtalkId,
 } from "../db";
 import { TRPCError } from "@trpc/server";
 import { ROLE_PERMISSIONS } from "./members";
 import { getProjectMember } from "../db";
+import { syncProjectMeeting } from "../_core/meetingSync";
+import { resolveDingtalkUserId } from "../_core/dingtalk";
+import { upsertWeeklyMeeting } from "../_core/dingtalkCalendar";
+import { pushWebhook } from "../_core/notify";
+
+const DEFAULT_MEETING = { enabled: true, weekday: 3, time: "15:00", durationMin: 60, title: "项目周会" };
 
 /** Resolve effective role for a user in a project */
 async function getEffectiveRole(projectId: string, userId: number) {
@@ -105,6 +115,25 @@ export const projectsRouter = router({
           projectNumber: input.projectNumber,
         },
       });
+      // 默认周会配置 + 尝试建钉钉日程（降级安全，绝不阻断建项目）
+      try {
+        await updateProjectMeetingConfig(input.id, DEFAULT_MEETING);
+        const project = await getProjectById(input.id);
+        const members = await getProjectMembers(input.id);
+        await syncProjectMeeting({
+          project: project as never,
+          config: DEFAULT_MEETING,
+          members: members as never,
+          deps: {
+            resolveUserId: (u) => resolveDingtalkUserId(u, setUserDingtalkId),
+            upsert: upsertWeeklyMeeting,
+            saveEventId: updateProjectDingtalkEvent,
+            groupPush: (t) => pushWebhook(t, { title: "项目周会" }),
+          },
+        });
+      } catch (e) {
+        console.warn("[meeting] create sync failed (non-fatal):", e);
+      }
       return { success: true };
     }),
 
