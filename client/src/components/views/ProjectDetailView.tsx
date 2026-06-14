@@ -3,7 +3,7 @@
 
 import { useState, useRef } from 'react';
 import {
-  ArrowLeft, CheckCircle2, Circle, ChevronDown, ChevronRight,
+  ArrowLeft, CheckCircle2, Circle, ChevronRight,
   Upload, Download, Trash2, Paperclip, FileText, Image as ImageIcon,
   Edit3, Calendar, AlertTriangle, Target, Zap, BarChart2, ListChecks,
   Lock, ShieldAlert, Flag, Bug, GitBranch, Filter, Rocket, LayoutDashboard,
@@ -500,7 +500,7 @@ function PmSelector({
 
 export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailViewProps) {
   const [activePhaseId, setActivePhaseId] = useState(project.currentPhase);
-  const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [mainTab, setMainTab] = useState<'overview' | 'tasks' | 'kanban' | 'requirements' | 'gantt' | 'issues' | 'changelog' | 'members' | 'bom' | 'fields'>('overview');
   const perms = useProjectPermission(project.id);
   const { user: currentUser } = useAuth();
@@ -522,6 +522,24 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
   const isCurrentPhaseUnlocked = isPhaseUnlocked(project, activePhaseId);
   const blockingGate = getBlockingGate(project, activePhaseId);
   const catConfig = project.category ? CATEGORY_MAP[project.category] : null;
+  const visibleActiveTasks = activePhase?.tasks.filter((task) => {
+    const effectiveRoles = project.taskVisibleRoles?.[task.id] ?? (task.visibleRoles || []);
+    if (!effectiveRoles || effectiveRoles.length === 0) return true;
+    if (perms.role === 'owner') return true;
+    return effectiveRoles.includes(perms.role);
+  }) || [];
+  const selectedTask = selectedTaskId
+    ? visibleActiveTasks.find((task) => task.id === selectedTaskId) || null
+    : null;
+  const selectedTaskDetails = selectedTask ? activePhaseData?.taskDetails?.[selectedTask.id] : undefined;
+  const selectedTaskChecked = selectedTask ? Boolean(activePhaseData?.tasks?.[selectedTask.id]) : false;
+  const selectedTaskIsGate = !!selectedTask && selectedTask.id === activePhase?.gateTaskId;
+  const selectedTaskRoles = selectedTask
+    ? project.taskVisibleRoles?.[selectedTask.id] ?? (selectedTask.visibleRoles || [])
+    : [];
+  const selectedTaskRoleLabels = selectedTaskRoles.length > 0
+    ? selectedTaskRoles.map((role) => ROLE_OPTIONS.find((option) => option.value === role)?.label || role).join(' / ')
+    : '所有项目成员';
 
   const updateField = (field: keyof Project, value: string) => onUpdate({ ...project, [field]: value });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -558,17 +576,10 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
     onUpdate(newProject);
   };
 
-  const toggleExpand = (taskId: string) => {
-    setExpandedTasks((prev) => {
-      const next = new Set(prev);
-      if (next.has(taskId)) next.delete(taskId); else next.add(taskId);
-      return next;
-    });
-  };
-
   // When user clicks a phase bar in Gantt, switch to tasks tab and jump to that phase
   const handleGanttPhaseClick = (phaseId: string) => {
     setActivePhaseId(phaseId);
+    setSelectedTaskId(null);
     setMainTab('tasks');
   };
 
@@ -964,7 +975,10 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                 return (
                   <button
                     key={phase.id}
-                    onClick={() => setActivePhaseId(phase.id)}
+                    onClick={() => {
+                      setActivePhaseId(phase.id);
+                      setSelectedTaskId(null);
+                    }}
                     className={`flex-1 min-w-[80px] p-3 text-left transition-all border-b-2 relative ${
                       isActive
                         ? 'border-b-stone-900 bg-stone-50'
@@ -1037,56 +1051,43 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
               {/* Role-based task filter notice */}
               {perms.role !== 'owner' && !perms.isLoading && (() => {
                 const totalTasks = activePhase?.tasks.length || 0;
-                const visibleTasks = activePhase?.tasks.filter((task) => {
-                  // Use project-level override if set, else fall back to template default
-                  const effectiveRoles = project.taskVisibleRoles?.[task.id] ?? (task.visibleRoles || []);
-                  if (!effectiveRoles || effectiveRoles.length === 0) return true;
-                  return effectiveRoles.includes(perms.role);
-                }).length || 0;
-                const hiddenCount = totalTasks - visibleTasks;
+                const hiddenCount = totalTasks - visibleActiveTasks.length;
                 if (hiddenCount === 0) return null;
                 return (
                   <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 text-xs text-amber-700">
                     <Filter size={11} className="shrink-0" />
-                    <span>已按您的岗位角色过滤，当前显示 <strong>{visibleTasks}</strong> 项相关任务（共 {totalTasks} 项，隐藏 {hiddenCount} 项非本岗位任务）</span>
+                    <span>已按您的岗位角色过滤，当前显示 <strong>{visibleActiveTasks.length}</strong> 项相关任务（共 {totalTasks} 项，隐藏 {hiddenCount} 项非本岗位任务）</span>
                   </div>
                 );
               })()}
 
               {/* Tasks */}
-              <div className="space-y-2">
-                {activePhase?.tasks.filter((task) => {
-                  // Use project-level override if set, else fall back to template default
-                  const effectiveRoles = project.taskVisibleRoles?.[task.id] ?? (task.visibleRoles || []);
-                  // If effectiveRoles is empty, everyone can see it
-                  if (!effectiveRoles || effectiveRoles.length === 0) return true;
-                  // Owner always sees all tasks
-                  if (perms.role === 'owner') return true;
-                  // Filter by role
-                  return effectiveRoles.includes(perms.role);
-                }).map((task) => {
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {visibleActiveTasks.map((task) => {
                   const checked = activePhaseData?.tasks[task.id] || false;
                   const details = activePhaseData?.taskDetails?.[task.id];
-                  const expanded = expandedTasks.has(task.id);
                   const hasInstructions = !!(details?.instructions || '').trim();
                   const fileCount = (details?.files || []).length;
                   const isGateTask = task.id === activePhase.gateTaskId;
                   const locked = !isCurrentPhaseUnlocked;
+                  const selected = selectedTaskId === task.id;
+                  const status = checked ? 'done' : (details?.taskStatus || 'todo');
 
                   return (
                     <div
                       key={task.id}
-                      className={`border transition-all ${
+                      onClick={() => setSelectedTaskId(task.id)}
+                      className={`border transition-all cursor-pointer min-h-[118px] ${
                         locked
                           ? 'border-stone-200 bg-stone-50/30 opacity-60'
-                          : isGateTask
+                        : isGateTask
                           ? checked
                             ? 'border-l-4 border-l-emerald-500 border-stone-200 bg-emerald-50/30'
                             : 'border-l-4 border-l-amber-500 border-amber-200 bg-amber-50/30'
                           : checked
                           ? 'border-l-2 border-l-stone-900 border-stone-200 bg-stone-50/50'
                           : 'border-stone-200 bg-white'
-                      }`}
+                      } ${selected ? 'ring-2 ring-amber-300 border-amber-300' : 'hover:border-stone-400 hover:bg-stone-50/50'}`}
                     >
                       {/* Gate Task Label */}
                       {isGateTask && (
@@ -1102,7 +1103,12 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
 
                       <div className="flex items-start gap-3 p-3 group">
                         <button
-                          onClick={() => !locked && (isGateTask ? handleGateTaskToggle(task.id) : toggleTask(task.id))}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (!locked) {
+                              isGateTask ? handleGateTaskToggle(task.id) : toggleTask(task.id);
+                            }
+                          }}
                           className={`mt-0.5 shrink-0 ${locked ? 'cursor-not-allowed' : 'cursor-pointer'}`}
                           title={locked ? '此阶段已锁定，请先完成前置 Gate 评审' : isGateTask && !checked ? '点击完成 Gate 评审并填写评审记录' : undefined}
                         >
@@ -1114,7 +1120,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                             <Circle size={18} className={`${isGateTask ? 'text-amber-400 hover:text-amber-600' : 'text-stone-300 hover:text-stone-500'} transition-colors`} />
                           )}
                         </button>
-                        <div className="flex-1 min-w-0 cursor-pointer" onClick={() => !locked && toggleExpand(task.id)}>
+                        <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className={`text-sm font-medium ${
                               locked ? 'text-stone-400' : checked ? 'text-stone-500 line-through' : isGateTask ? 'text-stone-900 font-semibold' : 'text-stone-900'
@@ -1136,141 +1142,211 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                           <p className={`text-xs mt-1 ${locked || checked ? 'text-stone-400' : 'text-stone-500'}`}>
                             {task.desc}
                           </p>
+                          <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                            <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400 border border-stone-200 bg-stone-50 px-1.5 py-0.5">
+                              {status === 'done' ? '已完成' :
+                                status === 'in_progress' ? '进行中' :
+                                status === 'blocked' ? '阻塞' :
+                                status === 'skipped' ? '跳过' : '待开始'}
+                            </span>
+                            {details?.taskPriority && (
+                              <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400 border border-stone-200 bg-stone-50 px-1.5 py-0.5">
+                                {details.taskPriority}
+                              </span>
+                            )}
+                            {selected && (
+                              <span className="text-[10px] font-mono uppercase tracking-wider text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5">
+                                详情已打开
+                              </span>
+                            )}
+                          </div>
                         </div>
-                        {!locked && (
-                          <button
-                            onClick={() => toggleExpand(task.id)}
-                            className="shrink-0 mt-0.5 text-stone-400 hover:text-stone-600 transition-colors"
-                          >
-                            {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                          </button>
-                        )}
+                        <ChevronRight size={16} className={`shrink-0 mt-0.5 transition-colors ${selected ? 'text-amber-600' : 'text-stone-300 group-hover:text-stone-500'}`} />
                       </div>
-
-                      {!locked && expanded && (
-                        <div className="px-3 pb-3">
-                          {isGateTask && activePhase.gateStandard && (
-                            <div className="p-3 border-l-2 border-l-stone-900 bg-stone-50 mb-3">
-                              <div className="text-[10px] font-mono uppercase tracking-widest text-stone-500 mb-2">Gate 管理标准</div>
-                              <GateStandardPanel standard={activePhase.gateStandard} compact evidenceHint />
-                            </div>
-                          )}
-                          {task.guide && (
-                            <div className={`p-3 border-l-2 mb-3 ${
-                              isGateTask ? 'border-amber-500 bg-amber-50' : 'border-amber-500 bg-amber-50'
-                            }`}>
-                              <div className="text-[10px] font-mono uppercase tracking-widest text-amber-600 mb-1.5">操作指南</div>
-                              <pre className="text-xs text-stone-700 whitespace-pre-wrap font-sans leading-relaxed">{task.guide}</pre>
-                            </div>
-                          )}
-                          <TaskDetail
-                            taskId={task.id}
-                            taskDetails={details || { instructions: '', files: [] }}
-                            onUpdate={(d) => updateTaskDetails(task.id, d)}
-                            visibleRoles={
-                              project.taskVisibleRoles?.[task.id] ??
-                              (task.visibleRoles || [])
-                            }
-                            onVisibleRolesChange={(roles) => {
-                              onUpdate({
-                                ...project,
-                                taskVisibleRoles: {
-                                  ...(project.taskVisibleRoles || {}),
-                                  [task.id]: roles,
-                                },
-                              });
-                            }}
-                            canEditRoles={perms.canEditProjectInfo}
-                            canEdit={perms.canEditTasks}
-                            projectId={project.id}
-                            phaseId={activePhaseId}
-                          />
-                        </div>
-                      )}
-
-                      {/* Gate Review Record Display */}
-                      {isGateTask && (() => {
-                        const reviews = activePhaseData?.gateReviews || [];
-                        const latest = reviews[reviews.length - 1];
-                        if (checked && latest) {
-                          return (
-                            <div className="px-3 pb-3 pt-0">
-                              <div className={`border p-3 ${
-                                latest.decision === 'approved' ? 'border-emerald-200 bg-emerald-50/50' :
-                                latest.decision === 'conditional' ? 'border-amber-200 bg-amber-50/50' :
-                                'border-rose-200 bg-rose-50/50'
-                              }`}>
-                                <div className="flex items-center justify-between mb-2">
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-[10px] font-mono uppercase tracking-widest text-stone-400">评审记录</span>
-                                    {reviews.length > 1 && (
-                                      <span className="text-[9px] font-mono text-stone-400 bg-stone-100 px-1.5 py-0.5 border border-stone-200">
-                                        共 {reviews.length} 次
-                                      </span>
-                                    )}
-                                  </div>
-                                  <button
-                                    onClick={() => setGateReviewPending({ phaseId: activePhaseId })}
-                                    className="text-[10px] font-mono text-stone-400 hover:text-stone-700 transition-colors"
-                                  >
-                                    查看历史
-                                  </button>
-                                </div>
-                                <GateReviewBadge review={latest} />
-                                <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-stone-600">
-                                  <div><span className="font-mono text-stone-400">参与人：</span>{latest.participants}</div>
-                                  {latest.conditions && (
-                                    <div className="col-span-2"><span className="font-mono text-stone-400">条件：</span>{latest.conditions}</div>
-                                  )}
-                                  {latest.notes && (
-                                    <div className="col-span-2 mt-1 text-stone-500 italic">{latest.notes}</div>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        }
-                        if (checked && !latest) {
-                          return (
-                            <div className="px-3 pb-3">
-                              <button
-                                onClick={() => setGateReviewPending({ phaseId: activePhaseId })}
-                                className="w-full text-xs font-mono text-amber-600 border border-dashed border-amber-300 py-2 hover:bg-amber-50 transition-colors"
-                              >
-                                + 补充填写 Gate 评审记录
-                              </button>
-                            </div>
-                          );
-                        }
-                        return null;
-                      })()}
                     </div>
                   );
                 })}
               </div>
             </div>
 
-            {/* Side Panel: Deliverables + Notes */}
-            <div className="space-y-4">
-              {/* Gate Standard */}
-              {activePhase?.gateStandard && (
-                <div className="bg-white border border-stone-200 p-5">
-                  <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-3">Gate 管理标准</div>
-                  <GateStandardPanel standard={activePhase.gateStandard} evidenceHint />
-                </div>
-              )}
-
-              {/* Deliverables */}
+            {/* Side Panel: Selected Task Details + Notes */}
+            <div className="space-y-4 lg:sticky lg:top-24 self-start">
               <div className="bg-white border border-stone-200 p-5">
-                <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-3">交付物</div>
-                <div className="space-y-1.5">
-                  {activePhase?.deliverables.map((d, i) => (
-                    <div key={i} className="flex items-start gap-2 text-sm text-stone-700">
-                      <span className="text-stone-300 mt-0.5">▸</span>
-                      <span>{d}</span>
+                <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-3">任务详情</div>
+                {selectedTask ? (
+                  <div>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2 mb-1">
+                          <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400">{selectedTask.id}</span>
+                          {selectedTaskIsGate && (
+                            <span className="text-[9px] font-mono uppercase tracking-wider bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.5">
+                              Gate
+                            </span>
+                          )}
+                          {selectedTaskChecked && (
+                            <span className="text-[9px] font-mono uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5">
+                              Done
+                            </span>
+                          )}
+                        </div>
+                        <h3 className="font-serif text-xl leading-tight text-stone-900">{selectedTask.name}</h3>
+                        <p className="text-sm text-stone-500 mt-1 leading-relaxed">{selectedTask.desc}</p>
+                      </div>
                     </div>
-                  ))}
-                </div>
+
+                    {!isCurrentPhaseUnlocked && (
+                      <div className="mt-4 flex items-start gap-2 border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                        <Lock size={13} className="shrink-0 mt-0.5" />
+                        <span>此阶段被前置 Gate 锁定，当前任务详情仅可查看。</span>
+                      </div>
+                    )}
+
+                    <div className="mt-4 border-t border-stone-100 pt-4 space-y-4">
+                      <div>
+                        <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-2">
+                          <Users size={11} />
+                          职责
+                        </div>
+                        <div className="space-y-1.5 text-xs text-stone-600">
+                          <div className="flex gap-2">
+                            <span className="w-16 shrink-0 font-mono text-stone-400">责任角色</span>
+                            <span className="text-stone-800">{selectedTask.owner || '未指定'}</span>
+                          </div>
+                          <div className="flex gap-2">
+                            <span className="w-16 shrink-0 font-mono text-stone-400">可见岗位</span>
+                            <span className="text-stone-800">{selectedTaskRoleLabels}</span>
+                          </div>
+                          {selectedTaskIsGate && activePhase?.gateStandard?.responsibleRoles?.length > 0 && (
+                            <div className="pt-1">
+                              <div className="font-mono text-stone-400 mb-1">Gate 责任分工</div>
+                              <div className="space-y-1">
+                                {activePhase.gateStandard.responsibleRoles.map((role, i) => (
+                                  <div key={i} className="flex items-start gap-2 text-stone-700">
+                                    <span className="text-stone-300 mt-0.5">▸</span>
+                                    <span>{role}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-2">
+                          <Target size={11} />
+                          交付物
+                        </div>
+                        <div className="space-y-1.5">
+                          {(selectedTaskIsGate && activePhase?.gateStandard?.requiredDeliverables?.length
+                            ? activePhase.gateStandard.requiredDeliverables
+                            : activePhase?.deliverables || []
+                          ).map((deliverable, i) => (
+                            <div key={i} className="flex items-start gap-2 text-sm text-stone-700">
+                              <span className="text-stone-300 mt-0.5">▸</span>
+                              <span>{deliverable}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    {selectedTask.guide && (
+                      <div className="mt-4 p-3 border-l-2 border-amber-500 bg-amber-50">
+                        <div className="text-[10px] font-mono uppercase tracking-widest text-amber-600 mb-1.5">操作指南</div>
+                        <pre className="text-xs text-stone-700 whitespace-pre-wrap font-sans leading-relaxed">{selectedTask.guide}</pre>
+                      </div>
+                    )}
+
+                    {selectedTaskIsGate && activePhase?.gateStandard && (
+                      <div className="mt-4 p-3 border-l-2 border-l-stone-900 bg-stone-50">
+                        <div className="text-[10px] font-mono uppercase tracking-widest text-stone-500 mb-2">Gate 管理标准</div>
+                        <GateStandardPanel standard={activePhase.gateStandard} compact evidenceHint />
+                      </div>
+                    )}
+
+                    <TaskDetail
+                      taskId={selectedTask.id}
+                      taskDetails={selectedTaskDetails || { instructions: '', files: [] }}
+                      onUpdate={(details) => updateTaskDetails(selectedTask.id, details)}
+                      visibleRoles={selectedTaskRoles}
+                      onVisibleRolesChange={(roles) => {
+                        onUpdate({
+                          ...project,
+                          taskVisibleRoles: {
+                            ...(project.taskVisibleRoles || {}),
+                            [selectedTask.id]: roles,
+                          },
+                        });
+                      }}
+                      canEditRoles={perms.canEditProjectInfo}
+                      canEdit={perms.canEditTasks && isCurrentPhaseUnlocked}
+                      projectId={project.id}
+                      phaseId={activePhaseId}
+                    />
+
+                    {selectedTaskIsGate && (() => {
+                      const reviews = activePhaseData?.gateReviews || [];
+                      const latest = reviews[reviews.length - 1];
+                      if (selectedTaskChecked && latest) {
+                        return (
+                          <div className={`mt-4 border p-3 ${
+                            latest.decision === 'approved' ? 'border-emerald-200 bg-emerald-50/50' :
+                            latest.decision === 'conditional' ? 'border-amber-200 bg-amber-50/50' :
+                            'border-rose-200 bg-rose-50/50'
+                          }`}>
+                            <div className="flex items-center justify-between mb-2">
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] font-mono uppercase tracking-widest text-stone-400">评审记录</span>
+                                {reviews.length > 1 && (
+                                  <span className="text-[9px] font-mono text-stone-400 bg-stone-100 px-1.5 py-0.5 border border-stone-200">
+                                    共 {reviews.length} 次
+                                  </span>
+                                )}
+                              </div>
+                              <button
+                                onClick={() => setGateReviewPending({ phaseId: activePhaseId })}
+                                className="text-[10px] font-mono text-stone-400 hover:text-stone-700 transition-colors"
+                              >
+                                查看历史
+                              </button>
+                            </div>
+                            <GateReviewBadge review={latest} />
+                            <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-stone-600">
+                              <div><span className="font-mono text-stone-400">参与人：</span>{latest.participants}</div>
+                              {latest.conditions && (
+                                <div className="col-span-2"><span className="font-mono text-stone-400">条件：</span>{latest.conditions}</div>
+                              )}
+                              {latest.notes && (
+                                <div className="col-span-2 mt-1 text-stone-500 italic">{latest.notes}</div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      }
+                      if (selectedTaskChecked && !latest) {
+                        return (
+                          <button
+                            onClick={() => setGateReviewPending({ phaseId: activePhaseId })}
+                            className="mt-4 w-full text-xs font-mono text-amber-600 border border-dashed border-amber-300 py-2 hover:bg-amber-50 transition-colors"
+                          >
+                            + 补充填写 Gate 评审记录
+                          </button>
+                        );
+                      }
+                      return null;
+                    })()}
+                  </div>
+                ) : (
+                  <div className="py-10 text-center">
+                    <ListChecks size={28} className="mx-auto text-stone-300 mb-3" />
+                    <div className="text-sm font-medium text-stone-600">选择左侧任务卡</div>
+                    <div className="text-xs text-stone-400 mt-1 leading-relaxed">
+                      点开任务后查看职责、交付物、截止日期、状态、执行说明和附件。
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Phase Notes */}
@@ -1302,7 +1378,10 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                       <div
                         key={phase.id}
                         className="cursor-pointer"
-                        onClick={() => setActivePhaseId(phase.id)}
+                        onClick={() => {
+                          setActivePhaseId(phase.id);
+                          setSelectedTaskId(null);
+                        }}
                       >
                         <div className="flex items-center justify-between mb-1">
                           <div className="flex items-center gap-1.5">
