@@ -19,7 +19,6 @@ import { getProjectMember } from "../db";
 import { syncProjectMeeting } from "../_core/meetingSync";
 import { resolveDingtalkUserId } from "../_core/dingtalk";
 import { upsertWeeklyMeeting } from "../_core/dingtalkCalendar";
-import { pushWebhook } from "../_core/notify";
 
 const DEFAULT_MEETING = { enabled: true, weekday: 3, time: "15:00", durationMin: 60, title: "项目周会" };
 
@@ -128,7 +127,9 @@ export const projectsRouter = router({
             resolveUserId: (u) => resolveDingtalkUserId(u, setUserDingtalkId),
             upsert: upsertWeeklyMeeting,
             saveEventId: updateProjectDingtalkEvent,
-            groupPush: (t) => pushWebhook(t, { title: "项目周会" }),
+            // 建项目阶段静默降级（不推群），避免成员手机号还没配时每建一个项目就刷群；
+            // PM 之后在周会编辑器显式保存时才会走群推降级。
+            groupPush: async () => {},
           },
         });
       } catch (e) {

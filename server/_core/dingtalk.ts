@@ -30,26 +30,41 @@ export async function getAccessToken(now = Date.now()): Promise<string | null> {
 type MappableUser = { id: number; dingtalkUserId?: string | null; mobile?: string | null };
 
 /**
- * 解析用户的钉钉 userId：优先用缓存；否则按手机号查通讯录并回写缓存；都没有返回 null。
+ * 解析用户的钉钉 unionId（钉钉日历 API 用的是 unionId，不是通讯录 userid）。
+ * 链路：缓存命中 → 否则 手机号→userid→unionId，回写缓存（dingtalkUserId 列存 unionId）。
  * @param cacheBack 回写缓存的副作用（生产传 setUserDingtalkId）
  */
 export async function resolveDingtalkUserId(
   user: MappableUser,
   cacheBack: (userId: number, dingtalkUserId: string) => Promise<void>
 ): Promise<string | null> {
-  if (user.dingtalkUserId) return user.dingtalkUserId;
+  if (user.dingtalkUserId) return user.dingtalkUserId; // 缓存的就是 unionId
   if (!user.mobile) return null;
   const token = await getAccessToken();
   if (!token) return null;
-  const resp = await fetch(`https://oapi.dingtalk.com/topapi/v2/user/getbymobile?access_token=${encodeURIComponent(token)}`, {
+
+  // 1) 手机号 → 通讯录 userid
+  const mResp = await fetch(`https://oapi.dingtalk.com/topapi/v2/user/getbymobile?access_token=${encodeURIComponent(token)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ mobile: user.mobile }),
   });
-  if (!resp.ok) return null;
-  const j = (await resp.json()) as { errcode?: number; result?: { userid?: string } };
-  const uid = j.result?.userid;
-  if (j.errcode !== 0 || !uid) return null;
-  await cacheBack(user.id, uid);
-  return uid;
+  if (!mResp.ok) return null;
+  const mj = (await mResp.json()) as { errcode?: number; result?: { userid?: string } };
+  const userid = mj.result?.userid;
+  if (mj.errcode !== 0 || !userid) return null;
+
+  // 2) userid → unionId
+  const gResp = await fetch(`https://oapi.dingtalk.com/topapi/v2/user/get?access_token=${encodeURIComponent(token)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userid }),
+  });
+  if (!gResp.ok) return null;
+  const gj = (await gResp.json()) as { errcode?: number; result?: { unionid?: string } };
+  const unionid = gj.result?.unionid;
+  if (gj.errcode !== 0 || !unionid) return null;
+
+  await cacheBack(user.id, unionid);
+  return unionid;
 }

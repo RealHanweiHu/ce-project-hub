@@ -15,8 +15,11 @@ describe("buildWeeklyEvent", () => {
     expect(ev.summary).toBe("项目周会");
     expect(ev.start.dateTime.startsWith("2026-06-17T15:00")).toBe(true);
     expect(ev.end.dateTime.startsWith("2026-06-17T16:00")).toBe(true);
-    expect(ev.recurrence.pattern.repeatType).toBe("WEEKLY");
-    expect(ev.recurrence.range.endDate).toBe("2026-08-01");
+    expect(ev.recurrence.pattern.type).toBe("weekly");
+    expect(ev.recurrence.pattern.interval).toBe(1);
+    expect(ev.recurrence.range.type).toBe("endDate");
+    expect(ev.recurrence.range.endDate.startsWith("2026-08-01")).toBe(true);
+    expect(ev.start.dateTime).toContain("+08:00");
     expect(ev.attendees.map((a) => a.id)).toEqual(["u-1", "u-2"]);
     expect(ev.onlineMeetingInfo.type).toBe("dingtalk");
   });
@@ -26,7 +29,7 @@ describe("buildWeeklyEvent", () => {
       title: "周会", weekday: 1, time: "10:00", durationMin: 30,
       startDate: "2026-06-14", targetDate: null, timeZone: "Asia/Shanghai", attendees: [],
     });
-    expect(ev.recurrence.range.endDate).toBe("2026-09-14"); // 周一 06-15 + 13 周
+    expect(ev.recurrence.range.endDate.startsWith("2026-09-14")).toBe(true); // 周一 06-15 + 13 周
   });
 });
 

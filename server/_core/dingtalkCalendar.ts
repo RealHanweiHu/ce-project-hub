@@ -9,7 +9,8 @@ export type DingtalkEvent = {
   summary: string;
   start: { dateTime: string; timeZone: string };
   end: { dateTime: string; timeZone: string };
-  recurrence: { pattern: { repeatType: "WEEKLY" }; range: { endDate: string } };
+  // 经真机核定：pattern.type:"weekly"（非 repeatType）+ interval；range.type:"endDate" + ISO8601 时间戳
+  recurrence: { pattern: { type: "weekly"; interval: number }; range: { type: "endDate"; endDate: string } };
   attendees: { id: string }[];
   onlineMeetingInfo: { type: "dingtalk" };
 };
@@ -42,11 +43,12 @@ export function buildWeeklyEvent(input: WeeklyEventInput): DingtalkEvent {
   const first = firstOccurrence(input.startDate, input.weekday);
   const endTime = addMinutes(input.time, input.durationMin);
   const endDate = input.targetDate ?? addDaysISO(first, 13 * 7);
+  // 钉钉要求 dateTime 带时区偏移；国内固定 +08:00（与 Asia/Shanghai 一致）
   return {
     summary: input.title,
-    start: { dateTime: `${first}T${input.time}:00`, timeZone: input.timeZone },
-    end: { dateTime: `${first}T${endTime}:00`, timeZone: input.timeZone },
-    recurrence: { pattern: { repeatType: "WEEKLY" }, range: { endDate } },
+    start: { dateTime: `${first}T${input.time}:00+08:00`, timeZone: input.timeZone },
+    end: { dateTime: `${first}T${endTime}:00+08:00`, timeZone: input.timeZone },
+    recurrence: { pattern: { type: "weekly", interval: 1 }, range: { type: "endDate", endDate: `${endDate}T23:59:59+08:00` } },
     attendees: input.attendees.map((id) => ({ id })),
     onlineMeetingInfo: { type: "dingtalk" },
   };

@@ -31,18 +31,20 @@ describe("resolveDingtalkUserId", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it("looks up by mobile then caches", async () => {
+  it("resolves mobile -> userid -> unionId and caches unionId", async () => {
     __setDingtalkConfigForTest({ appKey: "k", appSecret: "s" });
     _resetTokenCacheForTest();
     let cached = "";
     vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
       const u = String(url);
       if (u.includes("oauth2/accessToken")) return new Response(JSON.stringify({ accessToken: "tok", expireIn: 7200 }), { status: 200 });
-      return new Response(JSON.stringify({ errcode: 0, result: { userid: "u-99" } }), { status: 200 });
+      if (u.includes("getbymobile")) return new Response(JSON.stringify({ errcode: 0, result: { userid: "u-99" } }), { status: 200 });
+      // user/get → unionid
+      return new Response(JSON.stringify({ errcode: 0, result: { unionid: "union-99" } }), { status: 200 });
     });
     const id = await resolveDingtalkUserId({ id: 2, dingtalkUserId: null, mobile: "13800000000" }, async (_uid, dd) => { cached = dd; });
-    expect(id).toBe("u-99");
-    expect(cached).toBe("u-99"); // 已回写缓存
+    expect(id).toBe("union-99");
+    expect(cached).toBe("union-99"); // 缓存的是 unionId
   });
 
   it("returns null when no cache and no mobile", async () => {
