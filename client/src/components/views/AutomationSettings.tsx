@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -9,19 +9,9 @@ export function AutomationSettings() {
   const utils = trpc.useUtils();
   const { data: rules = [], isLoading } = trpc.automation.listRules.useQuery();
   const { data: runs = [] } = trpc.automation.listRuns.useQuery({ limit: 8 });
+  // drafts 只存"用户改过"的草稿；未改的 textarea 直接回退到规则当前 config（避免用 effect 同步导致死循环）
   const [drafts, setDrafts] = useState<Record<string, string>>({});
-
-  useEffect(() => {
-    setDrafts((prev) => {
-      const next = { ...prev };
-      for (const rule of rules) {
-        if (next[rule.key] === undefined) {
-          next[rule.key] = JSON.stringify(rule.config, null, 2);
-        }
-      }
-      return next;
-    });
-  }, [rules]);
+  const draftFor = (ruleKey: string, config: unknown) => drafts[ruleKey] ?? JSON.stringify(config, null, 2);
 
   const updateRule = trpc.automation.updateRule.useMutation({
     onSuccess: async () => {
@@ -34,9 +24,9 @@ export function AutomationSettings() {
     onError: (err) => toast.error(err.message),
   });
 
-  const saveConfig = (ruleKey: string) => {
+  const saveConfig = (ruleKey: string, config: unknown) => {
     try {
-      const parsed = JSON.parse(drafts[ruleKey] || '{}') as Record<string, unknown>;
+      const parsed = JSON.parse(draftFor(ruleKey, config)) as Record<string, unknown>;
       updateRule.mutate({ ruleKey: ruleKey as (typeof rules)[number]['key'], config: parsed });
     } catch {
       toast.error('配置不是有效 JSON');
@@ -79,7 +69,7 @@ export function AutomationSettings() {
               </div>
 
               <textarea
-                value={drafts[rule.key] ?? ''}
+                value={draftFor(rule.key, rule.config)}
                 onChange={(e) => setDrafts((prev) => ({ ...prev, [rule.key]: e.target.value }))}
                 className="w-full min-h-[132px] border border-stone-200 bg-stone-50 p-2 text-xs font-mono text-stone-700 outline-none focus:border-stone-400"
                 spellCheck={false}
@@ -89,7 +79,7 @@ export function AutomationSettings() {
                 variant="outline"
                 className="h-8 gap-1.5 text-xs"
                 disabled={updateRule.isPending}
-                onClick={() => saveConfig(rule.key)}
+                onClick={() => saveConfig(rule.key, rule.config)}
               >
                 <Save size={12} />
                 保存配置
