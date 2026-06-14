@@ -328,6 +328,56 @@ export async function getProjectsByMember(userId: number): Promise<ProjectRow[]>
     .orderBy(desc(projects.updatedAt));
 }
 
+export type PortfolioRow = {
+  id: string; name: string; projectNumber: string; category: string; risk: string;
+  currentPhase: string; startDate: string | null; targetDate: string | null; pmName: string | null;
+  taskTotal: number; taskDone: number; overdueTasks: number; blockedTasks: number;
+  openIssues: number; projectedEnd: string | null;
+};
+
+/** 跨项目组合看板：用户可见项目 + 每项目健康度聚合(任务/逾期/阻塞/开放问题/预计完成) */
+export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const [owned, member] = await Promise.all([getProjectsByUser(userId), getProjectsByMember(userId)]);
+  const projById = new Map<string, ProjectRow>();
+  for (const p of [...owned, ...member]) projById.set(p.id, p);
+  const ids = Array.from(projById.keys());
+  if (ids.length === 0) return [];
+
+  const taskAgg = await db.select({
+    projectId: projectTasks.projectId,
+    total: drizzleSql<number>`count(*)::int`,
+    done: drizzleSql<number>`count(*) filter (where ${projectTasks.status} in ('done','skipped'))::int`,
+    overdue: drizzleSql<number>`count(*) filter (where ${projectTasks.dueDate} is not null and ${projectTasks.dueDate} < CURRENT_DATE and ${projectTasks.status} not in ('done','skipped'))::int`,
+    blocked: drizzleSql<number>`count(*) filter (where ${projectTasks.status} = 'blocked')::int`,
+    projectedEnd: drizzleSql<string | null>`max(${projectTasks.dueDate})::text`,
+  }).from(projectTasks).where(inArray(projectTasks.projectId, ids)).groupBy(projectTasks.projectId);
+
+  const issueAgg = await db.select({
+    projectId: projectIssues.projectId,
+    open: drizzleSql<number>`count(*) filter (where ${projectIssues.status} in ('open','in_progress'))::int`,
+  }).from(projectIssues).where(inArray(projectIssues.projectId, ids)).groupBy(projectIssues.projectId);
+
+  const pmIds = Array.from(new Set(Array.from(projById.values()).map((p) => p.pmUserId).filter((x): x is number => !!x)));
+  const pmRows = pmIds.length ? await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, pmIds)) : [];
+  const pmName = new Map(pmRows.map((r) => [r.id, r.name]));
+  const taskMap = new Map(taskAgg.map((t) => [t.projectId, t]));
+  const issueMap = new Map(issueAgg.map((i) => [i.projectId, i]));
+
+  return Array.from(projById.values()).map((p) => {
+    const t = taskMap.get(p.id);
+    const i = issueMap.get(p.id);
+    return {
+      id: p.id, name: p.name, projectNumber: p.projectNumber, category: p.category, risk: p.risk,
+      currentPhase: p.currentPhase, startDate: p.startDate, targetDate: p.targetDate,
+      pmName: p.pmUserId ? (pmName.get(p.pmUserId) ?? null) : null,
+      taskTotal: t?.total ?? 0, taskDone: t?.done ?? 0, overdueTasks: t?.overdue ?? 0, blockedTasks: t?.blocked ?? 0,
+      openIssues: i?.open ?? 0, projectedEnd: t?.projectedEnd ?? null,
+    };
+  });
+}
+
 // ── Project Member helpers ────────────────────────────────────────────────────
 
 /** Get all members of a project, joined with user info */
