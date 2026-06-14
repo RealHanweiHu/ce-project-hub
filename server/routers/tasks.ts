@@ -14,6 +14,7 @@ import {
   createActivityLog,
   applyProjectSchedule,
   rescheduleProjectFromTask,
+  setTaskDeliverable,
 } from "../db";
 import { ROLE_PERMISSIONS } from "./members";
 import { TASK_STATUSES, TASK_PRIORITIES } from "../../drizzle/schema";
@@ -182,6 +183,34 @@ export const tasksRouter = router({
         after: { ...beforeTask, ...metaPatch } as Record<string, unknown>,
       });
       return { success: true };
+    }),
+
+  /** 勾选/取消单个交付物完成状态（需 canEditTasks） */
+  setDeliverable: protectedProcedure
+    .input(z.object({
+      projectId: z.string(),
+      phaseId: z.string(),
+      taskId: z.string(),
+      name: z.string().min(1),
+      done: z.boolean(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const role = await getEffectiveRole(input.projectId, ctx.user.id);
+      if (!role || !ROLE_PERMISSIONS[role].canEditTasks) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "没有编辑任务的权限" });
+      }
+      const deliverables = await setTaskDeliverable(
+        input.projectId, input.phaseId, input.taskId, input.name, input.done, ctx.user.id,
+      );
+      await createActivityLog({
+        projectId: input.projectId,
+        userId: ctx.user.id,
+        action: "task.update_deliverable",
+        entityType: "task",
+        entityId: input.taskId,
+        meta: { phaseId: input.phaseId, name: input.name, done: input.done },
+      });
+      return { success: true, deliverables } as const;
     }),
 
   /** 按项目开始日重新生成整套排期（覆盖任务起止日，需 canEditProjectInfo） */

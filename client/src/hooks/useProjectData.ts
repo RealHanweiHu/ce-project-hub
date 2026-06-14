@@ -125,6 +125,7 @@ export function useProjectData(projectId: string | null) {
           dueDate: t.dueDate ? String(t.dueDate).slice(0, 10) : null,
           taskStatus: t.status ?? "todo",
           taskPriority: t.priority ?? "medium",
+          deliverables: (t.deliverables as Record<string, boolean> | null) ?? {},
         };
       }
 

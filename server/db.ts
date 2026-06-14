@@ -936,6 +936,44 @@ export async function updateTaskMeta(
   }
 }
 
+/**
+ * 切换某任务下单个交付物的完成状态（合并到 deliverables jsonb map）。
+ * 行不存在则插入。返回更新后的完成 map。
+ */
+export async function setTaskDeliverable(
+  projectId: string,
+  phaseId: string,
+  taskId: string,
+  name: string,
+  done: boolean,
+  updatedBy?: number | null
+): Promise<Record<string, boolean>> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const existing = await db
+    .select({ id: projectTasks.id, deliverables: projectTasks.deliverables })
+    .from(projectTasks)
+    .where(
+      and(
+        eq(projectTasks.projectId, projectId),
+        eq(projectTasks.phaseId, phaseId),
+        eq(projectTasks.taskId, taskId)
+      )
+    )
+    .limit(1);
+  const current = existing[0]?.deliverables ?? {};
+  const next = { ...current, [name]: done };
+  if (existing.length > 0) {
+    await db
+      .update(projectTasks)
+      .set({ deliverables: next, updatedBy: updatedBy ?? null })
+      .where(eq(projectTasks.id, existing[0].id));
+  } else {
+    await db.insert(projectTasks).values({ projectId, phaseId, taskId, deliverables: next, updatedBy: updatedBy ?? null });
+  }
+  return next;
+}
+
 // ── 自动排期：生成 / 联动重排 ─────────────────────────────────────────────────
 
 /** 按项目 category + 开始日重生成整套任务起止日，写回 project_tasks。返回写入任务数。 */

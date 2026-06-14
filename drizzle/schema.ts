@@ -234,6 +234,8 @@ export const projectTasks = pgTable(
     completed: boolean("completed").notNull().default(false),
     /** Task-level instructions / notes */
     instructions: text("instructions"),
+    /** 交付物完成状态：交付物名称 → 是否完成。模板见 shared/task-deliverables.ts */
+    deliverables: jsonb("deliverables").$type<Record<string, boolean>>().default({}),
     /**
      * Roles that can see this task.
      * JSON array of ProjectMemberRole strings.
