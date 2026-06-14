@@ -12,6 +12,7 @@ import {
 } from "../db";
 import { ROLE_PERMISSIONS } from "./members";
 import { GATE_DECISIONS } from "../../drizzle/schema";
+import { emitAutomationEvent } from "../automation/events";
 
 async function getEffectiveRole(projectId: string, userId: number) {
   const project = await getProjectById(projectId);
@@ -71,6 +72,14 @@ export const gateReviewsRouter = router({
           roundNumber: input.roundNumber,
         },
       });
+      await emitAutomationEvent({
+        action: "gate.create",
+        projectId: input.projectId,
+        entityType: "gate_review",
+        entityId: id,
+        actorId: ctx.user.id,
+        after: { ...input, id, createdBy: ctx.user.id },
+      });
       return { success: true, id };
     }),
 
@@ -94,6 +103,8 @@ export const gateReviewsRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "只有管理层可以修改门评审" });
       }
       const { id, projectId, ...patch } = input;
+      const reviews = await getProjectGateReviews(projectId);
+      const beforeReview = reviews.find((review) => review.id === id);
       await updateProjectGateReview(id, patch);
       await createActivityLog({
         projectId,
@@ -103,6 +114,17 @@ export const gateReviewsRouter = router({
         entityId: String(id),
         meta: { patch },
       });
+      if (beforeReview) {
+        await emitAutomationEvent({
+          action: "gate.update",
+          projectId,
+          entityType: "gate_review",
+          entityId: id,
+          actorId: ctx.user.id,
+          before: beforeReview as unknown as Record<string, unknown>,
+          after: { ...beforeReview, ...patch } as Record<string, unknown>,
+        });
+      }
       return { success: true };
     }),
 

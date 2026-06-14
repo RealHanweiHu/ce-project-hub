@@ -16,6 +16,7 @@ import {
   ISSUE_STATUSES,
   ISSUE_CATEGORIES,
 } from "../../drizzle/schema";
+import { emitAutomationEvent } from "../automation/events";
 
 async function getEffectiveRole(projectId: string, userId: number) {
   const project = await getProjectById(projectId);
@@ -75,6 +76,14 @@ export const issuesRouter = router({
         entityId: String(id),
         meta: { phaseId: input.phaseId, title: input.title, severity: input.severity },
       });
+      await emitAutomationEvent({
+        action: "issue.create",
+        projectId: input.projectId,
+        entityType: "issue",
+        entityId: id,
+        actorId: ctx.user.id,
+        after: { ...input, id, creatorId: ctx.user.id },
+      });
       return { success: true, id };
     }),
 
@@ -114,6 +123,7 @@ export const issuesRouter = router({
 
       const { id, projectId, ...patch } = input;
       await updateProjectIssue(id, patch);
+      const afterIssue = { ...issue, ...patch };
       await createActivityLog({
         projectId,
         userId: ctx.user.id,
@@ -121,6 +131,15 @@ export const issuesRouter = router({
         entityType: "issue",
         entityId: String(id),
         meta: { patch },
+      });
+      await emitAutomationEvent({
+        action: "issue.update",
+        projectId,
+        entityType: "issue",
+        entityId: id,
+        actorId: ctx.user.id,
+        before: issue as unknown as Record<string, unknown>,
+        after: afterIssue as unknown as Record<string, unknown>,
       });
       return { success: true };
     }),

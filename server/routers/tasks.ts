@@ -15,6 +15,7 @@ import {
 } from "../db";
 import { ROLE_PERMISSIONS } from "./members";
 import { TASK_STATUSES, TASK_PRIORITIES } from "../../drizzle/schema";
+import { emitAutomationEvent } from "../automation/events";
 
 async function getEffectiveRole(projectId: string, userId: number) {
   const project = await getProjectById(projectId);
@@ -143,6 +144,17 @@ export const tasksRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "没有编辑任务的权限" });
       }
       const { projectId, phaseId, taskId, ...patch } = input;
+      const existingTasks = await getProjectTasks(projectId, phaseId);
+      const beforeTask = existingTasks.find((task) => task.taskId === taskId) ?? {
+        projectId,
+        phaseId,
+        taskId,
+        completed: false,
+        assigneeUserId: null,
+        dueDate: null,
+        status: "todo",
+        priority: "medium",
+      };
       const metaPatch = {
         ...patch,
         updatedBy: ctx.user.id,
@@ -157,6 +169,15 @@ export const tasksRouter = router({
         entityType: "task",
         entityId: taskId,
         meta: { phaseId, patch },
+      });
+      await emitAutomationEvent({
+        action: "task.update_meta",
+        projectId,
+        entityType: "task",
+        entityId: `${projectId}:${phaseId}:${taskId}`,
+        actorId: ctx.user.id,
+        before: beforeTask as unknown as Record<string, unknown>,
+        after: { ...beforeTask, ...metaPatch } as Record<string, unknown>,
       });
       return { success: true };
     }),

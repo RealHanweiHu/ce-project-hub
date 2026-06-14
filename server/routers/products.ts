@@ -7,6 +7,7 @@ import {
   createPlatform, listProductRevisions,
   setProjectProduct, getOpenP0P1Count, releaseProject, getProjectById,
 } from "../db";
+import { emitAutomationEvent } from "../automation/events";
 
 export const productsRouter = router({
   list: protectedProcedure
@@ -72,7 +73,24 @@ export const productsRouter = router({
     .input(z.object({ projectId: z.string(), notes: z.string().optional() }))
     .mutation(async ({ ctx, input }) => {
       try {
-        return await releaseProject({ projectId: input.projectId, releasedBy: ctx.user.id, notes: input.notes });
+        const project = await getProjectById(input.projectId);
+        const product = project?.productId ? await getProductById(project.productId) : undefined;
+        const result = await releaseProject({ projectId: input.projectId, releasedBy: ctx.user.id, notes: input.notes });
+        await emitAutomationEvent({
+          action: "mp.release",
+          projectId: input.projectId,
+          entityType: "mp_release",
+          entityId: `${input.projectId}:${result.revisionId}`,
+          actorId: ctx.user.id,
+          after: {
+            projectId: input.projectId,
+            productId: project?.productId ?? null,
+            productName: product?.name ?? null,
+            revisionId: result.revisionId,
+            revisionLabel: result.revisionLabel,
+          },
+        });
+        return result;
       } catch (e) {
         throw new TRPCError({ code: "BAD_REQUEST", message: (e as Error).message });
       }
