@@ -2,8 +2,11 @@ import { z } from "zod";
 
 export const AUTOMATION_RULE_KEYS = [
   "overdue_reminder",
+  "due_soon_reminder",
   "high_severity_issue",
   "status_change_notify",
+  "task_blocked_notify",
+  "gate_prereq_incomplete",
   "mp_release_broadcast",
 ] as const;
 
@@ -73,15 +76,39 @@ const mpReleaseConfigSchema = z.object({
   pushGroup: z.boolean().default(true),
 });
 
+const dueSoonConfigSchema = z.object({
+  dueSoonDays: z.number().int().min(1).default(2),
+  cadenceHours: z.number().int().min(1).default(24),
+  scope: z.enum(["tasks", "issues", "both"]).default("both"),
+  notifyRoles: z.array(z.enum(["assignee", "pm"])).default(["assignee", "pm"]),
+  pushGroup: z.boolean().default(false),
+});
+
+const taskBlockedConfigSchema = z.object({
+  pushGroup: z.boolean().default(false),
+});
+
+const gatePrereqConfigSchema = z.object({
+  leadDays: z.number().int().min(1).default(3),
+  cadenceHours: z.number().int().min(1).default(24),
+  pushGroup: z.boolean().default(false),
+});
+
 export type OverdueConfig = z.infer<typeof overdueConfigSchema>;
 export type HighSeverityIssueConfig = z.infer<typeof highSeverityIssueConfigSchema>;
 export type StatusChangeConfig = z.infer<typeof statusChangeConfigSchema>;
 export type MpReleaseConfig = z.infer<typeof mpReleaseConfigSchema>;
+export type DueSoonConfig = z.infer<typeof dueSoonConfigSchema>;
+export type TaskBlockedConfig = z.infer<typeof taskBlockedConfigSchema>;
+export type GatePrereqConfig = z.infer<typeof gatePrereqConfigSchema>;
 export type AutomationRuleConfig =
   | OverdueConfig
   | HighSeverityIssueConfig
   | StatusChangeConfig
-  | MpReleaseConfig;
+  | MpReleaseConfig
+  | DueSoonConfig
+  | TaskBlockedConfig
+  | GatePrereqConfig;
 
 export type BuiltInAutomationRule = {
   key: AutomationRuleKey;
@@ -106,6 +133,39 @@ export const AUTOMATION_RULES = [
     recipientRoles: ["assignee", "pm"],
     matches: (event, config) => matchesOverdueReminder(event, config as OverdueConfig),
     buildMessage: (event, config, ctx) => buildOverdueMessage(event, config as OverdueConfig, ctx),
+  },
+  {
+    key: "due_soon_reminder",
+    label: "截止前提醒",
+    triggerType: "scheduled",
+    defaultEnabled: true,
+    defaultConfig: dueSoonConfigSchema.parse({}),
+    configSchema: dueSoonConfigSchema,
+    recipientRoles: ["assignee", "pm"],
+    matches: (event, config) => matchesDueSoon(event, config as DueSoonConfig),
+    buildMessage: (event, config, ctx) => buildDueSoonMessage(event, config as DueSoonConfig, ctx),
+  },
+  {
+    key: "task_blocked_notify",
+    label: "任务阻塞通知",
+    triggerType: "event",
+    defaultEnabled: true,
+    defaultConfig: taskBlockedConfigSchema.parse({}),
+    configSchema: taskBlockedConfigSchema,
+    recipientRoles: ["pm", "assignee"],
+    matches: (event, _config) => matchesTaskBlocked(event),
+    buildMessage: (event, _config, ctx) => buildTaskBlockedMessage(event, ctx),
+  },
+  {
+    key: "gate_prereq_incomplete",
+    label: "Gate 前置未完提醒",
+    triggerType: "scheduled",
+    defaultEnabled: true,
+    defaultConfig: gatePrereqConfigSchema.parse({}),
+    configSchema: gatePrereqConfigSchema,
+    recipientRoles: ["pm", "manager"],
+    matches: (event, config) => matchesGatePrereq(event, config as GatePrereqConfig),
+    buildMessage: (event, _config, ctx) => buildGatePrereqMessage(event, ctx),
   },
   {
     key: "high_severity_issue",
@@ -168,6 +228,7 @@ export function isAutomationRuleMatch(
 
 function matchesOverdueReminder(event: AutomationEvent, config: OverdueConfig): boolean {
   if (event.action !== "scheduled") return false;
+  if (event.after?.isGate === true) return false; // gate 专项事件交给 gate_prereq 规则
   if (event.entityType !== "task" && event.entityType !== "issue") return false;
   if (config.scope === "tasks" && event.entityType !== "task") return false;
   if (config.scope === "issues" && event.entityType !== "issue") return false;
@@ -180,6 +241,41 @@ function matchesOverdueReminder(event: AutomationEvent, config: OverdueConfig): 
   if (!now) return false;
   const daysOverdue = Math.floor((startOfDay(now).getTime() - startOfDay(dueDate).getTime()) / DAY_MS);
   return daysOverdue > config.graceDays;
+}
+
+/** 距截止还有几天（负数=已逾期）；无法解析返回 null */
+function daysUntilDue(event: AutomationEvent): number | null {
+  const due = asDate(event.after?.dueDate ?? event.after?.targetDate);
+  const now = asDate(event.now ?? new Date());
+  if (!due || !now) return null;
+  return Math.floor((startOfDay(due).getTime() - startOfDay(now).getTime()) / DAY_MS);
+}
+
+function matchesDueSoon(event: AutomationEvent, config: DueSoonConfig): boolean {
+  if (event.action !== "scheduled") return false;
+  if (event.after?.isGate === true) return false; // gate 专项事件交给 gate_prereq 规则
+  if (event.entityType !== "task" && event.entityType !== "issue") return false;
+  if (config.scope === "tasks" && event.entityType !== "task") return false;
+  if (config.scope === "issues" && event.entityType !== "issue") return false;
+  if (isClosedStatus(event.entityType, String(event.after?.status ?? ""))) return false;
+  const d = daysUntilDue(event);
+  if (d === null) return false;
+  return d >= 0 && d <= config.dueSoonDays; // 今天~N天内到期(未逾期)
+}
+
+function matchesTaskBlocked(event: AutomationEvent): boolean {
+  if (event.action !== "task.update_meta" || event.entityType !== "task") return false;
+  return String(event.after?.status ?? "") === "blocked" && String(event.before?.status ?? "") !== "blocked";
+}
+
+function matchesGatePrereq(event: AutomationEvent, config: GatePrereqConfig): boolean {
+  if (event.action !== "scheduled" || event.entityType !== "task") return false;
+  if (event.after?.isGate !== true) return false;
+  if (isClosedStatus("task", String(event.after?.status ?? ""))) return false;
+  const incomplete = Number(event.after?.incompletePrereqCount ?? 0);
+  if (!(incomplete > 0)) return false;
+  const d = daysUntilDue(event);
+  return d !== null && d >= 0 && d <= config.leadDays; // gate 临近且仍有前置未完成
 }
 
 // 严重度排序：序号越小越严重（P0 最严重）
@@ -293,6 +389,36 @@ function buildMpReleaseMessage(
     text,
     markdown: `#### ${messageTitle}\n${text}`,
   };
+}
+
+function buildDueSoonMessage(event: AutomationEvent, _config: DueSoonConfig, ctx: AutomationMessageContext): AutomationMessage {
+  const label = entityLabel(event.entityType);
+  const title = ctx.entityTitle || String(event.after?.title ?? event.after?.taskId ?? event.entityId ?? label);
+  const project = ctx.projectName ? `「${ctx.projectName}」` : "项目";
+  const due = String(event.after?.dueDate ?? event.after?.targetDate ?? "");
+  const d = daysUntilDue(event);
+  const when = d === 0 ? "今天截止" : `还有 ${d} 天截止`;
+  const messageTitle = `${label}即将到期`;
+  const text = `${project}${label}「${title}」${when}（${due}），请及时处理。`;
+  return { title: messageTitle, text, markdown: `#### ${messageTitle}\n${text}` };
+}
+
+function buildTaskBlockedMessage(event: AutomationEvent, ctx: AutomationMessageContext): AutomationMessage {
+  const title = ctx.entityTitle || String(event.after?.title ?? event.after?.taskId ?? event.entityId ?? "任务");
+  const project = ctx.projectName ? `「${ctx.projectName}」` : "项目";
+  const messageTitle = "任务被阻塞";
+  const text = `${project}任务「${title}」已被标记为阻塞，请协调处理。`;
+  return { title: messageTitle, text, markdown: `#### ${messageTitle}\n${text}` };
+}
+
+function buildGatePrereqMessage(event: AutomationEvent, ctx: AutomationMessageContext): AutomationMessage {
+  const title = ctx.entityTitle || String(event.after?.title ?? event.after?.taskId ?? event.entityId ?? "Gate");
+  const project = ctx.projectName ? `「${ctx.projectName}」` : "项目";
+  const n = Number(event.after?.incompletePrereqCount ?? 0);
+  const d = daysUntilDue(event);
+  const messageTitle = "Gate 前置未完成";
+  const text = `${project}评审「${title}」${d === 0 ? "今天" : `还有 ${d} 天`}到期，仍有 ${n} 个前置任务未完成，请推进。`;
+  return { title: messageTitle, text, markdown: `#### ${messageTitle}\n${text}` };
 }
 
 function changedInto(

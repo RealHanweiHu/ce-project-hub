@@ -5,6 +5,9 @@ describe("built-in automation rule matching", () => {
   it("keeps exactly the MVP built-in rule keys", () => {
     expect(AUTOMATION_RULES.map((rule) => rule.key)).toEqual([
       "overdue_reminder",
+      "due_soon_reminder",
+      "task_blocked_notify",
+      "gate_prereq_incomplete",
       "high_severity_issue",
       "status_change_notify",
       "mp_release_broadcast",
@@ -161,6 +164,26 @@ describe("built-in automation rule matching", () => {
         after: { decision: "conditional" },
       })
     ).toBe(false);
+  });
+
+  it("due_soon_reminder fires within window, not when overdue or far off", () => {
+    const ev = (dueDate: string) => ({ action: "scheduled" as const, entityType: "task" as const, entityId: "t", now: "2026-06-14", after: { dueDate, status: "in_progress" } });
+    expect(isAutomationRuleMatch("due_soon_reminder", ev("2026-06-15"), { dueSoonDays: 2 })).toBe(true);  // 还有1天
+    expect(isAutomationRuleMatch("due_soon_reminder", ev("2026-06-14"), { dueSoonDays: 2 })).toBe(true);  // 今天
+    expect(isAutomationRuleMatch("due_soon_reminder", ev("2026-06-20"), { dueSoonDays: 2 })).toBe(false); // 太远
+    expect(isAutomationRuleMatch("due_soon_reminder", ev("2026-06-10"), { dueSoonDays: 2 })).toBe(false); // 已逾期(归 overdue)
+  });
+
+  it("task_blocked_notify fires only on transition into blocked", () => {
+    expect(isAutomationRuleMatch("task_blocked_notify", { action: "task.update_meta", entityType: "task", before: { status: "in_progress" }, after: { status: "blocked" } })).toBe(true);
+    expect(isAutomationRuleMatch("task_blocked_notify", { action: "task.update_meta", entityType: "task", before: { status: "blocked" }, after: { status: "blocked" } })).toBe(false);
+  });
+
+  it("gate_prereq_incomplete fires for approaching gate with incomplete prereqs", () => {
+    const ev = (extra: Record<string, unknown>) => ({ action: "scheduled" as const, entityType: "task" as const, entityId: "g", now: "2026-06-14", after: { isGate: true, status: "todo", dueDate: "2026-06-16", ...extra } });
+    expect(isAutomationRuleMatch("gate_prereq_incomplete", ev({ incompletePrereqCount: 3 }), { leadDays: 3 })).toBe(true);
+    expect(isAutomationRuleMatch("gate_prereq_incomplete", ev({ incompletePrereqCount: 0 }), { leadDays: 3 })).toBe(false); // 前置都完成
+    expect(isAutomationRuleMatch("overdue_reminder", ev({ incompletePrereqCount: 3, dueDate: "2026-06-01" }), {})).toBe(false); // gate 事件不触发 overdue
   });
 
   it("matches MP release completion events", () => {

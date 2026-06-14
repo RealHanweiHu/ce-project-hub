@@ -29,4 +29,6 @@ export const ENV = {
   dingtalkAppKey: process.env.DINGTALK_APP_KEY ?? "",
   dingtalkAppSecret: process.env.DINGTALK_APP_SECRET ?? "",
   dingtalkCorpId: process.env.DINGTALK_CORP_ID ?? "",
+  /** 企业内部应用 AgentId（发送工作通知必需） */
+  dingtalkAgentId: process.env.DINGTALK_AGENT_ID ?? "",
 };

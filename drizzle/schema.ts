@@ -43,8 +43,10 @@ export const users = pgTable("users", {
   canCreateProject: boolean("canCreateProject").notNull().default(false),
   /** 手机号（与钉钉一致）；自动映射钉钉 userId 的查询键 */
   mobile: varchar("mobile", { length: 32 }),
-  /** 反查到的钉钉 userId 缓存 */
+  /** 钉钉 unionId 缓存（日历 API 用） */
   dingtalkUserId: varchar("dingtalkUserId", { length: 64 }),
+  /** 钉钉通讯录 userid 缓存（工作通知 API 用） */
+  dingtalkCorpUserId: varchar("dingtalkCorpUserId", { length: 64 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
