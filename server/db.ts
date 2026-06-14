@@ -146,6 +146,7 @@ export async function createUserWithPassword(data: {
   passwordHash: string;
   name: string;
   email?: string | null;
+  mobile?: string | null;
   role?: 'user' | 'admin';
   canCreateProject?: boolean;
 }): Promise<void> {
@@ -157,11 +158,19 @@ export async function createUserWithPassword(data: {
     passwordHash: data.passwordHash,
     name: data.name,
     email: data.email ?? null,
+    mobile: data.mobile ?? null,
     loginMethod: 'password',
     role: data.role ?? 'user',
     canCreateProject: data.canCreateProject ?? false,
     lastSignedIn: new Date(),
   });
+}
+
+/** 设置/更新用户手机号；改动后清掉 dingtalkUserId 缓存，下次按新手机号重新解析 */
+export async function setUserMobile(userId: number, mobile: string | null): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error('Database not available');
+  await db.update(users).set({ mobile: mobile || null, dingtalkUserId: null }).where(eq(users.id, userId));
 }
 
 export async function updateUserPassword(userId: number, passwordHash: string): Promise<void> {

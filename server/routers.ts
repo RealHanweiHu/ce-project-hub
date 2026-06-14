@@ -136,6 +136,7 @@ export const appRouter = router({
         password: z.string().min(6, '密码至少6位'),
         name: z.string().trim().min(1, '请输入显示名称').max(64),
         email: z.string().trim().email('请输入有效的邮箱地址').toLowerCase().optional(),
+        mobile: z.string().trim().max(32).optional(),
         role: z.enum(['user', 'admin']).default('user'),
         canCreateProject: z.boolean().default(false),
       }))
@@ -159,9 +160,21 @@ export const appRouter = router({
           passwordHash,
           name: input.name,
           email: input.email ?? null,
+          mobile: input.mobile?.trim() || null,
           role: input.role,
           canCreateProject: input.canCreateProject,
         });
+        return { success: true } as const;
+      }),
+
+    /** Admin-only: 设置用户手机号（用于钉钉日程映射） */
+    setUserMobile: protectedProcedure
+      .input(z.object({ userId: z.number(), mobile: z.string().trim().max(32) }))
+      .mutation(async ({ input, ctx }) => {
+        if (ctx.user.role !== 'admin') {
+          throw new TRPCError({ code: 'FORBIDDEN', message: '仅管理员可修改手机号' });
+        }
+        await db.setUserMobile(input.userId, input.mobile.trim() || null);
         return { success: true } as const;
       }),
 
