@@ -242,6 +242,8 @@ export const projectTasks = pgTable(
     assigneeUserId: integer("assigneeUserId"),
     /** Due date for this task (DATE column, YYYY-MM-DD string at runtime) */
     dueDate: date("dueDate", { mode: "string" }),
+    /** 自动排期生成的任务开始日（YYYY-MM-DD） */
+    startDate: date("startDate", { mode: "string" }),
     /** Task workflow status */
     status: taskStatusEnum("status").notNull().default("todo"),
     /** Task priority */

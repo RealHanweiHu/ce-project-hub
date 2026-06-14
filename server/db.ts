@@ -25,6 +25,9 @@ import {
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { getSopPhasesForCategory } from "./sop-data";
+import { getPhasesForCategory } from "../shared/sop-templates";
+import { scheduleForCategory, buildSchedTasks } from "../shared/schedule-graph";
+import { rescheduleFrom, type Schedule } from "../shared/scheduling";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -858,6 +861,51 @@ export async function updateTaskMeta(
   } else {
     await db.insert(projectTasks).values({ projectId, phaseId, taskId, ...dbPatch });
   }
+}
+
+// ── 自动排期：生成 / 联动重排 ─────────────────────────────────────────────────
+
+/** 按项目 category + 开始日重生成整套任务起止日，写回 project_tasks。返回写入任务数。 */
+export async function applyProjectSchedule(projectId: string): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const project = await getProjectById(projectId);
+  if (!project?.startDate) return 0;
+  const schedule = scheduleForCategory(project.category, project.startDate);
+  let n = 0;
+  for (const [taskId, d] of Object.entries(schedule)) {
+    await db.update(projectTasks)
+      .set({ startDate: d.start, dueDate: d.due })
+      .where(and(eq(projectTasks.projectId, projectId), eq(projectTasks.taskId, taskId)));
+    n += 1;
+  }
+  return n;
+}
+
+/** 改某任务起止后，只向后联动重排其传递后继；返回受影响并更新的任务数。 */
+export async function rescheduleProjectFromTask(
+  projectId: string, taskId: string, start: string, due: string
+): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const project = await getProjectById(projectId);
+  if (!project) return 0;
+  const schedTasks = buildSchedTasks(getPhasesForCategory(project.category));
+  const rows = await db
+    .select({ taskId: projectTasks.taskId, startDate: projectTasks.startDate, dueDate: projectTasks.dueDate })
+    .from(projectTasks).where(eq(projectTasks.projectId, projectId));
+  const current: Schedule = {};
+  for (const r of rows) if (r.startDate && r.dueDate) current[r.taskId] = { start: r.startDate, due: r.dueDate };
+  const next = rescheduleFrom(schedTasks, current, taskId, { start, due });
+  let n = 0;
+  for (const [id, d] of Object.entries(next)) {
+    if (current[id]?.start === d.start && current[id]?.due === d.due) continue;
+    await db.update(projectTasks)
+      .set({ startDate: d.start, dueDate: d.due })
+      .where(and(eq(projectTasks.projectId, projectId), eq(projectTasks.taskId, id)));
+    n += 1;
+  }
+  return n;
 }
 
 export type TaskWithContext = ProjectTask & {

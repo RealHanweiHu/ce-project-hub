@@ -12,6 +12,7 @@ import {
   updateProjectMeetingConfig,
   updateProjectDingtalkEvent,
   setUserDingtalkId,
+  applyProjectSchedule,
 } from "../db";
 import { TRPCError } from "@trpc/server";
 import { ROLE_PERMISSIONS } from "./members";
@@ -102,6 +103,11 @@ export const projectsRouter = router({
         createdBy: ctx.user.id,
         archived: false,
       }, input.category, ctx.user.id);
+      // 有开始日 → 按 IPD 依赖图自动生成整套任务起止日（非阻断）
+      if (input.startDate) {
+        try { await applyProjectSchedule(input.id); }
+        catch (e) { console.warn("[schedule] generate failed (non-fatal):", e); }
+      }
       await createActivityLog({
         projectId: input.id,
         userId: ctx.user.id,

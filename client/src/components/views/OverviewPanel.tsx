@@ -3,8 +3,9 @@
 import { Project, RISK_CONFIG, getProjectPhases, computeOverallProgress } from '@/lib/data';
 import { CATEGORY_MAP } from '@/lib/sop-templates';
 import { trpc } from '@/lib/trpc';
-import { Hash, User, AlertTriangle, CalendarRange, Flag, GaugeCircle, ListChecks, Bug, GitBranch, Users } from 'lucide-react';
+import { Hash, User, AlertTriangle, CalendarRange, Flag, GaugeCircle, ListChecks, Bug, GitBranch, Users, CalendarClock, RefreshCw } from 'lucide-react';
 import { MeetingConfigPanel } from './MeetingConfigPanel';
+import { toast } from 'sonner';
 
 export function OverviewPanel({ project, canEdit }: { project: Project; canEdit: boolean }) {
   const { data: members = [] } = trpc.members.list.useQuery({ projectId: project.id });
@@ -35,6 +36,23 @@ export function OverviewPanel({ project, canEdit }: { project: Project; canEdit:
     return sum + issues.filter((i) => i.status === 'open' || i.status === 'in_progress').length;
   }, 0);
   const pendingChanges = (project.changeLog ?? []).filter((r) => r.status === 'proposed').length;
+
+  // 排期：预计完成 = 所有任务最晚 due；超期 = 晚于 targetDate
+  let projectedEnd: string | null = null;
+  for (const phase of phases) {
+    const td = project.phases[phase.id]?.taskDetails ?? {};
+    for (const id of Object.keys(td)) {
+      const due = td[id]?.dueDate;
+      if (due && (!projectedEnd || due > projectedEnd)) projectedEnd = due;
+    }
+  }
+  const overdue = !!(projectedEnd && project.targetDate && projectedEnd > project.targetDate);
+
+  const utils = trpc.useUtils();
+  const regenerate = trpc.tasks.regenerateSchedule.useMutation({
+    onSuccess: (r) => { utils.tasks.list.invalidate({ projectId: project.id }); toast.success(`已重新生成排期（${r.count} 个任务）`); },
+    onError: (e) => toast.error(e.message),
+  });
 
   return (
     <div className="space-y-6">
@@ -90,6 +108,32 @@ export function OverviewPanel({ project, canEdit }: { project: Project; canEdit:
           <Metric icon={<GitBranch size={15} />} label="待决变更" value={String(pendingChanges)} accent={pendingChanges > 0 ? 'text-amber-600' : undefined} />
           <Metric icon={<Users size={15} />} label="项目成员" value={String(members.length)} />
         </div>
+      </div>
+
+      {/* 排期 */}
+      <div className="border border-stone-200 bg-white p-4 flex items-center gap-4 flex-wrap">
+        <div className="flex items-center gap-2">
+          <CalendarClock size={14} className="text-amber-500" />
+          <span className="text-sm font-medium text-stone-800">自动排期</span>
+        </div>
+        <div className="flex items-center gap-1.5 text-sm">
+          <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400">预计完成</span>
+          <span className="font-mono text-stone-700">{projectedEnd || '未排期'}</span>
+        </div>
+        {overdue && (
+          <span className="text-[11px] font-mono px-1.5 py-0.5 bg-rose-50 text-rose-600 border border-rose-200">超出目标日 {project.targetDate}</span>
+        )}
+        <div className="text-[11px] text-stone-400 flex-1">按 SOP 工期+依赖、从开始日 {project.startDate || '（未设）'} 自动生成</div>
+        {canEdit && (
+          <button
+            disabled={regenerate.isPending || !project.startDate}
+            onClick={() => regenerate.mutate({ projectId: project.id })}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-wider border border-stone-300 text-stone-600 hover:bg-stone-50 disabled:opacity-40 transition-colors"
+            title={project.startDate ? '按开始日重新生成整套排期' : '请先设置项目开始日期'}
+          >
+            <RefreshCw size={12} />重新生成排期
+          </button>
+        )}
       </div>
 
       {/* 项目周会(每项目可配) */}

@@ -121,6 +121,7 @@ export function useProjectData(projectId: string | null) {
           instructions: t.instructions ?? "",
           files: dbFiles,
           assigneeUserId: t.assigneeUserId ?? null,
+          startDate: t.startDate ? String(t.startDate).slice(0, 10) : null,
           dueDate: t.dueDate ? String(t.dueDate).slice(0, 10) : null,
           taskStatus: t.status ?? "todo",
           taskPriority: t.priority ?? "medium",
