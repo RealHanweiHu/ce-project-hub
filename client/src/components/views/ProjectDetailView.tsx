@@ -958,7 +958,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
       {/* ── Overview Tab ──────────────────────────────────────────────────── */}
       {mainTab === 'overview' && (
         <div className="p-6">
-          <OverviewPanel project={project} />
+          <OverviewPanel project={project} canEdit={perms.canEditProjectInfo} />
         </div>
       )}
 
