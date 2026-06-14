@@ -41,6 +41,10 @@ export const users = pgTable("users", {
    * System admin (role='admin') always has this permission regardless of this field.
    */
   canCreateProject: boolean("canCreateProject").notNull().default(false),
+  /** 手机号（与钉钉一致）；自动映射钉钉 userId 的查询键 */
+  mobile: varchar("mobile", { length: 32 }),
+  /** 反查到的钉钉 userId 缓存 */
+  dingtalkUserId: varchar("dingtalkUserId", { length: 64 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
@@ -87,6 +91,10 @@ export const projects = pgTable("projects", {
   resultRevisionId: integer("resultRevisionId"),
   /** 自定义字段值：fieldKey -> value（定义见 custom_field_defs） */
   customFields: jsonb("customFields").$type<Record<string, unknown>>().notNull().default({}),
+  /** 每项目周会配置：{ enabled, weekday(0-6), time:"HH:MM", durationMin, title } */
+  meetingConfig: jsonb("meetingConfig").$type<{ enabled: boolean; weekday: number; time: string; durationMin: number; title: string } | null>(),
+  /** 已建钉钉日程 id（用于改/删） */
+  dingtalkEventId: varchar("dingtalkEventId", { length: 128 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
 });

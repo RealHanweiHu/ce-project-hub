@@ -25,4 +25,8 @@ export const ENV = {
   appBaseUrl: (process.env.APP_BASE_URL ?? "").replace(/\/+$/, ""),
   /** 自动化逾期扫描间隔（分钟） */
   automationScanIntervalMin: Number(process.env.AUTOMATION_SCAN_INTERVAL_MIN ?? "30") || 30,
+  // 钉钉企业内部应用（用于真日程+视频会议；未配则降级群推）
+  dingtalkAppKey: process.env.DINGTALK_APP_KEY ?? "",
+  dingtalkAppSecret: process.env.DINGTALK_APP_SECRET ?? "",
+  dingtalkCorpId: process.env.DINGTALK_CORP_ID ?? "",
 };
