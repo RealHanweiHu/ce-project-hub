@@ -1,5 +1,6 @@
 import { ENV } from "../_core/env";
 import { pushWebhook as defaultPushWebhook } from "../_core/notify";
+import { notifyUsersViaDingtalk as defaultNotifyDingtalk } from "../_core/dingtalkMessage";
 import {
   createAutomationRun,
   createNotification as defaultCreateNotification,
@@ -27,6 +28,7 @@ type ResolvedRecipients = {
 type DispatchDeps = {
   createNotification?: typeof defaultCreateNotification;
   pushWebhook?: typeof defaultPushWebhook;
+  notifyDingtalk?: (userIds: number[], title: string, markdown: string) => Promise<void>;
 };
 
 let seededDefaults = false;
@@ -59,7 +61,7 @@ export async function runAutomation(event: AutomationEvent, deps: DispatchDeps =
       if (!rule.matches(event, config)) continue;
 
       const entityId = entityIdForRun(event);
-      if (rule.key === "overdue_reminder" && entityId) {
+      if (rule.triggerType === "scheduled" && entityId) {
         const cadenceHours = getCadenceHours(config);
         const since = new Date(Date.now() - cadenceHours * 60 * 60 * 1000);
         if (await hasRecentAutomationFire({ ruleKey: rule.key, entityId, since })) {
@@ -87,6 +89,12 @@ export async function runAutomation(event: AutomationEvent, deps: DispatchDeps =
           entityType: event.entityType,
           entityId: event.entityId == null ? null : String(event.entityId),
         });
+      }
+
+      // 钉钉工作通知：把提醒直接推到负责人本人的钉钉（解析不到/未配则静默跳过）
+      if (recipients.userIds.length > 0) {
+        const notifyDingtalk = deps.notifyDingtalk ?? defaultNotifyDingtalk;
+        await notifyDingtalk(recipients.userIds, message.title, message.markdown ?? message.text);
       }
 
       if (recipients.pushGroup) {

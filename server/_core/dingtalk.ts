@@ -27,7 +27,29 @@ export async function getAccessToken(now = Date.now()): Promise<string | null> {
   return tokenCache.token;
 }
 
-type MappableUser = { id: number; dingtalkUserId?: string | null; mobile?: string | null };
+type MappableUser = { id: number; dingtalkUserId?: string | null; dingtalkCorpUserId?: string | null; mobile?: string | null };
+
+/** 解析钉钉通讯录 userid（工作通知用）：缓存命中 → 否则按手机号反查并回写缓存。 */
+export async function resolveDingtalkCorpUserId(
+  user: MappableUser,
+  cacheBack: (userId: number, corpUserId: string) => Promise<void>
+): Promise<string | null> {
+  if (user.dingtalkCorpUserId) return user.dingtalkCorpUserId;
+  if (!user.mobile) return null;
+  const token = await getAccessToken();
+  if (!token) return null;
+  const resp = await fetch(`https://oapi.dingtalk.com/topapi/v2/user/getbymobile?access_token=${encodeURIComponent(token)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mobile: user.mobile }),
+  });
+  if (!resp.ok) return null;
+  const j = (await resp.json()) as { errcode?: number; result?: { userid?: string } };
+  const userid = j.result?.userid;
+  if (j.errcode !== 0 || !userid) return null;
+  await cacheBack(user.id, userid);
+  return userid;
+}
 
 /**
  * 解析用户的钉钉 unionId（钉钉日历 API 用的是 unionId，不是通讯录 userid）。

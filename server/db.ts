@@ -123,11 +123,18 @@ export async function getUserById(id: number) {
   return result[0];
 }
 
-/** 缓存钉钉 userId 到用户行（按手机号反查后回写） */
+/** 缓存钉钉 unionId 到用户行（日历用） */
 export async function setUserDingtalkId(userId: number, dingtalkUserId: string): Promise<void> {
   const db = await getDb();
   if (!db) return;
   await db.update(users).set({ dingtalkUserId }).where(eq(users.id, userId));
+}
+
+/** 缓存钉钉通讯录 userid 到用户行（工作通知用） */
+export async function setUserDingtalkCorpId(userId: number, dingtalkCorpUserId: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(users).set({ dingtalkCorpUserId }).where(eq(users.id, userId));
 }
 
 export async function getUserByEmail(email: string) {
@@ -173,7 +180,7 @@ export async function createUserWithPassword(data: {
 export async function setUserMobile(userId: number, mobile: string | null): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error('Database not available');
-  await db.update(users).set({ mobile: mobile || null, dingtalkUserId: null }).where(eq(users.id, userId));
+  await db.update(users).set({ mobile: mobile || null, dingtalkUserId: null, dingtalkCorpUserId: null }).where(eq(users.id, userId));
 }
 
 export async function updateUserPassword(userId: number, passwordHash: string): Promise<void> {
@@ -1465,7 +1472,8 @@ export async function listAutomationRuns(input: {
   return db.select().from(automationRuns).orderBy(desc(automationRuns.createdAt)).limit(limit);
 }
 
-export async function getAutomationOverdueTasks(): Promise<ProjectTask[]> {
+/** 逾期或 14 天内到期的未完成任务（逾期催办 + 截止前提醒 共用此扫描，规则各自精确过滤） */
+export async function getAutomationDueTasks(): Promise<ProjectTask[]> {
   const db = await getDb();
   if (!db) return [];
   return db
@@ -1473,12 +1481,13 @@ export async function getAutomationOverdueTasks(): Promise<ProjectTask[]> {
     .from(projectTasks)
     .where(and(
       drizzleSql`${projectTasks.dueDate} IS NOT NULL`,
-      drizzleSql`${projectTasks.dueDate} < CURRENT_DATE`,
+      drizzleSql`${projectTasks.dueDate} <= CURRENT_DATE + INTERVAL '14 days'`,
       drizzleSql`${projectTasks.status} NOT IN ('done','skipped')`
     ));
 }
 
-export async function getAutomationOverdueIssues(): Promise<ProjectIssue[]> {
+/** 逾期或 14 天内到期的未关闭问题 */
+export async function getAutomationDueIssues(): Promise<ProjectIssue[]> {
   const db = await getDb();
   if (!db) return [];
   return db
@@ -1487,7 +1496,34 @@ export async function getAutomationOverdueIssues(): Promise<ProjectIssue[]> {
     .where(and(
       drizzleSql`${projectIssues.targetDate} IS NOT NULL`,
       drizzleSql`${projectIssues.targetDate} <> ''`,
-      drizzleSql`${projectIssues.targetDate} < TO_CHAR(CURRENT_DATE, 'YYYY-MM-DD')`,
+      drizzleSql`${projectIssues.targetDate} <= TO_CHAR(CURRENT_DATE + INTERVAL '14 days', 'YYYY-MM-DD')`,
       drizzleSql`${projectIssues.status} NOT IN ('resolved','closed','wont_fix')`
     ));
+}
+
+/** Gate 前置未完扫描：跨活跃项目，找"未完成且 dueDate 已设"的 gate 任务 + 其阶段内未完成前置数。 */
+export async function getAutomationGatePrereqs(): Promise<Array<{
+  projectId: string; taskId: string; phaseId: string; dueDate: string | null; status: string; incompletePrereqCount: number; title: string;
+}>> {
+  const db = await getDb();
+  if (!db) return [];
+  const projs = await db.select({ id: projects.id, category: projects.category }).from(projects).where(eq(projects.archived, false));
+  const out: Array<{ projectId: string; taskId: string; phaseId: string; dueDate: string | null; status: string; incompletePrereqCount: number; title: string }> = [];
+  for (const p of projs) {
+    const phases = getPhasesForCategory(p.category);
+    const rows = await db.select({ taskId: projectTasks.taskId, status: projectTasks.status, dueDate: projectTasks.dueDate, completed: projectTasks.completed })
+      .from(projectTasks).where(eq(projectTasks.projectId, p.id));
+    const byTask = new Map(rows.map((r) => [r.taskId, r]));
+    const isDone = (id: string) => { const r = byTask.get(id); return r ? (r.status === "done" || r.status === "skipped" || !!r.completed) : false; };
+    for (const phase of phases) {
+      const gate = byTask.get(phase.gateTaskId);
+      if (!gate?.dueDate || isDone(phase.gateTaskId)) continue;
+      let incomplete = 0;
+      for (const t of phase.tasks) { if (t.id !== phase.gateTaskId && !isDone(t.id)) incomplete += 1; }
+      if (incomplete > 0) {
+        out.push({ projectId: p.id, taskId: phase.gateTaskId, phaseId: phase.id, dueDate: gate.dueDate, status: gate.status, incompletePrereqCount: incomplete, title: phase.gate || phase.gateTaskId });
+      }
+    }
+  }
+  return out;
 }

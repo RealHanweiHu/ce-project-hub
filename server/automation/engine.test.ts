@@ -23,6 +23,7 @@ function makeDeps() {
     deps: {
       createNotification: async (n: { userId: number; title: string }) => { notes.push({ userId: n.userId, title: n.title }); },
       pushWebhook: async (_text: string, opts?: { title?: string }) => { pushes.push({ title: opts?.title }); },
+      notifyDingtalk: async () => {}, // 测试不真发钉钉工作通知
     },
   };
 }
