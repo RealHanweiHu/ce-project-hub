@@ -21,7 +21,7 @@ import { GateStandardPanel } from '@/components/shared/GateStandardPanel';
 import { GanttView } from './GanttView';
 import { IssueList } from './IssueList';
 import { ChangeLog } from './ChangeLog';
-import { ISSUE_PHASES, Issue, GateReview, ChangeRecord } from '@/lib/data';
+import { Issue, GateReview, ChangeRecord } from '@/lib/data';
 import { GateReviewModal, GateReviewBadge } from './GateReviewModal';
 import { MembersPanel } from './MembersPanel';
 import { ReleaseDialog } from './ReleaseDialog';
@@ -585,7 +585,6 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
 
   // Issue List helpers
   const activeIssues: Issue[] = activePhaseData?.issues || [];
-  const isIssuePhase = ISSUE_PHASES.has(activePhaseId);
   const openIssueCount = activeIssues.filter((i) => i.status === 'open' || i.status === 'in_progress').length;
 
   const updateIssues = (issues: Issue[]) => {
@@ -766,24 +765,22 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
           <Inbox size={14} />
           需求池
         </button>
-        {isIssuePhase && (
-          <button
-            onClick={() => setMainTab('issues')}
-            className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all ${
-              mainTab === 'issues'
-                ? 'border-b-rose-600 text-rose-700'
-                : 'border-b-transparent text-stone-400 hover:text-stone-700'
-            }`}
-          >
-            <Bug size={14} />
-            问题清单
-            {openIssueCount > 0 && (
-              <span className="text-[9px] font-mono bg-rose-100 text-rose-700 border border-rose-200 px-1.5 py-0.5 min-w-[18px] text-center">
-                {openIssueCount}
-              </span>
-            )}
-          </button>
-        )}
+        <button
+          onClick={() => setMainTab('issues')}
+          className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all ${
+            mainTab === 'issues'
+              ? 'border-b-rose-600 text-rose-700'
+              : 'border-b-transparent text-stone-400 hover:text-stone-700'
+          }`}
+        >
+          <Bug size={14} />
+          问题清单
+          {openIssueCount > 0 && (
+            <span className="text-[9px] font-mono bg-rose-100 text-rose-700 border border-rose-200 px-1.5 py-0.5 min-w-[18px] text-center">
+              {openIssueCount}
+            </span>
+          )}
+        </button>
         <button
           onClick={() => setMainTab('gantt')}
           className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all ${
@@ -847,12 +844,12 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
       </div>
 
       {/* ── Issues Tab ────────────────────────────────────────────────────── */}
-      {mainTab === 'issues' && isIssuePhase && (
+      {mainTab === 'issues' && (
         <div className="space-y-4">
-          {/* Phase Navigation (compact) */}
+          {/* Phase Navigation (compact) — 任何阶段都可记录问题 */}
           <div className="bg-white border border-stone-200 overflow-x-auto">
             <div className="flex min-w-max">
-              {projectPhases.filter((p) => ISSUE_PHASES.has(p.id)).map((phase) => {
+              {projectPhases.map((phase) => {
                 const isActive = phase.id === activePhaseId;
                 const phaseIssues = project.phases[phase.id]?.issues || [];
                 const openCount = phaseIssues.filter((i) => i.status === 'open' || i.status === 'in_progress').length;
