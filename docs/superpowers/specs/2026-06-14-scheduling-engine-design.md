@@ -31,7 +31,7 @@
 
 ### 持久化（附加式迁移 0011）
 - `project_tasks` 增列 `startDate: date(mode:"string")`（已有 `dueDate`）。
-- `projects` 增列 `meetingConfig: jsonb`，形如 `{ enabled, weekday(0-6), time:"HH:MM", durationMin, title }`，默认 `{ enabled:true, weekday:3, time:"15:00", durationMin:60, title:"项目周会" }`。
+- `projects` 增列 `meetingConfig: jsonb`，**每个项目独立**：`{ enabled, weekday(0-6), time:"HH:MM", durationMin, title }`。建项目时给一个可改的初值 `{ enabled:true, weekday:3, time:"15:00", durationMin:60, title:"项目周会" }`，但 **PM 可在项目里改成本项目的时间/星期/时长，或关掉**——不是所有项目同一时间。
 - 前端 `TaskDetails` 增 `startDate?: string`；`Project` 增 `meetingConfig?`。
 
 ## 3. 依赖图编排（我来做的"复杂活"）
@@ -88,6 +88,7 @@
   - 防重发：`hasRecentAutomationFire`（ruleKey=weekly_meeting_reminder, entityId=projectId, since=本周一）→ 命中则 skip；
   - 否则 `pushWebhook`：`【项目名】本周项目周会 周三 15:00（60 分钟）`（markdown 卡片，带站点链接），并落 `automation_runs`。
 - 复用现有 `pushWebhook` / dedup / `automation_runs` 审计；无新表。
+- **每项目周会编辑器**：在项目总揽（或设置区）放一个小面板，PM 可改 启用/星期/时间/时长/标题；改完即存进该项目 `meetingConfig`。这样不同项目可以各自不同的周会时间。
 
 ## 7. 迁移与部署
 
