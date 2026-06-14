@@ -22,28 +22,34 @@
 
 ## 2. 移除清单
 
-### 前端
-- `ReuseSetPanel.tsx`（复用集面板）+ `ProjectDetailView` 里 `reuseset` tab 的按钮与渲染、`mainTab` 联合类型去掉 `'reuseset'`。
-- 模块库导航页 `ModuleLibraryView`（Home.tsx:943 渲染）+ `Home.tsx` 顶部导航里 `{ id: 'modules', label: '模块库' }` 入口 + `View` 类型（Home.tsx:26）里的 `'modules'`。
+### 前端（删除/编辑文件）
+- 删 `client/src/components/views/ReuseSetPanel.tsx`（复用集面板）。
+- 删 `client/src/components/views/ModuleLibraryView.tsx`（模块库页）。
+- `ProjectDetailView.tsx`：去掉 `reuseset` tab 的按钮与渲染、`mainTab` 联合类型去掉 `'reuseset'`、删 `ReuseSetPanel` import。
+- `Home.tsx`：删 `ModuleLibraryView` lazy import（:52）、`View` 联合里的 `'modules'`（:26）、顶部导航 `{ id:'modules', label:'模块库' }`（:610）、`viewLabels.modules`（:623）、渲染分支 `view === 'modules'`（:942-943）。
 - 注：经查证，建项目 UI **没有** `mode/objectType` 选择控件、`projectToApiInput` 也**未**透传它们 → 前端无此项可删。
 
-### 后端
-- `server/routers/modules.ts`（modules 路由）+ `routers.ts` 里的挂载。
-- `server/db.ts` 里 modules/projectModules 相关 helpers + `createProjectWithSeed` 中对 `mode/objectType` 的默认写入。
+### 后端（删除/编辑文件）
+- 删 `server/routers/modules.ts` + `routers.ts:218` 的 `modules: modulesRouter` 挂载与 import。
+- 删 `server/module-seed.ts`。
+- 删 `server/modules.test.ts`（测的就是被删的 helper）。
+- `server/db.ts`：删 schema imports `moduleLibrary/moduleTasks/projectModules` 及类型（:18-20）、`MODULE_SEED` import（:29），删 helper `seedModuleLibrary/listModuleLibrary/getModuleTasks/setProjectModule/listProjectModules`（约 :1136-1189）。
+- `drizzle/schema.ts`：删 `MODULE_CHANGE_LEVELS`、`ModuleChangeLevel`、`moduleLibrary`、`moduleTasks`、`projectModules` 及其 `*Row/Insert*` 类型导出（:772-822），删 `projects` 的 `mode`、`objectType` 两列（:85-87）。
+- 注：`createProjectWithSeed` 并未显式写 `mode/objectType`——这两列的值来自 schema 列定义的 `.default()`。删掉列定义即去除默认；`InsertProject` 入参（projectToApiInput 构造）本就不含这两个字段，确认无依赖即可。
 - `projectInputSchema`（projects 路由）经查证**不含** `mode/objectType` → 无需改动。
 
-### 数据库（附加式迁移）
-- DROP TABLE：`project_modules`、`module_library`、`module_tasks`。
-- ALTER projects DROP COLUMN：`mode`、`objectType`。
+### 数据库（迁移）
+- DROP TABLE IF EXISTS：`project_modules`、`module_library`、`module_tasks`。
+- ALTER projects DROP COLUMN IF EXISTS：`mode`、`objectType`。
 - **保留** projects 的 `productId / baseRevisionId / resultRevisionId / customFields`。
+- 模块无启动期 seed（仅 modules.test.ts + 路由 `seed` mutation 调用），删表不影响启动。
 - 迁移前**先查生产**：是否有项目用到 reuse/module 数据或非默认 `mode/objectType`；有则导出留底再 drop。
 
 ## 3. 建项目流程（SKG 式）
 
-当前建项目已是按 category 选择（无 mode/objectType），本次把它**升级为 SKG 式 3 张类型卡片**：数据来自 `PROJECT_CATEGORIES`，每张卡显示 图标 / 名称 / 描述 / 阶段数 / 典型周期，选定即决定 SOP 流程。
+现状（`ProjectListView.tsx` 建项目弹窗 Step 1，:435）**已**用 `PROJECT_CATEGORIES` 以纵向按钮列表展示图标/名称/描述/阶段数/典型周期。本次不是新增，而是把这个**纵向列表打磨成真正的 3 卡片栅格布局**（SKG 式横排卡片），选定即决定 SOP 流程。其余字段不变（名称、编号、PM、风险、起止日期）。
 
-- 可选「关联产品」（产品库保留；`productId` 列保留），非必填。
-- 其余字段不变（名称、编号、PM、风险、起止日期）。
+**关联产品不进建项目范围**（P1 决策）：当前建项目链路（`projectToApiInput` :74、`projectInputSchema` :27、`createProjectWithSeed`）都不收 `productId`，且产品关联现实上发生在量产发布/后置关联。为保持简化、不引入新字段，本次**不**在建项目里加关联产品；`productId` 列保留，后续如需“建项目即挂产品”再单独追加（前端字段 + create/update schema + 入参写入）。
 
 ## 4. 项目总揽 tab
 
@@ -53,7 +59,9 @@
 - **基础信息**：类型（category 徽章卡）、项目编号、PM、风险等级、起止日期、当前阶段、整体进度、关联产品（若有）。
 - **关键指标**：阶段进度条、任务完成率、开放问题数、待决变更数、成员数。
 
-实现：复用现有 `computeOverallProgress / getPhaseStatus` 等帮助函数与 `CATEGORY_MAP`；问题/变更/成员计数复用详情页已查询的数据，避免新请求。
+实现：
+- 类型/进度/阶段/起止/PM/风险/关联产品/问题数/变更数 全部来自 `useProjectData` 已加载的 `project` 对象 + 现成帮助函数（`computeOverallProgress / getPhaseStatus`）+ `CATEGORY_MAP`，无新请求。
+- **成员数例外**（P2c）：`useProjectData` 不含 members（成员列表在 `MembersPanel` 内单独 `members.list` 查询）。总揽页要显示成员数，就**自己发一个 `members.list` 查询**（该接口已存在，开销很小）取 `.length`；这是总揽页唯一的新增请求。
 
 ## 5. 详情页 tab 最终形态
 
@@ -65,7 +73,7 @@
 
 ## 6. 测试与验证
 
-- 类型检查 + 现有测试全绿（移除 modules 后，相关测试若存在需一并删除/调整：检查 `server/modules.test.ts`、`relational-tables.test.ts` 是否引用被删表）。
+- 类型检查 + 现有测试全绿。删 `server/modules.test.ts`（测被删 helper）。经查证 `relational-tables.test.ts` 及其他测试**不引用** module 表或 mode/objectType 列 → 无需改动。
 - 移除 modules 路由后，确认 `release.test.ts`（MP Release）仍通过（验证依赖切割正确）。
 - 浏览器验证：建项目 3 卡选择可用；详情页默认进总揽且信息正确；复用集/模块库入口消失；量产发布/BOM/产品库仍正常。
 
