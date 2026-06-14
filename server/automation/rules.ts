@@ -32,6 +32,19 @@ export type AutomationEvent = {
 
 export type RecipientRole = "assignee" | "reporter" | "pm" | "manager" | "owner" | "group";
 
+export type AutomationMessageContext = {
+  projectName?: string | null;
+  entityTitle?: string | null;
+  productName?: string | null;
+  revisionLabel?: string | null;
+};
+
+export type AutomationMessage = {
+  title: string;
+  text: string;
+  markdown?: string;
+};
+
 const overdueConfigSchema = z.object({
   graceDays: z.number().int().min(0).default(0),
   cadenceHours: z.number().int().min(1).default(24),
@@ -79,6 +92,7 @@ export type BuiltInAutomationRule = {
   configSchema: z.ZodTypeAny;
   recipientRoles: RecipientRole[];
   matches: (event: AutomationEvent, config: AutomationRuleConfig) => boolean;
+  buildMessage: (event: AutomationEvent, config: AutomationRuleConfig, ctx: AutomationMessageContext) => AutomationMessage;
 };
 
 export const AUTOMATION_RULES = [
@@ -91,6 +105,7 @@ export const AUTOMATION_RULES = [
     configSchema: overdueConfigSchema,
     recipientRoles: ["assignee", "pm"],
     matches: (event, config) => matchesOverdueReminder(event, config as OverdueConfig),
+    buildMessage: (event, config, ctx) => buildOverdueMessage(event, config as OverdueConfig, ctx),
   },
   {
     key: "high_severity_issue",
@@ -101,6 +116,7 @@ export const AUTOMATION_RULES = [
     configSchema: highSeverityIssueConfigSchema,
     recipientRoles: ["pm", "manager", "assignee", "group"],
     matches: (event, config) => matchesHighSeverityIssue(event, config as HighSeverityIssueConfig),
+    buildMessage: (event, _config, ctx) => buildHighSeverityIssueMessage(event, ctx),
   },
   {
     key: "status_change_notify",
@@ -111,6 +127,7 @@ export const AUTOMATION_RULES = [
     configSchema: statusChangeConfigSchema,
     recipientRoles: ["reporter", "assignee", "pm"],
     matches: (event, config) => matchesStatusChange(event, config as StatusChangeConfig),
+    buildMessage: (event, _config, ctx) => buildStatusChangeMessage(event, ctx),
   },
   {
     key: "mp_release_broadcast",
@@ -121,6 +138,7 @@ export const AUTOMATION_RULES = [
     configSchema: mpReleaseConfigSchema,
     recipientRoles: ["pm", "manager", "owner", "group"],
     matches: matchesMpReleaseBroadcast,
+    buildMessage: (event, _config, ctx) => buildMpReleaseMessage(event, ctx),
   },
 ] as const satisfies readonly BuiltInAutomationRule[];
 
@@ -203,6 +221,80 @@ function matchesMpReleaseBroadcast(event: AutomationEvent): boolean {
   return event.action === "mp.release" && event.entityType === "mp_release";
 }
 
+function buildOverdueMessage(
+  event: AutomationEvent,
+  _config: OverdueConfig,
+  ctx: AutomationMessageContext
+): AutomationMessage {
+  const label = entityLabel(event.entityType);
+  const title = ctx.entityTitle || String(event.after?.title ?? event.after?.taskId ?? event.entityId ?? label);
+  const days = daysOverdueFromEvent(event);
+  const project = ctx.projectName ? `「${ctx.projectName}」` : "项目";
+  const dueDate = String(event.after?.dueDate ?? event.after?.targetDate ?? "未设置");
+  const dayText = days === null ? "" : `，已逾期 ${days} 天`;
+  const messageTitle = `${label}逾期提醒`;
+  const text = `${project}${label}「${title}」已超过计划日期 ${dueDate}${dayText}。`;
+  return {
+    title: messageTitle,
+    text,
+    markdown: `#### ${messageTitle}\n${text}`,
+  };
+}
+
+function buildHighSeverityIssueMessage(
+  event: AutomationEvent,
+  ctx: AutomationMessageContext
+): AutomationMessage {
+  const title = ctx.entityTitle || String(event.after?.title ?? event.entityId ?? "问题");
+  const severity = String(event.after?.severity ?? "");
+  const project = ctx.projectName ? `「${ctx.projectName}」` : "项目";
+  const isCreate = event.action === "issue.create";
+  const messageTitle = isCreate ? `新增 ${severity} 缺陷` : `${severity} 缺陷升级`;
+  const text = isCreate
+    ? `${project}新增 ${severity} 级问题「${title}」，请及时跟进。`
+    : `${project}问题「${title}」严重度已升级为 ${severity}，请及时跟进。`;
+  return {
+    title: messageTitle,
+    text,
+    markdown: `#### ${messageTitle}\n${text}`,
+  };
+}
+
+function buildStatusChangeMessage(
+  event: AutomationEvent,
+  ctx: AutomationMessageContext
+): AutomationMessage {
+  const label = entityLabel(event.entityType);
+  const title = ctx.entityTitle || String(event.after?.title ?? event.after?.taskId ?? event.entityId ?? label);
+  const field = event.entityType === "gate_review" ? "decision" : "status";
+  const fromValue = String(event.before?.[field] ?? "未设置");
+  const toValue = String(event.after?.[field] ?? "未设置");
+  const project = ctx.projectName ? `「${ctx.projectName}」` : "项目";
+  const messageTitle = `${label}状态流转`;
+  const text = `${project}${label}「${title}」由 ${fromValue} 变更为 ${toValue}。`;
+  return {
+    title: messageTitle,
+    text,
+    markdown: `#### ${messageTitle}\n${text}`,
+  };
+}
+
+function buildMpReleaseMessage(
+  event: AutomationEvent,
+  ctx: AutomationMessageContext
+): AutomationMessage {
+  const project = ctx.projectName ? `「${ctx.projectName}」` : "项目";
+  const product = ctx.productName || String(event.after?.productName ?? "产品");
+  const revision = ctx.revisionLabel || String(event.after?.revisionLabel ?? event.after?.revisionId ?? "新版本");
+  const messageTitle = "量产发布完成";
+  const text = `${project}已完成量产发布：${product} ${revision}。`;
+  return {
+    title: messageTitle,
+    text,
+    markdown: `#### ${messageTitle}\n${text}`,
+  };
+}
+
 function changedInto(
   before: Record<string, unknown> | null | undefined,
   after: Record<string, unknown> | null | undefined,
@@ -212,6 +304,21 @@ function changedInto(
   const beforeValue = before?.[field];
   const afterValue = after?.[field];
   return beforeValue !== afterValue && allowedTargets.includes(String(afterValue ?? ""));
+}
+
+function daysOverdueFromEvent(event: AutomationEvent): number | null {
+  const dueDate = asDate(event.after?.dueDate ?? event.after?.targetDate);
+  const now = asDate(event.now ?? new Date());
+  if (!dueDate || !now) return null;
+  return Math.max(0, Math.floor((startOfDay(now).getTime() - startOfDay(dueDate).getTime()) / DAY_MS));
+}
+
+function entityLabel(entityType: AutomationEntityType): string {
+  if (entityType === "task") return "任务";
+  if (entityType === "issue") return "问题";
+  if (entityType === "gate_review") return "Gate 评审";
+  if (entityType === "mp_release") return "量产发布";
+  return entityType;
 }
 
 function isClosedStatus(entityType: AutomationEntityType, status: string): boolean {

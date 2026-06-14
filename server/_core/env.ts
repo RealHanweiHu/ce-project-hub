@@ -23,4 +23,6 @@ export const ENV = {
   notifyWebhookSecret: process.env.NOTIFY_WEBHOOK_SECRET ?? "",
   /** 站点对外地址（用于通知里的跳转链接），如 https://hub.beepump.net；留空则不带链接 */
   appBaseUrl: (process.env.APP_BASE_URL ?? "").replace(/\/+$/, ""),
+  /** 自动化逾期扫描间隔（分钟） */
+  automationScanIntervalMin: Number(process.env.AUTOMATION_SCAN_INTERVAL_MIN ?? "30") || 30,
 };
