@@ -330,7 +330,7 @@ export async function getProjectsByMember(userId: number): Promise<ProjectRow[]>
 
 export type PortfolioRow = {
   id: string; name: string; projectNumber: string; category: string; risk: string;
-  currentPhase: string; startDate: string | null; targetDate: string | null; pmName: string | null;
+  currentPhase: string; startDate: string | null; targetDate: string | null; pmUserId: number | null; pmName: string | null;
   taskTotal: number; taskDone: number; overdueTasks: number; blockedTasks: number;
   openIssues: number; projectedEnd: string | null;
 };
@@ -371,6 +371,7 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
     return {
       id: p.id, name: p.name, projectNumber: p.projectNumber, category: p.category, risk: p.risk,
       currentPhase: p.currentPhase, startDate: p.startDate, targetDate: p.targetDate,
+      pmUserId: p.pmUserId ?? null,
       pmName: p.pmUserId ? (pmName.get(p.pmUserId) ?? null) : null,
       taskTotal: t?.total ?? 0, taskDone: t?.done ?? 0, overdueTasks: t?.overdue ?? 0, blockedTasks: t?.blocked ?? 0,
       openIssues: i?.open ?? 0, projectedEnd: t?.projectedEnd ?? null,

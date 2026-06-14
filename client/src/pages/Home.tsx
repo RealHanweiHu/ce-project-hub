@@ -6,7 +6,7 @@
 import { lazy, Suspense, useState, useEffect, useRef, useCallback } from 'react';
 import { useLocation } from 'wouter';
 import {
-  LayoutDashboard, LayoutGrid, FolderKanban, BookOpen, Save, CheckCircle2,
+  LayoutDashboard, LayoutGrid, BarChart3, FolderKanban, BookOpen, Save, CheckCircle2,
   ChevronRight, Menu, X, Cpu, Search, LogIn, Loader2, Cloud, Shield, KeyRound,
   ListTodo, AlertTriangle, ShieldAlert, LogOut, Package,
 } from 'lucide-react';
@@ -23,13 +23,16 @@ import { getQueryKey } from '@trpc/react-query';
 import { useProjectData } from '@/hooks/useProjectData';
 import { NotificationBell } from '@/components/NotificationBell';
 
-type View = 'dashboard' | 'portfolio' | 'projects' | 'products' | 'sop' | 'my-tasks' | 'overdue' | 'blocked';
+type View = 'dashboard' | 'portfolio' | 'reports' | 'projects' | 'products' | 'sop' | 'my-tasks' | 'overdue' | 'blocked';
 
 const DashboardView = lazy(() =>
   import('@/components/views/DashboardView').then((module) => ({ default: module.DashboardView }))
 );
 const PortfolioBoard = lazy(() =>
   import('@/components/views/PortfolioBoard').then((module) => ({ default: module.PortfolioBoard }))
+);
+const ReportsView = lazy(() =>
+  import('@/components/views/ReportsView').then((module) => ({ default: module.ReportsView }))
 );
 const ProjectListView = lazy(() =>
   import('@/components/views/ProjectListView').then((module) => ({ default: module.ProjectListView }))
@@ -606,6 +609,7 @@ export default function Home() {
   const navItems = [
     { id: 'dashboard' as View, label: '仪表盘', labelEn: 'Dashboard', icon: LayoutDashboard },
     { id: 'portfolio' as View, label: '组合看板', labelEn: 'Portfolio', icon: LayoutGrid },
+    { id: 'reports' as View, label: '报表', labelEn: 'Reports', icon: BarChart3 },
     { id: 'projects' as View, label: '项目管理', labelEn: 'Projects', icon: FolderKanban },
     { id: 'products' as View, label: '产品库', labelEn: 'Products', icon: Package },
     { id: 'sop' as View, label: 'SOP 流程库', labelEn: 'SOP Library', icon: BookOpen },
@@ -623,6 +627,7 @@ export default function Home() {
   const viewLabels: Record<View, string> = {
     dashboard: 'Dashboard',
     portfolio: 'Portfolio',
+    reports: 'Reports',
     projects: 'Projects',
     products: 'Products',
     sop: 'SOP Library',
@@ -924,6 +929,9 @@ export default function Home() {
               )}
               {view === 'portfolio' && (
                 <PortfolioBoard onSelectProject={handleSelectProject} />
+              )}
+              {view === 'reports' && (
+                <ReportsView onSelectProject={handleSelectProject} />
               )}
               {view === 'projects' && !selectedProjectId && (
                 <ProjectListView
