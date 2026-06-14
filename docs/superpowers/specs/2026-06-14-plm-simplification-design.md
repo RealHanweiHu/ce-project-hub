@@ -56,11 +56,12 @@
 新增 `OverviewPanel`（只读），作为详情页**默认 tab**。数据全部来自已加载的 `project` 对象与现成计数，无需新表/新接口。
 
 内容：
-- **基础信息**：类型（category 徽章卡）、项目编号、PM、风险等级、起止日期、当前阶段、整体进度、关联产品（若有）。
+- **基础信息**：类型（category 徽章卡）、项目编号、PM、风险等级、起止日期、当前阶段、整体进度。
 - **关键指标**：阶段进度条、任务完成率、开放问题数、待决变更数、成员数。
+- **关联产品不在本期总揽**（P2 决策）：前端 `Project` 类型（data.ts:143）无 `productId`，`useProjectData`（:219）也未映射 `projectRow.productId/baseRevisionId/resultRevisionId`。本期不展示关联产品；如以后要显示，需把这三字段扩进 `useProjectData` 的 Project 聚合，并用现有 `products.get` 查产品名。
 
 实现：
-- 类型/进度/阶段/起止/PM/风险/关联产品/问题数/变更数 全部来自 `useProjectData` 已加载的 `project` 对象 + 现成帮助函数（`computeOverallProgress / getPhaseStatus`）+ `CATEGORY_MAP`，无新请求。
+- 类型/进度/阶段/起止/PM/风险/问题数/变更数 全部来自 `useProjectData` 已加载的 `project` 对象 + 现成帮助函数（`computeOverallProgress / getPhaseStatus`）+ `CATEGORY_MAP`，无新请求。
 - **成员数例外**（P2c）：`useProjectData` 不含 members（成员列表在 `MembersPanel` 内单独 `members.list` 查询）。总揽页要显示成员数，就**自己发一个 `members.list` 查询**（该接口已存在，开销很小）取 `.length`；这是总揽页唯一的新增请求。
 
 ## 5. 详情页 tab 最终形态
