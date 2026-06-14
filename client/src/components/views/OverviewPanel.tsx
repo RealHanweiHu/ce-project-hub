@@ -5,9 +5,11 @@ import { CATEGORY_MAP } from '@/lib/sop-templates';
 import { trpc } from '@/lib/trpc';
 import { Hash, User, AlertTriangle, CalendarRange, Flag, GaugeCircle, ListChecks, Bug, GitBranch, Users, CalendarClock, RefreshCw } from 'lucide-react';
 import { MeetingConfigPanel } from './MeetingConfigPanel';
+import { MembersPanel } from './MembersPanel';
+import { CustomFieldsPanel } from './CustomFieldsPanel';
 import { toast } from 'sonner';
 
-export function OverviewPanel({ project, canEdit }: { project: Project; canEdit: boolean }) {
+export function OverviewPanel({ project, onUpdate, canEdit, canManageMembers, isAdmin }: { project: Project; onUpdate: (p: Project) => void; canEdit: boolean; canManageMembers: boolean; isAdmin: boolean }) {
   const { data: members = [] } = trpc.members.list.useQuery({ projectId: project.id });
   const { data: users = [] } = trpc.admin.listUsersForSelect.useQuery(undefined, { staleTime: 60_000 });
 
@@ -138,6 +140,17 @@ export function OverviewPanel({ project, canEdit }: { project: Project; canEdit:
 
       {/* 项目周会(每项目可配) */}
       <MeetingConfigPanel projectId={project.id} canEdit={canEdit} />
+
+      {/* 成员 */}
+      <div>
+        <h3 className="text-[11px] font-mono uppercase tracking-widest text-stone-400 mb-3">项目成员</h3>
+        <MembersPanel projectId={project.id} canManage={canManageMembers} />
+      </div>
+
+      {/* 自定义字段 */}
+      <div>
+        <CustomFieldsPanel project={project} onUpdate={onUpdate} canEdit={canEdit} isAdmin={isAdmin} />
+      </div>
     </div>
   );
 }

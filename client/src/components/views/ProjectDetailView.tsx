@@ -7,7 +7,7 @@ import {
   Upload, Download, Trash2, Paperclip, FileText, Image as ImageIcon,
   Edit3, Calendar, AlertTriangle, Target, Zap, BarChart2, ListChecks,
   Lock, ShieldAlert, Flag, Bug, GitBranch, Filter, Rocket, LayoutDashboard,
-  Inbox, LayoutGrid, SlidersHorizontal, Eye,
+  Inbox, LayoutGrid, FolderOpen, Eye,
 } from 'lucide-react';
 import {
   Project, SOP_PHASES, PHASE_MAP, RISK_CONFIG,
@@ -23,13 +23,12 @@ import { IssueList } from './IssueList';
 import { ChangeLog } from './ChangeLog';
 import { Issue, GateReview, ChangeRecord } from '@/lib/data';
 import { GateReviewModal, GateReviewBadge } from './GateReviewModal';
-import { MembersPanel } from './MembersPanel';
 import { ReleaseDialog } from './ReleaseDialog';
 import { BomPanel } from './BomPanel';
 import { OverviewPanel } from './OverviewPanel';
 import { RequirementPoolPanel } from './RequirementPoolPanel';
 import { KanbanBoard } from './KanbanBoard';
-import { CustomFieldsPanel } from './CustomFieldsPanel';
+import { FilesPanel } from './FilesPanel';
 import { FilePreviewModal, canPreview } from './FilePreviewModal';
 import { useProjectPermission } from '@/hooks/useProjectPermission';
 import { useAuth } from '@/_core/hooks/useAuth';
@@ -501,7 +500,7 @@ function PmSelector({
 export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailViewProps) {
   const [activePhaseId, setActivePhaseId] = useState(project.currentPhase);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [mainTab, setMainTab] = useState<'overview' | 'tasks' | 'kanban' | 'requirements' | 'gantt' | 'issues' | 'changelog' | 'members' | 'bom' | 'fields'>('overview');
+  const [mainTab, setMainTab] = useState<'overview' | 'tasks' | 'kanban' | 'requirements' | 'gantt' | 'issues' | 'changelog' | 'bom' | 'files'>('overview');
   const perms = useProjectPermission(project.id);
   const { user: currentUser } = useAuth();
 
@@ -793,17 +792,6 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
           甘特图
         </button>
         <button
-          onClick={() => setMainTab('members')}
-          className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all whitespace-nowrap ${
-            mainTab === 'members'
-              ? 'border-b-stone-900 text-stone-900'
-              : 'border-b-transparent text-stone-400 hover:text-stone-700'
-          }`}
-        >
-          <Users size={14} />
-          成员
-        </button>
-        <button
           onClick={() => setMainTab('bom')}
           className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all whitespace-nowrap ${
             mainTab === 'bom'
@@ -815,15 +803,15 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
           BOM
         </button>
         <button
-          onClick={() => setMainTab('fields')}
+          onClick={() => setMainTab('files')}
           className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all whitespace-nowrap ${
-            mainTab === 'fields'
+            mainTab === 'files'
               ? 'border-b-stone-900 text-stone-900'
               : 'border-b-transparent text-stone-400 hover:text-stone-700'
           }`}
         >
-          <SlidersHorizontal size={14} />
-          字段
+          <FolderOpen size={14} />
+          文件
         </button>
         <button
           onClick={() => setMainTab('changelog')}
@@ -928,34 +916,29 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
         </div>
       )}
 
-      {/* ── Members Tab ───────────────────────────────────────────────── */}
-      {mainTab === 'members' && (
-        <div className="p-6">
-          <MembersPanel projectId={project.id} canManage={perms.canManageMembers} />
-        </div>
-      )}
-
       {mainTab === 'bom' && (
         <div className="p-6">
           <BomPanel projectId={project.id} canEdit={perms.canEditProjectInfo} />
         </div>
       )}
 
-      {mainTab === 'fields' && (
+      {/* ── Files Tab（权限范围内项目文件汇总）──────────────────────────── */}
+      {mainTab === 'files' && (
         <div className="p-6">
-          <CustomFieldsPanel
-            project={project}
-            onUpdate={onUpdate}
-            canEdit={perms.canEditProjectInfo}
-            isAdmin={currentUser?.role === 'admin'}
-          />
+          <FilesPanel project={project} role={perms.role} />
         </div>
       )}
 
-      {/* ── Overview Tab ──────────────────────────────────────────────────── */}
+      {/* ── Overview Tab（含 成员 / 字段）─────────────────────────────────── */}
       {mainTab === 'overview' && (
         <div className="p-6">
-          <OverviewPanel project={project} canEdit={perms.canEditProjectInfo} />
+          <OverviewPanel
+            project={project}
+            onUpdate={onUpdate}
+            canEdit={perms.canEditProjectInfo}
+            canManageMembers={perms.canManageMembers}
+            isAdmin={currentUser?.role === 'admin'}
+          />
         </div>
       )}
 
