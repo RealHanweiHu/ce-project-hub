@@ -6,7 +6,7 @@ import {
   ArrowLeft, CheckCircle2, Circle, ChevronDown, ChevronRight,
   Upload, Download, Trash2, Paperclip, FileText, Image as ImageIcon,
   Edit3, Calendar, AlertTriangle, Target, Zap, BarChart2, ListChecks,
-  Lock, ShieldAlert, Flag, Bug, GitBranch, Filter, Rocket, Layers,
+  Lock, ShieldAlert, Flag, Bug, GitBranch, Filter, Rocket, LayoutDashboard,
   Inbox, LayoutGrid, SlidersHorizontal, Eye,
 } from 'lucide-react';
 import {
@@ -25,8 +25,8 @@ import { ISSUE_PHASES, Issue, GateReview, ChangeRecord } from '@/lib/data';
 import { GateReviewModal, GateReviewBadge } from './GateReviewModal';
 import { MembersPanel } from './MembersPanel';
 import { ReleaseDialog } from './ReleaseDialog';
-import { ReuseSetPanel } from './ReuseSetPanel';
 import { BomPanel } from './BomPanel';
+import { OverviewPanel } from './OverviewPanel';
 import { RequirementPoolPanel } from './RequirementPoolPanel';
 import { KanbanBoard } from './KanbanBoard';
 import { CustomFieldsPanel } from './CustomFieldsPanel';
@@ -501,7 +501,7 @@ function PmSelector({
 export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailViewProps) {
   const [activePhaseId, setActivePhaseId] = useState(project.currentPhase);
   const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
-  const [mainTab, setMainTab] = useState<'tasks' | 'kanban' | 'requirements' | 'gantt' | 'issues' | 'changelog' | 'members' | 'reuseset' | 'bom' | 'fields'>('tasks');
+  const [mainTab, setMainTab] = useState<'overview' | 'tasks' | 'kanban' | 'requirements' | 'gantt' | 'issues' | 'changelog' | 'members' | 'bom' | 'fields'>('overview');
   const perms = useProjectPermission(project.id);
   const { user: currentUser } = useAuth();
 
@@ -709,8 +709,19 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
         </div>
       </div>
 
-      {/* Main Tab Bar: Tasks / Issues / Gantt / Members */}
+      {/* Main Tab Bar: Overview / Tasks / Issues / Gantt / Members */}
       <div className="flex items-center gap-0 border-b border-stone-200 overflow-x-auto">
+        <button
+          onClick={() => setMainTab('overview')}
+          className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all ${
+            mainTab === 'overview'
+              ? 'border-b-stone-900 text-stone-900'
+              : 'border-b-transparent text-stone-400 hover:text-stone-700'
+          }`}
+        >
+          <LayoutDashboard size={14} />
+          总揽
+        </button>
         <button
           onClick={() => setMainTab('tasks')}
           className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all ${
@@ -783,17 +794,6 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
         >
           <Users size={14} />
           成员
-        </button>
-        <button
-          onClick={() => setMainTab('reuseset')}
-          className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all whitespace-nowrap ${
-            mainTab === 'reuseset'
-              ? 'border-b-stone-900 text-stone-900'
-              : 'border-b-transparent text-stone-400 hover:text-stone-700'
-          }`}
-        >
-          <Layers size={14} />
-          复用集
         </button>
         <button
           onClick={() => setMainTab('bom')}
@@ -927,12 +927,6 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
         </div>
       )}
 
-      {mainTab === 'reuseset' && (
-        <div className="p-6">
-          <ReuseSetPanel projectId={project.id} canEdit={perms.canEditProjectInfo} />
-        </div>
-      )}
-
       {mainTab === 'bom' && (
         <div className="p-6">
           <BomPanel projectId={project.id} canEdit={perms.canEditProjectInfo} />
@@ -947,6 +941,13 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
             canEdit={perms.canEditProjectInfo}
             isAdmin={currentUser?.role === 'admin'}
           />
+        </div>
+      )}
+
+      {/* ── Overview Tab ──────────────────────────────────────────────────── */}
+      {mainTab === 'overview' && (
+        <div className="p-6">
+          <OverviewPanel project={project} />
         </div>
       )}
 

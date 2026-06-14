@@ -398,7 +398,7 @@ export function ProjectListView({
       {showAdd && (
         <div className="fixed inset-0 bg-stone-900/50 z-50 flex items-center justify-center p-4" onClick={handleClose}>
           <div
-            className="bg-white w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl"
+            className="bg-white w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header */}
@@ -432,48 +432,41 @@ export function ProjectListView({
             {/* Modal Body */}
             <div className="flex-1 overflow-y-auto">
 
-              {/* ── Step 1: Category Selection ── */}
+              {/* ── Step 1: Category Selection (SKG 式 3 卡片) ── */}
               {step === 1 && (
                 <div className="p-6 space-y-4">
-                  <p className="text-sm text-stone-600">选择项目类别，系统将自动匹配对应的 SOP 流程模板。</p>
-                  <div className="space-y-3">
-                    {PROJECT_CATEGORIES.map((cat) => (
-                      <button
-                        key={cat.id}
-                        onClick={() => setSelectedCategory(cat.id)}
-                        className={`w-full text-left p-4 border-2 transition-all ${
-                          selectedCategory === cat.id
-                            ? 'border-stone-900 bg-stone-50'
-                            : 'border-stone-200 hover:border-stone-300 bg-white'
-                        }`}
-                      >
-                        <div className="flex items-start gap-4">
-                          <span className="text-2xl shrink-0 mt-0.5">{cat.icon}</span>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="font-serif text-base text-stone-900 font-medium">{cat.name}</span>
-                              <span className={`text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 ${cat.color} ${cat.textColor} border ${cat.borderColor}`}>
-                                {cat.badge}
-                              </span>
-                            </div>
-                            <p className="text-xs text-stone-500 leading-relaxed">{cat.desc}</p>
-                            <div className="flex items-center gap-4 mt-2">
-                              <span className="text-[10px] font-mono text-stone-400">
-                                {cat.phaseCount} 个阶段
-                              </span>
-                              <span className="text-[10px] font-mono text-stone-400">
-                                典型周期 {cat.typicalDuration}
-                              </span>
-                            </div>
-                          </div>
-                          {selectedCategory === cat.id && (
-                            <div className="shrink-0 w-5 h-5 bg-stone-900 rounded-full flex items-center justify-center">
+                  <p className="text-sm text-stone-600">选择项目类型，系统将自动匹配对应的 SOP 流程模板。</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    {PROJECT_CATEGORIES.map((cat) => {
+                      const active = selectedCategory === cat.id;
+                      return (
+                        <button
+                          key={cat.id}
+                          onClick={() => setSelectedCategory(cat.id)}
+                          className={`relative flex flex-col text-left p-4 border-2 transition-all ${
+                            active
+                              ? 'border-stone-900 bg-stone-50'
+                              : 'border-stone-200 hover:border-stone-300 bg-white'
+                          }`}
+                        >
+                          {active && (
+                            <div className="absolute top-2 right-2 w-5 h-5 bg-stone-900 rounded-full flex items-center justify-center">
                               <Check size={11} className="text-white" />
                             </div>
                           )}
-                        </div>
-                      </button>
-                    ))}
+                          <span className="text-3xl">{cat.icon}</span>
+                          <span className="font-serif text-base text-stone-900 font-medium mt-3">{cat.name}</span>
+                          <span className={`self-start text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 mt-1.5 ${cat.color} ${cat.textColor} border ${cat.borderColor}`}>
+                            {cat.badge}
+                          </span>
+                          <p className="text-xs text-stone-500 leading-relaxed mt-2 flex-1">{cat.desc}</p>
+                          <div className="mt-3 pt-3 border-t border-stone-100 flex flex-col gap-0.5">
+                            <span className="text-[10px] font-mono text-stone-400">{cat.phaseCount} 个阶段</span>
+                            <span className="text-[10px] font-mono text-stone-400">典型周期 {cat.typicalDuration}</span>
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               )}

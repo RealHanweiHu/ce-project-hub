@@ -8,7 +8,7 @@ import { useLocation } from 'wouter';
 import {
   LayoutDashboard, FolderKanban, BookOpen, Save, CheckCircle2,
   ChevronRight, Menu, X, Cpu, Search, LogIn, Loader2, Cloud, Shield, KeyRound,
-  ListTodo, AlertTriangle, ShieldAlert, LogOut, Package, Layers,
+  ListTodo, AlertTriangle, ShieldAlert, LogOut, Package,
 } from 'lucide-react';
 import { nanoid } from 'nanoid';
 import {
@@ -23,7 +23,7 @@ import { getQueryKey } from '@trpc/react-query';
 import { useProjectData } from '@/hooks/useProjectData';
 import { NotificationBell } from '@/components/NotificationBell';
 
-type View = 'dashboard' | 'projects' | 'products' | 'modules' | 'sop' | 'my-tasks' | 'overdue' | 'blocked';
+type View = 'dashboard' | 'projects' | 'products' | 'sop' | 'my-tasks' | 'overdue' | 'blocked';
 
 const DashboardView = lazy(() =>
   import('@/components/views/DashboardView').then((module) => ({ default: module.DashboardView }))
@@ -48,9 +48,6 @@ const BlockedTasksView = lazy(() =>
 );
 const ProductLibraryView = lazy(() =>
   import('@/components/views/ProductLibraryView').then((module) => ({ default: module.ProductLibraryView }))
-);
-const ModuleLibraryView = lazy(() =>
-  import('@/components/views/ModuleLibraryView').then((module) => ({ default: module.ModuleLibraryView }))
 );
 const GlobalSearch = lazy(() =>
   import('@/components/GlobalSearch').then((module) => ({ default: module.GlobalSearch }))
@@ -607,7 +604,6 @@ export default function Home() {
     { id: 'dashboard' as View, label: '仪表盘', labelEn: 'Dashboard', icon: LayoutDashboard },
     { id: 'projects' as View, label: '项目管理', labelEn: 'Projects', icon: FolderKanban },
     { id: 'products' as View, label: '产品库', labelEn: 'Products', icon: Package },
-    { id: 'modules' as View, label: '模块库', labelEn: 'Modules', icon: Layers },
     { id: 'sop' as View, label: 'SOP 流程库', labelEn: 'SOP Library', icon: BookOpen },
     { id: 'my-tasks' as View, label: '我的任务', labelEn: 'My Tasks', icon: ListTodo },
     { id: 'overdue' as View, label: '逾期任务', labelEn: 'Overdue', icon: AlertTriangle },
@@ -624,7 +620,6 @@ export default function Home() {
     dashboard: 'Dashboard',
     projects: 'Projects',
     products: 'Products',
-    modules: 'Modules',
     sop: 'SOP Library',
     'my-tasks': 'My Tasks',
     overdue: 'Overdue Tasks',
@@ -940,7 +935,6 @@ export default function Home() {
                 />
               )}
               {view === 'products' && <ProductLibraryView />}
-              {view === 'modules' && <ModuleLibraryView />}
               {view === 'sop' && <SOPLibraryView />}
               {view === 'my-tasks' && (
                 <MyTasksView onNavigateToProject={(id) => { handleSelectProject(id); }} />

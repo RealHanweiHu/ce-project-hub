@@ -64,6 +64,13 @@
       "when": 1781360784481,
       "tag": "0008_custom_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1781409200118,
+      "tag": "0009_simplify_plm",
+      "breakpoints": true
     }
   ]
 }
