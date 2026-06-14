@@ -4,8 +4,9 @@ import { Project, RISK_CONFIG, getProjectPhases, computeOverallProgress } from '
 import { CATEGORY_MAP } from '@/lib/sop-templates';
 import { trpc } from '@/lib/trpc';
 import { Hash, User, AlertTriangle, CalendarRange, Flag, GaugeCircle, ListChecks, Bug, GitBranch, Users } from 'lucide-react';
+import { MeetingConfigPanel } from './MeetingConfigPanel';
 
-export function OverviewPanel({ project }: { project: Project }) {
+export function OverviewPanel({ project, canEdit }: { project: Project; canEdit: boolean }) {
   const { data: members = [] } = trpc.members.list.useQuery({ projectId: project.id });
   const { data: users = [] } = trpc.admin.listUsersForSelect.useQuery(undefined, { staleTime: 60_000 });
 
@@ -90,6 +91,9 @@ export function OverviewPanel({ project }: { project: Project }) {
           <Metric icon={<Users size={15} />} label="项目成员" value={String(members.length)} />
         </div>
       </div>
+
+      {/* 项目周会(每项目可配) */}
+      <MeetingConfigPanel projectId={project.id} canEdit={canEdit} />
     </div>
   );
 }

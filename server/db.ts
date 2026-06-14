@@ -120,6 +120,13 @@ export async function getUserById(id: number) {
   return result[0];
 }
 
+/** 缓存钉钉 userId 到用户行（按手机号反查后回写） */
+export async function setUserDingtalkId(userId: number, dingtalkUserId: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(users).set({ dingtalkUserId }).where(eq(users.id, userId));
+}
+
 export async function getUserByEmail(email: string) {
   const db = await getDb();
   if (!db) return undefined;
@@ -260,6 +267,23 @@ export async function updateProject(
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.update(projects).set(patch).where(eq(projects.id, id));
+}
+
+/** 更新项目周会配置 */
+export async function updateProjectMeetingConfig(
+  projectId: string,
+  meetingConfig: { enabled: boolean; weekday: number; time: string; durationMin: number; title: string }
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(projects).set({ meetingConfig }).where(eq(projects.id, projectId));
+}
+
+/** 回填/清除项目已建钉钉日程 id */
+export async function updateProjectDingtalkEvent(projectId: string, dingtalkEventId: string | null): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(projects).set({ dingtalkEventId }).where(eq(projects.id, projectId));
 }
 
 export async function deleteProject(id: string): Promise<void> {
