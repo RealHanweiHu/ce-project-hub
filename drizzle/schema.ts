@@ -830,6 +830,50 @@ export const notifications = pgTable(
 export type Notification = typeof notifications.$inferSelect;
 export type InsertNotification = typeof notifications.$inferInsert;
 
+// ── 自动化规则：内置规则配置 + 运行审计 ────────────────────────────────────────
+export const automationRules = pgTable(
+  "automation_rules",
+  {
+    id: serial("id").primaryKey(),
+    ruleKey: varchar("ruleKey", { length: 64 }).notNull(),
+    enabled: boolean("enabled").notNull().default(false),
+    config: jsonb("config").$type<Record<string, unknown>>().notNull().default({}),
+    updatedBy: integer("updatedBy"),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (t) => ({
+    uqRuleKey: uniqueIndex("uq_automation_rules_rule_key").on(t.ruleKey),
+  })
+);
+export type AutomationRuleRow = typeof automationRules.$inferSelect;
+export type InsertAutomationRule = typeof automationRules.$inferInsert;
+
+export const automationRuns = pgTable(
+  "automation_runs",
+  {
+    id: serial("id").primaryKey(),
+    ruleKey: varchar("ruleKey", { length: 64 }).notNull(),
+    projectId: varchar("projectId", { length: 32 }),
+    eventType: varchar("eventType", { length: 64 }).notNull(),
+    entityType: varchar("entityType", { length: 32 }).notNull(),
+    entityId: varchar("entityId", { length: 64 }),
+    status: varchar("status", { length: 16 }).notNull(),
+    recipients: jsonb("recipients").$type<unknown>().default([]),
+    detail: text("detail"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    idxRuleEntityCreated: index("idx_automation_runs_rule_entity_created").on(
+      t.ruleKey,
+      t.entityId,
+      t.createdAt
+    ),
+    idxProjectCreated: index("idx_automation_runs_project_created").on(t.projectId, t.createdAt),
+  })
+);
+export type AutomationRunRow = typeof automationRuns.$inferSelect;
+export type InsertAutomationRun = typeof automationRuns.$inferInsert;
+
 // ── 自定义字段（管理员定义，项目级填值）─────────────────────────────────
 export const CUSTOM_FIELD_TYPES = ["text", "number", "date", "select", "boolean"] as const;
 export const customFieldTypeEnum = pgEnum("custom_field_type", CUSTOM_FIELD_TYPES);

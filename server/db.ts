@@ -18,6 +18,8 @@ import {
   bomItems, BomItem, InsertBomItem,
   comments, Comment,
   notifications,
+  automationRules, AutomationRuleRow, InsertAutomationRule,
+  automationRuns, AutomationRunRow, InsertAutomationRun,
   customFieldDefs, CustomFieldDef, InsertCustomFieldDef,
   type TaskStatus, type TaskPriority,
 } from "../drizzle/schema";
@@ -1283,4 +1285,128 @@ export async function markRead(id: number): Promise<void> {
 export async function markAllRead(userId: number): Promise<void> {
   const db = await getDb(); if (!db) return;
   await db.update(notifications).set({ read: true }).where(eq(notifications.userId, userId));
+}
+
+// ── 自动化规则：配置 + 运行审计 ────────────────────────────────────────────────
+
+export type AutomationRuleDefault = {
+  ruleKey: string;
+  enabled: boolean;
+  config: Record<string, unknown>;
+};
+
+export async function seedAutomationRuleDefaults(defaults: AutomationRuleDefault[]): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  for (const rule of defaults) {
+    await db.insert(automationRules).values({
+      ruleKey: rule.ruleKey,
+      enabled: rule.enabled,
+      config: rule.config,
+    } satisfies InsertAutomationRule).onConflictDoNothing({
+      target: automationRules.ruleKey,
+    });
+  }
+}
+
+export async function listAutomationRuleRows(): Promise<AutomationRuleRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(automationRules).orderBy(automationRules.id);
+}
+
+export async function updateAutomationRuleRow(input: {
+  ruleKey: string;
+  enabled?: boolean;
+  config?: Record<string, unknown>;
+  updatedBy?: number | null;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.insert(automationRules).values({
+    ruleKey: input.ruleKey,
+    enabled: input.enabled ?? false,
+    config: input.config ?? {},
+    updatedBy: input.updatedBy ?? null,
+    updatedAt: new Date(),
+  }).onConflictDoUpdate({
+    target: automationRules.ruleKey,
+    set: {
+      ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+      ...(input.config !== undefined ? { config: input.config } : {}),
+      updatedBy: input.updatedBy ?? null,
+      updatedAt: new Date(),
+    },
+  });
+}
+
+export async function createAutomationRun(record: Omit<InsertAutomationRun, "id" | "createdAt">): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.insert(automationRuns).values(record);
+}
+
+export async function hasRecentAutomationFire(input: {
+  ruleKey: string;
+  entityId: string;
+  since: Date;
+}): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const rows = await db
+    .select({ id: automationRuns.id })
+    .from(automationRuns)
+    .where(and(
+      eq(automationRuns.ruleKey, input.ruleKey),
+      eq(automationRuns.entityId, input.entityId),
+      eq(automationRuns.status, "fired"),
+      drizzleSql`${automationRuns.createdAt} >= ${input.since}`
+    ))
+    .limit(1);
+  return rows.length > 0;
+}
+
+export async function listAutomationRuns(input: {
+  projectId?: string | null;
+  limit?: number;
+} = {}): Promise<AutomationRunRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const limit = Math.min(Math.max(input.limit ?? 50, 1), 200);
+  if (input.projectId) {
+    return db
+      .select()
+      .from(automationRuns)
+      .where(eq(automationRuns.projectId, input.projectId))
+      .orderBy(desc(automationRuns.createdAt))
+      .limit(limit);
+  }
+  return db.select().from(automationRuns).orderBy(desc(automationRuns.createdAt)).limit(limit);
+}
+
+export async function getAutomationOverdueTasks(): Promise<ProjectTask[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(projectTasks)
+    .where(and(
+      drizzleSql`${projectTasks.dueDate} IS NOT NULL`,
+      drizzleSql`${projectTasks.dueDate} < CURRENT_DATE`,
+      drizzleSql`${projectTasks.status} NOT IN ('done','skipped')`
+    ));
+}
+
+export async function getAutomationOverdueIssues(): Promise<ProjectIssue[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(projectIssues)
+    .where(and(
+      drizzleSql`${projectIssues.targetDate} IS NOT NULL`,
+      drizzleSql`${projectIssues.targetDate} <> ''`,
+      drizzleSql`${projectIssues.targetDate} < TO_CHAR(CURRENT_DATE, 'YYYY-MM-DD')`,
+      drizzleSql`${projectIssues.status} NOT IN ('resolved','closed','wont_fix')`
+    ));
 }
