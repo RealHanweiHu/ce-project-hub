@@ -18,7 +18,6 @@ import { phasesRouter } from "./routers/phases";
 import { filesRouter } from "./routers/files";
 import { requirementsRouter } from "./routers/requirements";
 import { productsRouter } from "./routers/products";
-import { modulesRouter } from "./routers/modules";
 import { bomRouter } from "./routers/bom";
 import { commentsRouter, notificationsRouter } from "./routers/collab";
 import { customFieldsRouter } from "./routers/customFields";
@@ -215,7 +214,6 @@ export const appRouter = router({
   requirements: requirementsRouter,
   customFields: customFieldsRouter,
   products: productsRouter,
-  modules: modulesRouter,
   bom: bomRouter,
   comments: commentsRouter,
   notifications: notificationsRouter,
