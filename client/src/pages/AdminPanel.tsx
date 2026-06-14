@@ -27,6 +27,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
+import { AutomationSettings } from '@/components/views/AutomationSettings';
 
 type UserRow = {
   id: number;
@@ -170,6 +171,8 @@ export default function AdminPanel() {
             </div>
           </div>
         </div>
+
+        <AutomationSettings />
 
         {/* User Table */}
         <div className="bg-white border border-stone-200">
