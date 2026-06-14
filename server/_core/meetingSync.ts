@@ -16,10 +16,12 @@ export type MeetingSyncDeps = {
  * 永远不抛错由调用方控制；本函数只决策与编排。
  */
 export async function syncProjectMeeting(args: {
-  project: Proj; config: Cfg | null; members: Member[]; deps: MeetingSyncDeps;
+  project: Proj; config: Cfg | null; members: Member[]; todayISO: string; deps: MeetingSyncDeps;
 }): Promise<{ mode: "skipped" | "dingtalk" | "group_push" }> {
-  const { project, config, members, deps } = args;
-  if (!config?.enabled || !project.startDate) return { mode: "skipped" };
+  const { project, config, members, todayISO, deps } = args;
+  if (!config?.enabled) return { mode: "skipped" };
+  // 周会不强制项目开始日；无开始日则以今天为首次锚点
+  const startAnchor = project.startDate || todayISO;
 
   const pm = members.find((m) => m.id === project.pmUserId);
   const pmUserId = pm ? await deps.resolveUserId(pm) : null;
@@ -28,7 +30,7 @@ export async function syncProjectMeeting(args: {
     const attendees = (await Promise.all(members.map((m) => deps.resolveUserId(m)))).filter((x): x is string => !!x);
     const event = buildWeeklyEvent({
       title: config.title, weekday: config.weekday, time: config.time, durationMin: config.durationMin,
-      startDate: project.startDate, targetDate: project.targetDate, timeZone: "Asia/Shanghai", attendees,
+      startDate: startAnchor, targetDate: project.targetDate, timeZone: "Asia/Shanghai", attendees,
     });
     const eventId = await deps.upsert({ organizerUserId: pmUserId, existingEventId: project.dingtalkEventId, event });
     if (eventId) { await deps.saveEventId(project.id, eventId); return { mode: "dingtalk" }; }

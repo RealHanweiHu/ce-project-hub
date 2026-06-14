@@ -331,6 +331,21 @@ export async function getProjectsByMember(userId: number): Promise<ProjectRow[]>
 // ── Project Member helpers ────────────────────────────────────────────────────
 
 /** Get all members of a project, joined with user info */
+/** 周会参与人：项目成员 ∪ PM，返回用户记录(id=userId + mobile + 钉钉缓存)，供日程同步解析钉钉身份 */
+export async function getMeetingParticipants(
+  projectId: string,
+  pmUserId: number | null
+): Promise<Array<{ id: number; mobile: string | null; dingtalkUserId: string | null }>> {
+  const db = await getDb();
+  if (!db) return [];
+  const memberRows = await db.select({ userId: projectMembers.userId }).from(projectMembers).where(eq(projectMembers.projectId, projectId));
+  const ids = new Set<number>(memberRows.map((r) => r.userId));
+  if (pmUserId) ids.add(pmUserId);
+  if (ids.size === 0) return [];
+  return db.select({ id: users.id, mobile: users.mobile, dingtalkUserId: users.dingtalkUserId })
+    .from(users).where(inArray(users.id, Array.from(ids)));
+}
+
 export async function getProjectMembers(projectId: string): Promise<Array<ProjectMember & {
   userName: string | null;
   userEmail: string | null;

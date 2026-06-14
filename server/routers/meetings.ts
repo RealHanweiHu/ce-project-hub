@@ -2,7 +2,7 @@ import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import { TRPCError } from "@trpc/server";
 import {
-  getProjectById, getProjectMember, getProjectMembers,
+  getProjectById, getProjectMember, getMeetingParticipants,
   updateProjectMeetingConfig, setUserDingtalkId, updateProjectDingtalkEvent,
 } from "../db";
 import { ROLE_PERMISSIONS } from "./members";
@@ -41,11 +41,12 @@ export const meetingsRouter = router({
       if (!role || !ROLE_PERMISSIONS[role].canEditProjectInfo) throw new TRPCError({ code: "FORBIDDEN" });
       await updateProjectMeetingConfig(input.projectId, input.config);
       const project = await getProjectById(input.projectId);
-      const members = await getProjectMembers(input.projectId);
+      const members = await getMeetingParticipants(input.projectId, project?.pmUserId ?? null);
       await syncProjectMeeting({
         project: project as never,
         config: input.config,
-        members: members as never,
+        members,
+        todayISO: new Date().toISOString().slice(0, 10),
         deps: {
           resolveUserId: (u) => resolveDingtalkUserId(u, setUserDingtalkId),
           upsert: upsertWeeklyMeeting,
