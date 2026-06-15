@@ -259,6 +259,49 @@ const ROLE_OPTIONS = [
   { value: 'owner',  label: '项目创建者' },
 ] as const;
 
+/** Gate 就绪检查：从现有数据(任务/交付物/问题/文件)计算关卡是否就绪。 */
+interface GateReadiness {
+  tasksDone: number; tasksTotal: number;
+  delivDone: number; delivTotal: number;
+  openP0P1: number; fileCount: number;
+  signoffRoles: string[]; blockers: string[]; ready: boolean;
+}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function computeGateReadiness(phase: any, phaseData: any): GateReadiness {
+  const allTasks: Array<{ id: string }> = phase?.tasks ?? [];
+  const tasks = allTasks.filter((t) => t.id !== phase?.gateTaskId);
+  const tasksDone = tasks.filter((t) => phaseData?.tasks?.[t.id]).length;
+  let delivDone = 0, delivTotal = 0;
+  for (const t of tasks) {
+    const names = getTaskDeliverables(t.id, phase?.deliverables ?? []);
+    const status: Record<string, boolean> = phaseData?.taskDetails?.[t.id]?.deliverables ?? {};
+    delivTotal += names.length;
+    delivDone += names.filter((n) => status[n]).length;
+  }
+  const issues = phaseData?.issues ?? [];
+  const openP0P1 = issues.filter((i: { severity: string; status: string }) =>
+    (i.severity === 'P0' || i.severity === 'P1') && (i.status === 'open' || i.status === 'in_progress')).length;
+  let fileCount = 0;
+  for (const t of tasks) fileCount += (phaseData?.taskDetails?.[t.id]?.files ?? []).length;
+  const blockers: string[] = [];
+  if (openP0P1 > 0) blockers.push(`${openP0P1} 个未关闭的 P0/P1 问题`);
+  if (tasksDone < tasks.length) blockers.push(`${tasks.length - tasksDone} 项任务未完成`);
+  if (delivTotal > 0 && delivDone < delivTotal) blockers.push(`交付物未齐(${delivDone}/${delivTotal})`);
+  return { tasksDone, tasksTotal: tasks.length, delivDone, delivTotal, openP0P1, fileCount, signoffRoles: phase?.gateStandard?.responsibleRoles ?? [], blockers, ready: blockers.length === 0 };
+}
+
+function ReadinessRow({ label, ok, detail, soft }: { label: string; ok: boolean; detail: React.ReactNode; soft?: boolean }) {
+  return (
+    <div className="flex items-center justify-between py-1 text-sm">
+      <span className="flex items-center gap-1.5">
+        {ok ? <CheckCircle2 size={14} className="text-emerald-600" /> : <AlertTriangle size={14} className={soft ? 'text-amber-500' : 'text-rose-500'} />}
+        <span className="text-stone-700">{label}</span>
+      </span>
+      <span className={`text-xs font-mono ${ok ? 'text-stone-500' : soft ? 'text-amber-600' : 'text-rose-600'}`}>{detail}</span>
+    </div>
+  );
+}
+
 /** 任务交付物清单：模板预置交付物 + 完成勾选（持久化到 project_tasks.deliverables） */
 function DeliverablesChecklist({
   projectId, phaseId, taskId, items, status, canEdit,
@@ -1332,6 +1375,41 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                       </div>
                     )}
 
+                    {selectedTaskIsGate && (() => {
+                      const r = computeGateReadiness(activePhase, activePhaseData);
+                      return (
+                        <div className={`mt-4 p-3 border ${r.ready ? 'border-emerald-200 bg-emerald-50/50' : 'border-amber-200 bg-amber-50/50'}`}>
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="text-[10px] font-mono uppercase tracking-widest text-stone-500">Gate 就绪检查</div>
+                            <span className={`text-[10px] font-mono px-1.5 py-0.5 border ${r.ready ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
+                              {r.ready ? '已就绪' : '未就绪'}
+                            </span>
+                          </div>
+                          <div className="divide-y divide-stone-100">
+                            <ReadinessRow label="阶段任务完成" ok={r.tasksDone === r.tasksTotal} detail={`${r.tasksDone}/${r.tasksTotal}`} />
+                            <ReadinessRow label="交付物齐备" ok={r.delivTotal === 0 || r.delivDone === r.delivTotal} detail={`${r.delivDone}/${r.delivTotal}`} />
+                            <ReadinessRow label="无未关闭 P0/P1" ok={r.openP0P1 === 0} detail={r.openP0P1 === 0 ? '通过' : `${r.openP0P1} 个待关闭`} />
+                            <ReadinessRow label="关键文件已上传" ok={r.fileCount > 0} detail={`${r.fileCount} 个`} soft />
+                          </div>
+                          {r.signoffRoles.length > 0 && (
+                            <div className="mt-2 pt-2 border-t border-stone-100">
+                              <div className="text-[10px] font-mono uppercase tracking-wider text-stone-400 mb-1">需会签角色</div>
+                              <div className="flex flex-wrap gap-1">
+                                {r.signoffRoles.map((role, i) => (
+                                  <span key={i} className="text-[10px] text-stone-600 bg-white border border-stone-200 px-1.5 py-0.5">{role}</span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {!r.ready && (
+                            <div className="mt-2 pt-2 border-t border-amber-100 text-xs text-amber-700 leading-relaxed">
+                              未就绪:{r.blockers.join('、')}。补齐后再通过;若需放行,请在评审里选「有条件通过」并填写例外项的责任人与截止。
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+
                     {selectedTaskIsGate && activePhase?.gateStandard && (
                       <div className="mt-4 p-3 border-l-2 border-l-stone-900 bg-stone-50">
                         <div className="text-[10px] font-mono uppercase tracking-widest text-stone-500 mb-2">Gate 管理标准</div>
@@ -1480,6 +1558,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
           gateName={activePhase?.gate || 'Gate 评审'}
           gateStandard={activePhase?.gateStandard}
           existingReviews={activePhaseData?.gateReviews}
+          blockers={computeGateReadiness(activePhase, activePhaseData).blockers}
           onConfirm={perms.canGateReview ? handleGateReviewConfirm : () => {}}
           onCancel={() => setGateReviewPending(null)}
           readOnly={!perms.canGateReview}
