@@ -1,4 +1,4 @@
-import { useMemo, useState, Suspense, lazy } from "react";
+import { useMemo, useState, useEffect, Suspense, lazy } from "react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { PHASE_MAP } from "@/lib/data";
@@ -51,7 +51,7 @@ export function OverviewPage({ onSelectProject }: { onSelectProject: (id: string
       cur.count++; m.set(code, cur);
     }
     return Array.from(m.entries())
-      .sort(([a], [b]) => Number(a.replace(/\D/g, "")) - Number(b.replace(/\D/g, "")))
+      .sort(([a], [b]) => Number(a.replace(/\D/g, "") || "0") - Number(b.replace(/\D/g, "") || "0"))
       .map(([code, v]) => ({ name: code, fullName: v.name, count: v.count, color: v.color, label: code }));
   }, [portfolio]);
 
@@ -97,6 +97,11 @@ export function OverviewPage({ onSelectProject }: { onSelectProject: (id: string
 }
 
 function DrillDown({ kind, onClose, onSelectProject }: { kind: "overdue" | "blocked"; onClose: () => void; onSelectProject: (id: string) => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
   const overdueQ = trpc.tasks.overdue.useQuery(undefined, { enabled: kind === "overdue" });
   const blockedQ = trpc.tasks.blocked.useQuery(undefined, { enabled: kind === "blocked" });
   const q = kind === "overdue" ? overdueQ : blockedQ;
@@ -112,7 +117,7 @@ function DrillDown({ kind, onClose, onSelectProject }: { kind: "overdue" | "bloc
       <div className="w-full max-w-xl h-full bg-white shadow-xl overflow-auto p-5" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-serif text-lg text-stone-900">{kind === "overdue" ? "逾期任务" : "阻塞任务"}</h3>
-          <button onClick={onClose} className="text-stone-400 hover:text-stone-700"><X size={18} /></button>
+          <button onClick={onClose} aria-label="关闭" className="text-stone-400 hover:text-stone-700"><X size={18} /></button>
         </div>
         <div className="ce-table-shell">
           <TaskListView tasks={rows} isLoading={q.isLoading}
