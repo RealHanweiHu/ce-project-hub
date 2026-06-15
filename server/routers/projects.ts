@@ -51,6 +51,12 @@ const projectInputSchema = z.object({
 });
 
 export const projectsRouter = router({
+  /** 跨项目组合看板：用户可见项目 + 健康度聚合 */
+  portfolio: protectedProcedure.query(async ({ ctx }) => {
+    const { getPortfolio } = await import("../db");
+    return getPortfolio(ctx.user.id);
+  }),
+
   /** List all projects for the current user (owned + member) */
   list: protectedProcedure.query(async ({ ctx }) => {
     const [owned, memberOf] = await Promise.all([

@@ -33,6 +33,7 @@ import { FilePreviewModal, canPreview } from './FilePreviewModal';
 import { useProjectPermission } from '@/hooks/useProjectPermission';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { trpc } from '@/lib/trpc';
+import { getTaskDeliverables } from '@shared/task-deliverables';
 import { Users } from 'lucide-react';
 
 const MAX_FILE_SIZE = 16 * 1024 * 1024;
@@ -256,6 +257,51 @@ const ROLE_OPTIONS = [
   { value: 'manager', label: '管理层' },
   { value: 'owner',  label: '项目创建者' },
 ] as const;
+
+/** 任务交付物清单：模板预置交付物 + 完成勾选（持久化到 project_tasks.deliverables） */
+function DeliverablesChecklist({
+  projectId, phaseId, taskId, items, status, canEdit,
+}: {
+  projectId: string;
+  phaseId: string;
+  taskId: string;
+  items: string[];
+  status: Record<string, boolean>;
+  canEdit: boolean;
+}) {
+  const utils = trpc.useUtils();
+  const [pending, setPending] = useState<string | null>(null);
+  const mutation = trpc.tasks.setDeliverable.useMutation({
+    onSettled: () => { utils.tasks.list.invalidate({ projectId }); setPending(null); },
+  });
+  const doneCount = items.filter((d) => status[d]).length;
+
+  if (items.length === 0) return <div className="text-sm text-stone-400">无预置交付物</div>;
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[10px] font-mono text-stone-400">{doneCount}/{items.length} 完成</span>
+        {doneCount === items.length && <span className="text-[10px] font-mono text-emerald-600">✓ 全部交付</span>}
+      </div>
+      {items.map((d) => {
+        const done = !!status[d];
+        return (
+          <button
+            key={d}
+            disabled={!canEdit || pending === d}
+            onClick={() => { setPending(d); mutation.mutate({ projectId, phaseId, taskId, name: d, done: !done }); }}
+            className={`w-full flex items-start gap-2 text-left text-sm py-0.5 ${canEdit ? 'hover:bg-stone-50 cursor-pointer' : 'cursor-default'} ${pending === d ? 'opacity-50' : ''}`}
+          >
+            {done
+              ? <CheckCircle2 size={15} className="shrink-0 mt-0.5 text-emerald-600" />
+              : <Circle size={15} className="shrink-0 mt-0.5 text-stone-300" />}
+            <span className={done ? 'text-stone-400 line-through' : 'text-stone-700'}>{d}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 function TaskDetail({
   taskId, taskDetails, onUpdate, visibleRoles, onVisibleRolesChange, canEditRoles,
@@ -1218,17 +1264,18 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                           <Target size={11} />
                           交付物
                         </div>
-                        <div className="space-y-1.5">
-                          {(selectedTaskIsGate && activePhase?.gateStandard?.requiredDeliverables?.length
-                            ? activePhase.gateStandard.requiredDeliverables
-                            : activePhase?.deliverables || []
-                          ).map((deliverable, i) => (
-                            <div key={i} className="flex items-start gap-2 text-sm text-stone-700">
-                              <span className="text-stone-300 mt-0.5">▸</span>
-                              <span>{deliverable}</span>
-                            </div>
-                          ))}
-                        </div>
+                        <DeliverablesChecklist
+                          projectId={project.id}
+                          phaseId={activePhaseId}
+                          taskId={selectedTask.id}
+                          items={
+                            selectedTaskIsGate && activePhase?.gateStandard?.requiredDeliverables?.length
+                              ? activePhase.gateStandard.requiredDeliverables
+                              : getTaskDeliverables(selectedTask.id, activePhase?.deliverables || [])
+                          }
+                          status={selectedTaskDetails?.deliverables || {}}
+                          canEdit={perms.canEditTasks && isCurrentPhaseUnlocked}
+                        />
                       </div>
                     </div>
 

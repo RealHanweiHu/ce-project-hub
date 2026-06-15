@@ -48,6 +48,7 @@ export interface TaskDetails {
   dueDate?: string | null;       // YYYY-MM-DD
   taskStatus?: string;           // TaskStatus (renamed to avoid collision with IssueStatus)
   taskPriority?: string;         // TaskPriority
+  deliverables?: Record<string, boolean>; // 交付物名称 → 是否完成
 }
 
 export interface FileAttachment {
