@@ -332,7 +332,7 @@ export type PortfolioRow = {
   id: string; name: string; projectNumber: string; category: string; risk: string;
   currentPhase: string; startDate: string | null; targetDate: string | null; pmUserId: number | null; pmName: string | null;
   taskTotal: number; taskDone: number; overdueTasks: number; blockedTasks: number;
-  openIssues: number; projectedEnd: string | null;
+  openIssues: number; criticalIssues: number; projectedEnd: string | null;
 };
 
 /** 跨项目组合看板：用户可见项目 + 每项目健康度聚合(任务/逾期/阻塞/开放问题/预计完成) */
@@ -357,6 +357,7 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
   const issueAgg = await db.select({
     projectId: projectIssues.projectId,
     open: drizzleSql<number>`count(*) filter (where ${projectIssues.status} in ('open','in_progress'))::int`,
+    critical: drizzleSql<number>`count(*) filter (where ${projectIssues.status} in ('open','in_progress') and ${projectIssues.severity} in ('P0','P1'))::int`,
   }).from(projectIssues).where(inArray(projectIssues.projectId, ids)).groupBy(projectIssues.projectId);
 
   const pmIds = Array.from(new Set(Array.from(projById.values()).map((p) => p.pmUserId).filter((x): x is number => !!x)));
@@ -374,7 +375,7 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
       pmUserId: p.pmUserId ?? null,
       pmName: p.pmUserId ? (pmName.get(p.pmUserId) ?? null) : null,
       taskTotal: t?.total ?? 0, taskDone: t?.done ?? 0, overdueTasks: t?.overdue ?? 0, blockedTasks: t?.blocked ?? 0,
-      openIssues: i?.open ?? 0, projectedEnd: t?.projectedEnd ?? null,
+      openIssues: i?.open ?? 0, criticalIssues: i?.critical ?? 0, projectedEnd: t?.projectedEnd ?? null,
     };
   });
 }
@@ -1768,4 +1769,58 @@ export async function getAutomationGatePrereqs(): Promise<Array<{
     }
   }
   return out;
+}
+
+/** 里程碑日历事件：阶段截止 / Gate 评审 / 项目目标日。 */
+export type CalendarEvent = {
+  date: string;          // YYYY-MM-DD
+  type: "phase" | "gate" | "target";
+  projectId: string;
+  projectName: string;
+  label: string;
+};
+
+/**
+ * 在 [fromDate, toDate] 时间窗内聚合用户可见项目(owned ∪ member)的里程碑级事件。
+ * 仅里程碑：阶段截止日(projectPhases.endDate)、Gate评审(projectGateReviews.reviewDate)、项目目标日(projects.targetDate)。
+ */
+export async function getCalendar(userId: number, fromDate: string, toDate: string): Promise<CalendarEvent[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const [owned, member] = await Promise.all([getProjectsByUser(userId), getProjectsByMember(userId)]);
+  const projById = new Map<string, ProjectRow>();
+  for (const p of [...owned, ...member]) projById.set(p.id, p);
+  const ids = Array.from(projById.keys());
+  if (ids.length === 0) return [];
+
+  const inWindow = (d: string | null): d is string => !!d && d >= fromDate && d <= toDate;
+  const events: CalendarEvent[] = [];
+
+  for (const p of projById.values()) {
+    if (inWindow(p.targetDate)) {
+      events.push({ date: p.targetDate, type: "target", projectId: p.id, projectName: p.name, label: "目标交付" });
+    }
+  }
+
+  const phaseRows = await db.select({
+    projectId: projectPhases.projectId, phaseId: projectPhases.phaseId, endDate: projectPhases.endDate,
+  }).from(projectPhases).where(inArray(projectPhases.projectId, ids));
+  for (const r of phaseRows) {
+    if (inWindow(r.endDate)) {
+      const p = projById.get(r.projectId);
+      if (p) events.push({ date: r.endDate, type: "phase", projectId: p.id, projectName: p.name, label: `${r.phaseId} 阶段截止` });
+    }
+  }
+
+  const gateRows = await db.select({
+    projectId: projectGateReviews.projectId, reviewDate: projectGateReviews.reviewDate, gateName: projectGateReviews.gateName,
+  }).from(projectGateReviews).where(inArray(projectGateReviews.projectId, ids));
+  for (const r of gateRows) {
+    if (inWindow(r.reviewDate)) {
+      const p = projById.get(r.projectId);
+      if (p) events.push({ date: r.reviewDate, type: "gate", projectId: p.id, projectName: p.name, label: r.gateName || "Gate 评审" });
+    }
+  }
+
+  return events.sort((a, b) => a.date.localeCompare(b.date));
 }
