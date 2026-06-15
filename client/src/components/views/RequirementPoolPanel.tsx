@@ -203,31 +203,46 @@ const CHANGE_TYPE_OPTIONS: Array<{ value: ChangeType; label: string }> = [
   { value: 'other', label: '其他' },
 ];
 
+/** 三种使用场景:项目过滤视图 / 产品 backlog / 全局池。一套面板、多视图。 */
+export type RequirementPanelScope =
+  | { kind: 'project'; projectId: string; phases: SOPPhase[] }
+  | { kind: 'product'; productId: string }
+  | { kind: 'global' };
+
 interface RequirementPoolPanelProps {
-  projectId: string;
-  phases: SOPPhase[];
+  scope: RequirementPanelScope;
   canEdit?: boolean;
+  title?: string;
+  subtitle?: string;
 }
 
-export function RequirementPoolPanel({ projectId, phases, canEdit = false }: RequirementPoolPanelProps) {
+const NO_PHASES: SOPPhase[] = [];
+
+export function RequirementPoolPanel({ scope, canEdit = false, title, subtitle }: RequirementPoolPanelProps) {
+  const projectId = scope.kind === 'project' ? scope.projectId : undefined;
+  const phases = scope.kind === 'project' ? scope.phases : NO_PHASES;
+  const listInput = useMemo(
+    () => (scope.kind === 'project' ? { projectId: scope.projectId }
+      : scope.kind === 'product' ? { productId: scope.productId }
+      : {}),
+    [scope]
+  );
+
   const utils = trpc.useUtils();
-  const { data = [], isLoading } = trpc.requirements.list.useQuery({ projectId });
+  const { data = [], isLoading } = trpc.requirements.list.useQuery(listInput);
   const requirements = data as Requirement[];
-  const createMutation = trpc.requirements.create.useMutation({
-    onSuccess: () => utils.requirements.list.invalidate({ projectId }),
-  });
-  const updateMutation = trpc.requirements.update.useMutation({
-    onSuccess: () => utils.requirements.list.invalidate({ projectId }),
-  });
-  const deleteMutation = trpc.requirements.delete.useMutation({
-    onSuccess: () => utils.requirements.list.invalidate({ projectId }),
-  });
+  const invalidateList = () => utils.requirements.list.invalidate(listInput);
+  const createMutation = trpc.requirements.create.useMutation({ onSuccess: invalidateList });
+  const updateMutation = trpc.requirements.update.useMutation({ onSuccess: invalidateList });
+  const deleteMutation = trpc.requirements.delete.useMutation({ onSuccess: invalidateList });
   const convertMutation = trpc.requirements.convert.useMutation({
     onSuccess: () => {
-      utils.requirements.list.invalidate({ projectId });
-      // 让新建的问题/变更立即出现在对应 tab
-      utils.issues.list.invalidate({ projectId });
-      utils.changelog.list.invalidate({ projectId });
+      invalidateList();
+      if (projectId) {
+        // 让新建的问题/变更立即出现在对应 tab
+        utils.issues.list.invalidate({ projectId });
+        utils.changelog.list.invalidate({ projectId });
+      }
     },
   });
 
@@ -270,21 +285,25 @@ export function RequirementPoolPanel({ projectId, phases, canEdit = false }: Req
     const payload = cleanForm(form);
     if (!payload.title) return;
     if (editingId) {
-      await updateMutation.mutateAsync({ projectId, id: editingId, patch: payload });
+      await updateMutation.mutateAsync({ id: editingId, patch: payload });
+    } else if (scope.kind === 'project') {
+      await createMutation.mutateAsync({ projectId: scope.projectId, ...payload });
+    } else if (scope.kind === 'product') {
+      await createMutation.mutateAsync({ productId: scope.productId, ...payload });
     } else {
-      await createMutation.mutateAsync({ projectId, ...payload });
+      await createMutation.mutateAsync({ ...payload });
     }
     closeForm();
   };
 
   const handleQuickStatus = (row: Requirement, status: RequirementStatus) => {
     if (!canEdit || row.status === status) return;
-    updateMutation.mutate({ projectId, id: row.id, patch: { status } });
+    updateMutation.mutate({ id: row.id, patch: { status } });
   };
 
   const handleDelete = (row: Requirement) => {
     if (!confirm(`删除需求「${row.title}」？`)) return;
-    deleteMutation.mutate({ projectId, id: row.id });
+    deleteMutation.mutate({ id: row.id });
   };
 
   // ── 采纳转化 ──────────────────────────────────────────────────────────────
@@ -306,13 +325,13 @@ export function RequirementPoolPanel({ projectId, phases, canEdit = false }: Req
   };
 
   const handleConvert = async () => {
-    if (!convertRow) return;
+    if (!convertRow || scope.kind !== 'project') return;
     const f = convertForm;
     if (f.target === 'task' && !f.taskId) { alert('请选择要关联的任务'); return; }
     await convertMutation.mutateAsync({
       id: convertRow.id,
       target: f.target,
-      projectId,
+      projectId: scope.projectId,
       phaseId: f.phaseId || undefined,
       taskId: f.target === 'task' ? f.taskId : undefined,
       changeType: f.target === 'change' ? f.changeType : undefined,
@@ -349,8 +368,8 @@ export function RequirementPoolPanel({ projectId, phases, canEdit = false }: Req
     <div className="space-y-5">
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
         <div>
-          <h3 className="font-serif text-lg text-stone-900">需求池</h3>
-          <p className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mt-0.5">REQUIREMENT POOL</p>
+          <h3 className="font-serif text-lg text-stone-900">{title ?? '需求池'}</h3>
+          <p className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mt-0.5">{subtitle ?? 'REQUIREMENT POOL'}</p>
         </div>
         {canEdit && (
           <button
@@ -457,24 +476,28 @@ export function RequirementPoolPanel({ projectId, phases, canEdit = false }: Req
                 <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">负责人</label>
                 <input value={form.owner} onChange={(e) => set('owner', e.target.value)} className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm" placeholder="PM / 工程负责人" />
               </div>
-              <div>
-                <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">目标阶段</label>
-                <select value={form.targetPhaseId} onChange={(e) => set('targetPhaseId', e.target.value)} className="w-full px-2 py-2 border border-stone-300 bg-white text-xs outline-none focus:border-stone-900">
-                  <option value="">未指定</option>
-                  {phases.map((phase) => (
-                    <option key={phase.id} value={phase.id}>{phase.code} {phase.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">关联任务</label>
-                <select value={form.linkedTaskId} onChange={(e) => set('linkedTaskId', e.target.value)} disabled={!form.targetPhaseId} className="w-full px-2 py-2 border border-stone-300 bg-white text-xs outline-none focus:border-stone-900 disabled:bg-stone-50 disabled:text-stone-400">
-                  <option value="">未关联</option>
-                  {linkedTaskOptions.map((task) => (
-                    <option key={task.id} value={task.id}>{task.id} {task.name}</option>
-                  ))}
-                </select>
-              </div>
+              {phases.length > 0 && (
+                <>
+                  <div>
+                    <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">目标阶段</label>
+                    <select value={form.targetPhaseId} onChange={(e) => set('targetPhaseId', e.target.value)} className="w-full px-2 py-2 border border-stone-300 bg-white text-xs outline-none focus:border-stone-900">
+                      <option value="">未指定</option>
+                      {phases.map((phase) => (
+                        <option key={phase.id} value={phase.id}>{phase.code} {phase.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">关联任务</label>
+                    <select value={form.linkedTaskId} onChange={(e) => set('linkedTaskId', e.target.value)} disabled={!form.targetPhaseId} className="w-full px-2 py-2 border border-stone-300 bg-white text-xs outline-none focus:border-stone-900 disabled:bg-stone-50 disabled:text-stone-400">
+                      <option value="">未关联</option>
+                      {linkedTaskOptions.map((task) => (
+                        <option key={task.id} value={task.id}>{task.id} {task.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </>
+              )}
             </div>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
               <div>
@@ -610,7 +633,7 @@ export function RequirementPoolPanel({ projectId, phases, canEdit = false }: Req
                         ))}
                       </select>
                     )}
-                    {canEdit && !row.convertedType && (
+                    {scope.kind === 'project' && canEdit && !row.convertedType && (
                       <button onClick={() => openConvert(row)} className="inline-flex items-center gap-1 px-2 py-1.5 text-xs text-emerald-700 border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 transition-colors" title="采纳并转为任务/问题/变更">
                         <ArrowUpRight size={13} />采纳转化
                       </button>

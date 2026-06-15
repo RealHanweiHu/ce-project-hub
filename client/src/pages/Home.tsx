@@ -8,7 +8,7 @@ import { useLocation } from 'wouter';
 import {
   LayoutDashboard, LayoutGrid, BarChart3, FolderKanban, BookOpen, Save, CheckCircle2,
   ChevronRight, Menu, X, Cpu, Search, LogIn, Loader2, Cloud, Shield, KeyRound,
-  ListTodo, AlertTriangle, ShieldAlert, LogOut, Package,
+  ListTodo, AlertTriangle, ShieldAlert, LogOut, Package, Inbox,
 } from 'lucide-react';
 import { nanoid } from 'nanoid';
 import {
@@ -23,7 +23,7 @@ import { getQueryKey } from '@trpc/react-query';
 import { useProjectData } from '@/hooks/useProjectData';
 import { NotificationBell } from '@/components/NotificationBell';
 
-type View = 'dashboard' | 'portfolio' | 'reports' | 'projects' | 'products' | 'sop' | 'my-tasks' | 'overdue' | 'blocked';
+type View = 'dashboard' | 'portfolio' | 'reports' | 'projects' | 'products' | 'requirements' | 'sop' | 'my-tasks' | 'overdue' | 'blocked';
 
 const DashboardView = lazy(() =>
   import('@/components/views/DashboardView').then((module) => ({ default: module.DashboardView }))
@@ -51,6 +51,9 @@ const OverdueTasksView = lazy(() =>
 );
 const BlockedTasksView = lazy(() =>
   import('@/components/views/BlockedTasksView').then((module) => ({ default: module.BlockedTasksView }))
+);
+const RequirementsView = lazy(() =>
+  import('@/components/views/RequirementsView').then((module) => ({ default: module.RequirementsView }))
 );
 const ProductLibraryView = lazy(() =>
   import('@/components/views/ProductLibraryView').then((module) => ({ default: module.ProductLibraryView }))
@@ -612,6 +615,7 @@ export default function Home() {
     { id: 'reports' as View, label: '报表', labelEn: 'Reports', icon: BarChart3 },
     { id: 'projects' as View, label: '项目管理', labelEn: 'Projects', icon: FolderKanban },
     { id: 'products' as View, label: '产品库', labelEn: 'Products', icon: Package },
+    { id: 'requirements' as View, label: '需求池', labelEn: 'Requirements', icon: Inbox },
     { id: 'sop' as View, label: 'SOP 流程库', labelEn: 'SOP Library', icon: BookOpen },
     { id: 'my-tasks' as View, label: '我的任务', labelEn: 'My Tasks', icon: ListTodo },
     { id: 'overdue' as View, label: '逾期任务', labelEn: 'Overdue', icon: AlertTriangle },
@@ -630,6 +634,7 @@ export default function Home() {
     reports: 'Reports',
     projects: 'Projects',
     products: 'Products',
+    requirements: 'Requirements',
     sop: 'SOP Library',
     'my-tasks': 'My Tasks',
     overdue: 'Overdue Tasks',
@@ -951,6 +956,7 @@ export default function Home() {
                 />
               )}
               {view === 'products' && <ProductLibraryView />}
+              {view === 'requirements' && <RequirementsView />}
               {view === 'sop' && <SOPLibraryView />}
               {view === 'my-tasks' && (
                 <MyTasksView onNavigateToProject={(id) => { handleSelectProject(id); }} />
