@@ -784,6 +784,20 @@ export const mpReleases = pgTable("mp_releases", {
   /** 关键规格 */
   specs: jsonb("specs").$type<Record<string, unknown>>().default({}),
   notes: text("notes"),
+  /** 是否为 conditional 留痕强制发布 */
+  overridden: boolean("overridden").notNull().default(false),
+  /** 强制发布理由（override 时必填） */
+  overrideReason: text("overrideReason"),
+  /** 强制发布操作人（服务端登录态写入） */
+  acceptedBy: integer("acceptedBy"),
+  /** 强制发布时间（服务端时间戳写入） */
+  acceptedAt: timestamp("acceptedAt"),
+  /** 发布时 Gate 条件快照 */
+  conditionsSnapshot: text("conditionsSnapshot"),
+  /** 后续条件跟进负责人 userId（override 时必填） */
+  followUpOwner: integer("followUpOwner"),
+  /** 条件跟进截止日（override 时必填） */
+  dueDate: varchar("dueDate", { length: 32 }),
   releasedBy: integer("releasedBy").notNull(),
   releasedAt: timestamp("releasedAt").defaultNow().notNull(),
 });

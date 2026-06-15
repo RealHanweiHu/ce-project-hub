@@ -120,6 +120,13 @@
       "when": 1781504388746,
       "tag": "0016_right_fixer",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1781545278405,
+      "tag": "0017_high_radioactive_man",
+      "breakpoints": true
     }
   ]
 }
