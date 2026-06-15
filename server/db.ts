@@ -442,6 +442,24 @@ export async function addProjectMember(member: InsertProjectMember): Promise<voi
   await db.insert(projectMembers).values(member);
 }
 
+/**
+ * 确保某用户是项目成员;不存在则按给定角色加入,已存在则不动(不覆盖既有角色)。
+ * 返回是否新加入。用于「选了 PM 自动给访问权」。
+ */
+export async function ensureProjectMember(
+  projectId: string,
+  userId: number,
+  role: ProjectMemberRole,
+  invitedBy: number
+): Promise<boolean> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const existing = await getProjectMember(projectId, userId);
+  if (existing) return false;
+  await db.insert(projectMembers).values({ projectId, userId, role, invitedBy });
+  return true;
+}
+
 /** Update a member's role or jobTitle */
 export async function updateProjectMember(
   projectId: string,
@@ -1063,6 +1081,33 @@ export async function setTaskDeliverable(
     await db.insert(projectTasks).values({ projectId, phaseId, taskId, deliverables: next, updatedBy: updatedBy ?? null });
   }
   return next;
+}
+
+/**
+ * 按角色把未分配的任务自动指派给对应项目成员（responsible role 取自任务 visibleRoles 首个非管理角色）。
+ * 不覆盖已手动分配的任务。返回新建的分配明细，供上层发钉钉通知。
+ */
+export async function assignTasksByRole(
+  projectId: string,
+  updatedBy: number
+): Promise<Array<{ userId: number; taskId: string; phaseId: string; dueDate: string | null }>> {
+  const db = await getDb();
+  if (!db) return [];
+  const members = await getProjectMembers(projectId);
+  const roleToUser = new Map<string, number>();
+  for (const m of members) if (!roleToUser.has(m.role)) roleToUser.set(m.role, m.userId);
+  const tasks = await getProjectTasks(projectId);
+  const out: Array<{ userId: number; taskId: string; phaseId: string; dueDate: string | null }> = [];
+  for (const t of tasks) {
+    if (t.assigneeUserId) continue; // 不覆盖已分配
+    const roles = (t.visibleRoles as string[] | null) ?? [];
+    const primary = roles.find((r) => r !== "manager" && r !== "owner") ?? "pm";
+    const userId = roleToUser.get(primary) ?? roleToUser.get("pm") ?? roleToUser.get("manager");
+    if (!userId) continue;
+    await db.update(projectTasks).set({ assigneeUserId: userId, updatedBy }).where(eq(projectTasks.id, t.id));
+    out.push({ userId, taskId: t.taskId, phaseId: t.phaseId, dueDate: t.dueDate ?? null });
+  }
+  return out;
 }
 
 // ── 自动排期：生成 / 联动重排 ─────────────────────────────────────────────────
