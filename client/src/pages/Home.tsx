@@ -6,9 +6,9 @@
 import { lazy, Suspense, useState, useEffect, useRef, useCallback } from 'react';
 import { useLocation } from 'wouter';
 import {
-  LayoutDashboard, LayoutGrid, BarChart3, FolderKanban, BookOpen, Save, CheckCircle2,
+  LayoutDashboard, FolderKanban, BookOpen, Save, CheckCircle2,
   ChevronRight, Menu, X, Cpu, Search, LogIn, Loader2, Cloud, Shield, KeyRound,
-  ListTodo, AlertTriangle, ShieldAlert, LogOut, Package, Inbox,
+  LogOut, Package, Inbox,
 } from 'lucide-react';
 import { nanoid } from 'nanoid';
 import {
@@ -23,16 +23,10 @@ import { getQueryKey } from '@trpc/react-query';
 import { useProjectData } from '@/hooks/useProjectData';
 import { NotificationBell } from '@/components/NotificationBell';
 
-type View = 'dashboard' | 'portfolio' | 'reports' | 'projects' | 'products' | 'requirements' | 'sop' | 'my-tasks' | 'overdue' | 'blocked';
+type View = 'overview' | 'projects' | 'products' | 'requirements' | 'sop';
 
-const DashboardView = lazy(() =>
-  import('@/components/views/DashboardView').then((module) => ({ default: module.DashboardView }))
-);
-const PortfolioBoard = lazy(() =>
-  import('@/components/views/PortfolioBoard').then((module) => ({ default: module.PortfolioBoard }))
-);
-const ReportsView = lazy(() =>
-  import('@/components/views/ReportsView').then((module) => ({ default: module.ReportsView }))
+const OverviewPage = lazy(() =>
+  import('@/components/views/overview/OverviewPage').then((module) => ({ default: module.OverviewPage }))
 );
 const ProjectListView = lazy(() =>
   import('@/components/views/ProjectListView').then((module) => ({ default: module.ProjectListView }))
@@ -42,15 +36,6 @@ const ProjectDetailView = lazy(() =>
 );
 const SOPLibraryView = lazy(() =>
   import('@/components/views/SOPLibraryView').then((module) => ({ default: module.SOPLibraryView }))
-);
-const MyTasksView = lazy(() =>
-  import('@/components/views/MyTasksView').then((module) => ({ default: module.MyTasksView }))
-);
-const OverdueTasksView = lazy(() =>
-  import('@/components/views/OverdueTasksView').then((module) => ({ default: module.OverdueTasksView }))
-);
-const BlockedTasksView = lazy(() =>
-  import('@/components/views/BlockedTasksView').then((module) => ({ default: module.BlockedTasksView }))
 );
 const RequirementsView = lazy(() =>
   import('@/components/views/RequirementsView').then((module) => ({ default: module.RequirementsView }))
@@ -497,7 +482,7 @@ export default function Home() {
   const canCreateProject = !!(user as (typeof user & { canCreateProject?: boolean }) | null)?.canCreateProject;
   const queryClient = useQueryClient();
 
-  const [view, setView] = useState<View>('dashboard');
+  const [view, setView] = useState<View>('overview');
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [kickoffProject, setKickoffProject] = useState<{ id: string; name: string; category: string; pmUserId: number | null; startDate: string | null } | null>(null);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
@@ -519,22 +504,6 @@ export default function Home() {
   const invalidateProjects = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: getQueryKey(trpc.projects.list) });
   }, [queryClient]);
-  // ── Task badge counts for sidebar ────────────────────────────────────────
-  const { data: myTasksData = [] } = trpc.tasks.myTasks.useQuery(undefined, {
-    enabled: !!user, staleTime: 60_000,
-  });
-  const { data: overdueData = [] } = trpc.tasks.overdue.useQuery(undefined, {
-    enabled: !!user, staleTime: 60_000,
-  });
-  const { data: blockedData = [] } = trpc.tasks.blocked.useQuery(undefined, {
-    enabled: !!user, staleTime: 60_000,
-  });
-  const taskBadges: Record<string, number> = {
-    'my-tasks': myTasksData.length,
-    overdue: overdueData.length,
-    blocked: blockedData.length,
-  };
-
   // ── Ctrl+K global shortcut ───────────────────────────────────────────────
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -634,16 +603,11 @@ export default function Home() {
 
   // ── Navigation ───────────────────────────────────────────────────────────
   const navItems = [
-    { id: 'dashboard' as View, label: '仪表盘', labelEn: 'Dashboard', icon: LayoutDashboard },
-    { id: 'portfolio' as View, label: '组合看板', labelEn: 'Portfolio', icon: LayoutGrid },
-    { id: 'reports' as View, label: '报表', labelEn: 'Reports', icon: BarChart3 },
+    { id: 'overview' as View, label: '总览', labelEn: 'Overview', icon: LayoutDashboard },
     { id: 'projects' as View, label: '项目管理', labelEn: 'Projects', icon: FolderKanban },
     { id: 'products' as View, label: '产品库', labelEn: 'Products', icon: Package },
     { id: 'requirements' as View, label: '需求池', labelEn: 'Requirements', icon: Inbox },
     { id: 'sop' as View, label: 'SOP 流程库', labelEn: 'SOP Library', icon: BookOpen },
-    { id: 'my-tasks' as View, label: '我的任务', labelEn: 'My Tasks', icon: ListTodo },
-    { id: 'overdue' as View, label: '逾期任务', labelEn: 'Overdue', icon: AlertTriangle },
-    { id: 'blocked' as View, label: '阻塞任务', labelEn: 'Blocked', icon: ShieldAlert },
   ];
 
   const handleNavClick = (v: View) => {
@@ -653,16 +617,11 @@ export default function Home() {
   };
 
   const viewLabels: Record<View, string> = {
-    dashboard: 'Dashboard',
-    portfolio: 'Portfolio',
-    reports: 'Reports',
+    overview: 'Overview',
     projects: 'Projects',
     products: 'Products',
     requirements: 'Requirements',
     sop: 'SOP Library',
-    'my-tasks': 'My Tasks',
-    overdue: 'Overdue Tasks',
-    blocked: 'Blocked Tasks',
   };
 
   // ── Auth loading / login gate ────────────────────────────────────────────
@@ -754,7 +713,6 @@ export default function Home() {
         <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
           {navItems.map(({ id, label, labelEn, icon: Icon }) => {
             const isActive = view === id;
-            const badge = taskBadges[id] ?? 0;
             return (
               <button
                 key={id}
@@ -770,13 +728,6 @@ export default function Home() {
                   <div className="text-sm font-medium leading-tight">{label}</div>
                   <div className="text-[9px] font-mono uppercase tracking-widest text-stone-600 leading-tight mt-0.5">{labelEn}</div>
                 </div>
-                {badge > 0 && !isActive && (
-                  <span className={`shrink-0 text-[10px] font-mono px-1.5 py-0.5 rounded-sm ${
-                    id === 'overdue' ? 'bg-red-900/60 text-red-300' :
-                    id === 'blocked' ? 'bg-orange-900/60 text-orange-300' :
-                    'bg-amber-900/60 text-amber-300'
-                  }`}>{badge}</span>
-                )}
                 {isActive && <ChevronRight size={13} className="text-amber-400 shrink-0" />}
               </button>
             );
@@ -953,14 +904,8 @@ export default function Home() {
             </div>
           ) : (
             <Suspense fallback={<ViewLoading />}>
-              {view === 'dashboard' && (
-                <DashboardView projects={projects} onSelectProject={handleSelectProject} />
-              )}
-              {view === 'portfolio' && (
-                <PortfolioBoard onSelectProject={handleSelectProject} />
-              )}
-              {view === 'reports' && (
-                <ReportsView onSelectProject={handleSelectProject} />
+              {view === 'overview' && (
+                <OverviewPage onSelectProject={handleSelectProject} />
               )}
               {view === 'projects' && !selectedProjectId && (
                 <ProjectListView
@@ -982,15 +927,6 @@ export default function Home() {
               {view === 'products' && <ProductLibraryView />}
               {view === 'requirements' && <RequirementsView />}
               {view === 'sop' && <SOPLibraryView />}
-              {view === 'my-tasks' && (
-                <MyTasksView onNavigateToProject={(id) => { handleSelectProject(id); }} />
-              )}
-              {view === 'overdue' && (
-                <OverdueTasksView onNavigateToProject={(id) => { handleSelectProject(id); }} />
-              )}
-              {view === 'blocked' && (
-                <BlockedTasksView onNavigateToProject={(id) => { handleSelectProject(id); }} />
-              )}
             </Suspense>
           )}
         </main>
