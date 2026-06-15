@@ -2,8 +2,10 @@ import { describe, it, expect } from "vitest";
 import {
   shanghaiParts, addDaysISO, isoWeekdayOf, computeDigestTiming,
   scorePortfolio, groupByPm, buildPmMarkdown, buildGroupMarkdown,
+  runHealthDigestScan,
 } from "./healthDigest";
 import type { PortfolioHealthRow } from "../db";
+import type { HealthDigestConfig } from "./digestRules";
 
 function row(over: Partial<PortfolioHealthRow>): PortfolioHealthRow {
   return {
@@ -83,5 +85,70 @@ describe("评分/分组/消息", () => {
     const grp = buildGroupMarkdown(abnormal, greenCount, "weekly");
     expect(grp.title).toContain("周报");
     expect(grp.text).toContain("绿 1");
+  });
+});
+
+describe("runHealthDigestScan（注入 deps）", () => {
+  const NOW = new Date("2026-06-16T02:00:00Z"); // 上海 10:00
+  const cfg: HealthDigestConfig = { cadence: "daily", sendHour: 9, weekday: 1, pushPmPersonal: true, pushManagerGroup: true };
+
+  function makeDeps(over: Partial<Parameters<typeof runHealthDigestScan>[1]> & { rows?: PortfolioHealthRow[] } = {}) {
+    const calls = { notify: [] as number[][], notifications: [] as number[], group: 0, runs: [] as Array<{ status: string; key: string }> };
+    const deps = {
+      getConfigRow: async () => ({ enabled: true, config: cfg }),
+      getHealth: async (_today: string) => over.rows ?? [row({ id: "r", overdueTasks: 1, pmUserId: 7 })],
+      hasRun: async () => false,
+      writeRun: async (status: "fired" | "skipped", key: string) => { calls.runs.push({ status, key }); },
+      createNotification: async (n: { userId: number }) => { calls.notifications.push(n.userId); },
+      notifyDingtalk: async (ids: number[]) => { calls.notify.push(ids); },
+      pushWebhook: async () => { calls.group += 1; },
+      ...over,
+    };
+    return { deps, calls };
+  }
+
+  it("正常：PM 个人 + 管理群 + 写 fired", async () => {
+    const { deps, calls } = makeDeps();
+    await runHealthDigestScan(NOW, deps);
+    expect(calls.notifications).toEqual([7]);
+    expect(calls.notify).toEqual([[7]]);
+    expect(calls.group).toBe(1);
+    expect(calls.runs).toEqual([{ status: "fired", key: "d:2026-06-16" }]);
+  });
+
+  it("enabled=false 不发", async () => {
+    const { deps, calls } = makeDeps({ getConfigRow: async () => ({ enabled: false, config: cfg }) });
+    await runHealthDigestScan(NOW, deps);
+    expect(calls.runs).toEqual([]);
+    expect(calls.group).toBe(0);
+  });
+
+  it("未到点不发", async () => {
+    const { deps, calls } = makeDeps();
+    await runHealthDigestScan(new Date("2026-06-16T00:00:00Z"), deps); // 上海 08:00
+    expect(calls.runs).toEqual([]);
+  });
+
+  it("当期已有 run → 不重复", async () => {
+    const { deps, calls } = makeDeps({ hasRun: async () => true });
+    await runHealthDigestScan(NOW, deps);
+    expect(calls.runs).toEqual([]);
+    expect(calls.group).toBe(0);
+  });
+
+  it("无异常 → skipped 不发消息", async () => {
+    const { deps, calls } = makeDeps({ rows: [row({ id: "g", risk: "low" })] });
+    await runHealthDigestScan(NOW, deps);
+    expect(calls.runs).toEqual([{ status: "skipped", key: "d:2026-06-16" }]);
+    expect(calls.notifications).toEqual([]);
+    expect(calls.group).toBe(0);
+  });
+
+  it("pushPmPersonal=false 只发群", async () => {
+    const { deps, calls } = makeDeps({ getConfigRow: async () => ({ enabled: true, config: { ...cfg, pushPmPersonal: false } }) });
+    await runHealthDigestScan(NOW, deps);
+    expect(calls.notifications).toEqual([]);
+    expect(calls.group).toBe(1);
+    expect(calls.runs[0].status).toBe("fired");
   });
 });
