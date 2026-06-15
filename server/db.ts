@@ -29,7 +29,7 @@ import { getPhasesForCategory, getReleaseGatePhase } from "../shared/sop-templat
 import { getTaskDeliverables } from "../shared/task-deliverables";
 import { scheduleForCategory, buildSchedTasks } from "../shared/schedule-graph";
 import { rescheduleFrom, type Schedule } from "../shared/scheduling";
-import { daysBetween } from "../shared/health";
+import { daysBetween, GATE_RED_DAYS, GATE_AMBER_DAYS } from "../shared/health";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -418,14 +418,14 @@ export async function getPortfolioHealthForDigest(todayISO: string): Promise<Por
     critical: drizzleSql<number>`count(*) filter (where ${projectIssues.status} in ('open','in_progress') and ${projectIssues.severity} in ('P0','P1'))::int`,
   }).from(projectIssues).where(inArray(projectIssues.projectId, ids)).groupBy(projectIssues.projectId);
 
+  // getAutomationGatePrereqs 已只返回 archived=false 项目，无需再按 ids 过滤。
   const gateRows = await getAutomationGatePrereqs();
-  const idSet = new Set(ids);
   const gateByProject = new Map<string, "red" | "amber">();
   for (const g of gateRows) {
-    if (!idSet.has(g.projectId) || !g.dueDate) continue;
+    if (!g.dueDate) continue;
     const d = daysBetween(todayISO, g.dueDate);
     if (d === null) continue;
-    const level: "red" | "amber" | null = d <= 3 ? "red" : d <= 7 ? "amber" : null;
+    const level: "red" | "amber" | null = d <= GATE_RED_DAYS ? "red" : d <= GATE_AMBER_DAYS ? "amber" : null;
     if (level === null) continue;
     if (gateByProject.get(g.projectId) === "red") continue;
     if (level === "red" || !gateByProject.has(g.projectId)) gateByProject.set(g.projectId, level);

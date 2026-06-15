@@ -24,6 +24,10 @@ const SLIP_AMBER = 1; // 1..7 天 → 黄
 const PROGRESS_RED = 20; // 进度落后 > 20pt → 红
 const PROGRESS_AMBER = 10; // 10..20pt → 黄
 
+// Gate 临近未就绪的天数阈值（distanceToGate，含负数=已过期）。导出供 db 聚合复用。
+export const GATE_RED_DAYS = 3; // Gate ≤3 天到期(含已过期) 且未就绪 → 红
+export const GATE_AMBER_DAYS = 7; // Gate ≤7 天到期 且未就绪 → 黄
+
 /** 两个 YYYY-MM-DD 相减得天数（toISO - fromISO，正=晚）；任一为空/非法→null。与时区无关。 */
 export function daysBetween(fromISO: string | null, toISO: string | null): number | null {
   if (!fromISO || !toISO) return null;

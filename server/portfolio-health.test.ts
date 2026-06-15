@@ -29,15 +29,17 @@ describe("getPortfolioHealthForDigest", () => {
     await upsertProjectTask(PROJ, "concept", "c2", { dueDate: "2026-06-12", status: "in_progress" });
     await upsertProjectTask(PROJ, "concept", "c3", { dueDate: "2026-06-30", status: "in_progress" });
     await upsertProjectTask(PROJ, "concept", "c4", { dueDate: null, status: "in_progress" });
+    await upsertProjectTask(PROJ, "concept", "c5", { dueDate: "2026-06-20", status: "blocked" });
 
     const rows = await getPortfolioHealthForDigest(TODAY);
     const row = rows.find((r) => r.id === PROJ);
     expect(row).toBeDefined();
-    expect(row!.plannedItems).toBe(3);
-    expect(row!.dueItems).toBe(2);
-    expect(row!.donePlannedItems).toBe(1);
+    expect(row!.plannedItems).toBe(4); // c1,c2,c3,c5 有 dueDate（c4 无）
+    expect(row!.dueItems).toBe(2); // c1,c2 <= today
+    expect(row!.donePlannedItems).toBe(1); // c1 done
     expect(row!.plannedEnd).toBe("2026-06-30");
-    expect(row!.overdueTasks).toBe(1);
+    expect(row!.overdueTasks).toBe(1); // c2 过期未完成
+    expect(row!.blockedTasks).toBe(1); // c5 阻塞
   });
 
   it("hasAutomationRunForEntity 任意状态都算", async () => {
