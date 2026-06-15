@@ -1,4 +1,4 @@
-import { eq, desc, and, or, isNull, inArray, sql as drizzleSql } from "drizzle-orm";
+import { eq, desc, and, or, isNull, inArray, between, sql as drizzleSql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import {
   InsertUser, users, projects, InsertProject, ProjectRow,
@@ -1804,22 +1804,18 @@ export async function getCalendar(userId: number, fromDate: string, toDate: stri
 
   const phaseRows = await db.select({
     projectId: projectPhases.projectId, phaseId: projectPhases.phaseId, endDate: projectPhases.endDate,
-  }).from(projectPhases).where(inArray(projectPhases.projectId, ids));
+  }).from(projectPhases).where(and(inArray(projectPhases.projectId, ids), between(projectPhases.endDate, fromDate, toDate)));
   for (const r of phaseRows) {
-    if (inWindow(r.endDate)) {
-      const p = projById.get(r.projectId);
-      if (p) events.push({ date: r.endDate, type: "phase", projectId: p.id, projectName: p.name, label: `${r.phaseId} 阶段截止` });
-    }
+    const p = projById.get(r.projectId);
+    if (p) events.push({ date: r.endDate!, type: "phase", projectId: p.id, projectName: p.name, label: `${r.phaseId} 阶段截止` });
   }
 
   const gateRows = await db.select({
     projectId: projectGateReviews.projectId, reviewDate: projectGateReviews.reviewDate, gateName: projectGateReviews.gateName,
-  }).from(projectGateReviews).where(inArray(projectGateReviews.projectId, ids));
+  }).from(projectGateReviews).where(and(inArray(projectGateReviews.projectId, ids), between(projectGateReviews.reviewDate, fromDate, toDate)));
   for (const r of gateRows) {
-    if (inWindow(r.reviewDate)) {
-      const p = projById.get(r.projectId);
-      if (p) events.push({ date: r.reviewDate, type: "gate", projectId: p.id, projectName: p.name, label: r.gateName || "Gate 评审" });
-    }
+    const p = projById.get(r.projectId);
+    if (p) events.push({ date: r.reviewDate!, type: "gate", projectId: p.id, projectName: p.name, label: r.gateName || "Gate 评审" });
   }
 
   return events.sort((a, b) => a.date.localeCompare(b.date));
