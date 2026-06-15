@@ -674,7 +674,7 @@ export const PROJECT_CATEGORIES: ProjectCategoryConfig[] = [
     icon: '🚀',
     desc: '全新品类产品，从0到1完整开发流程，包含概念立项、规划、设计、EVT/DVT/PVT 验证到量产，共 7 个阶段。',
     phaseCount: 7,
-    typicalDuration: '12-18 个月',
+    typicalDuration: '约 3-4 个月',
     phases: NPD_PHASES,
   },
   {
@@ -688,7 +688,7 @@ export const PROJECT_CATEGORIES: ProjectCategoryConfig[] = [
     icon: '🔄',
     desc: '现有产品的硬件/软件/结构迭代升级，如换芯片、增功能、降成本，跳过概念阶段，共 5 个阶段。',
     phaseCount: 5,
-    typicalDuration: '3-6 个月',
+    typicalDuration: '约 2-3 个月',
     phases: ECO_PHASES,
   },
   {
@@ -702,7 +702,7 @@ export const PROJECT_CATEGORIES: ProjectCategoryConfig[] = [
     icon: '🎨',
     desc: '现有产品的外观翻新/外观改版，可能牵动 ID、结构、硬件接口、包装标签、新物料采购和认证更新，共 4 个阶段。',
     phaseCount: 4,
-    typicalDuration: '3-5 个月',
+    typicalDuration: '约 2-3 个月',
     phases: IDR_PHASES,
   },
 ];

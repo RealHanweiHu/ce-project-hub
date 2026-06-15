@@ -1101,8 +1101,10 @@ export async function assignTasksByRole(
   for (const t of tasks) {
     if (t.assigneeUserId) continue; // 不覆盖已分配
     const roles = (t.visibleRoles as string[] | null) ?? [];
+    // 责任角色 = visibleRoles 首个非管理角色;Gate/无角色任务归 PM。
     const primary = roles.find((r) => r !== "manager" && r !== "owner") ?? "pm";
-    const userId = roleToUser.get(primary) ?? roleToUser.get("pm") ?? roleToUser.get("manager");
+    // 只分给该角色对应成员;该角色没配人则留空(让缺口可见),不强塞给 PM。
+    const userId = roleToUser.get(primary);
     if (!userId) continue;
     await db.update(projectTasks).set({ assigneeUserId: userId, updatedBy }).where(eq(projectTasks.id, t.id));
     out.push({ userId, taskId: t.taskId, phaseId: t.phaseId, dueDate: t.dueDate ?? null });

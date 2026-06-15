@@ -1,12 +1,14 @@
 // 项目总揽（只读）：基础信息 + 关键指标。数据多数来自已加载的 project；
 // 成员数走 members.list、PM 名走 admin.listUsersForSelect（均已存在、带缓存）。
+import { useState } from 'react';
 import { Project, RISK_CONFIG, getProjectPhases, computeOverallProgress } from '@/lib/data';
 import { CATEGORY_MAP } from '@/lib/sop-templates';
 import { trpc } from '@/lib/trpc';
-import { Hash, User, AlertTriangle, CalendarRange, Flag, GaugeCircle, ListChecks, Bug, GitBranch, Users, CalendarClock, RefreshCw, UserCheck } from 'lucide-react';
+import { Hash, User, AlertTriangle, CalendarRange, Flag, GaugeCircle, ListChecks, Bug, GitBranch, Users, CalendarClock, RefreshCw, UserCheck, Rocket } from 'lucide-react';
 import { MeetingConfigPanel } from './MeetingConfigPanel';
 import { MembersPanel } from './MembersPanel';
 import { CustomFieldsPanel } from './CustomFieldsPanel';
+import { KickoffWizard } from './KickoffWizard';
 import { toast } from 'sonner';
 
 export function OverviewPanel({ project, onUpdate, canEdit, canManageMembers, isAdmin }: { project: Project; onUpdate: (p: Project) => void; canEdit: boolean; canManageMembers: boolean; isAdmin: boolean }) {
@@ -55,6 +57,7 @@ export function OverviewPanel({ project, onUpdate, canEdit, canManageMembers, is
     onSuccess: (r) => { utils.tasks.list.invalidate({ projectId: project.id }); toast.success(`已重新生成排期（${r.count} 个任务）`); },
     onError: (e) => toast.error(e.message),
   });
+  const [kickoffOpen, setKickoffOpen] = useState(false);
   const assignByRole = trpc.projects.assignByRole.useMutation({
     onSuccess: (r) => {
       utils.tasks.list.invalidate({ projectId: project.id });
@@ -153,14 +156,23 @@ export function OverviewPanel({ project, onUpdate, canEdit, canManageMembers, is
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-[11px] font-mono uppercase tracking-widest text-stone-400">项目成员</h3>
           {canEdit && (
-            <button
-              onClick={() => { if (confirm('按各成员角色，把未分配的任务自动指派给对应负责人，并给每人发钉钉任务通知？')) assignByRole.mutate({ projectId: project.id }); }}
-              disabled={assignByRole.isPending}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-mono uppercase tracking-wider border border-stone-300 text-stone-600 hover:bg-stone-50 disabled:opacity-50 transition-colors"
-              title="按角色把未分配任务指派给对应成员并发钉钉通知"
-            >
-              <UserCheck size={12} />{assignByRole.isPending ? '分配中…' : '按角色分配负责人'}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => { if (confirm('按各成员角色，把未分配的任务自动指派给对应负责人，并给每人发钉钉任务通知？')) assignByRole.mutate({ projectId: project.id }); }}
+                disabled={assignByRole.isPending}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-mono uppercase tracking-wider border border-stone-300 text-stone-600 hover:bg-stone-50 disabled:opacity-50 transition-colors"
+                title="按角色把未分配任务指派给对应成员并发钉钉通知"
+              >
+                <UserCheck size={12} />{assignByRole.isPending ? '分配中…' : '按角色分配'}
+              </button>
+              <button
+                onClick={() => setKickoffOpen(true)}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-mono uppercase tracking-wider bg-stone-900 text-white hover:bg-stone-700 transition-colors"
+                title="一步完成:设开始日 + 各角色配人 + 派任务 + 钉钉通知"
+              >
+                <Rocket size={12} />立项向导
+              </button>
+            </div>
           )}
         </div>
         <MembersPanel projectId={project.id} canManage={canManageMembers} />
@@ -170,6 +182,13 @@ export function OverviewPanel({ project, onUpdate, canEdit, canManageMembers, is
       <div>
         <CustomFieldsPanel project={project} onUpdate={onUpdate} canEdit={canEdit} isAdmin={isAdmin} />
       </div>
+
+      {kickoffOpen && (
+        <KickoffWizard
+          project={{ id: project.id, name: project.name, category: project.category ?? 'npd', pmUserId: project.pmUserId ?? null, startDate: project.startDate ?? null }}
+          onClose={() => setKickoffOpen(false)}
+        />
+      )}
     </div>
   );
 }

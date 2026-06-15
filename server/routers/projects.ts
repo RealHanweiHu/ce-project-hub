@@ -24,6 +24,7 @@ import { resolveDingtalkUserId } from "../_core/dingtalk";
 import { upsertWeeklyMeeting } from "../_core/dingtalkCalendar";
 import { notifyUsersViaDingtalk } from "../_core/dingtalkMessage";
 import { getPhasesForCategory } from "../../shared/sop-templates";
+import { PROJECT_MEMBER_ROLES } from "../../drizzle/schema";
 
 const DEFAULT_MEETING = { enabled: true, weekday: 3, time: "15:00", durationMin: 60, title: "项目周会" };
 
@@ -34,6 +35,37 @@ async function getEffectiveRole(projectId: string, userId: number) {
   if (project.createdBy === userId) return "owner" as const;
   const member = await getProjectMember(projectId, userId);
   return member?.role ?? null;
+}
+
+/** 按角色分配未分配任务 + (可选)逐人发钉钉通知。assignByRole / kickoff 共用。 */
+async function assignAndNotify(
+  project: { id: string; name: string; category: string },
+  actorId: number,
+  notify: boolean
+): Promise<{ assigned: number; recipients: number; notified: number }> {
+  const assignments = await assignTasksByRole(project.id, actorId);
+  const nameMap = new Map<string, string>();
+  for (const phase of getPhasesForCategory(project.category)) {
+    for (const t of phase.tasks) nameMap.set(t.id, t.name);
+  }
+  const byUser = new Map<number, Array<{ taskId: string; dueDate: string | null }>>();
+  for (const a of assignments) {
+    const arr = byUser.get(a.userId) ?? [];
+    arr.push({ taskId: a.taskId, dueDate: a.dueDate });
+    byUser.set(a.userId, arr);
+  }
+  let notified = 0;
+  if (notify) {
+    for (const [userId, items] of Array.from(byUser.entries())) {
+      const lines = items
+        .map((i: { taskId: string; dueDate: string | null }) => `- ${nameMap.get(i.taskId) ?? i.taskId}${i.dueDate ? `（截止 ${i.dueDate}）` : ""}`)
+        .join("\n");
+      const md = `### 项目「${project.name}」任务分配\n你被指派以下 ${items.length} 项任务：\n${lines}`;
+      try { await notifyUsersViaDingtalk([userId], "项目任务分配", md); notified += 1; }
+      catch (e) { console.warn("[assign] dingtalk notify failed (non-fatal):", e); }
+    }
+  }
+  return { assigned: assignments.length, recipients: byUser.size, notified };
 }
 
 const riskEnum = z.enum(["low", "medium", "high"]).default("low");
@@ -216,39 +248,75 @@ export const projectsRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "仅 Owner/管理层/PM 可分配负责人" });
       }
 
-      const assignments = await assignTasksByRole(input.projectId, ctx.user.id);
-
-      // taskId → 任务名(取自 SOP 模板)
-      const nameMap = new Map<string, string>();
-      for (const phase of getPhasesForCategory(project.category)) {
-        for (const t of phase.tasks) nameMap.set(t.id, t.name);
-      }
-      // 按负责人分组
-      const byUser = new Map<number, Array<{ taskId: string; dueDate: string | null }>>();
-      for (const a of assignments) {
-        const arr = byUser.get(a.userId) ?? [];
-        arr.push({ taskId: a.taskId, dueDate: a.dueDate });
-        byUser.set(a.userId, arr);
-      }
-      // 逐人发钉钉工作通知(降级安全,不阻断)
-      let notified = 0;
-      for (const [userId, items] of Array.from(byUser.entries())) {
-        const lines = items
-          .map((i: { taskId: string; dueDate: string | null }) => `- ${nameMap.get(i.taskId) ?? i.taskId}${i.dueDate ? `（截止 ${i.dueDate}）` : ""}`)
-          .join("\n");
-        const md = `### 项目「${project.name}」任务分配\n你被指派以下 ${items.length} 项任务：\n${lines}`;
-        try { await notifyUsersViaDingtalk([userId], "项目任务分配", md); notified += 1; }
-        catch (e) { console.warn("[assign] dingtalk notify failed (non-fatal):", e); }
-      }
+      const r = await assignAndNotify(project, ctx.user.id, true);
       await createActivityLog({
         projectId: input.projectId,
         userId: ctx.user.id,
         action: "project.assign_by_role",
         entityType: "project",
         entityId: input.projectId,
-        meta: { assigned: assignments.length, recipients: byUser.size },
+        meta: { assigned: r.assigned, recipients: r.recipients },
       });
-      return { success: true, assigned: assignments.length, recipients: byUser.size, notified };
+      return { success: true, ...r };
+    }),
+
+  /**
+   * 立项向导:一步完成「设置开始日(生成排期) + 各角色配人 + 按角色分配任务 + 钉钉通知」。
+   * 需 canEditProjectInfo。
+   */
+  kickoff: protectedProcedure
+    .input(z.object({
+      projectId: z.string(),
+      startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+      staffing: z.array(z.object({
+        role: z.enum(PROJECT_MEMBER_ROLES),
+        userId: z.number().int(),
+      })).default([]),
+      notify: z.boolean().default(true),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+      const role = await getEffectiveRole(input.projectId, ctx.user.id);
+      if (!role || !ROLE_PERMISSIONS[role].canEditProjectInfo) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "仅 Owner/管理层/PM 可执行立项向导" });
+      }
+
+      // 1) 开始日 → 生成整套排期(非阻断)
+      if (input.startDate && input.startDate !== project.startDate) {
+        try {
+          await updateProject(input.projectId, { startDate: input.startDate });
+          await applyProjectSchedule(input.projectId);
+        } catch (e) { console.warn("[kickoff] schedule failed (non-fatal):", e); }
+      }
+
+      // 2) 各角色配人(去重;跳过创建者本人,避免覆盖 owner)
+      let staffed = 0;
+      const seen = new Set<string>();
+      for (const s of input.staffing) {
+        const key = `${s.role}:${s.userId}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (s.userId === project.createdBy) continue;
+        try { if (await ensureProjectMember(input.projectId, s.userId, s.role, ctx.user.id)) staffed += 1; }
+        catch (e) { console.warn("[kickoff] staffing failed (non-fatal):", e); }
+      }
+
+      // 3) 按角色分配任务 + 通知
+      const r = await assignAndNotify(
+        { id: project.id, name: project.name, category: project.category },
+        ctx.user.id,
+        input.notify,
+      );
+      await createActivityLog({
+        projectId: input.projectId,
+        userId: ctx.user.id,
+        action: "project.kickoff",
+        entityType: "project",
+        entityId: input.projectId,
+        meta: { staffed, assigned: r.assigned, recipients: r.recipients, startDate: input.startDate ?? null },
+      });
+      return { success: true, staffed, ...r };
     }),
 
   /**
