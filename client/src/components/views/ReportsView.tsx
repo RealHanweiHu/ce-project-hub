@@ -4,7 +4,9 @@ import { trpc } from '@/lib/trpc';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { RISK_CONFIG, PHASE_MAP } from '@/lib/data';
 import { ProgressBar } from '@/components/shared/ProgressBar';
-import { BarChart3, Crown, User, Users, Bug, Ban, CalendarClock, ChevronRight, Loader2 } from 'lucide-react';
+import { TaskListView, type TaskRow } from './TaskListView';
+import type { TaskStatus, TaskPriority } from '@shared/const';
+import { BarChart3, Crown, User, Users, Bug, Ban, CalendarClock, ChevronRight, CheckCircle2, Loader2 } from 'lucide-react';
 
 type Persp = 'exec' | 'pm' | 'mine';
 type PRow = {
@@ -19,7 +21,7 @@ export function ReportsView({ onSelectProject }: { onSelectProject: (id: string)
   const { user } = useAuth();
   const [persp, setPersp] = useState<Persp>(user?.role === 'admin' ? 'exec' : 'mine');
   const { data: portfolio = [], isLoading } = trpc.projects.portfolio.useQuery();
-  const { data: myTasks = [] } = trpc.tasks.myTasks.useQuery();
+  const { data: myTasks = [], isLoading: myLoading, refetch: refetchMine } = trpc.tasks.myTasks.useQuery();
   const rows = portfolio as PRow[];
 
   const exec = useMemo(() => {
@@ -94,19 +96,33 @@ export function ReportsView({ onSelectProject }: { onSelectProject: (id: string)
       )}
 
       {persp === 'mine' && (
-        <MyTasks tasks={myTasks as MyTaskRow[]} onSelectProject={onSelectProject} />
+        <MyTasks tasks={myTasks} isLoading={myLoading} onRefetch={() => refetchMine()} onSelectProject={onSelectProject} />
       )}
     </div>
   );
 }
 
-type MyTaskRow = { taskId: string; projectId: string; projectName: string; status: string; priority: string | null; dueDate: string | null };
+// myTasks 查询返回的行（与 MyTasksView 同源），映射到共享 TaskListView 的 TaskRow
+type MyTaskApiRow = {
+  id: number; projectId: string; phaseId: string; taskId: string;
+  projectName: string; projectNumber: string; projectCategory: string;
+  status: string; priority: string | null; dueDate: string | null;
+  assigneeUserId: number | null; completed: boolean;
+};
 
-function MyTasks({ tasks, onSelectProject }: { tasks: MyTaskRow[]; onSelectProject: (id: string) => void }) {
+function MyTasks({ tasks, isLoading, onRefetch, onSelectProject }: {
+  tasks: MyTaskApiRow[]; isLoading: boolean; onRefetch: () => void; onSelectProject: (id: string) => void;
+}) {
   const today = new Date().toISOString().slice(0, 10);
   const od = tasks.filter((t) => t.dueDate && t.dueDate < today).length;
   const blocked = tasks.filter((t) => t.status === 'blocked').length;
   const soon = tasks.filter((t) => t.dueDate && t.dueDate >= today && t.dueDate <= new Date(Date.now() + 3 * 864e5).toISOString().slice(0, 10)).length;
+  const rows: TaskRow[] = tasks.map((t) => ({
+    id: t.id, projectId: t.projectId, phaseId: t.phaseId, taskId: t.taskId,
+    projectName: t.projectName, projectNumber: t.projectNumber, projectCategory: t.projectCategory,
+    status: t.status as TaskStatus, priority: t.priority as TaskPriority,
+    dueDate: t.dueDate ? String(t.dueDate) : null, assigneeUserId: t.assigneeUserId ?? null, completed: t.completed,
+  }));
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -115,24 +131,18 @@ function MyTasks({ tasks, onSelectProject }: { tasks: MyTaskRow[]; onSelectProje
         <Stat label="3天内到期" value={soon} accent={soon > 0 ? 'text-amber-600' : undefined} />
         <Stat label="被阻塞" value={blocked} accent={blocked > 0 ? 'text-amber-600' : undefined} />
       </div>
-      <Panel title="我的任务">
-        {tasks.length === 0 ? <div className="text-sm text-stone-400">没有待办任务 🎉</div> : (
-          <div className="divide-y divide-stone-100">
-            {tasks.map((t) => {
-              const isOd = !!(t.dueDate && t.dueDate < today);
-              return (
-                <div key={`${t.projectId}/${t.taskId}`} onClick={() => onSelectProject(t.projectId)} className="flex items-center gap-3 py-2 cursor-pointer hover:bg-stone-50/60 -mx-2 px-2">
-                  <span className="text-sm text-stone-800 flex-1 truncate">{t.taskId}</span>
-                  <span className="text-[10px] font-mono text-stone-400 truncate max-w-[140px]">{t.projectName}</span>
-                  {t.status === 'blocked' && <span className="text-[10px] font-mono px-1.5 py-0.5 bg-amber-50 text-amber-700 border border-amber-200">阻塞</span>}
-                  {t.dueDate && <span className={`text-[10px] font-mono ${isOd ? 'text-rose-600' : 'text-stone-500'}`}>{t.dueDate}{isOd ? ' 逾期' : ''}</span>}
-                  <ChevronRight size={13} className="text-stone-300" />
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </Panel>
+      <div className="bg-white border border-stone-200">
+        <TaskListView
+          tasks={rows}
+          isLoading={isLoading}
+          emptyIcon={<CheckCircle2 size={24} />}
+          emptyTitle="没有待办任务 🎉"
+          emptyDesc="当前没有指派给您的未完成任务。"
+          onRefetch={onRefetch}
+          onNavigateToProject={onSelectProject}
+          showOverdueBadge
+        />
+      </div>
     </div>
   );
 }
