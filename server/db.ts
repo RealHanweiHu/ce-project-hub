@@ -518,7 +518,7 @@ export async function upsertProjectTask(
   projectId: string,
   phaseId: string,
   taskId: string,
-  patch: { completed?: boolean; instructions?: string | null; visibleRoles?: string[]; updatedBy?: number | null }
+  patch: { completed?: boolean; instructions?: string | null; visibleRoles?: string[]; status?: TaskStatus; completedAt?: Date | null; updatedBy?: number | null }
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -887,8 +887,25 @@ export type TaskMetaPatch = {
   status?: TaskStatus;
   priority?: TaskPriority;
   completedAt?: Date | null;
+  /** 派生镜像列，勿手动传；由 status 推导。见 deriveCompletion */
+  completed?: boolean;
   updatedBy?: number | null;
 };
+
+/**
+ * status 是唯一主状态；completed/completedAt 由它派生。
+ * completed 镜像「字面已完成」(status==='done')；进度统计中 skipped 也算已解决，
+ * 但那由各处直接读 status 处理(见 getPortfolio / useProjectData)，与此镜像无关。
+ */
+function deriveCompletion(patch: TaskMetaPatch): TaskMetaPatch {
+  if (patch.status === undefined) return patch;
+  const isDone = patch.status === "done";
+  return {
+    ...patch,
+    completed: isDone,
+    completedAt: isDone ? (patch.completedAt ?? new Date()) : null,
+  };
+}
 
 /** Convert TaskMetaPatch to a drizzle-compatible set object */
 function toDbPatch(patch: TaskMetaPatch) {
@@ -919,7 +936,7 @@ export async function updateTaskMeta(
       )
     )
     .limit(1);
-  const dbPatch = toDbPatch(patch);
+  const dbPatch = toDbPatch(deriveCompletion(patch));
   if (existing.length > 0) {
     await db
       .update(projectTasks)
@@ -934,6 +951,25 @@ export async function updateTaskMeta(
   } else {
     await db.insert(projectTasks).values({ projectId, phaseId, taskId, ...dbPatch });
   }
+}
+
+/**
+ * 卡片勾选「完成」：status 是主状态，勾选即把 status 设为 done/todo，
+ * completed/completedAt 随之派生。行不存在则插入。
+ */
+export async function setTaskCompletion(
+  projectId: string,
+  phaseId: string,
+  taskId: string,
+  completed: boolean,
+  updatedBy?: number | null
+): Promise<void> {
+  await upsertProjectTask(projectId, phaseId, taskId, {
+    completed,
+    status: completed ? "done" : "todo",
+    completedAt: completed ? new Date() : null,
+    updatedBy: updatedBy ?? null,
+  });
 }
 
 /**

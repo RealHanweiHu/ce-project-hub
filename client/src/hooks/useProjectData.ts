@@ -101,7 +101,8 @@ export function useProjectData(projectId: string | null) {
       const tasks: Record<string, boolean> = {};
       const taskDetails: Record<string, TaskDetails> = {};
       for (const t of phaseTasks) {
-        tasks[t.taskId] = !!t.completed;
+        // status 是唯一主状态：done/skipped 均算「已解决」，与组合看板/报表口径一致
+        tasks[t.taskId] = t.status === "done" || t.status === "skipped";
 
         // Build DB-backed file list for this task
         const dbFiles: FileAttachment[] = fileRows
