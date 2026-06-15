@@ -88,6 +88,7 @@ function projectToApiInput(p: Project) {
     projectNumber: code || '',
     category: category || 'npd',
     pmUserId: pmUserId ?? null,
+    productId: p.productId ?? null,
     description: p.description ?? null,
     customer: p.customer ?? null,
     background: p.background ?? null,
@@ -187,6 +188,7 @@ function ProjectDetailWrapper({
           updated.startDate !== project.startDate ||
           updated.targetDate !== project.targetDate ||
           updated.category !== project.category ||
+          (updated.productId ?? '') !== (project.productId ?? '') ||
           (updated.description ?? '') !== (project.description ?? '') ||
           (updated.customer ?? '') !== (project.customer ?? '') ||
           (updated.background ?? '') !== (project.background ?? '') ||

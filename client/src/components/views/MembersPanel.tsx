@@ -5,6 +5,7 @@ import { useState, useRef, useEffect } from 'react';
 import {
   Users, UserPlus, Shield, Trash2, Crown,
   Eye, Edit3, CheckCircle2, X, AlertCircle, Loader2, Search, UserCheck,
+  Wrench, Factory, Megaphone, BadgeCheck, BatteryCharging,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { useQueryClient } from '@tanstack/react-query';
@@ -68,6 +69,36 @@ const ROLE_META: Record<string, {
     icon: <Edit3 size={11} />,
     description: '可编辑变更记录中的成本相关字段',
   },
+  pe: {
+    label: '工艺/设备', labelEn: 'Process/Equip',
+    color: 'text-lime-700', bg: 'bg-lime-50', border: 'border-lime-200',
+    icon: <Wrench size={11} />,
+    description: 'DFM/工装/量产准备，负责/会签任务',
+  },
+  mfg: {
+    label: '生产', labelEn: 'Manufacturing',
+    color: 'text-stone-700', bg: 'bg-stone-100', border: 'border-stone-300',
+    icon: <Factory size={11} />,
+    description: '试产/量产爬坡，负责/会签任务',
+  },
+  sales: {
+    label: '销售/渠道', labelEn: 'Sales',
+    color: 'text-pink-700', bg: 'bg-pink-50', border: 'border-pink-200',
+    icon: <Megaphone size={11} />,
+    description: '需求/市场输入，可提问题与需求',
+  },
+  cert: {
+    label: '认证', labelEn: 'Certification',
+    color: 'text-indigo-700', bg: 'bg-indigo-50', border: 'border-indigo-200',
+    icon: <BadgeCheck size={11} />,
+    description: '安规/认证资料，Gate 会签责任人',
+  },
+  battery_safety: {
+    label: '电池安全', labelEn: 'Battery Safety',
+    color: 'text-red-700', bg: 'bg-red-50', border: 'border-red-200',
+    icon: <BatteryCharging size={11} />,
+    description: '电池/安全合规，Gate 会签责任人',
+  },
   viewer: {
     label: '只读', labelEn: 'Viewer',
     color: 'text-stone-600', bg: 'bg-stone-50', border: 'border-stone-200',
@@ -76,7 +107,17 @@ const ROLE_META: Record<string, {
   },
 };
 
-const ASSIGNABLE_ROLES = ['manager', 'pm', 'rd_hw', 'rd_sw', 'rd_mech', 'qa', 'scm', 'viewer'] as const;
+const ASSIGNABLE_ROLES = [
+  'manager', 'pm',                                                  // 可编辑项目
+  'rd_hw', 'rd_sw', 'rd_mech', 'qa', 'scm', 'pe', 'mfg', 'cert', 'battery_safety', 'sales', // 负责/会签
+  'viewer',
+] as const;
+/** 角色按职能分组,便于选人时区分「能编辑项目」与「负责/会签任务」 */
+const ROLE_GROUPS: Array<{ title: string; roles: AssignableRole[] }> = [
+  { title: '可编辑项目', roles: ['manager', 'pm'] },
+  { title: '负责 / 会签任务', roles: ['rd_hw', 'rd_sw', 'rd_mech', 'qa', 'scm', 'pe', 'mfg', 'cert', 'battery_safety', 'sales'] },
+  { title: '只读', roles: ['viewer'] },
+];
 type AssignableRole = typeof ASSIGNABLE_ROLES[number];
 
 type SearchUser = { id: number; name: string | null; username: string | null; email: string | null };
@@ -326,28 +367,32 @@ export function MembersPanel({ projectId, canManage }: MembersPanelProps) {
             <label className="block text-[10px] font-mono uppercase tracking-wider text-stone-500 mb-2">
               项目角色 *
             </label>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              {ASSIGNABLE_ROLES.map((role) => {
-                const meta = ROLE_META[role];
-                const isSelected = inviteRole === role;
-                return (
-                  <button
-                    key={role}
-                    onClick={() => setInviteRole(role)}
-                    className={`p-2.5 text-left border transition-all ${
-                      isSelected
-                        ? `${meta.bg} ${meta.border} border-2`
-                        : 'bg-white border-stone-200 hover:border-stone-300'
-                    }`}
-                  >
-                    <div className={`flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider mb-0.5 ${isSelected ? meta.color : 'text-stone-500'}`}>
-                      {meta.icon}
-                      {meta.label}
-                    </div>
-                    <div className="text-[9px] text-stone-400 leading-tight">{meta.description}</div>
-                  </button>
-                );
-              })}
+            <div className="space-y-3">
+              {ROLE_GROUPS.map((group) => (
+                <div key={group.title}>
+                  <div className="text-[9px] font-mono uppercase tracking-widest text-stone-400 mb-1.5">{group.title}</div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {group.roles.map((role) => {
+                      const meta = ROLE_META[role];
+                      const isSelected = inviteRole === role;
+                      return (
+                        <button
+                          key={role}
+                          onClick={() => setInviteRole(role)}
+                          className={`p-2.5 text-left border transition-all ${
+                            isSelected ? `${meta.bg} ${meta.border} border-2` : 'bg-white border-stone-200 hover:border-stone-300'
+                          }`}
+                        >
+                          <div className={`flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider mb-0.5 ${isSelected ? meta.color : 'text-stone-500'}`}>
+                            {meta.icon}{meta.label}
+                          </div>
+                          <div className="text-[9px] text-stone-400 leading-tight">{meta.description}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
 

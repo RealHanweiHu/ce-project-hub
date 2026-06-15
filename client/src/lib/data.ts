@@ -149,6 +149,8 @@ export interface Project {
   type: string;
   pm: string;
   pmUserId?: number | null;
+  /** 关联产品(产品库 id) */
+  productId?: string | null;
   /** 立项基础信息 */
   description?: string | null;
   customer?: string | null;

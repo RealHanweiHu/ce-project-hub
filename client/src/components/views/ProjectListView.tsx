@@ -80,21 +80,30 @@ export function ProjectListView({
   const [step, setStep] = useState<WizardStep>(1);
   const [selectedCategory, setSelectedCategory] = useState<ProjectCategory>('npd');
   const { data: userList, isLoading: usersLoading, isError: usersError } = trpc.admin.listUsersForSelect.useQuery();
+  const utils = trpc.useUtils();
+  const { data: productList = [] } = trpc.products.list.useQuery(undefined);
+  const products = productList as Array<{ id: string; name: string; productNumber: string }>;
+  const createProductMutation = trpc.products.create.useMutation({
+    onSuccess: () => utils.products.list.invalidate(),
+  });
 
-  const [form, setForm] = useState({
+  const emptyForm = {
     code: '',
     name: '',
     type: '汽车充气泵',
     pmUserId: null as number | null,
+    productId: '' as string,        // 关联已有产品
+    newProductName: '' as string,   // 新产品(填写则建档并关联)
     startDate: '',
     targetDate: '',
     risk: 'medium' as 'low' | 'medium' | 'high',
-  });
+  };
+  const [form, setForm] = useState(emptyForm);
 
   const resetWizard = () => {
     setStep(1);
     setSelectedCategory('npd');
-    setForm({ code: '', name: '', type: '汽车充气泵', pmUserId: null, startDate: '', targetDate: '', risk: 'medium' });
+    setForm(emptyForm);
   };
 
   const handleClose = () => {
@@ -102,12 +111,22 @@ export function ProjectListView({
     resetWizard();
   };
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     if (!form.name.trim()) return;
     const phases = getPhasesForCategory(selectedCategory);
     const firstPhaseId = phases[0]?.id || 'concept';
+    // 关联产品:选了已有 → 用它;否则填了新产品名 → 先建档再关联
+    let productId: string | null = form.productId || null;
+    if (!productId && form.newProductName.trim()) {
+      try {
+        const res = await createProductMutation.mutateAsync({ name: form.newProductName.trim(), type: 'finished', category: form.type });
+        productId = res.id;
+      } catch { /* 建产品失败不阻断建项目 */ }
+    }
     onAddProject({
-      ...form,
+      code: form.code, name: form.name, type: form.type, pmUserId: form.pmUserId,
+      startDate: form.startDate, targetDate: form.targetDate, risk: form.risk,
+      productId,
       pm: '',
       currentPhase: firstPhaseId,
       category: selectedCategory,
@@ -535,6 +554,28 @@ export function ProjectListView({
                         )}
                       </select>
                     </div>
+                  </div>
+                  {/* 关联产品:ECO/IDR 改进/翻新已有产品;NPD 可新建产品建档 */}
+                  <div>
+                    <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">
+                      关联产品 {selectedCategory === 'npd' ? '（全新产品，可新建建档或暂不关联）' : '（改进/翻新的已有产品）'}
+                    </label>
+                    <select
+                      value={form.productId}
+                      onChange={(e) => setForm({ ...form, productId: e.target.value, newProductName: '' })}
+                      className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors bg-white"
+                    >
+                      <option value="">{selectedCategory === 'npd' ? '新产品 / 暂不关联' : '选择已有产品…'}</option>
+                      {products.map((p) => <option key={p.id} value={p.id}>{p.name}{p.productNumber ? ` · ${p.productNumber}` : ''}</option>)}
+                    </select>
+                    {!form.productId && (
+                      <input
+                        value={form.newProductName}
+                        onChange={(e) => setForm({ ...form, newProductName: e.target.value })}
+                        placeholder="新产品名称（选填，填写则在产品库建档并关联）"
+                        className="mt-2 w-full px-3 py-2 border border-stone-200 focus:border-stone-900 outline-none text-sm transition-colors"
+                      />
+                    )}
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>

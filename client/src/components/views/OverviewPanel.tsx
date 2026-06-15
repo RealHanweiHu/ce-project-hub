@@ -6,7 +6,7 @@ import { CATEGORY_MAP } from '@/lib/sop-templates';
 import { trpc } from '@/lib/trpc';
 import {
   Hash, User, AlertTriangle, CalendarRange, Flag, GaugeCircle, ListChecks, Bug, GitBranch,
-  Users, CalendarClock, RefreshCw, UserCheck, Rocket, FileText, MessagesSquare, CheckCircle2, Loader2,
+  Users, CalendarClock, RefreshCw, UserCheck, Rocket, FileText, MessagesSquare, CheckCircle2, Loader2, Boxes,
 } from 'lucide-react';
 import { MeetingConfigPanel } from './MeetingConfigPanel';
 import { MembersPanel } from './MembersPanel';
@@ -26,6 +26,8 @@ const SECTIONS: Array<{ key: SectionKey; label: string; icon: React.ComponentTyp
 export function OverviewPanel({ project, onUpdate, canEdit, canManageMembers, isAdmin }: { project: Project; onUpdate: (p: Project) => void; canEdit: boolean; canManageMembers: boolean; isAdmin: boolean }) {
   const { data: members = [] } = trpc.members.list.useQuery({ projectId: project.id });
   const { data: users = [] } = trpc.admin.listUsersForSelect.useQuery(undefined, { staleTime: 60_000 });
+  const { data: productList = [] } = trpc.products.list.useQuery(undefined, { staleTime: 60_000 });
+  const linkedProduct = project.productId ? (productList as Array<{ id: string; name: string }>).find((p) => p.id === project.productId) : null;
   const utils = trpc.useUtils();
 
   const [section, setSection] = useState<SectionKey>('info');
@@ -119,6 +121,7 @@ export function OverviewPanel({ project, onUpdate, canEdit, canManageMembers, is
               <div className="grid grid-cols-2 md:grid-cols-3 gap-px bg-stone-200 border border-stone-200">
                 <InfoCell icon={<Hash size={13} />} label="项目编号" value={project.code || '—'} mono />
                 <InfoCell icon={<User size={13} />} label="项目经理" value={pmName} />
+                <InfoCell icon={<Boxes size={13} />} label="关联产品" value={linkedProduct ? linkedProduct.name : (project.productId ? project.productId : '新产品 / 未关联')} />
                 <InfoCell icon={<AlertTriangle size={13} />} label="风险等级" value={<span className={risk?.color}>{risk?.label ?? project.risk}</span>} />
                 <InfoCell icon={<Flag size={13} />} label="当前阶段" value={currentPhaseName} />
                 <InfoCell icon={<CalendarRange size={13} />} label="计划起止" value={`${project.startDate || '—'} ~ ${project.targetDate || '—'}`} mono />

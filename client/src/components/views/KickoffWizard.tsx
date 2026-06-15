@@ -9,8 +9,11 @@ const KEY_ROLES = [
   { role: 'rd_hw', label: '硬件研发', hint: 'EE · 原理图 / PCB' },
   { role: 'rd_mech', label: '结构 / ID', hint: 'MD/ID · 结构 / 外观' },
   { role: 'rd_sw', label: '软件研发', hint: 'SW · 固件 / APP' },
-  { role: 'qa', label: '测试 / 品质', hint: 'QA · EVT/DVT / 认证' },
+  { role: 'qa', label: '测试 / 品质', hint: 'QA · EVT/DVT' },
   { role: 'scm', label: '供应链', hint: 'SCM · BOM / 供应商' },
+  { role: 'pe', label: '工艺 / 设备', hint: 'PE · DFM / 量产准备' },
+  { role: 'mfg', label: '生产', hint: 'MFG · 试产 / 爬坡' },
+  { role: 'cert', label: '认证', hint: 'CERT · 安规 / Gate 会签' },
 ] as const;
 
 type UserRow = { id: number; name: string | null; username: string };
