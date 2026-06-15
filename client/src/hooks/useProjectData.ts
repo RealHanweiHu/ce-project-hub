@@ -226,6 +226,11 @@ export function useProjectData(projectId: string | null) {
       category: (projectRow.category as 'npd' | 'eco' | 'idr') ?? 'npd',
       pm: '',  // pmName resolved in UI via listUsersForSelect
       pmUserId: projectRow.pmUserId ?? null,
+      description: (projectRow as { description?: string | null }).description ?? null,
+      customer: (projectRow as { customer?: string | null }).customer ?? null,
+      background: (projectRow as { background?: string | null }).background ?? null,
+      value: (projectRow as { value?: string | null }).value ?? null,
+      dingtalkChatId: (projectRow as { dingtalkChatId?: string | null }).dingtalkChatId ?? null,
       risk: (projectRow.risk as 'low' | 'medium' | 'high') ?? 'low',
       currentPhase: projectRow.currentPhase ?? 'concept',
       startDate: projectRow.startDate ?? '',

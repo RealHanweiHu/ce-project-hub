@@ -88,6 +88,10 @@ function projectToApiInput(p: Project) {
     projectNumber: code || '',
     category: category || 'npd',
     pmUserId: pmUserId ?? null,
+    description: p.description ?? null,
+    customer: p.customer ?? null,
+    background: p.background ?? null,
+    value: p.value ?? null,
     risk: (risk || 'low') as 'low' | 'medium' | 'high',
     currentPhase: currentPhase || 'concept',
     progress: 0,
@@ -183,6 +187,10 @@ function ProjectDetailWrapper({
           updated.startDate !== project.startDate ||
           updated.targetDate !== project.targetDate ||
           updated.category !== project.category ||
+          (updated.description ?? '') !== (project.description ?? '') ||
+          (updated.customer ?? '') !== (project.customer ?? '') ||
+          (updated.background ?? '') !== (project.background ?? '') ||
+          (updated.value ?? '') !== (project.value ?? '') ||
           JSON.stringify(updated.customFields ?? {}) !== JSON.stringify(project.customFields ?? {});
 
         if (metaChanged) {

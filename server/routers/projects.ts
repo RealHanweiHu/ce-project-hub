@@ -22,7 +22,9 @@ import { getProjectMember } from "../db";
 import { syncProjectMeeting } from "../_core/meetingSync";
 import { resolveDingtalkUserId } from "../_core/dingtalk";
 import { upsertWeeklyMeeting } from "../_core/dingtalkCalendar";
-import { notifyUsersViaDingtalk } from "../_core/dingtalkMessage";
+import { notifyUsersViaDingtalk, resolveCorpIdsForUsers } from "../_core/dingtalkMessage";
+import { createGroupChat, sendToGroupChat } from "../_core/dingtalkGroup";
+import { getProjectMembers } from "../db";
 import { getPhasesForCategory } from "../../shared/sop-templates";
 import { PROJECT_MEMBER_ROLES } from "../../drizzle/schema";
 
@@ -39,7 +41,7 @@ async function getEffectiveRole(projectId: string, userId: number) {
 
 /** 按角色分配未分配任务 + (可选)逐人发钉钉通知。assignByRole / kickoff 共用。 */
 async function assignAndNotify(
-  project: { id: string; name: string; category: string },
+  project: { id: string; name: string; category: string; dingtalkChatId?: string | null },
   actorId: number,
   notify: boolean
 ): Promise<{ assigned: number; recipients: number; notified: number }> {
@@ -64,6 +66,11 @@ async function assignAndNotify(
       try { await notifyUsersViaDingtalk([userId], "项目任务分配", md); notified += 1; }
       catch (e) { console.warn("[assign] dingtalk notify failed (non-fatal):", e); }
     }
+    // 同步发一份汇总到项目群(若已建群)
+    if (project.dingtalkChatId && assignments.length > 0) {
+      const summary = `### 项目「${project.name}」任务已分配\n共 ${assignments.length} 项任务分给 ${byUser.size} 位负责人,详情见各自钉钉工作通知。`;
+      try { await sendToGroupChat(project.dingtalkChatId, "任务分配", summary); } catch { /* 非阻断 */ }
+    }
   }
   return { assigned: assignments.length, recipients: byUser.size, notified };
 }
@@ -82,6 +89,11 @@ const projectInputSchema = z.object({
   progress: z.number().default(0),
   startDate: z.string().nullable().optional(),
   targetDate: z.string().nullable().optional(),
+  /** 立项基础信息 */
+  description: z.string().nullable().optional(),
+  customer: z.string().nullable().optional(),
+  background: z.string().nullable().optional(),
+  value: z.string().nullable().optional(),
   /** 自定义字段值 fieldKey -> value */
   customFields: z.record(z.string(), z.unknown()).optional(),
 });
@@ -137,6 +149,10 @@ export const projectsRouter = router({
         projectNumber: input.projectNumber,
         category: input.category,
         pmUserId: input.pmUserId ?? null,
+        description: input.description ?? null,
+        customer: input.customer ?? null,
+        background: input.background ?? null,
+        value: input.value ?? null,
         risk: input.risk,
         currentPhase: input.currentPhase,
         progress: input.progress,
@@ -206,6 +222,10 @@ export const projectsRouter = router({
         projectNumber: input.projectNumber,
         category: input.category,
         pmUserId: input.pmUserId ?? null,
+        description: input.description ?? null,
+        customer: input.customer ?? null,
+        background: input.background ?? null,
+        value: input.value ?? null,
         risk: input.risk,
         currentPhase: input.currentPhase,
         progress: input.progress,
@@ -304,7 +324,7 @@ export const projectsRouter = router({
 
       // 3) 按角色分配任务 + 通知
       const r = await assignAndNotify(
-        { id: project.id, name: project.name, category: project.category },
+        { id: project.id, name: project.name, category: project.category, dingtalkChatId: project.dingtalkChatId },
         ctx.user.id,
         input.notify,
       );
@@ -317,6 +337,53 @@ export const projectsRouter = router({
         meta: { staffed, assigned: r.assigned, recipients: r.recipients, startDate: input.startDate ?? null },
       });
       return { success: true, staffed, ...r };
+    }),
+
+  /**
+   * 为项目创建/绑定钉钉对接群:群主取 PM(无则创建者),成员取项目成员。
+   * 成功后回填 dingtalkChatId,后续项目提醒发到此群。需 canEditProjectInfo + 已建群权限。
+   */
+  createDingtalkGroup: protectedProcedure
+    .input(z.object({ projectId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+      const role = await getEffectiveRole(input.projectId, ctx.user.id);
+      if (!role || !ROLE_PERMISSIONS[role].canEditProjectInfo) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "仅 Owner/管理层/PM 可创建项目群" });
+      }
+      if (project.dingtalkChatId) {
+        return { success: true, chatId: project.dingtalkChatId, already: true };
+      }
+
+      const ownerUserId = project.pmUserId ?? project.createdBy;
+      const [ownerCorp] = await resolveCorpIdsForUsers([ownerUserId]);
+      if (!ownerCorp) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "群主(PM/创建者)需先在「成员/系统管理」里配置手机号" });
+      }
+      const members = await getProjectMembers(input.projectId);
+      const memberCorps = await resolveCorpIdsForUsers(
+        members.map((m) => m.userId).filter((id) => id !== ownerUserId)
+      );
+
+      const res = await createGroupChat(`【${project.name}】项目群`, ownerCorp, memberCorps);
+      if (!res.ok) throw new TRPCError({ code: "BAD_REQUEST", message: res.error });
+
+      await updateProject(input.projectId, { dingtalkChatId: res.chatId });
+      await sendToGroupChat(
+        res.chatId,
+        "项目群已创建",
+        `### 【${project.name}】项目对接群\n本群用于该项目对接,逾期/Gate/任务/周会等提醒会自动发到这里。`
+      );
+      await createActivityLog({
+        projectId: input.projectId,
+        userId: ctx.user.id,
+        action: "project.create_group",
+        entityType: "project",
+        entityId: input.projectId,
+        meta: { chatId: res.chatId, members: memberCorps.length + 1 },
+      });
+      return { success: true, chatId: res.chatId, already: false };
     }),
 
   /**

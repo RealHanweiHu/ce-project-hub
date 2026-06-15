@@ -76,6 +76,11 @@ export const projects = pgTable("projects", {
    * Use JOIN to get display name; no pmName string field.
    */
   pmUserId: integer("pmUserId"),
+  /** 项目描述 / 背景 / 客户 / 价值（立项基础信息） */
+  description: text("description"),
+  customer: varchar("customer", { length: 256 }),
+  background: text("background"),
+  value: text("value"),
   risk: projectRiskEnum("risk").notNull().default("low"),
   currentPhase: varchar("currentPhase", { length: 32 }).notNull().default("concept"),
   progress: integer("progress").notNull().default(0),
@@ -97,6 +102,8 @@ export const projects = pgTable("projects", {
   meetingConfig: jsonb("meetingConfig").$type<{ enabled: boolean; weekday: number; time: string; durationMin: number; title: string } | null>(),
   /** 已建钉钉日程 id（用于改/删） */
   dingtalkEventId: varchar("dingtalkEventId", { length: 128 }),
+  /** 项目专属钉钉群会话 id（建群后回填，项目提醒发到此群） */
+  dingtalkChatId: varchar("dingtalkChatId", { length: 128 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
 });
