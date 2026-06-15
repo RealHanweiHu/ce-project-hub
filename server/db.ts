@@ -339,9 +339,10 @@ export type PortfolioRow = {
 export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
   const db = await getDb();
   if (!db) return [];
-  const [owned, member] = await Promise.all([getProjectsByUser(userId), getProjectsByMember(userId)]);
+  // 总览全员只读可见全部未归档项目（详情/编辑仍按各自权限拦截），避免信息闭塞。
+  const allProjects = await db.select().from(projects).where(eq(projects.archived, false));
   const projById = new Map<string, ProjectRow>();
-  for (const p of [...owned, ...member]) projById.set(p.id, p);
+  for (const p of allProjects) projById.set(p.id, p);
   const ids = Array.from(projById.keys());
   if (ids.length === 0) return [];
 
@@ -1787,9 +1788,10 @@ export type CalendarEvent = {
 export async function getCalendar(userId: number, fromDate: string, toDate: string): Promise<CalendarEvent[]> {
   const db = await getDb();
   if (!db) return [];
-  const [owned, member] = await Promise.all([getProjectsByUser(userId), getProjectsByMember(userId)]);
+  // 总览日历全员只读可见全部未归档项目里程碑（详情/编辑仍按各自权限），避免信息闭塞。
+  const allProjects = await db.select().from(projects).where(eq(projects.archived, false));
   const projById = new Map<string, ProjectRow>();
-  for (const p of [...owned, ...member]) projById.set(p.id, p);
+  for (const p of allProjects) projById.set(p.id, p);
   const ids = Array.from(projById.keys());
   if (ids.length === 0) return [];
 

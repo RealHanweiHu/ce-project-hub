@@ -46,8 +46,8 @@ describe("getCalendar", () => {
     expect(events.filter((e) => e.projectId === PROJ)).toHaveLength(0);
   });
 
-  it("无权限用户看不到该项目事件", async () => {
+  it("总览全员可见：非成员用户也能看到该项目的里程碑事件", async () => {
     const events = await getCalendar(999999, "2026-07-01", "2026-07-31");
-    expect(events.filter((e) => e.projectId === PROJ)).toHaveLength(0);
+    expect(events.filter((e) => e.projectId === PROJ).length).toBeGreaterThan(0);
   });
 });
