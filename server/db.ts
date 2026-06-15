@@ -1796,7 +1796,7 @@ export async function getCalendar(userId: number, fromDate: string, toDate: stri
   const inWindow = (d: string | null): d is string => !!d && d >= fromDate && d <= toDate;
   const events: CalendarEvent[] = [];
 
-  for (const p of projById.values()) {
+  for (const p of Array.from(projById.values())) {
     if (inWindow(p.targetDate)) {
       events.push({ date: p.targetDate, type: "target", projectId: p.id, projectName: p.name, label: "目标交付" });
     }
