@@ -149,6 +149,13 @@ export interface Project {
   type: string;
   pm: string;
   pmUserId?: number | null;
+  /** 立项基础信息 */
+  description?: string | null;
+  customer?: string | null;
+  background?: string | null;
+  value?: string | null;
+  /** 项目专属钉钉群会话 id（只读，建群后回填） */
+  dingtalkChatId?: string | null;
   startDate: string;
   targetDate: string;
   currentPhase: string;

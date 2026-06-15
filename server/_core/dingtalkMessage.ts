@@ -24,9 +24,8 @@ export async function sendWorkNotification(corpUserIds: string[], title: string,
   }
 }
 
-/** 把内部 userId 列表解析成钉钉 userid 并发工作通知（解析不到的跳过）。引擎默认派发用。 */
-export async function notifyUsersViaDingtalk(userIds: number[], title: string, markdown: string): Promise<void> {
-  if (!isDingtalkConfigured() || !ENV.dingtalkAgentId || userIds.length === 0) return;
+/** 把内部 userId 列表解析成钉钉企业 userid(corp userid),解析不到的跳过。建群/群发用。 */
+export async function resolveCorpIdsForUsers(userIds: number[]): Promise<string[]> {
   const corpIds: string[] = [];
   for (const uid of userIds) {
     const u = await getUserById(uid);
@@ -34,5 +33,12 @@ export async function notifyUsersViaDingtalk(userIds: number[], title: string, m
     const cid = await resolveDingtalkCorpUserId(u, setUserDingtalkCorpId);
     if (cid) corpIds.push(cid);
   }
+  return corpIds;
+}
+
+/** 把内部 userId 列表解析成钉钉 userid 并发工作通知（解析不到的跳过）。引擎默认派发用。 */
+export async function notifyUsersViaDingtalk(userIds: number[], title: string, markdown: string): Promise<void> {
+  if (!isDingtalkConfigured() || !ENV.dingtalkAgentId || userIds.length === 0) return;
+  const corpIds = await resolveCorpIdsForUsers(userIds);
   await sendWorkNotification(corpIds, title, markdown);
 }
