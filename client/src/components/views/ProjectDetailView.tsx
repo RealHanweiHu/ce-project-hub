@@ -940,8 +940,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
       {mainTab === 'requirements' && (
         <div className="p-6">
           <RequirementPoolPanel
-            projectId={project.id}
-            phases={projectPhases}
+            scope={{ kind: 'project', projectId: project.id, phases: projectPhases }}
             canEdit={perms.canEditRequirements}
           />
         </div>
