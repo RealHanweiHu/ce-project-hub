@@ -390,7 +390,8 @@ export const projectRequirements = pgTable(
   "project_requirements",
   {
     id: serial("id").primaryKey(),
-    projectId: varchar("projectId", { length: 32 }).notNull(),
+    /** 来源项目;可空 —— 纯产品/全局 backlog 尚未归属任何项目 */
+    projectId: varchar("projectId", { length: 32 }),
     title: varchar("title", { length: 512 }).notNull(),
     description: text("description"),
     source: requirementSourceEnum("source").notNull().default("internal"),
@@ -406,6 +407,10 @@ export const projectRequirements = pgTable(
     creatorId: integer("creatorId"),
     /** 溯源：需求挂在产品上（永久），projectId 为来源项目 */
     productId: varchar("productId", { length: 32 }),
+    /** 采纳转化目标类型：task | issue | change（null 表示未转化） */
+    convertedType: varchar("convertedType", { length: 16 }),
+    /** 转化目标 id（任务模板 id / 问题 id / 变更 id） */
+    convertedId: varchar("convertedId", { length: 64 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
   },

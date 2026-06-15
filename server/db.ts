@@ -1,4 +1,4 @@
-import { eq, desc, and, or, inArray, sql as drizzleSql } from "drizzle-orm";
+import { eq, desc, and, or, isNull, inArray, sql as drizzleSql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import {
   InsertUser, users, projects, InsertProject, ProjectRow,
@@ -618,7 +618,12 @@ export async function deleteProjectIssue(id: number): Promise<void> {
 
 // ── Project Requirements helpers ─────────────────────────────────────────────
 
-/** Get all requirements for a project. */
+const REQ_ORDER = [
+  drizzleSql`CASE ${projectRequirements.priority} WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END`,
+  desc(projectRequirements.createdAt),
+] as const;
+
+/** Get all requirements for a project (严格按 projectId,内部用). */
 export async function getProjectRequirements(projectId: string): Promise<ProjectRequirement[]> {
   const db = await getDb();
   if (!db) return [];
@@ -626,10 +631,46 @@ export async function getProjectRequirements(projectId: string): Promise<Project
     .select()
     .from(projectRequirements)
     .where(eq(projectRequirements.projectId, projectId))
-    .orderBy(
-      drizzleSql`CASE ${projectRequirements.priority} WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END`,
-      desc(projectRequirements.createdAt)
-    );
+    .orderBy(...REQ_ORDER);
+}
+
+/** 单条查询(按 id),用于鉴权与转化。 */
+export async function getRequirementById(id: number): Promise<ProjectRequirement | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(projectRequirements).where(eq(projectRequirements.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
+/**
+ * 统一需求池查询。一套池子,多个过滤视图:
+ * - project: 本项目提出(projectId=X) ∪ 本产品待承接(productId=P 且 projectId 为空)
+ * - product: 该产品的全部需求(productId=P)
+ * - global:  全部需求
+ */
+export type RequirementFilter =
+  | { scope: "project"; projectId: string; productId: string | null }
+  | { scope: "product"; productId: string }
+  | { scope: "global" };
+
+export async function getRequirements(filter: RequirementFilter): Promise<ProjectRequirement[]> {
+  const db = await getDb();
+  if (!db) return [];
+  let where;
+  if (filter.scope === "project") {
+    where = filter.productId
+      ? or(
+          eq(projectRequirements.projectId, filter.projectId),
+          and(isNull(projectRequirements.projectId), eq(projectRequirements.productId, filter.productId))
+        )
+      : eq(projectRequirements.projectId, filter.projectId);
+  } else if (filter.scope === "product") {
+    where = eq(projectRequirements.productId, filter.productId);
+  } else {
+    where = undefined;
+  }
+  const q = db.select().from(projectRequirements);
+  return (where ? q.where(where) : q).orderBy(...REQ_ORDER);
 }
 
 /** Create a new requirement pool item. */
