@@ -7,7 +7,7 @@ import { ChevronRight, ArrowUpDown } from "lucide-react";
 
 export type PortfolioTableRow = {
   id: string; name: string; projectNumber: string; category: string; risk: string;
-  currentPhase: string; startDate: string | null; targetDate: string | null; pmName: string | null;
+  currentPhase: string; startDate: string | null; targetDate: string | null; pmUserId: number | null; pmName: string | null;
   taskTotal: number; taskDone: number; overdueTasks: number; blockedTasks: number;
   openIssues: number; criticalIssues: number; projectedEnd: string | null;
 };

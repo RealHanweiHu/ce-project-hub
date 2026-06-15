@@ -28,8 +28,7 @@ export function PerspectivePanel({ lens, rows, onSelectProject }: { lens: Lens; 
     return { total: rows.length, delayRate: Math.round((od / total) * 100), risk, phaseDelays };
   }, [rows]);
 
-  // PortfolioTableRow has pmName (string) but no pmUserId; filter by display name match.
-  const myProjects = useMemo(() => rows.filter((r) => r.pmName === user?.name), [rows, user?.name]);
+  const myProjects = useMemo(() => rows.filter((r) => r.pmUserId === user?.id), [rows, user?.id]);
 
   if (lens === "exec") {
     return (
