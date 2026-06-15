@@ -12,6 +12,7 @@ import { MeetingConfigPanel } from './MeetingConfigPanel';
 import { MembersPanel } from './MembersPanel';
 import { CustomFieldsPanel } from './CustomFieldsPanel';
 import { KickoffWizard } from './KickoffWizard';
+import { isProjectedOverdue } from '@shared/health';
 import { toast } from 'sonner';
 
 type SectionKey = 'info' | 'team' | 'schedule' | 'dingtalk' | 'fields';
@@ -54,7 +55,7 @@ export function OverviewPanel({ project, onUpdate, canEdit, canManageMembers, is
     const td = project.phases[phase.id]?.taskDetails ?? {};
     for (const id of Object.keys(td)) { const due = td[id]?.dueDate; if (due && (!projectedEnd || due > projectedEnd)) projectedEnd = due; }
   }
-  const overdue = !!(projectedEnd && project.targetDate && projectedEnd > project.targetDate);
+  const overdue = isProjectedOverdue(projectedEnd, project.targetDate);
 
   // ── 立项基础信息编辑(客户/背景/价值/描述) ───────────────────────────────
   const [info, setInfo] = useState({ description: '', customer: '', background: '', value: '' });
@@ -103,7 +104,7 @@ export function OverviewPanel({ project, onUpdate, canEdit, canManageMembers, is
         {section === 'info' && (
           <>
             {catConfig && (
-              <div className={`flex items-start gap-4 border ${catConfig.borderColor} ${catConfig.color} p-4`}>
+              <div className={`ce-panel flex items-start gap-4 border ${catConfig.borderColor} ${catConfig.color} p-4 shadow-none`}>
                 <span className="text-3xl leading-none">{catConfig.icon}</span>
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
@@ -118,7 +119,7 @@ export function OverviewPanel({ project, onUpdate, canEdit, canManageMembers, is
 
             <div>
               <h3 className="text-[11px] font-mono uppercase tracking-widest text-stone-400 mb-3">关键信息</h3>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-px bg-stone-200 border border-stone-200">
+              <div className="ce-table-shell grid grid-cols-2 md:grid-cols-3 gap-px bg-stone-200">
                 <InfoCell icon={<Hash size={13} />} label="项目编号" value={project.code || '—'} mono />
                 <InfoCell icon={<User size={13} />} label="项目经理" value={pmName} />
                 <InfoCell icon={<Boxes size={13} />} label="关联产品" value={linkedProduct ? linkedProduct.name : (project.productId ? project.productId : '新产品 / 未关联')} />
@@ -182,7 +183,7 @@ export function OverviewPanel({ project, onUpdate, canEdit, canManageMembers, is
 
         {section === 'schedule' && (
           <div className="space-y-6">
-            <div className="border border-stone-200 bg-white p-4 flex items-center gap-4 flex-wrap">
+            <div className="ce-panel p-4 flex items-center gap-4 flex-wrap">
               <div className="flex items-center gap-2"><CalendarClock size={14} className="text-amber-500" /><span className="text-sm font-medium text-stone-800">自动排期</span></div>
               <div className="flex items-center gap-1.5 text-sm"><span className="text-[10px] font-mono uppercase tracking-wider text-stone-400">预计完成</span><span className="font-mono text-stone-700">{projectedEnd || '未排期'}</span></div>
               {overdue && <span className="text-[11px] font-mono px-1.5 py-0.5 bg-rose-50 text-rose-600 border border-rose-200">超出目标日 {project.targetDate}</span>}
@@ -203,13 +204,13 @@ export function OverviewPanel({ project, onUpdate, canEdit, canManageMembers, is
           <div>
             <h3 className="text-[11px] font-mono uppercase tracking-widest text-stone-400 mb-3">钉钉对接群</h3>
             {project.dingtalkChatId ? (
-              <div className="border border-emerald-200 bg-emerald-50/50 p-4 space-y-2">
+              <div className="ce-panel border-emerald-200 bg-emerald-50/50 p-4 space-y-2">
                 <div className="flex items-center gap-2 text-sm text-emerald-800"><CheckCircle2 size={15} />已绑定项目钉钉群</div>
                 <div className="text-xs text-stone-600">群 ID:<span className="font-mono ml-1">{project.dingtalkChatId.slice(0, 12)}…</span></div>
                 <p className="text-xs text-stone-500 leading-relaxed">该项目的提醒(逾期 / Gate / 任务分配 / 周会等)会自动发到此群。在钉钉里搜索「【{project.name}】项目群」即可进入。</p>
               </div>
             ) : (
-              <div className="border border-stone-200 bg-white p-4 space-y-3">
+              <div className="ce-panel p-4 space-y-3">
                 <p className="text-sm text-stone-700 leading-relaxed">
                   一键在钉钉创建本项目的对接群:群主为 <strong>PM(无则创建者)</strong>,成员为<strong>已配手机号的项目成员</strong>。建群后,项目提醒会统一发到该群。
                 </p>
@@ -247,7 +248,7 @@ function Field({ label, value, onCommit, canEdit, placeholder, textarea, classNa
   useEffect(() => { setDraft(value); }, [value]);
   const commit = () => { if (draft !== value) onCommit(draft); };
   return (
-    <div className={`bg-white border border-stone-200 p-3 ${className ?? ''}`}>
+    <div className={`ce-card p-3 ${className ?? ''}`}>
       <div className="text-[10px] font-mono uppercase tracking-wider text-stone-400 mb-1.5">{label}</div>
       {!canEdit ? (
         <div className="text-sm text-stone-700 whitespace-pre-wrap min-h-[1.25rem]">{value || <span className="text-stone-300">—</span>}</div>
@@ -273,7 +274,7 @@ function InfoCell({ icon, label, value, mono }: { icon: React.ReactNode; label: 
 
 function Metric({ icon, label, value, sub, accent }: { icon: React.ReactNode; label: string; value: string; sub?: string; accent?: string }) {
   return (
-    <div className="bg-white border border-stone-200 p-4">
+    <div className="ce-card p-4">
       <div className="flex items-center gap-1.5 text-stone-400">{icon}<span className="text-[10px] font-mono uppercase tracking-wider">{label}</span></div>
       <div className="mt-2 flex items-baseline gap-1.5">
         <span className={`text-2xl font-semibold ${accent ?? 'text-stone-800'}`}>{value}</span>

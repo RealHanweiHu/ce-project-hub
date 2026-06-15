@@ -712,7 +712,7 @@ export default function Home() {
 
   // ── Main App ─────────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen flex bg-stone-50">
+    <div className="min-h-screen flex text-stone-900">
       {/* Mobile Overlay */}
       {sidebarOpen && (
         <div
@@ -723,15 +723,15 @@ export default function Home() {
 
       {/* Sidebar */}
       <aside
-        className={`fixed lg:sticky top-0 left-0 h-screen w-60 bg-stone-900 flex flex-col z-40 shrink-0 transition-transform duration-300 ${
+        className={`fixed lg:sticky top-0 left-0 h-screen w-64 bg-[#171513] flex flex-col z-40 shrink-0 transition-transform duration-300 shadow-[8px_0_32px_rgba(28,25,23,0.12)] ${
           sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
         }`}
       >
         {/* Logo */}
-        <div className="p-5 border-b border-stone-800">
+        <div className="p-4 border-b border-white/10">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-amber-500 flex items-center justify-center shrink-0">
+              <div className="w-9 h-9 rounded-md bg-amber-500 flex items-center justify-center shrink-0 shadow-[0_10px_24px_rgba(245,158,11,0.24)]">
                 <Cpu size={16} className="text-stone-900" />
               </div>
               <div>
@@ -751,7 +751,7 @@ export default function Home() {
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 p-3 space-y-0.5 overflow-y-auto">
+        <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
           {navItems.map(({ id, label, labelEn, icon: Icon }) => {
             const isActive = view === id;
             const badge = taskBadges[id] ?? 0;
@@ -759,10 +759,10 @@ export default function Home() {
               <button
                 key={id}
                 onClick={() => handleNavClick(id)}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 text-left transition-all group ${
+                className={`w-full flex items-center gap-3 rounded-md border px-3 py-2.5 text-left transition-all group ${
                   isActive
-                    ? 'bg-stone-800 text-stone-50'
-                    : 'text-stone-400 hover:bg-stone-800/60 hover:text-stone-200'
+                    ? 'border-amber-400/30 bg-white/[0.07] text-stone-50 shadow-inner'
+                    : 'border-transparent text-stone-400 hover:bg-white/[0.045] hover:text-stone-200'
                 }`}
               >
                 <Icon size={15} className={isActive ? 'text-amber-400' : 'text-stone-500 group-hover:text-stone-400'} />
@@ -794,8 +794,8 @@ export default function Home() {
                   onClick={() => handleSelectProject(p.id)}
                   className={`w-full text-left px-3 py-1.5 text-xs transition-colors truncate ${
                     selectedProjectId === p.id
-                      ? 'text-amber-400 bg-stone-800'
-                      : 'text-stone-500 hover:text-stone-300 hover:bg-stone-800/40'
+                      ? 'text-amber-300 bg-white/[0.07] rounded'
+                      : 'text-stone-500 hover:text-stone-300 hover:bg-white/[0.045] rounded'
                   }`}
                 >
                   {p.name}
@@ -806,7 +806,7 @@ export default function Home() {
         </nav>
 
         {/* Save Status + User */}
-        <div className="p-4 border-t border-stone-800 space-y-2">
+        <div className="p-4 border-t border-white/10 space-y-2">
           <div className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-wider">
             {saveStatus === 'saved' ? (
               <>
@@ -837,8 +837,8 @@ export default function Home() {
           {isAdmin && (
             <button
               onClick={() => navigate('/admin')}
-              className="w-full flex items-center gap-2 px-2 py-1.5 text-left text-amber-500 hover:text-amber-300 hover:bg-stone-800/60 transition-colors"
-            >
+            className="w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-amber-500 hover:text-amber-300 hover:bg-white/[0.045] transition-colors"
+          >
               <Shield size={12} className="shrink-0" />
               <div>
                 <div className="text-[10px] font-mono uppercase tracking-wider">系统管理</div>
@@ -849,7 +849,7 @@ export default function Home() {
 
           {/* User info + change password + logout */}
           <div className="pt-1 flex items-center gap-2 group">
-            <div className="w-5 h-5 bg-amber-600 flex items-center justify-center text-[9px] font-mono text-stone-900 uppercase shrink-0">
+            <div className="w-6 h-6 rounded bg-amber-600 flex items-center justify-center text-[9px] font-mono text-stone-900 uppercase shrink-0">
               {(user.name || user.email || 'U').charAt(0)}
             </div>
             <span className="text-[10px] text-stone-500 truncate flex-1">{user.name || user.email}</span>
@@ -875,7 +875,7 @@ export default function Home() {
       {/* Main Content */}
       <div className="flex-1 min-w-0 flex flex-col">
         {/* Top Bar */}
-        <header className="sticky top-0 z-20 bg-stone-50/95 backdrop-blur-sm border-b border-stone-200 px-4 lg:px-8 py-3.5 flex items-center gap-4">
+        <header className="sticky top-0 z-20 border-b border-stone-200/80 bg-white/82 px-4 py-3 backdrop-blur-xl lg:px-7 flex items-center gap-4">
           <button
             onClick={() => setSidebarOpen(true)}
             className="lg:hidden text-stone-500 hover:text-stone-900 transition-colors"
@@ -903,7 +903,7 @@ export default function Home() {
             {/* Search trigger */}
             <button
               onClick={() => setSearchOpen(true)}
-              className="flex items-center gap-2 px-3 py-1.5 border border-stone-200 bg-white hover:border-stone-400 transition-colors text-stone-400 hover:text-stone-700"
+              className="ce-control flex items-center gap-2 border border-stone-200 bg-white px-3 py-1.5 text-stone-400 shadow-sm transition-colors hover:border-stone-400 hover:text-stone-700"
             >
               <Search size={13} />
               <span className="text-[11px] font-mono hidden sm:inline">搜索</span>
@@ -936,14 +936,14 @@ export default function Home() {
               )}
             </div>
 
-            <div className="text-[10px] font-mono text-stone-400 hidden md:block bg-stone-100 px-2 py-1">
+            <div className="ce-control text-[10px] font-mono text-stone-400 hidden md:block bg-stone-100 px-2 py-1">
               {projectsLoading ? '...' : `${projects.length} PROJECTS`}
             </div>
           </div>
         </header>
 
         {/* Page Content */}
-        <main className="flex-1 p-4 lg:p-8 overflow-auto">
+        <main className="flex-1 overflow-auto p-4 lg:p-7">
           {projectsLoading ? (
             <div className="flex items-center justify-center h-64">
               <div className="flex flex-col items-center gap-3">

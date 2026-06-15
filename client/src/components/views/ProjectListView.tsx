@@ -138,25 +138,25 @@ export function ProjectListView({
   const sopPhases = getPhasesForCategory(selectedCategory);
 
   return (
-    <div className="space-y-6">
+    <div className="ce-page">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="ce-page-header">
         <div>
           <h2 className="font-serif text-2xl text-stone-900">项目列表</h2>
-          <p className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mt-0.5">
+          <p className="ce-kicker mt-0.5">
             {projects.length} PROJECTS
           </p>
         </div>
         {canCreateProject ? (
           <button
             onClick={() => setShowAdd(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-stone-900 text-stone-50 text-xs font-mono uppercase tracking-wider hover:bg-stone-700 transition-colors"
+            className="ce-control flex items-center gap-2 px-4 py-2 bg-stone-900 text-stone-50 text-xs font-mono uppercase tracking-wider shadow-sm hover:bg-stone-700 transition-colors"
           >
             <Plus size={14} />
             新建项目
           </button>
         ) : (
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-stone-100 border border-stone-200 text-stone-400 text-[10px] font-mono uppercase tracking-wider cursor-not-allowed" title="仅管理员、管理层和 PM 可创建项目">
+          <div className="ce-control flex items-center gap-2 px-3 py-1.5 bg-stone-100 border border-stone-200 text-stone-400 text-[10px] font-mono uppercase tracking-wider cursor-not-allowed" title="仅管理员、管理层和 PM 可创建项目">
             <Lock size={12} />
             无创建权限
           </div>
@@ -178,7 +178,7 @@ export function ProjectListView({
           return (
             <div
               key={project.id}
-              className="group bg-white border border-stone-200 hover:border-stone-300 transition-all cursor-pointer"
+              className="ce-card group cursor-pointer overflow-hidden"
               style={{ borderTopWidth: 3, borderTopColor: phaseObj?.color || '#78716c' }}
               onClick={() => onSelectProject(project.id)}
             >
@@ -262,7 +262,7 @@ export function ProjectListView({
 
         {/* Phase Progress Summary */}
         {projects.length > 0 && (
-          <div className="bg-stone-50 border border-stone-200 border-dashed p-5 flex flex-col justify-center items-center text-center">
+          <div className="ce-muted-band border-dashed p-5 flex flex-col justify-center items-center text-center">
             <FolderKanban size={24} className="text-stone-300 mb-3" />
             <p className="text-sm font-medium text-stone-500">阶段概览</p>
             <div className="mt-4 w-full space-y-2">

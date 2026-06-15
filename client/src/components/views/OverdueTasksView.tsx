@@ -39,21 +39,21 @@ export function OverdueTasksView({ onNavigateToProject }: OverdueTasksViewProps)
   }, {});
 
   return (
-    <div className="p-6 lg:p-8">
+    <div className="ce-page">
       {/* Page header */}
-      <div className="mb-6">
+      <div>
         <div className="flex items-center gap-2">
           <AlertTriangle size={18} className="text-red-500" />
           <h2 className="font-serif text-xl text-stone-900 leading-tight">逾期任务</h2>
         </div>
-        <p className="text-[11px] font-mono text-stone-400 uppercase tracking-widest mt-1">
+        <p className="ce-kicker mt-1">
           Overdue Tasks · 截止日期已过且未完成的任务
         </p>
       </div>
 
       {/* Project breakdown */}
       {!isLoading && Object.keys(projectGroups).length > 0 && (
-        <div className="mb-5 p-3 bg-red-50 border border-red-200">
+        <div className="ce-panel p-3 bg-red-50/80 border-red-200">
           <div className="text-[9px] font-mono uppercase tracking-widest text-red-400 mb-2">逾期任务分布</div>
           <div className="flex flex-wrap gap-2">
             {Object.entries(projectGroups).map(([name, count]) => (
@@ -66,7 +66,7 @@ export function OverdueTasksView({ onNavigateToProject }: OverdueTasksViewProps)
       )}
 
       {/* Task list */}
-      <div className="bg-white border border-stone-200">
+      <div className="ce-table-shell">
         <TaskListView
           tasks={tasks}
           isLoading={isLoading}

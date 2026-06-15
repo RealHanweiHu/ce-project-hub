@@ -32,18 +32,18 @@ export function MyTasksView({ onNavigateToProject }: MyTasksViewProps) {
   }));
 
   return (
-    <div className="p-6 lg:p-8">
+    <div className="ce-page">
       {/* Page header */}
-      <div className="mb-6">
+      <div>
         <h2 className="font-serif text-xl text-stone-900 leading-tight">我的任务</h2>
-        <p className="text-[11px] font-mono text-stone-400 uppercase tracking-widest mt-1">
+        <p className="ce-kicker mt-1">
           My Tasks · 指派给我的所有未完成任务
         </p>
       </div>
 
       {/* Summary chips */}
       {!isLoading && data.length > 0 && (
-        <div className="flex flex-wrap gap-2 mb-5">
+        <div className="flex flex-wrap gap-2">
           {(['critical', 'high', 'medium', 'low'] as const).map((p) => {
             const count = tasks.filter((t) => t.priority === p).length;
             if (count === 0) return null;
@@ -69,7 +69,7 @@ export function MyTasksView({ onNavigateToProject }: MyTasksViewProps) {
       )}
 
       {/* Task list */}
-      <div className="bg-white border border-stone-200">
+      <div className="ce-table-shell">
         <TaskListView
           tasks={tasks}
           isLoading={isLoading}

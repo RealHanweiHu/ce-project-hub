@@ -107,6 +107,14 @@ export const projectsRouter = router({
     return getPortfolio(ctx.user.id);
   }),
 
+  /** 里程碑日历：时间窗内的阶段截止/Gate/目标日事件 */
+  calendar: protectedProcedure
+    .input(z.object({ fromDate: z.string(), toDate: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const { getCalendar } = await import("../db");
+      return getCalendar(ctx.user.id, input.fromDate, input.toDate);
+    }),
+
   /** List all projects for the current user (owned + member) */
   list: protectedProcedure.query(async ({ ctx }) => {
     const [owned, memberOf] = await Promise.all([

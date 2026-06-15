@@ -160,7 +160,7 @@ export function DashboardView({ projects, onSelectProject }: DashboardViewProps)
   );
 
   return (
-    <div className="space-y-8">
+    <div className="ce-page">
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard label="项目总数" value={stats.total} sub="ACTIVE" accent="bg-stone-100" icon={<Hash size={16} />} />
@@ -171,7 +171,7 @@ export function DashboardView({ projects, onSelectProject }: DashboardViewProps)
 
       {/* ── P0/P1 Critical Issue Alert ────────────────────────────────────── */}
       {criticalIssues.length > 0 && (
-        <div className="bg-white border-2 border-rose-300">
+        <div className="ce-panel overflow-hidden border-rose-300">
           {/* Alert Header */}
           <div className="flex items-center justify-between p-5 border-b border-rose-100 bg-rose-50">
             <div className="flex items-center gap-3">
@@ -270,8 +270,8 @@ export function DashboardView({ projects, onSelectProject }: DashboardViewProps)
       {criticalIssues.length === 0 && projects.some((p) =>
         Object.values(p.phases).some((ph) => (ph.issues || []).length > 0)
       ) && (
-        <div className="flex items-center gap-3 p-4 bg-emerald-50 border border-emerald-200">
-          <div className="w-6 h-6 bg-emerald-500 flex items-center justify-center shrink-0">
+        <div className="ce-panel flex items-center gap-3 p-4 bg-emerald-50/80 border-emerald-200">
+          <div className="w-6 h-6 rounded bg-emerald-500 flex items-center justify-center shrink-0">
             <Bug size={12} className="text-white" />
           </div>
           <div>
@@ -283,7 +283,7 @@ export function DashboardView({ projects, onSelectProject }: DashboardViewProps)
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Phase Distribution Chart */}
-        <div className="lg:col-span-2 bg-white border border-stone-200 p-6">
+        <div className="lg:col-span-2 ce-panel p-5 lg:p-6">
           <div className="flex items-center justify-between mb-6">
             <div>
               <h3 className="font-serif text-xl text-stone-900">阶段分布</h3>
@@ -297,7 +297,7 @@ export function DashboardView({ projects, onSelectProject }: DashboardViewProps)
         </div>
 
         {/* Upcoming Gates */}
-        <div className="bg-white border border-stone-200 p-6">
+        <div className="ce-panel p-5 lg:p-6">
           <div className="flex items-center justify-between mb-6">
             <div>
               <h3 className="font-serif text-xl text-stone-900">即将到来的 Gate</h3>
@@ -346,7 +346,7 @@ export function DashboardView({ projects, onSelectProject }: DashboardViewProps)
       </div>
 
       {/* Project Table */}
-      <div className="bg-white border border-stone-200">
+      <div className="ce-table-shell">
         <div className="flex items-center justify-between p-6 border-b border-stone-200">
           <div>
             <h3 className="font-serif text-xl text-stone-900">项目总览</h3>

@@ -6,6 +6,7 @@ import { RISK_CONFIG, PHASE_MAP } from '@/lib/data';
 import { ProgressBar } from '@/components/shared/ProgressBar';
 import { TaskListView, type TaskRow } from './TaskListView';
 import type { TaskStatus, TaskPriority } from '@shared/const';
+import { isProjectedOverdue } from '@shared/health';
 import { BarChart3, Crown, User, Users, Bug, Ban, CalendarClock, ChevronRight, CheckCircle2, Loader2 } from 'lucide-react';
 
 type Persp = 'exec' | 'pm' | 'mine';
@@ -15,7 +16,7 @@ type PRow = {
   taskTotal: number; taskDone: number; overdueTasks: number; blockedTasks: number; openIssues: number; projectedEnd: string | null;
 };
 const prog = (r: PRow) => (r.taskTotal > 0 ? Math.round((r.taskDone / r.taskTotal) * 100) : 0);
-const overdue = (r: PRow) => !!(r.projectedEnd && r.targetDate && r.projectedEnd > r.targetDate);
+const overdue = (r: PRow) => isProjectedOverdue(r.projectedEnd, r.targetDate);
 
 export function ReportsView({ onSelectProject }: { onSelectProject: (id: string) => void }) {
   const { user } = useAuth();
@@ -39,12 +40,12 @@ export function ReportsView({ onSelectProject }: { onSelectProject: (id: string)
   if (isLoading) return <div className="flex items-center gap-2 text-stone-400 py-12 justify-center"><Loader2 size={16} className="animate-spin" />加载报表…</div>;
 
   return (
-    <div className="space-y-5">
+    <div className="ce-page">
       <div className="flex items-center gap-2">
         <BarChart3 size={18} className="text-amber-500" />
         <h1 className="font-serif text-xl text-stone-900">报表</h1>
       </div>
-      <div className="flex items-center gap-0 border-b border-stone-200">
+      <div className="ce-panel flex items-center gap-0 overflow-x-auto px-1">
         {([['exec', '管理层视角', Crown], ['pm', 'PM 视角', User], ['mine', '我的视角', Users]] as const).map(([k, label, Icon]) => (
           <button key={k} onClick={() => setPersp(k)}
             className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all ${persp === k ? 'border-b-stone-900 text-stone-900' : 'border-b-transparent text-stone-400 hover:text-stone-700'}`}>
@@ -131,7 +132,7 @@ function MyTasks({ tasks, isLoading, onRefetch, onSelectProject }: {
         <Stat label="3天内到期" value={soon} accent={soon > 0 ? 'text-amber-600' : undefined} />
         <Stat label="被阻塞" value={blocked} accent={blocked > 0 ? 'text-amber-600' : undefined} />
       </div>
-      <div className="bg-white border border-stone-200">
+      <div className="ce-table-shell">
         <TaskListView
           tasks={rows}
           isLoading={isLoading}
@@ -171,7 +172,7 @@ function ProjectRows({ rows, onSelectProject, empty }: { rows: PRow[]; onSelectP
 
 function Stat({ label, value, accent }: { label: string; value: number | string; accent?: string }) {
   return (
-    <div className="bg-white border border-stone-200 p-4">
+    <div className="ce-card p-4">
       <div className="text-[10px] font-mono uppercase tracking-wider text-stone-400">{label}</div>
       <div className={`mt-1.5 text-2xl font-serif font-semibold ${accent ?? 'text-stone-900'}`}>{value}</div>
     </div>
@@ -180,7 +181,7 @@ function Stat({ label, value, accent }: { label: string; value: number | string;
 
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="bg-white border border-stone-200 p-4">
+    <div className="ce-panel p-4">
       <h3 className="text-[11px] font-mono uppercase tracking-widest text-stone-400 mb-3">{title}</h3>
       {children}
     </div>

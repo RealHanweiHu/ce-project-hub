@@ -5,6 +5,7 @@ import { RISK_CONFIG, PHASE_MAP } from '@/lib/data';
 import { CATEGORY_MAP } from '@/lib/sop-templates';
 import { ProgressBar } from '@/components/shared/ProgressBar';
 import { LayoutGrid, AlertTriangle, CalendarClock, Bug, Ban, ChevronRight, Loader2, ArrowUpDown } from 'lucide-react';
+import { isProjectedOverdue } from '@shared/health';
 
 type Row = {
   id: string; name: string; projectNumber: string; category: string; risk: string;
@@ -14,7 +15,7 @@ type Row = {
 };
 
 const progressOf = (r: Row) => (r.taskTotal > 0 ? Math.round((r.taskDone / r.taskTotal) * 100) : 0);
-const isOverdue = (r: Row) => !!(r.projectedEnd && r.targetDate && r.projectedEnd > r.targetDate);
+const isOverdue = (r: Row) => isProjectedOverdue(r.projectedEnd, r.targetDate);
 const RISK_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2 };
 
 type SortKey = 'name' | 'progress' | 'risk' | 'overdueTasks' | 'blockedTasks' | 'openIssues' | 'projectedEnd';
@@ -61,11 +62,11 @@ export function PortfolioBoard({ onSelectProject }: { onSelectProject: (id: stri
   if (isLoading) return <div className="flex items-center gap-2 text-stone-400 py-12 justify-center"><Loader2 size={16} className="animate-spin" />加载组合看板…</div>;
 
   return (
-    <div className="space-y-5">
+    <div className="ce-page">
       <div className="flex items-center gap-2">
         <LayoutGrid size={18} className="text-amber-500" />
         <h1 className="font-serif text-xl text-stone-900">组合看板</h1>
-        <span className="text-[11px] font-mono text-stone-400">{stats.total} 个项目</span>
+        <span className="ce-kicker">{stats.total} 个项目</span>
       </div>
 
       {/* 汇总 */}
@@ -78,17 +79,17 @@ export function PortfolioBoard({ onSelectProject }: { onSelectProject: (id: stri
 
       {/* 筛选 */}
       <div className="flex flex-wrap items-center gap-2 text-xs">
-        <select value={riskFilter} onChange={(e) => setRiskFilter(e.target.value)} className="border border-stone-300 px-2 py-1.5">
+        <select value={riskFilter} onChange={(e) => setRiskFilter(e.target.value)} className="ce-control border border-stone-300 bg-white px-2 py-1.5">
           <option value="">全部风险</option><option value="high">高风险</option><option value="medium">中风险</option><option value="low">低风险</option>
         </select>
-        <select value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className="border border-stone-300 px-2 py-1.5">
+        <select value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className="ce-control border border-stone-300 bg-white px-2 py-1.5">
           <option value="">全部类型</option><option value="npd">新产品开发</option><option value="eco">迭代升级</option><option value="idr">外观翻新</option>
         </select>
         <span className="text-stone-400">显示 {filtered.length} / {data.length}</span>
       </div>
 
       {/* 表格 */}
-      <div className="border border-stone-200 bg-white overflow-x-auto">
+      <div className="ce-table-shell overflow-x-auto">
         <table className="w-full text-sm min-w-[860px]">
           <thead>
             <tr className="border-b border-stone-100 bg-stone-50 text-[10px] font-mono uppercase tracking-wider text-stone-400">
@@ -144,7 +145,7 @@ export function PortfolioBoard({ onSelectProject }: { onSelectProject: (id: stri
 
 function Stat({ icon, label, value, accent }: { icon: React.ReactNode; label: string; value: number; accent?: string }) {
   return (
-    <div className="bg-white border border-stone-200 p-4">
+    <div className="ce-card p-4">
       <div className="flex items-center gap-1.5 text-stone-400">{icon}<span className="text-[10px] font-mono uppercase tracking-wider">{label}</span></div>
       <div className={`mt-1.5 text-2xl font-serif font-semibold ${accent ?? 'text-stone-900'}`}>{value}</div>
     </div>
