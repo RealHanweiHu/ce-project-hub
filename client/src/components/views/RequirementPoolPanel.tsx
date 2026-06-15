@@ -16,6 +16,7 @@ import {
   Trash2,
   X,
   XCircle,
+  ArrowUpRight,
 } from 'lucide-react';
 
 type RequirementStatus = 'new' | 'triaged' | 'planned' | 'in_progress' | 'accepted' | 'deferred' | 'rejected';
@@ -23,9 +24,14 @@ type RequirementPriority = 'P0' | 'P1' | 'P2' | 'P3';
 type RequirementSource = 'customer' | 'sales' | 'market' | 'internal' | 'regulatory' | 'manufacturing' | 'quality' | 'supplier' | 'other';
 type RequirementType = 'functional' | 'performance' | 'compliance' | 'cost' | 'schedule' | 'quality' | 'manufacturing' | 'ux' | 'packaging' | 'other';
 
+type ConvertTarget = 'task' | 'issue' | 'change';
+
 type Requirement = {
   id: number;
-  projectId: string;
+  projectId: string | null;
+  productId?: string | null;
+  convertedType?: ConvertTarget | null;
+  convertedId?: string | null;
   title: string;
   description: string | null;
   source: RequirementSource;
@@ -183,6 +189,20 @@ function formatDate(value: Date | string) {
   return date.toISOString().slice(0, 10);
 }
 
+const CONVERT_LABELS: Record<ConvertTarget, string> = { task: '任务', issue: '问题', change: '变更' };
+type ChangeType = 'decision' | 'tradeoff' | 'eco' | 'ecn' | 'spec' | 'cost' | 'schedule' | 'supplier' | 'other';
+const CHANGE_TYPE_OPTIONS: Array<{ value: ChangeType; label: string }> = [
+  { value: 'spec', label: '规格变更' },
+  { value: 'eco', label: 'ECO 工程变更' },
+  { value: 'ecn', label: 'ECN 变更通知' },
+  { value: 'cost', label: '成本变更' },
+  { value: 'schedule', label: '进度变更' },
+  { value: 'supplier', label: '供应商变更' },
+  { value: 'decision', label: '关键决策' },
+  { value: 'tradeoff', label: '方案取舍' },
+  { value: 'other', label: '其他' },
+];
+
 interface RequirementPoolPanelProps {
   projectId: string;
   phases: SOPPhase[];
@@ -201,6 +221,14 @@ export function RequirementPoolPanel({ projectId, phases, canEdit = false }: Req
   });
   const deleteMutation = trpc.requirements.delete.useMutation({
     onSuccess: () => utils.requirements.list.invalidate({ projectId }),
+  });
+  const convertMutation = trpc.requirements.convert.useMutation({
+    onSuccess: () => {
+      utils.requirements.list.invalidate({ projectId });
+      // 让新建的问题/变更立即出现在对应 tab
+      utils.issues.list.invalidate({ projectId });
+      utils.changelog.list.invalidate({ projectId });
+    },
   });
 
   const [showForm, setShowForm] = useState(false);
@@ -257,6 +285,40 @@ export function RequirementPoolPanel({ projectId, phases, canEdit = false }: Req
   const handleDelete = (row: Requirement) => {
     if (!confirm(`删除需求「${row.title}」？`)) return;
     deleteMutation.mutate({ projectId, id: row.id });
+  };
+
+  // ── 采纳转化 ──────────────────────────────────────────────────────────────
+  const [convertRow, setConvertRow] = useState<Requirement | null>(null);
+  const [convertForm, setConvertForm] = useState<{ target: ConvertTarget; phaseId: string; taskId: string; changeType: ChangeType; note: string }>(
+    { target: 'issue', phaseId: '', taskId: '', changeType: 'spec', note: '' }
+  );
+  const convertPhase = phases.find((p) => p.id === convertForm.phaseId);
+
+  const openConvert = (row: Requirement) => {
+    setConvertForm({
+      target: 'issue',
+      phaseId: row.targetPhaseId || phases[0]?.id || '',
+      taskId: row.linkedTaskId || '',
+      changeType: 'other',
+      note: '',
+    });
+    setConvertRow(row);
+  };
+
+  const handleConvert = async () => {
+    if (!convertRow) return;
+    const f = convertForm;
+    if (f.target === 'task' && !f.taskId) { alert('请选择要关联的任务'); return; }
+    await convertMutation.mutateAsync({
+      id: convertRow.id,
+      target: f.target,
+      projectId,
+      phaseId: f.phaseId || undefined,
+      taskId: f.target === 'task' ? f.taskId : undefined,
+      changeType: f.target === 'change' ? f.changeType : undefined,
+      note: f.note || undefined,
+    });
+    setConvertRow(null);
   };
 
   const filtered = useMemo(() => {
@@ -501,6 +563,12 @@ export function RequirementPoolPanel({ projectId, phases, canEdit = false }: Req
                       <StatusBadge status={row.status} />
                       <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400">{TYPE_LABELS[row.type]}</span>
                       <span className="text-[10px] font-mono uppercase tracking-wider text-stone-300">REQ-{String(row.id).padStart(4, '0')}</span>
+                      {row.convertedType && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5">
+                          <ArrowUpRight size={10} />
+                          已转{CONVERT_LABELS[row.convertedType]}{row.convertedType !== 'task' ? ` #${row.convertedId}` : ` ${row.convertedId}`}
+                        </span>
+                      )}
                     </div>
                     <h4 className="text-sm font-semibold text-stone-900 leading-snug">{row.title}</h4>
                     {row.description && (
@@ -542,6 +610,11 @@ export function RequirementPoolPanel({ projectId, phases, canEdit = false }: Req
                         ))}
                       </select>
                     )}
+                    {canEdit && !row.convertedType && (
+                      <button onClick={() => openConvert(row)} className="inline-flex items-center gap-1 px-2 py-1.5 text-xs text-emerald-700 border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 transition-colors" title="采纳并转为任务/问题/变更">
+                        <ArrowUpRight size={13} />采纳转化
+                      </button>
+                    )}
                     {canEdit && (
                       <>
                         <button onClick={() => openEdit(row)} className="p-1.5 text-stone-400 hover:text-stone-900 hover:bg-stone-100 transition-colors" title="编辑需求">
@@ -557,6 +630,78 @@ export function RequirementPoolPanel({ projectId, phases, canEdit = false }: Req
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* 采纳转化子窗口 */}
+      {convertRow && (
+        <div className="fixed inset-0 z-50 flex justify-center overflow-y-auto bg-stone-900/40 backdrop-blur-sm p-4 sm:p-8" onClick={() => setConvertRow(null)}>
+          <div className="relative w-full max-w-lg h-fit my-auto bg-white border border-stone-200 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b border-stone-100">
+              <div>
+                <div className="text-sm font-semibold text-stone-900">采纳转化</div>
+                <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mt-0.5">「{convertRow.title}」</div>
+              </div>
+              <button onClick={() => setConvertRow(null)} className="text-stone-400 hover:text-stone-700"><X size={18} /></button>
+            </div>
+            <div className="p-4 space-y-4">
+              <div>
+                <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">转为</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {(['issue', 'change', 'task'] as ConvertTarget[]).map((t) => (
+                    <button key={t} onClick={() => setConvertForm((p) => ({ ...p, target: t }))}
+                      className={`px-3 py-2 text-sm border transition-colors ${convertForm.target === t ? 'border-stone-900 bg-stone-900 text-white' : 'border-stone-300 text-stone-600 hover:border-stone-500'}`}>
+                      {CONVERT_LABELS[t]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {(convertForm.target === 'issue' || convertForm.target === 'task') && (
+                <div>
+                  <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">所属阶段</label>
+                  <select value={convertForm.phaseId} onChange={(e) => setConvertForm((p) => ({ ...p, phaseId: e.target.value, taskId: '' }))} className="w-full px-2 py-2 border border-stone-300 bg-white text-xs outline-none focus:border-stone-900">
+                    {phases.map((ph) => <option key={ph.id} value={ph.id}>{ph.code} {ph.name}</option>)}
+                  </select>
+                </div>
+              )}
+
+              {convertForm.target === 'task' && (
+                <div>
+                  <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">关联任务 *</label>
+                  <select value={convertForm.taskId} onChange={(e) => setConvertForm((p) => ({ ...p, taskId: e.target.value }))} className="w-full px-2 py-2 border border-stone-300 bg-white text-xs outline-none focus:border-stone-900">
+                    <option value="">选择任务</option>
+                    {(convertPhase?.tasks || []).map((t) => <option key={t.id} value={t.id}>{t.id} · {t.name}</option>)}
+                  </select>
+                </div>
+              )}
+
+              {convertForm.target === 'change' && (
+                <div>
+                  <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">变更类型</label>
+                  <select value={convertForm.changeType} onChange={(e) => setConvertForm((p) => ({ ...p, changeType: e.target.value as ChangeType }))} className="w-full px-2 py-2 border border-stone-300 bg-white text-xs outline-none focus:border-stone-900">
+                    {CHANGE_TYPE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                </div>
+              )}
+
+              <div>
+                <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">决策备注</label>
+                <textarea value={convertForm.note} onChange={(e) => setConvertForm((p) => ({ ...p, note: e.target.value }))} rows={2} className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm resize-none" placeholder="为什么采纳、范围与约束" />
+              </div>
+
+              <div className="flex items-center justify-between pt-1">
+                <p className="text-[11px] text-stone-400">转化后需求归属本项目并标记「已验收」</p>
+                <div className="flex gap-2">
+                  <button onClick={() => setConvertRow(null)} className="px-3 py-1.5 text-xs text-stone-600 border border-stone-300 hover:bg-stone-50">取消</button>
+                  <button onClick={handleConvert} disabled={convertMutation.isPending} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white text-xs hover:bg-emerald-700 disabled:opacity-50">
+                    {convertMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <ArrowUpRight size={13} />}
+                    确认转化
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

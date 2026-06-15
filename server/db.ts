@@ -694,6 +694,20 @@ export async function updateProjectRequirement(
   await db.update(projectRequirements).set(patch).where(eq(projectRequirements.id, id));
 }
 
+/**
+ * 采纳转化:把需求归属到目标项目 + 标记转化目标 + 状态。
+ * 与 updateProjectRequirement 不同,允许写 projectId(采纳即承接)。
+ */
+export async function adoptAndLinkRequirement(
+  id: number,
+  patch: Partial<Pick<InsertProjectRequirement,
+    "projectId" | "status" | "convertedType" | "convertedId" | "targetPhaseId" | "linkedTaskId" | "decisionNote">>
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(projectRequirements).set(patch).where(eq(projectRequirements.id, id));
+}
+
 /** Delete a requirement pool item. */
 export async function deleteProjectRequirement(id: number): Promise<void> {
   const db = await getDb();

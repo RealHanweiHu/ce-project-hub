@@ -4,18 +4,22 @@ import { protectedProcedure, router } from "../_core/trpc";
 import {
   createActivityLog,
   createProjectRequirement,
+  createProjectIssue,
+  createProjectChangeRecord,
   deleteProjectRequirement,
   getProjectById,
   getProjectMember,
   getRequirements,
   getRequirementById,
   updateProjectRequirement,
+  adoptAndLinkRequirement,
 } from "../db";
 import {
   REQUIREMENT_PRIORITIES,
   REQUIREMENT_SOURCES,
   REQUIREMENT_STATUSES,
   REQUIREMENT_TYPES,
+  CHANGE_TYPES,
   type ProjectRequirement,
 } from "../../drizzle/schema";
 import { ROLE_PERMISSIONS } from "./members";
@@ -192,5 +196,88 @@ export const requirementsRouter = router({
         });
       }
       return { success: true };
+    }),
+
+  /**
+   * 采纳转化:把需求转成项目任务 / 问题 / 变更。
+   * - issue/change:在目标项目自动创建实体并回链
+   * - task:关联到目标项目的某个 SOP 任务(taskId)
+   * 转化后需求归属目标项目、状态置 accepted、记录 convertedType/convertedId。
+   */
+  convert: protectedProcedure
+    .input(z.object({
+      id: z.number(),
+      target: z.enum(["task", "issue", "change"]),
+      projectId: z.string(),                  // 目标项目(产品/全局 backlog 转化时由前端指定)
+      phaseId: z.string().optional(),         // issue/task 用
+      taskId: z.string().optional(),          // target=task:关联到的 SOP 任务
+      changeType: z.enum(CHANGE_TYPES).optional(),
+      note: z.string().optional().nullable(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const req = await getRequirementById(input.id);
+      if (!req) throw new TRPCError({ code: "NOT_FOUND" });
+      await assertCanEditRequirement(ctx.user, req);
+
+      // 目标项目编辑权限
+      const role = await getEffectiveRole(input.projectId, ctx.user.id);
+      if (!role || !ROLE_PERMISSIONS[role].canEditRequirements) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "没有在目标项目转化需求的权限" });
+      }
+      const project = await getProjectById(input.projectId);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND", message: "目标项目不存在" });
+      const productId = req.productId ?? project.productId ?? null;
+
+      let convertedId: string;
+      if (input.target === "issue") {
+        const phaseId = input.phaseId || req.targetPhaseId || project.currentPhase;
+        const issueId = await createProjectIssue({
+          projectId: input.projectId,
+          phaseId,
+          title: req.title,
+          description: req.description ?? null,
+          severity: req.priority,                 // 需求优先级 P0-P3 与问题严重度同枚举
+          category: "other",
+          relatedTaskId: req.linkedTaskId ?? null,
+          productId,
+          creatorId: ctx.user.id,
+        });
+        convertedId = String(issueId);
+      } else if (input.target === "change") {
+        const changeId = await createProjectChangeRecord({
+          projectId: input.projectId,
+          title: req.title,
+          description: req.description ?? null,
+          reason: req.description ?? null,
+          type: input.changeType ?? "other",
+          productId,
+          creatorId: ctx.user.id,
+        });
+        convertedId = String(changeId);
+      } else {
+        if (!input.taskId) throw new TRPCError({ code: "BAD_REQUEST", message: "转为任务需指定 taskId" });
+        convertedId = input.taskId;
+      }
+
+      await adoptAndLinkRequirement(req.id, {
+        projectId: input.projectId,
+        status: "accepted",
+        convertedType: input.target,
+        convertedId,
+        ...(input.target === "task"
+          ? { targetPhaseId: input.phaseId ?? req.targetPhaseId, linkedTaskId: input.taskId }
+          : {}),
+        decisionNote: input.note ?? req.decisionNote,
+      });
+
+      await createActivityLog({
+        projectId: input.projectId,
+        userId: ctx.user.id,
+        action: "requirement.convert",
+        entityType: "requirement",
+        entityId: String(req.id),
+        meta: { target: input.target, convertedId, title: req.title },
+      });
+      return { success: true, target: input.target, convertedId };
     }),
 });

@@ -6,6 +6,9 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import {
   createProjectRequirement,
+  createProjectIssue,
+  deleteProjectIssue,
+  adoptAndLinkRequirement,
   getRequirements,
   getRequirementById,
   deleteProjectRequirement,
@@ -72,5 +75,22 @@ describe("unified requirement pool", () => {
     const rows = await getRequirements({ scope: "global" });
     const t = titles(rows);
     for (const x of ["A-raised", "product-backlog", "B-owned", "global-idea"]) expect(t).toContain(x);
+  });
+
+  it("采纳转化为问题:创建问题 + 需求归属目标项目并回链", async () => {
+    // 取「本产品待承接」那条(无项目),转化到 PROJ_A
+    const reqId = ids[1];
+    const issueId = await createProjectIssue({
+      projectId: PROJ_A, phaseId: "concept", title: "from-req", severity: "P1", category: "other", creatorId: 1,
+    });
+    await adoptAndLinkRequirement(reqId, {
+      projectId: PROJ_A, status: "accepted", convertedType: "issue", convertedId: String(issueId),
+    });
+    const r = await getRequirementById(reqId);
+    expect(r?.projectId).toBe(PROJ_A);
+    expect(r?.status).toBe("accepted");
+    expect(r?.convertedType).toBe("issue");
+    expect(r?.convertedId).toBe(String(issueId));
+    await deleteProjectIssue(issueId);
   });
 });
