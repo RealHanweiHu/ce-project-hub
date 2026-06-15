@@ -1,13 +1,13 @@
 // Design: Industrial Precision - stone/amber color system
 // ProjectDetailView: phase navigation, Gantt chart tab, task checklist, task details, file upload
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import {
   ArrowLeft, CheckCircle2, Circle, ChevronRight,
   Upload, Download, Trash2, Paperclip, FileText, Image as ImageIcon,
   Edit3, Calendar, AlertTriangle, Target, Zap, BarChart2, ListChecks,
   Lock, ShieldAlert, Flag, Bug, GitBranch, Filter, Rocket, LayoutDashboard,
-  Inbox, LayoutGrid, FolderOpen, Eye,
+  Inbox, LayoutGrid, FolderOpen, Eye, X,
 } from 'lucide-react';
 import {
   Project, SOP_PHASES, PHASE_MAP, RISK_CONFIG,
@@ -546,6 +546,13 @@ function PmSelector({
 export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailViewProps) {
   const [activePhaseId, setActivePhaseId] = useState(project.currentPhase);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  // 任务详情子窗口：Esc 关闭
+  useEffect(() => {
+    if (!selectedTaskId) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setSelectedTaskId(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedTaskId]);
   const [mainTab, setMainTab] = useState<'overview' | 'tasks' | 'kanban' | 'requirements' | 'gantt' | 'issues' | 'changelog' | 'bom' | 'files'>('overview');
   const perms = useProjectPermission(project.id);
   const { user: currentUser } = useAuth();
@@ -1195,13 +1202,27 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
               </div>
             </div>
 
-            {/* Side Panel: Selected Task Details + Notes */}
+            {/* Side Panel: 阶段备注 + 全阶段进度 */}
             <div className="space-y-4 lg:sticky lg:top-24 self-start">
-              <div className="bg-white border border-stone-200 p-5">
-                <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-3">任务详情</div>
-                {selectedTask ? (
-                  <div>
-                    <div className="flex items-start justify-between gap-3">
+              {/* 任务详情子窗口（点击任务弹出） */}
+              {selectedTask && (
+                <div
+                  className="fixed inset-0 z-50 flex justify-center overflow-y-auto bg-stone-900/40 backdrop-blur-sm p-4 sm:p-8"
+                  onClick={() => setSelectedTaskId(null)}
+                >
+                  <div
+                    className="relative w-full max-w-2xl h-fit my-auto bg-white border border-stone-200 shadow-2xl"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <button
+                      onClick={() => setSelectedTaskId(null)}
+                      className="absolute top-3.5 right-3.5 z-10 p-1.5 text-stone-400 hover:text-stone-700 hover:bg-stone-100 transition-colors"
+                      title="关闭 (Esc)"
+                    >
+                      <X size={18} />
+                    </button>
+                    <div className="max-h-[86vh] overflow-y-auto p-6">
+                    <div className="flex items-start justify-between gap-3 pr-8">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2 mb-1">
                           <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400">{selectedTask.id}</span>
@@ -1364,17 +1385,10 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                       }
                       return null;
                     })()}
-                  </div>
-                ) : (
-                  <div className="py-10 text-center">
-                    <ListChecks size={28} className="mx-auto text-stone-300 mb-3" />
-                    <div className="text-sm font-medium text-stone-600">选择左侧任务卡</div>
-                    <div className="text-xs text-stone-400 mt-1 leading-relaxed">
-                      点开任务后查看职责、交付物、截止日期、状态、执行说明和附件。
-                    </div>
-                  </div>
-                )}
-              </div>
+                    </div>{/* /scroll-body */}
+                  </div>{/* /modal-panel */}
+                </div>
+              )}
 
               {/* Phase Notes */}
               <div className="bg-white border border-stone-200 p-5">
