@@ -9,6 +9,8 @@ import {
   deleteProject,
   createActivityLog,
   getMeetingParticipants,
+  ensureProjectMember,
+  assignTasksByRole,
   updateProjectMeetingConfig,
   updateProjectDingtalkEvent,
   setUserDingtalkId,
@@ -20,6 +22,8 @@ import { getProjectMember } from "../db";
 import { syncProjectMeeting } from "../_core/meetingSync";
 import { resolveDingtalkUserId } from "../_core/dingtalk";
 import { upsertWeeklyMeeting } from "../_core/dingtalkCalendar";
+import { notifyUsersViaDingtalk } from "../_core/dingtalkMessage";
+import { getPhasesForCategory } from "../../shared/sop-templates";
 
 const DEFAULT_MEETING = { enabled: true, weekday: 3, time: "15:00", durationMin: 60, title: "项目周会" };
 
@@ -109,6 +113,11 @@ export const projectsRouter = router({
         createdBy: ctx.user.id,
         archived: false,
       }, input.category, ctx.user.id);
+      // 选了 PM 且不是创建者本人 → 自动加入项目成员并赋 pm 角色（否则 PM 看不到项目）
+      if (input.pmUserId && input.pmUserId !== ctx.user.id) {
+        try { await ensureProjectMember(input.id, input.pmUserId, "pm", ctx.user.id); }
+        catch (e) { console.warn("[member] add pm on create failed (non-fatal):", e); }
+      }
       // 有开始日 → 按 IPD 依赖图自动生成整套任务起止日（非阻断）
       if (input.startDate) {
         try { await applyProjectSchedule(input.id); }
@@ -172,6 +181,11 @@ export const projectsRouter = router({
         targetDate: input.targetDate ?? null,
         ...(input.customFields !== undefined ? { customFields: input.customFields } : {}),
       });
+      // PM 变更 → 确保新 PM 是成员(否则换了 PM 后对方看不到项目)
+      if (input.pmUserId && input.pmUserId !== existing.pmUserId && input.pmUserId !== existing.createdBy) {
+        try { await ensureProjectMember(input.id, input.pmUserId, "pm", ctx.user.id); }
+        catch (e) { console.warn("[member] add pm on update failed (non-fatal):", e); }
+      }
       await createActivityLog({
         projectId: input.id,
         userId: ctx.user.id,
@@ -186,6 +200,55 @@ export const projectsRouter = router({
         },
       });
       return { success: true };
+    }),
+
+  /**
+   * 按角色把未分配任务自动指派给对应成员,并给每位负责人发钉钉通知(含任务+截止日)。
+   * 立项后由创建者/PM 在指定好各角色成员后触发。需 canEditProjectInfo。
+   */
+  assignByRole: protectedProcedure
+    .input(z.object({ projectId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+      const role = await getEffectiveRole(input.projectId, ctx.user.id);
+      if (!role || !ROLE_PERMISSIONS[role].canEditProjectInfo) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "仅 Owner/管理层/PM 可分配负责人" });
+      }
+
+      const assignments = await assignTasksByRole(input.projectId, ctx.user.id);
+
+      // taskId → 任务名(取自 SOP 模板)
+      const nameMap = new Map<string, string>();
+      for (const phase of getPhasesForCategory(project.category)) {
+        for (const t of phase.tasks) nameMap.set(t.id, t.name);
+      }
+      // 按负责人分组
+      const byUser = new Map<number, Array<{ taskId: string; dueDate: string | null }>>();
+      for (const a of assignments) {
+        const arr = byUser.get(a.userId) ?? [];
+        arr.push({ taskId: a.taskId, dueDate: a.dueDate });
+        byUser.set(a.userId, arr);
+      }
+      // 逐人发钉钉工作通知(降级安全,不阻断)
+      let notified = 0;
+      for (const [userId, items] of Array.from(byUser.entries())) {
+        const lines = items
+          .map((i: { taskId: string; dueDate: string | null }) => `- ${nameMap.get(i.taskId) ?? i.taskId}${i.dueDate ? `（截止 ${i.dueDate}）` : ""}`)
+          .join("\n");
+        const md = `### 项目「${project.name}」任务分配\n你被指派以下 ${items.length} 项任务：\n${lines}`;
+        try { await notifyUsersViaDingtalk([userId], "项目任务分配", md); notified += 1; }
+        catch (e) { console.warn("[assign] dingtalk notify failed (non-fatal):", e); }
+      }
+      await createActivityLog({
+        projectId: input.projectId,
+        userId: ctx.user.id,
+        action: "project.assign_by_role",
+        entityType: "project",
+        entityId: input.projectId,
+        meta: { assigned: assignments.length, recipients: byUser.size },
+      });
+      return { success: true, assigned: assignments.length, recipients: byUser.size, notified };
     }),
 
   /**
