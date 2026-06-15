@@ -13,7 +13,7 @@ describe("computeRag", () => {
   it("high risk → red", () => {
     expect(computeRag({ ...base, risk: "high" })).toBe("red");
   });
-  it("预计超期(projectedEnd > targetDate) → red", () => {
+  it("预计超期 > 7 天 → red（31天 slip）", () => {
     expect(computeRag({ ...base, projectedEnd: "2026-09-01", targetDate: "2026-08-01" })).toBe("red");
   });
   it("有逾期任务 → red", () => {
@@ -62,6 +62,18 @@ describe("computeRag 新信号", () => {
     expect(computeRag({ ...base, gateNotReady: "red" })).toBe("red");
     expect(computeRag({ ...base, gateNotReady: "amber" })).toBe("amber");
   });
+  it("目标日偏差 = 7 天（边界）→ amber", () => {
+    expect(computeRag({ ...base, projectedEnd: "2026-08-08", targetDate: "2026-08-01" })).toBe("amber");
+  });
+  it("目标日偏差 = 1 天（边界）→ amber", () => {
+    expect(computeRag({ ...base, projectedEnd: "2026-08-02", targetDate: "2026-08-01" })).toBe("amber");
+  });
+  it("进度落后 = 20pt（边界）→ amber", () => {
+    expect(computeRag({ ...base, progressBehindPct: 20 })).toBe("amber");
+  });
+  it("进度落后 = 10pt（边界）→ amber", () => {
+    expect(computeRag({ ...base, progressBehindPct: 10 })).toBe("amber");
+  });
 });
 
 describe("ragReasons 不短路", () => {
@@ -76,6 +88,9 @@ describe("ragReasons 不短路", () => {
     expect(r).toContain("预计晚9天");
     expect(r).toContain("进度落后15pt");
     expect(r.some((x) => x.startsWith("Gate"))).toBe(true);
+  });
+  it("gateNotReady='red' → Gate未就绪(临近)", () => {
+    expect(ragReasons({ ...base, gateNotReady: "red" })).toContain("Gate未就绪(临近)");
   });
   it("绿项目返回空数组", () => {
     expect(ragReasons(base)).toEqual([]);

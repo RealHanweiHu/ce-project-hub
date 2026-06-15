@@ -35,7 +35,8 @@ export function daysBetween(fromISO: string | null, toISO: string | null): numbe
 
 /** 预计完成晚于目标日 → 视为超期。保留为工具函数供他处复用。 */
 export function isProjectedOverdue(projectedEnd: string | null, targetDate: string | null): boolean {
-  return !!(projectedEnd && targetDate && projectedEnd > targetDate);
+  const d = daysBetween(targetDate, projectedEnd);
+  return d !== null && d > 0;
 }
 
 /**
