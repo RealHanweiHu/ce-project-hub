@@ -4,6 +4,7 @@ import { RISK_CONFIG, PHASE_MAP } from "@/lib/data";
 import { CATEGORY_MAP } from "@/lib/sop-templates";
 import { ProgressBar } from "@/components/shared/ProgressBar";
 import { ChevronRight, ArrowUpDown } from "lucide-react";
+import { isProjectedOverdue } from "@shared/health";
 
 export type PortfolioTableRow = {
   id: string; name: string; projectNumber: string; category: string; risk: string;
@@ -13,7 +14,7 @@ export type PortfolioTableRow = {
 };
 
 const progressOf = (r: PortfolioTableRow) => (r.taskTotal > 0 ? Math.round((r.taskDone / r.taskTotal) * 100) : 0);
-const isOverdue = (r: PortfolioTableRow) => !!(r.projectedEnd && r.targetDate && r.projectedEnd > r.targetDate);
+const isOverdue = (r: PortfolioTableRow) => isProjectedOverdue(r.projectedEnd, r.targetDate);
 const RISK_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2 };
 type SortKey = "name" | "progress" | "risk" | "overdueTasks" | "blockedTasks" | "openIssues" | "projectedEnd";
 

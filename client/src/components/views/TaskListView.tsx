@@ -1,5 +1,6 @@
 /**
- * TaskListView – reusable task list table used by MyTasksView, OverdueTasksView, BlockedTasksView.
+ * TaskListView – reusable task list table used by PerspectivePanel (我的视角)
+ * and OverviewPage's drill-down drawer.
  * Displays tasks with project context, priority badge, status badge, assignee, and due date.
  * Allows inline status/priority updates via trpc.tasks.setMeta.
  */

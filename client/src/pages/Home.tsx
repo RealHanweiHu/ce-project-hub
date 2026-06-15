@@ -895,7 +895,7 @@ export default function Home() {
 
         {/* Page Content */}
         <main className="flex-1 overflow-auto p-4 lg:p-7">
-          {projectsLoading ? (
+          {projectsLoading && view !== 'overview' ? (
             <div className="flex items-center justify-center h-64">
               <div className="flex flex-col items-center gap-3">
                 <Loader2 size={24} className="animate-spin text-amber-500" />
