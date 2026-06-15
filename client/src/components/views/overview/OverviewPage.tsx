@@ -32,13 +32,20 @@ export function OverviewPage({ onSelectProject }: { onSelectProject: (id: string
   const { data: rows = [], isLoading } = trpc.projects.portfolio.useQuery();
   const portfolio = rows as PortfolioTableRow[];
 
-  const defaultLens: Lens = useMemo(() => {
-    if (user?.role === "admin") return "exec";
-    if (portfolio.some((r) => r.pmUserId === user?.id)) return "pm";
-    return "mine";
-  }, [user, portfolio]);
+  // 按身份授权可用视角：管理者(admin)→管理层；项目负责人→PM；所有人→我的。
+  // 普通用户(非 admin、非任何项目 PM)只有「我的」，不出现视角切换。
+  const isAdmin = user?.role === "admin";
+  const isPM = useMemo(() => portfolio.some((r) => r.pmUserId === user?.id), [portfolio, user?.id]);
+  const allowedLenses = useMemo<Lens[]>(() => {
+    const list: Lens[] = [];
+    if (isAdmin) list.push("exec");
+    if (isPM) list.push("pm");
+    list.push("mine");
+    return list;
+  }, [isAdmin, isPM]);
   const [lens, setLens] = useState<Lens | null>(null);
-  const activeLens = lens ?? defaultLens;
+  // 默认=授权列表首项；手动选择须仍在授权范围内，否则回落默认（防越权/陈旧选择）。
+  const activeLens: Lens = lens && allowedLenses.includes(lens) ? lens : allowedLenses[0];
 
   const [drill, setDrill] = useState<"overdue" | "blocked" | null>(null);
 
@@ -63,14 +70,16 @@ export function OverviewPage({ onSelectProject }: { onSelectProject: (id: string
     <div className="ce-page">
       <div className="flex items-center justify-between gap-3">
         <h1 className="font-serif text-xl text-stone-900">总览</h1>
-        <div className="flex items-center gap-2">
-          <span className="text-[11px] font-mono text-stone-400">以</span>
-          <select value={activeLens} onChange={(e) => setLens(e.target.value as Lens)}
-            className="ce-control border border-stone-300 bg-white px-2 py-1.5 text-sm">
-            {(["exec", "pm", "mine"] as Lens[]).map((l) => <option key={l} value={l}>{LENS_LABEL[l]}视角</option>)}
-          </select>
-          <span className="text-[11px] font-mono text-stone-400">查看</span>
-        </div>
+        {allowedLenses.length > 1 && (
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-mono text-stone-400">以</span>
+            <select value={activeLens} onChange={(e) => setLens(e.target.value as Lens)}
+              className="ce-control border border-stone-300 bg-white px-2 py-1.5 text-sm">
+              {allowedLenses.map((l) => <option key={l} value={l}>{LENS_LABEL[l]}视角</option>)}
+            </select>
+            <span className="text-[11px] font-mono text-stone-400">查看</span>
+          </div>
+        )}
       </div>
 
       <KpiStrip rows={portfolio} onDrill={setDrill} />
