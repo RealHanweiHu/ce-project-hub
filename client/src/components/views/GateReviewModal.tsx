@@ -280,13 +280,15 @@ interface GateReviewModalProps {
   gateName: string;
   gateStandard?: SOPGateStandard;
   existingReviews?: GateReview[];
+  /** 就绪检查未通过项;非空时提示评审改走「有条件通过」并记录例外 */
+  blockers?: string[];
   onConfirm: (review: GateReview) => void;
   onCancel: () => void;
   readOnly?: boolean;
 }
 
 export function GateReviewModal({
-  open, phaseId, phaseName, gateName, gateStandard, existingReviews = [], onConfirm, onCancel, readOnly = false,
+  open, phaseId, phaseName, gateName, gateStandard, existingReviews = [], blockers = [], onConfirm, onCancel, readOnly = false,
 }: GateReviewModalProps) {
   const [showForm, setShowForm] = useState(existingReviews.length === 0);
   const latestReview = existingReviews[existingReviews.length - 1];
@@ -334,6 +336,16 @@ export function GateReviewModal({
           <div className="text-sm font-medium text-stone-900">{phaseName}</div>
           <div className="text-xs text-stone-500 font-mono">{gateName}</div>
         </div>
+
+        {blockers.length > 0 && (
+          <div className="border border-amber-200 bg-amber-50/60 p-3 mb-4">
+            <div className="text-[11px] font-semibold text-amber-800 mb-1">⚠ 就绪检查未通过</div>
+            <ul className="text-xs text-amber-700 list-disc pl-4 space-y-0.5">
+              {blockers.map((b, i) => <li key={i}>{b}</li>)}
+            </ul>
+            <div className="text-[11px] text-amber-600 mt-1.5">建议补齐后通过;如需放行,请选「有条件通过」并在条件里写明例外项的责任人与截止日期。</div>
+          </div>
+        )}
 
         {gateStandard && (
           <div className="border border-stone-200 p-3 mb-4">
