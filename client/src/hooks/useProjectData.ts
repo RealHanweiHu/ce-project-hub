@@ -226,6 +226,7 @@ export function useProjectData(projectId: string | null) {
       category: (projectRow.category as 'npd' | 'eco' | 'idr') ?? 'npd',
       pm: '',  // pmName resolved in UI via listUsersForSelect
       pmUserId: projectRow.pmUserId ?? null,
+      productId: (projectRow as { productId?: string | null }).productId ?? null,
       description: (projectRow as { description?: string | null }).description ?? null,
       customer: (projectRow as { customer?: string | null }).customer ?? null,
       background: (projectRow as { background?: string | null }).background ?? null,

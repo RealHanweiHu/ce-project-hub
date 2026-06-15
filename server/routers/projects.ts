@@ -84,6 +84,8 @@ const projectInputSchema = z.object({
   category: z.string().default("npd"),
   /** PM user id (FK to users.id) */
   pmUserId: z.number().int().nullable().optional(),
+  /** 关联产品(产品库 id);NPD 新产品可暂空 */
+  productId: z.string().nullable().optional(),
   risk: riskEnum,
   currentPhase: z.string().default("concept"),
   progress: z.number().default(0),
@@ -149,6 +151,7 @@ export const projectsRouter = router({
         projectNumber: input.projectNumber,
         category: input.category,
         pmUserId: input.pmUserId ?? null,
+        productId: input.productId ?? null,
         description: input.description ?? null,
         customer: input.customer ?? null,
         background: input.background ?? null,
@@ -222,6 +225,7 @@ export const projectsRouter = router({
         projectNumber: input.projectNumber,
         category: input.category,
         pmUserId: input.pmUserId ?? null,
+        productId: input.productId ?? null,
         description: input.description ?? null,
         customer: input.customer ?? null,
         background: input.background ?? null,
