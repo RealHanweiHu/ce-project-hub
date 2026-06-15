@@ -62,3 +62,34 @@ export function buildSchedTasks(phases: Array<{ bufferDays?: number; tasks: Arra
 export function scheduleForCategory(category: string | undefined, startDate: string): Schedule {
   return generateSchedule(buildSchedTasks(getPhasesForCategory(category)), startDate);
 }
+
+/**
+ * 计算某 category 的关键路径任务集合（决定整体工期的最长链)。
+ * 用于 Gantt 高亮关键路径。
+ */
+export function criticalPathTasks(category: string | undefined): Set<string> {
+  const phases = getPhasesForCategory(category);
+  const idList = phases.flatMap((p) => p.tasks.map((t) => t.id));
+  const ids = new Set<string>(idList);
+  const g: Record<string, [number, string[]]> = {};
+  for (const id of idList) {
+    const e = SCHEDULE_GRAPH[id];
+    g[id] = e ? [e[0], (e.slice(1) as string[]).filter((d) => ids.has(d))] : [1, []];
+  }
+  const finish: Record<string, number> = {};
+  const pick: Record<string, string | null> = {};
+  const calc = (id: string): number => {
+    if (finish[id] != null) return finish[id];
+    const entry = g[id] ?? [1, []];
+    let best = 0, bp: string | null = null;
+    for (const dep of entry[1]) { const f = calc(dep); if (f > best) { best = f; bp = dep; } }
+    pick[id] = bp;
+    return (finish[id] = best + entry[0]);
+  };
+  let endId: string | null = null, endF = -1;
+  for (const id of idList) { const f = calc(id); if (f > endF) { endF = f; endId = id; } }
+  const path = new Set<string>();
+  let cur: string | null = endId;
+  while (cur) { path.add(cur); cur = pick[cur]; }
+  return path;
+}

@@ -19,6 +19,7 @@ import { CATEGORY_MAP } from '@/lib/sop-templates';
 import { ProgressBar } from '@/components/shared/ProgressBar';
 import { GateStandardPanel } from '@/components/shared/GateStandardPanel';
 import { GanttView } from './GanttView';
+import { TaskGanttView } from './TaskGanttView';
 import { IssueList } from './IssueList';
 import { ChangeLog } from './ChangeLog';
 import { Issue, GateReview, ChangeRecord } from '@/lib/data';
@@ -598,6 +599,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedTaskId]);
   const [mainTab, setMainTab] = useState<'overview' | 'tasks' | 'kanban' | 'requirements' | 'gantt' | 'issues' | 'changelog' | 'bom' | 'files'>('overview');
+  const [ganttMode, setGanttMode] = useState<'task' | 'phase'>('task');
   const perms = useProjectPermission(project.id);
   const { user: currentUser } = useAuth();
 
@@ -1016,12 +1018,26 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
 
        {/* ── Gantt Tab ─────────────────────────────────────────────────── */}
       {mainTab === 'gantt' && (
-        <GanttView
-          project={project}
-          onUpdate={onUpdate}
-          onPhaseClick={handleGanttPhaseClick}
-          readOnly={!perms.canEditProjectInfo}
-        />
+        <div className="space-y-3">
+          <div className="flex items-center gap-0 border border-stone-200 w-fit">
+            {([['task', '任务视图'], ['phase', '阶段视图']] as const).map(([m, label]) => (
+              <button key={m} onClick={() => setGanttMode(m)}
+                className={`px-3 py-1.5 text-xs font-mono uppercase tracking-wider transition-colors ${ganttMode === m ? 'bg-stone-900 text-white' : 'text-stone-500 hover:bg-stone-50'}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+          {ganttMode === 'task' ? (
+            <TaskGanttView project={project} onTaskClick={(phaseId, taskId) => { setActivePhaseId(phaseId); setSelectedTaskId(taskId); setMainTab('tasks'); }} />
+          ) : (
+            <GanttView
+              project={project}
+              onUpdate={onUpdate}
+              onPhaseClick={handleGanttPhaseClick}
+              readOnly={!perms.canEditProjectInfo}
+            />
+          )}
+        </div>
       )}
 
       {/* ── Change Log Tab ──────────────────────────────────────────── */}
