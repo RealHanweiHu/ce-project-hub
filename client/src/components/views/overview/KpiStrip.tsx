@@ -1,8 +1,9 @@
 import type React from "react";
 import type { PortfolioTableRow } from "./PortfolioTable";
 import { Hash, Activity, AlertTriangle, TrendingUp, CalendarClock, Ban } from "lucide-react";
+import { isProjectedOverdue } from "@shared/health";
 
-const isOverdue = (r: PortfolioTableRow) => !!(r.projectedEnd && r.targetDate && r.projectedEnd > r.targetDate);
+const isOverdue = (r: PortfolioTableRow) => isProjectedOverdue(r.projectedEnd, r.targetDate);
 
 export function KpiStrip({ rows, onDrill }: { rows: PortfolioTableRow[]; onDrill: (kind: "overdue" | "blocked") => void }) {
   const total = rows.length;
@@ -25,12 +26,14 @@ export function KpiStrip({ rows, onDrill }: { rows: PortfolioTableRow[]; onDrill
 }
 
 function Kpi({ icon, label, value, accent, onClick }: { icon: React.ReactNode; label: string; value: number | string; accent?: string; onClick?: () => void }) {
-  const clickable = !!onClick;
-  return (
-    <button type="button" disabled={!clickable} onClick={onClick}
-      className={`ce-card p-4 text-left ${clickable ? "cursor-pointer hover:border-stone-300 transition-colors" : "cursor-default"}`}>
-      <div className="flex items-center gap-1.5 text-stone-400">{icon}<span className="text-[10px] font-mono uppercase tracking-wider">{label}</span>{clickable && <span className="ml-auto text-[9px] font-mono text-stone-300">下钻›</span>}</div>
+  const inner = (
+    <>
+      <div className="flex items-center gap-1.5 text-stone-400">{icon}<span className="text-[10px] font-mono uppercase tracking-wider">{label}</span>{onClick && <span className="ml-auto text-[9px] font-mono text-stone-300">下钻›</span>}</div>
       <div className={`mt-1.5 text-2xl font-serif font-semibold ${accent ?? "text-stone-900"}`}>{value}</div>
-    </button>
+    </>
   );
+  if (onClick) {
+    return <button type="button" onClick={onClick} className="ce-card p-4 text-left cursor-pointer hover:border-stone-300 transition-colors">{inner}</button>;
+  }
+  return <div className="ce-card p-4">{inner}</div>;
 }
