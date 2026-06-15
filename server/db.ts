@@ -21,13 +21,15 @@ import {
   automationRules, AutomationRuleRow, InsertAutomationRule,
   automationRuns, AutomationRunRow, InsertAutomationRun,
   customFieldDefs, CustomFieldDef, InsertCustomFieldDef,
-  type TaskStatus, type TaskPriority,
+  type TaskStatus, type TaskPriority, type GateDecision,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { getSopPhasesForCategory } from "./sop-data";
-import { getPhasesForCategory } from "../shared/sop-templates";
+import { getPhasesForCategory, getReleaseGatePhase } from "../shared/sop-templates";
+import { getTaskDeliverables } from "../shared/task-deliverables";
 import { scheduleForCategory, buildSchedTasks } from "../shared/schedule-graph";
 import { rescheduleFrom, type Schedule } from "../shared/scheduling";
+import { daysBetween } from "../shared/health";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -379,6 +381,86 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
       openIssues: i?.open ?? 0, criticalIssues: i?.critical ?? 0, projectedEnd: t?.projectedEnd ?? null,
     };
   });
+}
+
+/** digest 用：全量活跃项目的健康聚合（不依赖用户视角）。SQL 一律用传入 todayISO。 */
+export type PortfolioHealthRow = {
+  id: string; name: string; projectNumber: string; category: string; risk: string;
+  currentPhase: string; targetDate: string | null; pmUserId: number | null; pmName: string | null;
+  overdueTasks: number; blockedTasks: number; openIssues: number; criticalIssues: number;
+  plannedEnd: string | null;
+  plannedItems: number;
+  dueItems: number;
+  donePlannedItems: number;
+  gateNotReady: "red" | "amber" | null;
+};
+
+export async function getPortfolioHealthForDigest(todayISO: string): Promise<PortfolioHealthRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const projRows = await db.select().from(projects).where(eq(projects.archived, false));
+  if (projRows.length === 0) return [];
+  const ids = projRows.map((p) => p.id);
+
+  const taskAgg = await db.select({
+    projectId: projectTasks.projectId,
+    overdue: drizzleSql<number>`count(*) filter (where ${projectTasks.dueDate} is not null and ${projectTasks.dueDate} < ${todayISO} and ${projectTasks.status} not in ('done','skipped'))::int`,
+    blocked: drizzleSql<number>`count(*) filter (where ${projectTasks.status} = 'blocked')::int`,
+    plannedItems: drizzleSql<number>`count(*) filter (where ${projectTasks.dueDate} is not null)::int`,
+    dueItems: drizzleSql<number>`count(*) filter (where ${projectTasks.dueDate} is not null and ${projectTasks.dueDate} <= ${todayISO})::int`,
+    donePlannedItems: drizzleSql<number>`count(*) filter (where ${projectTasks.dueDate} is not null and ${projectTasks.status} in ('done','skipped'))::int`,
+    plannedEnd: drizzleSql<string | null>`max(${projectTasks.dueDate})::text`,
+  }).from(projectTasks).where(inArray(projectTasks.projectId, ids)).groupBy(projectTasks.projectId);
+
+  const issueAgg = await db.select({
+    projectId: projectIssues.projectId,
+    open: drizzleSql<number>`count(*) filter (where ${projectIssues.status} in ('open','in_progress'))::int`,
+    critical: drizzleSql<number>`count(*) filter (where ${projectIssues.status} in ('open','in_progress') and ${projectIssues.severity} in ('P0','P1'))::int`,
+  }).from(projectIssues).where(inArray(projectIssues.projectId, ids)).groupBy(projectIssues.projectId);
+
+  const gateRows = await getAutomationGatePrereqs();
+  const idSet = new Set(ids);
+  const gateByProject = new Map<string, "red" | "amber">();
+  for (const g of gateRows) {
+    if (!idSet.has(g.projectId) || !g.dueDate) continue;
+    const d = daysBetween(todayISO, g.dueDate);
+    if (d === null) continue;
+    const level: "red" | "amber" | null = d <= 3 ? "red" : d <= 7 ? "amber" : null;
+    if (level === null) continue;
+    if (gateByProject.get(g.projectId) === "red") continue;
+    if (level === "red" || !gateByProject.has(g.projectId)) gateByProject.set(g.projectId, level);
+  }
+
+  const pmIds = Array.from(new Set(projRows.map((p) => p.pmUserId).filter((x): x is number => !!x)));
+  const pmRows = pmIds.length ? await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, pmIds)) : [];
+  const pmName = new Map(pmRows.map((r) => [r.id, r.name]));
+  const taskMap = new Map(taskAgg.map((t) => [t.projectId, t]));
+  const issueMap = new Map(issueAgg.map((i) => [i.projectId, i]));
+
+  return projRows.map((p) => {
+    const t = taskMap.get(p.id);
+    const i = issueMap.get(p.id);
+    return {
+      id: p.id, name: p.name, projectNumber: p.projectNumber, category: p.category, risk: p.risk,
+      currentPhase: p.currentPhase, targetDate: p.targetDate, pmUserId: p.pmUserId ?? null,
+      pmName: p.pmUserId ? (pmName.get(p.pmUserId) ?? null) : null,
+      overdueTasks: t?.overdue ?? 0, blockedTasks: t?.blocked ?? 0,
+      openIssues: i?.open ?? 0, criticalIssues: i?.critical ?? 0,
+      plannedEnd: t?.plannedEnd ?? null,
+      plannedItems: t?.plannedItems ?? 0, dueItems: t?.dueItems ?? 0, donePlannedItems: t?.donePlannedItems ?? 0,
+      gateNotReady: gateByProject.get(p.id) ?? null,
+    };
+  });
+}
+
+/** digest 当期去重：某 ruleKey+entityId(periodKey) 是否已有任意状态的 run（fired 或 skipped 都算已处理）。 */
+export async function hasAutomationRunForEntity(input: { ruleKey: string; entityId: string }): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const rows = await db.select({ id: automationRuns.id }).from(automationRuns)
+    .where(and(eq(automationRuns.ruleKey, input.ruleKey), eq(automationRuns.entityId, input.entityId)))
+    .limit(1);
+  return rows.length > 0;
 }
 
 // ── Project Member helpers ────────────────────────────────────────────────────
@@ -1396,6 +1478,68 @@ export async function getOpenP0P1Count(projectId: string): Promise<number> {
       drizzleSql`${projectIssues.status} NOT IN ('resolved','closed','wont_fix')`
     ));
   return rows.length;
+}
+
+/** 取最新 Gate 记录：roundNumber 最大；并列取 createdAt 最新。 */
+function pickLatestReview(reviews: ProjectGateReview[]): ProjectGateReview | null {
+  if (reviews.length === 0) return null;
+  return reviews.reduce((best, r) => {
+    if (r.roundNumber > best.roundNumber) return r;
+    if (r.roundNumber === best.roundNumber && r.createdAt > best.createdAt) return r;
+    return best;
+  });
+}
+
+export interface ReleaseGateStatus {
+  phaseId: string | null;
+  gateName: string;
+  decision: GateDecision | null;
+  conditions: string | null;
+  roundNumber: number;
+  deliverables: { done: number; total: number; missing: string[] };
+}
+
+/** 计算某项目「MP Release 前置 Gate」的最新决议与交付物缺口。 */
+export async function getReleaseGateStatus(project: ProjectRow): Promise<ReleaseGateStatus> {
+  const phase = getReleaseGatePhase(project.category);
+  if (!phase) {
+    return { phaseId: null, gateName: "", decision: null, conditions: null, roundNumber: 0, deliverables: { done: 0, total: 0, missing: [] } };
+  }
+  const reviews = await getProjectGateReviews(project.id, phase.id);
+  const latest = pickLatestReview(reviews);
+  const taskRows = await getProjectTasks(project.id, phase.id);
+  const statusByTask: Record<string, Record<string, boolean>> = {};
+  for (const r of taskRows) statusByTask[r.taskId] = r.deliverables ?? {};
+  let total = 0, done = 0;
+  const missing: string[] = [];
+  for (const t of phase.tasks) {
+    if (t.id === phase.gateTaskId) continue;
+    for (const name of getTaskDeliverables(t.id, phase.deliverables)) {
+      total++;
+      if (statusByTask[t.id]?.[name]) done++;
+      else missing.push(name);
+    }
+  }
+  return {
+    phaseId: phase.id,
+    gateName: latest?.gateName || phase.gate,
+    decision: latest?.decision ?? null,
+    conditions: latest?.conditions ?? null,
+    roundNumber: latest?.roundNumber ?? 0,
+    deliverables: { done, total, missing },
+  };
+}
+
+/** Release override 专用授权（非全局权限矩阵）：创建人 / PM / 项目 owner|manager / 系统 admin。 */
+export async function isReleaseOverrideAuthorized(
+  project: ProjectRow,
+  actor: { id: number; role: string },
+): Promise<boolean> {
+  if (actor.role === "admin") return true;
+  if (project.createdBy === actor.id) return true;
+  if (project.pmUserId === actor.id) return true;
+  const member = await getProjectMember(project.id, actor.id);
+  return member?.role === "owner" || member?.role === "manager";
 }
 
 /** 下一个版本号字母 Rev A/B/C… */
