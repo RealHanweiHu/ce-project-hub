@@ -607,7 +607,6 @@ export default function Home() {
     { id: 'projects' as View, label: '项目管理', labelEn: 'Projects', icon: FolderKanban },
     { id: 'products' as View, label: '产品库', labelEn: 'Products', icon: Package },
     { id: 'requirements' as View, label: '需求池', labelEn: 'Requirements', icon: Inbox },
-    { id: 'sop' as View, label: 'SOP 流程库', labelEn: 'SOP Library', icon: BookOpen },
   ];
 
   const handleNavClick = (v: View) => {
@@ -784,6 +783,18 @@ export default function Home() {
           <div className="text-[9px] font-mono text-stone-700">
             {projects.length} PROJECTS · CLOUD DB
           </div>
+          {/* SOP library - secondary entry (moved out of main nav) */}
+          <button
+            onClick={() => handleNavClick('sop')}
+            className={`w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${view === 'sop' ? 'text-amber-300 bg-white/[0.07]' : 'text-stone-400 hover:text-stone-200 hover:bg-white/[0.045]'}`}
+          >
+            <BookOpen size={12} className="shrink-0" />
+            <div>
+              <div className="text-[10px] font-mono uppercase tracking-wider">SOP 流程库</div>
+              <div className="text-[9px] font-mono text-stone-600">SOP Library</div>
+            </div>
+          </button>
+
           {/* Admin link - only visible to admin users */}
           {isAdmin && (
             <button
