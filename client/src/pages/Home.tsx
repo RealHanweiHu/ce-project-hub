@@ -58,6 +58,9 @@ const RequirementsView = lazy(() =>
 const ProductLibraryView = lazy(() =>
   import('@/components/views/ProductLibraryView').then((module) => ({ default: module.ProductLibraryView }))
 );
+const KickoffWizard = lazy(() =>
+  import('@/components/views/KickoffWizard').then((module) => ({ default: module.KickoffWizard }))
+);
 const GlobalSearch = lazy(() =>
   import('@/components/GlobalSearch').then((module) => ({ default: module.GlobalSearch }))
 );
@@ -486,6 +489,7 @@ export default function Home() {
 
   const [view, setView] = useState<View>('dashboard');
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [kickoffProject, setKickoffProject] = useState<{ id: string; name: string; category: string; pmUserId: number | null; startDate: string | null } | null>(null);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -568,6 +572,16 @@ export default function Home() {
     try {
       await createMutation.mutateAsync(projectToApiInput(newProject));
       invalidateProjects();
+      // 立项即引导:跳到新项目并自动打开立项向导(开始日/PM 已预填,补齐各角色 → 派任务+通知)
+      setSelectedProjectId(newProject.id);
+      setView('projects');
+      setKickoffProject({
+        id: newProject.id,
+        name: newProject.name,
+        category: newProject.category ?? 'npd',
+        pmUserId: newProject.pmUserId ?? null,
+        startDate: newProject.startDate || null,
+      });
     } catch {
       setSaveStatus('error');
     }
@@ -990,6 +1004,12 @@ export default function Home() {
             open={changePasswordOpen}
             onOpenChange={setChangePasswordOpen}
           />
+        </Suspense>
+      )}
+
+      {kickoffProject && (
+        <Suspense fallback={null}>
+          <KickoffWizard project={kickoffProject} onClose={() => setKickoffProject(null)} />
         </Suspense>
       )}
     </div>
