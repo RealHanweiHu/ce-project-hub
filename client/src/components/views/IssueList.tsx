@@ -8,7 +8,7 @@ import { CommentThread } from '@/components/CommentThread';
 import {
   Plus, X, Edit2, Trash2, ChevronDown, ChevronRight,
   AlertCircle, CheckCircle2, Clock, Ban, Search, Filter,
-  Bug, Flag,
+  Bug, Flag, GitBranch,
 } from 'lucide-react';
 import {
   Issue, IssueSeverity, IssueStatus, IssueCategory,
@@ -25,6 +25,10 @@ interface IssueListProps {
   currentUserId?: string;
   /** If true, user can close/delete any issue (owner/manager/pm role) */
   canManage?: boolean;
+  /** 本阶段 SOP 任务,用于「关联修复任务」选择 */
+  phaseTasks?: Array<{ id: string; name: string }>;
+  /** 由问题一键发起变更 */
+  onRaiseChange?: (issue: Issue) => void;
 }
 
 // ── Empty Issue Form ──────────────────────────────────────────────────────────
@@ -57,11 +61,13 @@ function IssueFormModal({
   onSave,
   onClose,
   title,
+  phaseTasks = [],
 }: {
   initial: Omit<Issue, 'id'> & { id?: string };
   onSave: (issue: Omit<Issue, 'id'> & { id?: string }) => void;
   onClose: () => void;
   title: string;
+  phaseTasks?: Array<{ id: string; name: string }>;
 }) {
   const [form, setForm] = useState(initial);
   const set = (k: keyof typeof form, v: string) => setForm((f) => ({ ...f, [k]: v }));
@@ -248,6 +254,18 @@ function IssueFormModal({
               placeholder="具体的修复方案、验证方法..."
             />
           </div>
+          {/* 关联修复任务(SOP 任务) */}
+          <div>
+            <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">关联修复任务</label>
+            <select
+              value={form.relatedTaskId || ''}
+              onChange={(e) => set('relatedTaskId', e.target.value)}
+              className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors bg-white"
+            >
+              <option value="">未关联</option>
+              {phaseTasks.map((t) => <option key={t.id} value={t.id}>{t.id} · {t.name}</option>)}
+            </select>
+          </div>
         </div>
 
         {/* Footer */}
@@ -272,7 +290,7 @@ function IssueFormModal({
 }
 
 // ── Main Component ────────────────────────────────────────────────────────────
-export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true, currentUserId, canManage = false }: IssueListProps) {
+export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true, currentUserId, canManage = false, phaseTasks = [], onRaiseChange }: IssueListProps) {
   const [showForm, setShowForm] = useState(false);
   const [editingIssue, setEditingIssue] = useState<Issue | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -531,6 +549,15 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true
                     if (!canEditThis) return null;
                     return (
                       <div className="flex items-center gap-1 shrink-0">
+                        {onRaiseChange && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); onRaiseChange(issue); }}
+                            className="p-1.5 text-stone-400 hover:text-amber-600 transition-colors"
+                            title="由此问题发起变更"
+                          >
+                            <GitBranch size={13} />
+                          </button>
+                        )}
                         <button
                           onClick={(e) => { e.stopPropagation(); setEditingIssue(issue); }}
                           className="p-1.5 text-stone-400 hover:text-stone-700 transition-colors"
@@ -597,6 +624,7 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true
           initial={emptyIssue()}
           onSave={(data) => handleCreate(data as Omit<Issue, 'id'>)}
           onClose={() => setShowForm(false)}
+          phaseTasks={phaseTasks}
         />
       )}
 
@@ -607,6 +635,7 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true
           initial={editingIssue}
           onSave={handleEdit}
           onClose={() => setEditingIssue(null)}
+          phaseTasks={phaseTasks}
         />
       )}
     </div>

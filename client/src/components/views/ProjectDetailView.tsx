@@ -33,6 +33,7 @@ import { FilePreviewModal, canPreview } from './FilePreviewModal';
 import { useProjectPermission } from '@/hooks/useProjectPermission';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { trpc } from '@/lib/trpc';
+import { toast } from 'sonner';
 import { getTaskDeliverables } from '@shared/task-deliverables';
 import { Users } from 'lucide-react';
 
@@ -564,6 +565,28 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
     onUpdate({ ...project, changeLog: records });
   };
 
+  // 闭环:由问题一键发起变更(预填来源,跳到变更记录补充决策人/影响)
+  const handleRaiseChange = (issue: Issue) => {
+    const now = new Date();
+    const newRecord: ChangeRecord = {
+      id: `tmp-${now.getTime()}`,
+      number: '',
+      type: 'eco',
+      title: `[问题] ${issue.title}`,
+      description: issue.desc || '',
+      reason: issue.rootCause || `源于问题「${issue.title}」(${issue.severity})`,
+      decisionMaker: '',
+      affectedPhases: [activePhaseId],
+      status: 'proposed',
+      createdAt: now.toISOString(),
+      createdDate: now.toISOString().slice(0, 10),
+      notes: `来源:问题「${issue.title}」(#${issue.id})`,
+    };
+    updateChangeLog([...(project.changeLog ?? []), newRecord]);
+    setMainTab('changelog');
+    toast.success('已从问题发起变更,请补充决策人与影响');
+  };
+
   const projectPhases = getProjectPhases(project);
   const phaseMap = Object.fromEntries(projectPhases.map((p) => [p.id, p]));
   const activePhase = phaseMap[activePhaseId] || PHASE_MAP[activePhaseId];
@@ -926,6 +949,8 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
             canEdit={perms.canEditIssues}
             currentUserId={currentUser?.id !== undefined ? String(currentUser.id) : undefined}
             canManage={perms.canManageMembers}
+            phaseTasks={(activePhase?.tasks ?? []).map((t) => ({ id: t.id, name: t.name }))}
+            onRaiseChange={perms.canEditChangelog ? handleRaiseChange : undefined}
           />
         </div>
       )}
