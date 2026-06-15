@@ -48,6 +48,8 @@ export interface SOPPhase {
   color: string;
   /** 自动排期：进入本阶段前的缓冲天数（加在入口任务 start 前）。缺省 0。 */
   bufferDays?: number;
+  /** 标记本阶段的 Gate 为 MP Release 的前置闸口（每个 category 仅一个）。 */
+  isReleaseGate?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -419,6 +421,7 @@ export const NPD_PHASES: SOPPhase[] = [
     desc: '生产工艺与良率验证',
     gate: 'MP准备就绪评审',
     gateTaskId: 'pv8',
+    isReleaseGate: true,
     color: '#b45309',
     deliverables: ['试产50-300台', 'SOP/WI作业指导书', '良率报告', '治具与测试程序'],
     gateStandard: NPD_GATE_STANDARDS.pvt,
@@ -533,6 +536,7 @@ export const ECO_PHASES: SOPPhase[] = [
     desc: '变更后的产线验证与切换',
     gate: '变更量产切换评审',
     gateTaskId: 'epv5',
+    isReleaseGate: true,
     color: '#b45309',
     deliverables: ['变更试产报告', '更新后的SOP/WI', '产线切换计划', '库存处理方案'],
     gateStandard: ECO_GATE_STANDARDS.pvt,
@@ -645,6 +649,7 @@ export const IDR_PHASES: SOPPhase[] = [
     desc: '完成新版本试产、物料切换、文件发布和上市准备',
     gate: 'MP Release评审',
     gateTaskId: 'im6',
+    isReleaseGate: true,
     color: '#166534',
     deliverables: ['试产/首批量产产品', 'PVT或首批质量报告', 'SOP/WI更新记录', '版本切换计划', '市场上市计划'],
     gateStandard: IDR_GATE_STANDARDS.mp,
@@ -721,3 +726,7 @@ export const getPhasesForCategory = (category?: string): SOPPhase[] => {
   if (!category) return NPD_PHASES;
   return CATEGORY_MAP[category as ProjectCategory]?.phases || NPD_PHASES;
 };
+
+/** 定位某 category 的「MP Release 前置 Gate」所在 phase；未定义返回 null。 */
+export const getReleaseGatePhase = (category?: string): SOPPhase | null =>
+  getPhasesForCategory(category).find((p) => p.isReleaseGate) ?? null;
