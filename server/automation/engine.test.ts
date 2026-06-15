@@ -17,13 +17,16 @@ let asgId = 0;
 function makeDeps() {
   const notes: Array<{ userId: number; title: string }> = [];
   const pushes: Array<{ title?: string }> = [];
+  const groups: Array<{ chatId: string; title: string }> = [];
   return {
     notes,
     pushes,
+    groups,
     deps: {
       createNotification: async (n: { userId: number; title: string }) => { notes.push({ userId: n.userId, title: n.title }); },
       pushWebhook: async (_text: string, opts?: { title?: string }) => { pushes.push({ title: opts?.title }); },
       notifyDingtalk: async () => {}, // 测试不真发钉钉工作通知
+      notifyGroup: async (chatId: string, title: string) => { groups.push({ chatId, title }); return true; },
     },
   };
 }
@@ -85,6 +88,30 @@ describe("automation engine integration", () => {
     const runs = await listAutomationRuns({ projectId: PROJECT_ID });
     const fired = runs.find((r) => r.ruleKey === "high_severity_issue" && r.status === "fired");
     expect(fired).toBeTruthy();
+  });
+
+  it("routes group push to the project DingTalk group when chatId is set, else falls back to webhook", async () => {
+    const { updateProject } = await import("../db");
+    await updateAutomationRuleRow({ ruleKey: "high_severity_issue", enabled: true, config: { severities: ["P0", "P1"], pushGroup: true } });
+    // 有项目专属群 → 发到群,不走全局 webhook
+    await updateProject(PROJECT_ID, { dingtalkChatId: "chat_test_xyz" });
+    const a = makeDeps();
+    await runAutomation({
+      action: "issue.create", projectId: PROJECT_ID, entityType: "issue", entityId: 9101,
+      after: { severity: "P0", title: "群路由测试", assigneeUserId: asgId },
+    }, a.deps);
+    expect(a.groups.length).toBe(1);
+    expect(a.groups[0].chatId).toBe("chat_test_xyz");
+    expect(a.pushes.length).toBe(0);
+    // 无项目群 → 回退全局 webhook
+    await updateProject(PROJECT_ID, { dingtalkChatId: null });
+    const b = makeDeps();
+    await runAutomation({
+      action: "issue.create", projectId: PROJECT_ID, entityType: "issue", entityId: 9102,
+      after: { severity: "P0", title: "回退 webhook", assigneeUserId: asgId },
+    }, b.deps);
+    expect(b.groups.length).toBe(0);
+    expect(b.pushes.length).toBe(1);
   });
 
   it("does not trigger high severity for out-of-set severity (P3)", async () => {

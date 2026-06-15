@@ -1,6 +1,7 @@
 import { ENV } from "../_core/env";
 import { pushWebhook as defaultPushWebhook } from "../_core/notify";
 import { notifyUsersViaDingtalk as defaultNotifyDingtalk } from "../_core/dingtalkMessage";
+import { sendToGroupChat as defaultNotifyGroup } from "../_core/dingtalkGroup";
 import {
   createAutomationRun,
   createNotification as defaultCreateNotification,
@@ -23,12 +24,15 @@ import {
 type ResolvedRecipients = {
   userIds: number[];
   pushGroup: boolean;
+  /** 项目专属钉钉群 id;有则群提醒发到此群,否则回退全局机器人 webhook */
+  chatId: string | null;
 };
 
 type DispatchDeps = {
   createNotification?: typeof defaultCreateNotification;
   pushWebhook?: typeof defaultPushWebhook;
   notifyDingtalk?: (userIds: number[], title: string, markdown: string) => Promise<void>;
+  notifyGroup?: (chatId: string, title: string, markdown: string) => Promise<boolean>;
 };
 
 let seededDefaults = false;
@@ -98,12 +102,17 @@ export async function runAutomation(event: AutomationEvent, deps: DispatchDeps =
       }
 
       if (recipients.pushGroup) {
-        const pushWebhook = deps.pushWebhook ?? defaultPushWebhook;
         const link = ENV.appBaseUrl ? `\n\n[打开 CE Project Hub](${ENV.appBaseUrl}/)` : "";
-        await pushWebhook(message.text, {
-          title: message.title,
-          markdown: `${message.markdown ?? message.text}${link}`,
-        });
+        const md = `${message.markdown ?? message.text}${link}`;
+        if (recipients.chatId) {
+          // 有项目专属钉钉群 → 提醒发到本项目群
+          const notifyGroup = deps.notifyGroup ?? defaultNotifyGroup;
+          await notifyGroup(recipients.chatId, message.title, md);
+        } else {
+          // 否则回退到全局群机器人 webhook
+          const pushWebhook = deps.pushWebhook ?? defaultPushWebhook;
+          await pushWebhook(message.text, { title: message.title, markdown: md });
+        }
       }
 
       await writeRun(rule, event, "fired", serializeRecipients(recipients), message.text);
@@ -138,6 +147,7 @@ async function resolveRecipients(
   return {
     userIds: Array.from(userIds),
     pushGroup: Boolean((config as { pushGroup?: boolean }).pushGroup),
+    chatId: project?.dingtalkChatId ?? null,
   };
 }
 

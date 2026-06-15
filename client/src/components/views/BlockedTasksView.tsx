@@ -42,21 +42,21 @@ export function BlockedTasksView({ onNavigateToProject }: BlockedTasksViewProps)
   }, {});
 
   return (
-    <div className="p-6 lg:p-8">
+    <div className="ce-page">
       {/* Page header */}
-      <div className="mb-6">
+      <div>
         <div className="flex items-center gap-2">
           <ShieldAlert size={18} className="text-orange-500" />
           <h2 className="font-serif text-xl text-stone-900 leading-tight">阻塞任务</h2>
         </div>
-        <p className="text-[11px] font-mono text-stone-400 uppercase tracking-widest mt-1">
+        <p className="ce-kicker mt-1">
           Blocked Tasks · 状态为"已阻塞"的任务，PM 需跟进解除阻塞
         </p>
       </div>
 
       {/* PM overview: which projects have blocked tasks */}
       {!isLoading && Object.keys(projectGroups).length > 0 && (
-        <div className="mb-5 p-3 bg-orange-50 border border-orange-200">
+        <div className="ce-panel p-3 bg-orange-50/80 border-orange-200">
           <div className="text-[9px] font-mono uppercase tracking-widest text-orange-400 mb-2">阻塞任务分布（PM 催进）</div>
           <div className="flex flex-wrap gap-2">
             {Object.entries(projectGroups).map(([name, { count, critical }]) => (
@@ -69,7 +69,7 @@ export function BlockedTasksView({ onNavigateToProject }: BlockedTasksViewProps)
       )}
 
       {/* Task list */}
-      <div className="bg-white border border-stone-200">
+      <div className="ce-table-shell">
         <TaskListView
           tasks={tasks}
           isLoading={isLoading}

@@ -756,9 +756,9 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
   };
 
   return (
-    <div className="space-y-6">
+    <div className="ce-page">
       {/* Header */}
-      <div>
+      <div className="ce-panel p-5 lg:p-6">
         <div className="flex items-center justify-between mb-4">
           <button
             onClick={onBack}
@@ -769,7 +769,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
           {perms.canGateReview && (
             <button
               onClick={() => setReleaseOpen(true)}
-              className="flex items-center gap-1.5 text-xs font-medium bg-stone-900 hover:bg-stone-800 text-stone-50 px-3 py-1.5 transition-colors"
+              className="ce-control flex items-center gap-1.5 text-xs font-medium bg-stone-900 hover:bg-stone-800 text-stone-50 px-3 py-1.5 shadow-sm transition-colors"
             >
               <Rocket size={13} /> 量产发布
             </button>
@@ -840,7 +840,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
       </div>
 
       {/* Main Tab Bar: Overview / Tasks / Issues / Gantt / Members */}
-      <div className="flex items-center gap-0 border-b border-stone-200 overflow-x-auto">
+      <div className="ce-panel ce-scroll-x flex items-center gap-0 px-1">
         <button
           onClick={() => setMainTab('overview')}
           className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all ${
@@ -956,7 +956,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
       {mainTab === 'issues' && (
         <div className="space-y-4">
           {/* Phase Navigation (compact) — 任何阶段都可记录问题 */}
-          <div className="bg-white border border-stone-200 overflow-x-auto">
+          <div className="ce-panel ce-scroll-x">
             <div className="flex min-w-max">
               {projectPhases.map((phase) => {
                 const isActive = phase.id === activePhaseId;
@@ -1082,7 +1082,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
       {mainTab === 'tasks' && (
         <>
           {/* Phase Navigation */}
-          <div className="bg-white border border-stone-200 overflow-x-auto">
+          <div className="ce-panel ce-scroll-x">
             <div className="flex min-w-max">
               {projectPhases.map((phase) => {
                 const status = getPhaseStatus(project, phase.id);
@@ -1126,7 +1126,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
             {/* Task List */}
             <div className="lg:col-span-2 space-y-3">
               {/* Phase Header */}
-              <div className="bg-white border border-stone-200 p-5" style={{ borderLeftWidth: 4, borderLeftColor: activePhase?.color }}>
+              <div className="ce-panel p-5" style={{ borderLeftWidth: 4, borderLeftColor: activePhase?.color }}>
                 <div className="flex items-start justify-between mb-3">
                   <div>
                     <div className="flex items-center gap-2 mb-1">
@@ -1194,7 +1194,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                     <div
                       key={task.id}
                       onClick={() => setSelectedTaskId(task.id)}
-                      className={`border transition-all cursor-pointer min-h-[118px] ${
+                      className={`rounded-md border transition-all cursor-pointer min-h-[118px] shadow-sm ${
                         locked
                           ? 'border-stone-200 bg-stone-50/30 opacity-60'
                         : isGateTask
@@ -1204,7 +1204,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                           : checked
                           ? 'border-l-2 border-l-stone-900 border-stone-200 bg-stone-50/50'
                           : 'border-stone-200 bg-white'
-                      } ${selected ? 'ring-2 ring-amber-300 border-amber-300' : 'hover:border-stone-400 hover:bg-stone-50/50'}`}
+                      } ${selected ? 'ring-2 ring-amber-300 border-amber-300' : 'hover:border-stone-400 hover:bg-stone-50/50 hover:shadow-md'}`}
                     >
                       {/* Gate Task Label */}
                       {isGateTask && (
@@ -1295,7 +1295,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                   onClick={() => setSelectedTaskId(null)}
                 >
                   <div
-                    className="relative w-full max-w-2xl h-fit my-auto bg-white border border-stone-200 shadow-2xl"
+                    className="relative w-full max-w-2xl h-fit my-auto ce-panel shadow-2xl"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <button
@@ -1510,7 +1510,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
               )}
 
               {/* Phase Notes */}
-              <div className="bg-white border border-stone-200 p-5">
+              <div className="ce-panel p-5">
                 <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-3">阶段备注</div>
                 <textarea
                   value={activePhaseData?.notes || ''}
@@ -1527,7 +1527,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
               </div>
 
               {/* Phase Progress Summary */}
-              <div className="bg-white border border-stone-200 p-5">
+              <div className="ce-panel p-5">
                 <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-3">全阶段进度</div>
                 <div className="space-y-3">
                   {projectPhases.map((phase) => {

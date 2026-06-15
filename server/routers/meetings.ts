@@ -10,6 +10,7 @@ import { resolveDingtalkUserId } from "../_core/dingtalk";
 import { upsertWeeklyMeeting } from "../_core/dingtalkCalendar";
 import { syncProjectMeeting } from "../_core/meetingSync";
 import { pushWebhook } from "../_core/notify";
+import { sendToGroupChat } from "../_core/dingtalkGroup";
 
 const cfgSchema = z.object({
   enabled: z.boolean(),
@@ -51,7 +52,11 @@ export const meetingsRouter = router({
           resolveUserId: (u) => resolveDingtalkUserId(u, setUserDingtalkId),
           upsert: upsertWeeklyMeeting,
           saveEventId: updateProjectDingtalkEvent,
-          groupPush: (t) => pushWebhook(t, { title: "项目周会" }),
+          // 有项目专属钉钉群 → 周会通知发到本项目群,否则回退全局机器人
+          groupPush: (t) => {
+            const chatId = (project as { dingtalkChatId?: string | null } | undefined)?.dingtalkChatId;
+            return chatId ? sendToGroupChat(chatId, "项目周会", t).then(() => undefined) : pushWebhook(t, { title: "项目周会" });
+          },
         },
       });
       return { success: true } as const;

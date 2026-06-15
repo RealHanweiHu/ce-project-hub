@@ -381,7 +381,7 @@ export function RequirementPoolPanel({ scope, canEdit = false, canCreate, canMan
         {allowCreate && (
           <button
             onClick={openCreate}
-            className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 bg-stone-900 text-stone-50 text-xs font-mono uppercase tracking-wider hover:bg-stone-700 transition-colors"
+            className="ce-control inline-flex items-center justify-center gap-1.5 px-3 py-1.5 bg-stone-900 text-stone-50 text-xs font-mono uppercase tracking-wider hover:bg-stone-700 transition-colors"
           >
             <Plus size={13} />
             新增需求
@@ -390,26 +390,26 @@ export function RequirementPoolPanel({ scope, canEdit = false, canCreate, canMan
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <div className="bg-stone-50 border border-stone-200 px-4 py-3">
+        <div className="ce-card bg-stone-50 px-4 py-3 shadow-none">
           <p className="text-[10px] font-mono uppercase tracking-widest text-stone-400">总需求</p>
           <p className="text-2xl font-serif text-stone-900 mt-0.5">{stats.total}</p>
         </div>
-        <div className="bg-sky-50 border border-sky-200 px-4 py-3">
+        <div className="ce-card bg-sky-50 border-sky-200 px-4 py-3 shadow-none">
           <p className="text-[10px] font-mono uppercase tracking-widest text-sky-700">待澄清</p>
           <p className="text-2xl font-serif text-sky-700 mt-0.5">{stats.open}</p>
         </div>
-        <div className="bg-amber-50 border border-amber-200 px-4 py-3">
+        <div className="ce-card bg-amber-50 border-amber-200 px-4 py-3 shadow-none">
           <p className="text-[10px] font-mono uppercase tracking-widest text-amber-700">已纳入</p>
           <p className="text-2xl font-serif text-amber-700 mt-0.5">{stats.planned}</p>
         </div>
-        <div className="bg-stone-100 border border-stone-200 px-4 py-3">
+        <div className="ce-card bg-stone-100 px-4 py-3 shadow-none">
           <p className="text-[10px] font-mono uppercase tracking-widest text-stone-500">暂缓/拒绝</p>
           <p className="text-2xl font-serif text-stone-700 mt-0.5">{stats.closed}</p>
         </div>
       </div>
 
       {showForm && (
-        <div className="bg-white border border-stone-200">
+        <div className="ce-panel overflow-hidden">
           <div className="flex items-center justify-between p-4 border-b border-stone-100">
             <div>
               <div className="text-sm font-semibold text-stone-900">{editingId ? '编辑需求' : '新增需求'}</div>
@@ -539,7 +539,7 @@ export function RequirementPoolPanel({ scope, canEdit = false, canCreate, canMan
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 border border-stone-200 bg-white text-sm outline-none focus:border-stone-900 transition-colors"
+            className="ce-control w-full pl-9 pr-3 py-2 border border-stone-200 bg-white text-sm outline-none focus:border-stone-900 transition-colors"
             placeholder="搜索标题、说明、负责人、验收标准"
           />
         </div>
@@ -573,7 +573,7 @@ export function RequirementPoolPanel({ scope, canEdit = false, canCreate, canMan
           <Loader2 size={22} className="animate-spin text-amber-500" />
         </div>
       ) : filtered.length === 0 ? (
-        <div className="border border-dashed border-stone-300 bg-stone-50 py-12 px-4 text-center">
+        <div className="ce-muted-band border-dashed py-12 px-4 text-center">
           <Inbox size={28} className="mx-auto text-stone-300 mb-3" />
           <div className="text-sm font-medium text-stone-600">暂无匹配需求</div>
           <div className="text-xs text-stone-400 mt-1">新的客户、市场、制造或合规诉求会先进入这里等待澄清</div>
@@ -585,7 +585,7 @@ export function RequirementPoolPanel({ scope, canEdit = false, canCreate, canMan
             const phase = phases.find((p) => p.id === row.targetPhaseId);
             const task = phase?.tasks.find((t) => t.id === row.linkedTaskId);
             return (
-              <div key={row.id} className={`bg-white border border-stone-200 border-l-4 ${priority.border} p-4`}>
+              <div key={row.id} className={`ce-card border-l-4 ${priority.border} p-4`}>
                 <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
                   <div className="flex-1 min-w-0">
                     <div className="flex flex-wrap items-center gap-2 mb-2">
@@ -666,7 +666,7 @@ export function RequirementPoolPanel({ scope, canEdit = false, canCreate, canMan
       {/* 采纳转化子窗口 */}
       {convertRow && (
         <div className="fixed inset-0 z-50 flex justify-center overflow-y-auto bg-stone-900/40 backdrop-blur-sm p-4 sm:p-8" onClick={() => setConvertRow(null)}>
-          <div className="relative w-full max-w-lg h-fit my-auto bg-white border border-stone-200 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+          <div className="relative w-full max-w-lg h-fit my-auto ce-panel shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between p-4 border-b border-stone-100">
               <div>
                 <div className="text-sm font-semibold text-stone-900">采纳转化</div>

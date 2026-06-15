@@ -188,9 +188,10 @@ export function TaskListView({
   }
 
   return (
-    <div className="space-y-1">
+    <div className="ce-scroll-x">
+      <div className="min-w-[680px]">
       {/* Header */}
-      <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-2 px-3 py-1.5 text-[9px] font-mono uppercase tracking-widest text-stone-400 border-b border-stone-200">
+      <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-2 bg-stone-50/80 px-3 py-2 text-[9px] font-mono uppercase tracking-widest text-stone-400 border-b border-stone-200">
         <span>任务 / 项目</span>
         <span className="w-28 text-center">状态</span>
         <span className="w-16 text-center">优先级</span>
@@ -209,7 +210,7 @@ export function TaskListView({
         return (
           <div
             key={task.id}
-            className={`grid grid-cols-[1fr_auto_auto_auto_auto] gap-2 px-3 py-2.5 items-center border-b border-stone-100 hover:bg-stone-50/70 transition-colors group ${
+            className={`grid grid-cols-[1fr_auto_auto_auto_auto] gap-2 px-3 py-3 items-center border-b border-stone-100 hover:bg-stone-50/70 transition-colors group ${
               overdue ? 'bg-red-50/30' : ''
             }`}
           >
@@ -286,6 +287,7 @@ export function TaskListView({
         >
           <RefreshCw size={10} />刷新
         </button>
+      </div>
       </div>
     </div>
   );

@@ -3,7 +3,7 @@ export type RagLevel = "green" | "amber" | "red";
 
 /** computeRag 的输入：均来自 PortfolioRow，避免依赖具体数据层类型。 */
 export type RagInput = {
-  risk: string;
+  risk: "low" | "medium" | "high";
   projectedEnd: string | null;
   targetDate: string | null;
   overdueTasks: number;
@@ -14,7 +14,7 @@ export type RagInput = {
 };
 
 /** 预计完成晚于目标日 → 视为超期。两者均为 YYYY-MM-DD，字符串比较即可。 */
-function isProjectedOverdue(projectedEnd: string | null, targetDate: string | null): boolean {
+export function isProjectedOverdue(projectedEnd: string | null, targetDate: string | null): boolean {
   return !!(projectedEnd && targetDate && projectedEnd > targetDate);
 }
 

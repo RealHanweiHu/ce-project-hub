@@ -23,18 +23,18 @@ export function SOPLibraryView() {
   const totalTasks = phases.reduce((sum, p) => sum + p.tasks.length, 0);
 
   return (
-    <div className="space-y-6">
+    <div className="ce-page">
       {/* Header */}
       <div>
         <h2 className="font-serif text-2xl text-stone-900">SOP 标准流程库</h2>
-        <p className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mt-0.5">STANDARD OPERATING PROCEDURE</p>
+        <p className="ce-kicker mt-0.5">STANDARD OPERATING PROCEDURE</p>
         <p className="text-sm text-stone-600 mt-3 max-w-3xl">
           按项目类别查看对应的标准开发流程。每个子任务附带详细执行指南，帮助团队规范化产品开发过程。
         </p>
       </div>
 
       {/* Category Tabs */}
-      <div className="flex gap-0 border-b border-stone-200">
+      <div className="ce-panel ce-scroll-x flex gap-0 px-1">
         {PROJECT_CATEGORIES.map((cat) => (
           <button
             key={cat.id}
@@ -55,7 +55,7 @@ export function SOPLibraryView() {
       </div>
 
       {/* Category Summary Card */}
-      <div className={`p-5 border ${catConfig.borderColor} ${catConfig.color}`}>
+      <div className={`ce-panel p-5 border ${catConfig.borderColor} ${catConfig.color}`}>
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div className="flex items-start gap-4">
             <span className="text-3xl">{catConfig.icon}</span>
@@ -87,7 +87,7 @@ export function SOPLibraryView() {
       </div>
 
       {/* Phase Overview Grid */}
-      <div className="bg-white border border-stone-200 p-6">
+      <div className="ce-panel p-5 lg:p-6">
         <div className="flex items-center gap-2 mb-4">
           <Zap size={16} className="text-amber-600" />
           <h3 className="font-serif text-lg text-stone-900">{catConfig.name}开发流程</h3>
@@ -103,7 +103,7 @@ export function SOPLibraryView() {
             <button
               key={phase.id}
               onClick={() => setExpandedPhase(expandedPhase === phase.id ? null : phase.id)}
-              className={`p-3 border text-left transition-all ${
+              className={`rounded-md p-3 border text-left transition-all ${
                 expandedPhase === phase.id
                   ? 'border-l-4 bg-stone-50'
                   : 'border-stone-200 hover:bg-stone-50'
@@ -123,7 +123,7 @@ export function SOPLibraryView() {
       {phases.map((phase) => {
         const isOpen = expandedPhase === phase.id;
         return (
-          <div key={phase.id} className="bg-white border border-stone-200">
+          <div key={phase.id} className="ce-panel overflow-hidden">
             <button
               onClick={() => setExpandedPhase(isOpen ? null : phase.id)}
               className="w-full p-6 flex items-center justify-between text-left hover:bg-stone-50 transition-colors"
@@ -185,7 +185,7 @@ export function SOPLibraryView() {
                   <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-4">子任务清单</div>
                   <div className="space-y-3">
                     {phase.tasks.map((task, idx) => (
-                      <div key={task.id} className="border border-stone-200 hover:border-stone-300 transition-colors">
+                      <div key={task.id} className="ce-card overflow-hidden">
                         <div className="flex items-start gap-3 p-3 bg-stone-50/50">
                           <div className="text-[10px] font-mono text-stone-400 mt-0.5 w-5 shrink-0">{idx + 1}</div>
                           <div className="flex-1">

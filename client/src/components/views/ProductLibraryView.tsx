@@ -78,12 +78,12 @@ export function ProductLibraryView() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="ce-page">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="ce-page-header">
         <div>
           <h2 className="font-serif text-2xl text-stone-900">产品库</h2>
-          <p className="text-[11px] font-mono uppercase tracking-widest text-stone-400 mt-1">
+          <p className="ce-kicker mt-1">
             {products.length} PRODUCTS · PRODUCT ASSET LIBRARY
           </p>
         </div>
@@ -113,7 +113,7 @@ export function ProductLibraryView() {
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {rows.map((p) => (
-                  <div key={p.id} onClick={() => setRevProduct(p)} className="border border-stone-200 bg-white p-4 hover:border-stone-400 transition-colors cursor-pointer">
+                  <div key={p.id} onClick={() => setRevProduct(p)} className="ce-card cursor-pointer p-4">
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-[10px] font-mono text-stone-400">{p.productNumber || '—'}</span>
                       <span className={`text-[10px] font-mono px-1.5 py-0.5 ${

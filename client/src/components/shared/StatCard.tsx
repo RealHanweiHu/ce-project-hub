@@ -13,16 +13,16 @@ interface StatCardProps {
 
 export function StatCard({ label, value, sub, accent = 'bg-stone-100', icon }: StatCardProps) {
   return (
-    <div className="bg-white border border-stone-200 p-5 group hover:border-stone-300 transition-colors">
+    <div className="ce-card p-4 sm:p-5 group">
       <div className="flex items-start justify-between mb-3">
-        <span className="text-[10px] font-mono uppercase tracking-widest text-stone-400">{label}</span>
-        {icon && <span className="text-stone-300">{icon}</span>}
+        <span className="ce-kicker">{label}</span>
+        {icon && <span className="text-stone-300 group-hover:text-stone-500 transition-colors">{icon}</span>}
       </div>
       <div className="flex items-end gap-2">
         <span className="text-3xl font-serif font-semibold text-stone-900 leading-none">{value}</span>
       </div>
       {sub && (
-        <div className={`mt-3 inline-flex items-center px-2 py-0.5 ${accent}`}>
+        <div className={`mt-3 inline-flex items-center rounded px-2 py-0.5 ${accent}`}>
           <span className="text-[10px] font-mono uppercase tracking-wider text-stone-500">{sub}</span>
         </div>
       )}
