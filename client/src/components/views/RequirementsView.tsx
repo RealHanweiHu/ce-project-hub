@@ -50,7 +50,8 @@ export function RequirementsView({ initialProductId }: { initialProductId?: stri
 
       <RequirementPoolPanel
         scope={scope}
-        canEdit={isAdmin}
+        canCreate                                   /* 人人可提需求 */
+        canManageRow={(row) => isAdmin || row.creatorId === user?.id}  /* admin 或创建人可改 */
         title={product ? `${product.name} · 需求` : '全部需求'}
         subtitle={product ? 'PRODUCT BACKLOG' : 'GLOBAL REQUIREMENT POOL'}
       />

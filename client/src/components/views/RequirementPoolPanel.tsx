@@ -211,14 +211,21 @@ export type RequirementPanelScope =
 
 interface RequirementPoolPanelProps {
   scope: RequirementPanelScope;
+  /** 是否可编辑/删除/转化(管理)。项目视图传项目角色;产品/全局可改用 canManageRow 细分到行 */
   canEdit?: boolean;
+  /** 是否可新增需求(提需求);默认跟随 canEdit。产品/全局可设为 true 实现「人人可提」 */
+  canCreate?: boolean;
+  /** 逐行管理权限判定;默认 () => canEdit。产品/全局可传「admin 或创建人」 */
+  canManageRow?: (row: Requirement) => boolean;
   title?: string;
   subtitle?: string;
 }
 
 const NO_PHASES: SOPPhase[] = [];
 
-export function RequirementPoolPanel({ scope, canEdit = false, title, subtitle }: RequirementPoolPanelProps) {
+export function RequirementPoolPanel({ scope, canEdit = false, canCreate, canManageRow, title, subtitle }: RequirementPoolPanelProps) {
+  const allowCreate = canCreate ?? canEdit;
+  const canManage = canManageRow ?? (() => canEdit);
   const projectId = scope.kind === 'project' ? scope.projectId : undefined;
   const phases = scope.kind === 'project' ? scope.phases : NO_PHASES;
   const listInput = useMemo(
@@ -297,7 +304,7 @@ export function RequirementPoolPanel({ scope, canEdit = false, title, subtitle }
   };
 
   const handleQuickStatus = (row: Requirement, status: RequirementStatus) => {
-    if (!canEdit || row.status === status) return;
+    if (!canManage(row) || row.status === status) return;
     updateMutation.mutate({ id: row.id, patch: { status } });
   };
 
@@ -371,7 +378,7 @@ export function RequirementPoolPanel({ scope, canEdit = false, title, subtitle }
           <h3 className="font-serif text-lg text-stone-900">{title ?? '需求池'}</h3>
           <p className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mt-0.5">{subtitle ?? 'REQUIREMENT POOL'}</p>
         </div>
-        {canEdit && (
+        {allowCreate && (
           <button
             onClick={openCreate}
             className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 bg-stone-900 text-stone-50 text-xs font-mono uppercase tracking-wider hover:bg-stone-700 transition-colors"
@@ -622,7 +629,7 @@ export function RequirementPoolPanel({ scope, canEdit = false, title, subtitle }
                     )}
                   </div>
                   <div className="flex items-center gap-2 lg:justify-end">
-                    {canEdit && (
+                    {canManage(row) && (
                       <select
                         value={row.status}
                         onChange={(e) => handleQuickStatus(row, e.target.value as RequirementStatus)}
@@ -633,12 +640,12 @@ export function RequirementPoolPanel({ scope, canEdit = false, title, subtitle }
                         ))}
                       </select>
                     )}
-                    {scope.kind === 'project' && canEdit && !row.convertedType && (
+                    {scope.kind === 'project' && canManage(row) && !row.convertedType && (
                       <button onClick={() => openConvert(row)} className="inline-flex items-center gap-1 px-2 py-1.5 text-xs text-emerald-700 border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 transition-colors" title="采纳并转为任务/问题/变更">
                         <ArrowUpRight size={13} />采纳转化
                       </button>
                     )}
-                    {canEdit && (
+                    {canManage(row) && (
                       <>
                         <button onClick={() => openEdit(row)} className="p-1.5 text-stone-400 hover:text-stone-900 hover:bg-stone-100 transition-colors" title="编辑需求">
                           <Edit2 size={14} />
