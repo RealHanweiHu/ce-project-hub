@@ -1104,7 +1104,8 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                   const isGateTask = task.id === activePhase.gateTaskId;
                   const locked = !isCurrentPhaseUnlocked;
                   const selected = selectedTaskId === task.id;
-                  const status = checked ? 'done' : (details?.taskStatus || 'todo');
+                  // status 为主状态;checked 已由 status 派生(done/skipped),直接显示真实状态
+                  const status = details?.taskStatus || (checked ? 'done' : 'todo');
 
                   return (
                     <div

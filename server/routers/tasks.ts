@@ -6,6 +6,7 @@ import {
   getProjectMember,
   getProjectTasks,
   upsertProjectTask,
+  setTaskCompletion,
   updateTaskMeta,
   getMyTasks,
   getOverdueTasks,
@@ -56,10 +57,7 @@ export const tasksRouter = router({
       if (!role || !ROLE_PERMISSIONS[role].canEditTasks) {
         throw new TRPCError({ code: "FORBIDDEN", message: "没有编辑任务的权限" });
       }
-      await upsertProjectTask(input.projectId, input.phaseId, input.taskId, {
-        completed: input.completed,
-        updatedBy: ctx.user.id,
-      });
+      await setTaskCompletion(input.projectId, input.phaseId, input.taskId, input.completed, ctx.user.id);
       await createActivityLog({
         projectId: input.projectId,
         userId: ctx.user.id,
@@ -158,12 +156,8 @@ export const tasksRouter = router({
         status: "todo",
         priority: "medium",
       };
-      const metaPatch = {
-        ...patch,
-        updatedBy: ctx.user.id,
-        ...(patch.status === "done" ? { completedAt: new Date() } : {}),
-        ...(patch.status && patch.status !== "done" ? { completedAt: null } : {}),
-      };
+      // status 为主状态；completed/completedAt 由 updateTaskMeta 内 deriveCompletion 派生
+      const metaPatch = { ...patch, updatedBy: ctx.user.id };
       await updateTaskMeta(projectId, phaseId, taskId, metaPatch);
       await createActivityLog({
         projectId,
