@@ -268,16 +268,33 @@ interface GateReadiness {
   signoffRoles: string[]; blockers: string[]; ready: boolean;
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function computeGateReadiness(phase: any, phaseData: any): GateReadiness {
+function computeGateReadiness(phase: any, phaseData: any, submittedDeliverables?: string[]): GateReadiness {
   const allTasks: Array<{ id: string }> = phase?.tasks ?? [];
   const tasks = allTasks.filter((t) => t.id !== phase?.gateTaskId);
   const tasksDone = tasks.filter((t) => phaseData?.tasks?.[t.id]).length;
   let delivDone = 0, delivTotal = 0;
-  for (const t of tasks) {
-    const names = getTaskDeliverables(t.id, phase?.deliverables ?? []);
-    const status: Record<string, boolean> = phaseData?.taskDetails?.[t.id]?.deliverables ?? {};
-    delivTotal += names.length;
-    delivDone += names.filter((n) => status[n]).length;
+  if (submittedDeliverables) {
+    const gateStatus: Record<string, boolean> = phaseData?.taskDetails?.[phase?.gateTaskId]?.deliverables ?? {};
+    let legacyTotal = 0, legacyDone = 0;
+    for (const t of tasks) {
+      const names = getTaskDeliverables(t.id, phase?.deliverables ?? []);
+      const status: Record<string, boolean> = phaseData?.taskDetails?.[t.id]?.deliverables ?? {};
+      legacyTotal += names.length;
+      legacyDone += names.filter((n) => status[n]).length;
+    }
+    const legacyAllDone = legacyTotal > 0 && legacyDone === legacyTotal;
+    delivTotal = submittedDeliverables.length;
+    delivDone = submittedDeliverables.filter((name) => {
+      if (gateStatus[name] || legacyAllDone) return true;
+      return allTasks.some((task) => !!phaseData?.taskDetails?.[task.id]?.deliverables?.[name]);
+    }).length;
+  } else {
+    for (const t of tasks) {
+      const names = getTaskDeliverables(t.id, phase?.deliverables ?? []);
+      const status: Record<string, boolean> = phaseData?.taskDetails?.[t.id]?.deliverables ?? {};
+      delivTotal += names.length;
+      delivDone += names.filter((n) => status[n]).length;
+    }
   }
   const issues = phaseData?.issues ?? [];
   const openP0P1 = issues.filter((i: { severity: string; status: string }) =>
@@ -602,6 +619,10 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
   const [ganttMode, setGanttMode] = useState<'task' | 'phase'>('task');
   const perms = useProjectPermission(project.id);
   const { user: currentUser } = useAuth();
+  const { data: effectiveProcess } = trpc.tailoring.effectiveProcess.useQuery(
+    { projectId: project.id },
+    { staleTime: 5_000 }
+  );
 
   // Change Log helpers
   const changeLog: ChangeRecord[] = project.changeLog || [];
@@ -635,6 +656,9 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
   const projectPhases = getProjectPhases(project);
   const phaseMap = Object.fromEntries(projectPhases.map((p) => [p.id, p]));
   const activePhase = phaseMap[activePhaseId] || PHASE_MAP[activePhaseId];
+  const effectiveActivePhase = effectiveProcess?.phases.find((phase) => phase.id === activePhaseId);
+  const activeGateDeliverables =
+    effectiveActivePhase?.submittedDeliverables ?? activePhase?.gateStandard?.requiredDeliverables ?? [];
   const activePhaseData = project.phases[activePhaseId];
   const activeProgress = computePhaseProgress(activePhaseData, activePhaseId, activePhase);
   const overallProgress = computeOverallProgress(project);
@@ -1374,8 +1398,8 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                           phaseId={activePhaseId}
                           taskId={selectedTask.id}
                           items={
-                            selectedTaskIsGate && activePhase?.gateStandard?.requiredDeliverables?.length
-                              ? activePhase.gateStandard.requiredDeliverables
+                            selectedTaskIsGate
+                              ? activeGateDeliverables
                               : getTaskDeliverables(selectedTask.id, activePhase?.deliverables || [])
                           }
                           status={selectedTaskDetails?.deliverables || {}}
@@ -1392,7 +1416,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                     )}
 
                     {selectedTaskIsGate && (() => {
-                      const r = computeGateReadiness(activePhase, activePhaseData);
+                      const r = computeGateReadiness(activePhase, activePhaseData, activeGateDeliverables);
                       return (
                         <div className={`mt-4 p-3 border ${r.ready ? 'border-emerald-200 bg-emerald-50/50' : 'border-amber-200 bg-amber-50/50'}`}>
                           <div className="flex items-center justify-between mb-2">

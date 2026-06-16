@@ -214,6 +214,85 @@ export type ProjectPhase = typeof projectPhases.$inferSelect;
 export type InsertProjectPhase = typeof projectPhases.$inferInsert;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Process tailoring and deliverable overrides
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const TAILORING_REASONS = [
+  "customer_id",
+  "customer_structure",
+  "reuse_mature",
+  "other",
+] as const;
+export type TailoringReason = (typeof TAILORING_REASONS)[number];
+export const tailoringReasonEnum = pgEnum("tailoring_reason", TAILORING_REASONS);
+
+export const TAILORING_STATUSES = ["pending", "approved", "rejected", "revoked"] as const;
+export type TailoringStatus = (typeof TAILORING_STATUSES)[number];
+export const tailoringStatusEnum = pgEnum("tailoring_status", TAILORING_STATUSES);
+
+export type TailoringTarget =
+  | { scope: "phase"; phaseId: string }
+  | { scope: "task"; phaseId: string; taskId: string };
+
+export const projectTailoring = pgTable(
+  "project_tailoring",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 }).notNull(),
+    reasonType: tailoringReasonEnum("reasonType").notNull(),
+    reasonNote: text("reasonNote").notNull().default(""),
+    targets: jsonb("targets").$type<TailoringTarget[]>().notNull().default([]),
+    status: tailoringStatusEnum("status").notNull().default("pending"),
+    proposedBy: integer("proposedBy").notNull(),
+    proposedAt: timestamp("proposedAt").defaultNow().notNull(),
+    reviewedBy: integer("reviewedBy"),
+    reviewedAt: timestamp("reviewedAt"),
+    reviewNote: text("reviewNote"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    idxProject: index("idx_project_tailoring_project").on(table.projectId),
+    idxProjectStatus: index("idx_project_tailoring_project_status").on(table.projectId, table.status),
+  })
+);
+
+export type ProjectTailoring = typeof projectTailoring.$inferSelect;
+export type InsertProjectTailoring = typeof projectTailoring.$inferInsert;
+
+export const DELIVERABLE_OVERRIDE_ACTIONS = ["add", "remove"] as const;
+export type DeliverableOverrideAction = (typeof DELIVERABLE_OVERRIDE_ACTIONS)[number];
+export const deliverableOverrideActionEnum = pgEnum(
+  "deliverable_override_action",
+  DELIVERABLE_OVERRIDE_ACTIONS
+);
+
+export const projectDeliverableOverrides = pgTable(
+  "project_deliverable_overrides",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 }).notNull(),
+    nodePhaseId: varchar("nodePhaseId", { length: 32 }).notNull(),
+    deliverableName: varchar("deliverableName", { length: 256 }).notNull(),
+    action: deliverableOverrideActionEnum("action").notNull(),
+    createdBy: integer("createdBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    uniqProjectNodeDeliverable: uniqueIndex("uniq_project_deliverable_override").on(
+      table.projectId,
+      table.nodePhaseId,
+      table.deliverableName
+    ),
+    idxProject: index("idx_project_deliverable_overrides_project").on(table.projectId),
+  })
+);
+
+export type ProjectDeliverableOverride = typeof projectDeliverableOverrides.$inferSelect;
+export type InsertProjectDeliverableOverride = typeof projectDeliverableOverrides.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Tasks (per-project, per-phase task completion state)
 // ─────────────────────────────────────────────────────────────────────────────
 

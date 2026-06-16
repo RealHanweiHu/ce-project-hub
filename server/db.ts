@@ -21,6 +21,8 @@ import {
   automationRules, AutomationRuleRow, InsertAutomationRule,
   automationRuns, AutomationRunRow, InsertAutomationRun,
   customFieldDefs, CustomFieldDef, InsertCustomFieldDef,
+  projectTailoring, ProjectTailoring, InsertProjectTailoring, TailoringTarget,
+  projectDeliverableOverrides, ProjectDeliverableOverride,
   type TaskStatus, type TaskPriority, type GateDecision,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -28,6 +30,7 @@ import { getSopPhasesForCategory } from "./sop-data";
 import { getPhasesForCategory, getReleaseGatePhase } from "../shared/sop-templates";
 import { computeGateReadiness, type GateReadiness } from "../shared/gate-readiness";
 import { getTaskDeliverables } from "../shared/task-deliverables";
+import { getDeliverableLibrary, getEffectiveProcess, type EffectiveProcess } from "../shared/effective-process";
 import { scheduleForCategory, buildSchedTasks } from "../shared/schedule-graph";
 import { rescheduleFrom, type Schedule } from "../shared/scheduling";
 import { daysBetween, GATE_RED_DAYS, GATE_AMBER_DAYS } from "../shared/health";
@@ -1168,6 +1171,315 @@ export async function setTaskDeliverable(
   return next;
 }
 
+function normalizeTailoringTargets(targets: TailoringTarget[]): TailoringTarget[] {
+  const seen = new Set<string>();
+  const normalized: TailoringTarget[] = [];
+  for (const target of targets) {
+    const key = target.scope === "phase"
+      ? `phase:${target.phaseId}`
+      : `task:${target.phaseId}:${target.taskId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(target);
+  }
+  return normalized;
+}
+
+function resolveTailoringTargetTasks(
+  category: string,
+  targets: TailoringTarget[]
+): Array<{ phaseId: string; taskId: string }> {
+  const phases = getPhasesForCategory(category);
+  const phaseById = new Map(phases.map((phase) => [phase.id, phase]));
+  const tasks: Array<{ phaseId: string; taskId: string }> = [];
+  const seen = new Set<string>();
+
+  for (const target of normalizeTailoringTargets(targets)) {
+    const phase = phaseById.get(target.phaseId);
+    if (!phase) throw new Error(`裁剪阶段不存在: ${target.phaseId}`);
+    if (target.scope === "phase") {
+      for (const task of phase.tasks) {
+        const key = `${phase.id}:${task.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        tasks.push({ phaseId: phase.id, taskId: task.id });
+      }
+      continue;
+    }
+    const task = phase.tasks.find((item) => item.id === target.taskId);
+    if (!task) throw new Error(`裁剪任务不存在: ${target.phaseId}/${target.taskId}`);
+    const key = `${phase.id}:${task.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    tasks.push({ phaseId: phase.id, taskId: task.id });
+  }
+
+  return tasks;
+}
+
+export async function listProjectTailoring(projectId: string): Promise<ProjectTailoring[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(projectTailoring)
+    .where(eq(projectTailoring.projectId, projectId))
+    .orderBy(desc(projectTailoring.proposedAt));
+}
+
+export async function createProjectTailoringRequest(input: {
+  projectId: string;
+  reasonType: InsertProjectTailoring["reasonType"];
+  reasonNote?: string;
+  targets: TailoringTarget[];
+  proposedBy: number;
+}): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const project = await getProjectById(input.projectId);
+  if (!project) throw new Error("项目不存在");
+  const targets = normalizeTailoringTargets(input.targets);
+  if (targets.length === 0) throw new Error("请至少选择一个裁剪对象");
+
+  const resolvedTasks = resolveTailoringTargetTasks(project.category, targets);
+  const taskRows = await getProjectTasks(input.projectId);
+  const taskByKey = new Map(taskRows.map((task) => [`${task.phaseId}:${task.taskId}`, task]));
+  for (const task of resolvedTasks) {
+    const row = taskByKey.get(`${task.phaseId}:${task.taskId}`);
+    if (row?.status === "done" || row?.completed) {
+      throw new Error("已完成的阶段/任务不能申请裁剪");
+    }
+  }
+
+  const [row] = await db
+    .insert(projectTailoring)
+    .values({
+      projectId: input.projectId,
+      reasonType: input.reasonType,
+      reasonNote: input.reasonNote ?? "",
+      targets,
+      proposedBy: input.proposedBy,
+      status: "pending",
+    })
+    .returning({ id: projectTailoring.id });
+  return row.id;
+}
+
+async function getProjectTailoringById(id: number): Promise<ProjectTailoring | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(projectTailoring).where(eq(projectTailoring.id, id)).limit(1);
+  return rows[0];
+}
+
+async function applyTailoringTargets(
+  projectId: string,
+  category: string,
+  targets: TailoringTarget[],
+  updatedBy: number
+): Promise<void> {
+  const tasks = resolveTailoringTargetTasks(category, targets);
+  for (const task of tasks) {
+    const rows = await getProjectTasks(projectId, task.phaseId);
+    const existing = rows.find((row) => row.taskId === task.taskId);
+    if (existing?.status === "done") continue;
+    await updateTaskMeta(projectId, task.phaseId, task.taskId, {
+      status: "skipped",
+      updatedBy,
+    });
+  }
+}
+
+function taskCoveredByTailoring(
+  task: { phaseId: string; taskId: string },
+  sets: { tailoredPhaseIds: Set<string>; tailoredTaskIds: Set<string> }
+): boolean {
+  return (
+    sets.tailoredPhaseIds.has(task.phaseId) ||
+    sets.tailoredTaskIds.has(task.taskId) ||
+    sets.tailoredTaskIds.has(`${task.phaseId}:${task.taskId}`)
+  );
+}
+
+export async function getApprovedTailoringSets(projectId: string): Promise<{
+  tailoredPhaseIds: Set<string>;
+  tailoredTaskIds: Set<string>;
+}> {
+  const db = await getDb();
+  const tailoredPhaseIds = new Set<string>();
+  const tailoredTaskIds = new Set<string>();
+  if (!db) return { tailoredPhaseIds, tailoredTaskIds };
+
+  const rows = await db
+    .select({ targets: projectTailoring.targets })
+    .from(projectTailoring)
+    .where(and(eq(projectTailoring.projectId, projectId), eq(projectTailoring.status, "approved")));
+
+  for (const row of rows) {
+    for (const target of row.targets ?? []) {
+      if (target.scope === "phase") tailoredPhaseIds.add(target.phaseId);
+      else {
+        tailoredTaskIds.add(target.taskId);
+        tailoredTaskIds.add(`${target.phaseId}:${target.taskId}`);
+      }
+    }
+  }
+
+  return { tailoredPhaseIds, tailoredTaskIds };
+}
+
+export async function reviewProjectTailoring(input: {
+  id: number;
+  decision: "approved" | "rejected";
+  reviewedBy: number;
+  reviewNote?: string | null;
+}): Promise<string> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const tailoring = await getProjectTailoringById(input.id);
+  if (!tailoring) throw new Error("裁剪申请不存在");
+  if (tailoring.status !== "pending") throw new Error("只有待审批申请可处理");
+  const project = await getProjectById(tailoring.projectId);
+  if (!project) throw new Error("项目不存在");
+
+  if (input.decision === "approved") {
+    await applyTailoringTargets(tailoring.projectId, project.category, tailoring.targets ?? [], input.reviewedBy);
+  }
+
+  await db
+    .update(projectTailoring)
+    .set({
+      status: input.decision,
+      reviewedBy: input.reviewedBy,
+      reviewedAt: new Date(),
+      reviewNote: input.reviewNote ?? null,
+    })
+    .where(eq(projectTailoring.id, input.id));
+  return tailoring.projectId;
+}
+
+export async function revokeProjectTailoring(input: {
+  id: number;
+  reviewedBy: number;
+  reviewNote?: string | null;
+}): Promise<string> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const tailoring = await getProjectTailoringById(input.id);
+  if (!tailoring) throw new Error("裁剪申请不存在");
+  if (tailoring.status !== "approved") throw new Error("只有已通过裁剪可撤销");
+  const project = await getProjectById(tailoring.projectId);
+  if (!project) throw new Error("项目不存在");
+
+  await db
+    .update(projectTailoring)
+    .set({
+      status: "revoked",
+      reviewedBy: input.reviewedBy,
+      reviewedAt: new Date(),
+      reviewNote: input.reviewNote ?? null,
+    })
+    .where(eq(projectTailoring.id, input.id));
+
+  const remainingSets = await getApprovedTailoringSets(tailoring.projectId);
+  const tasks = resolveTailoringTargetTasks(project.category, tailoring.targets ?? []);
+  for (const task of tasks) {
+    if (taskCoveredByTailoring(task, remainingSets)) continue;
+    const rows = await getProjectTasks(tailoring.projectId, task.phaseId);
+    const row = rows.find((item) => item.taskId === task.taskId);
+    if (row?.status !== "skipped") continue;
+    await updateTaskMeta(tailoring.projectId, task.phaseId, task.taskId, {
+      status: "todo",
+      updatedBy: input.reviewedBy,
+    });
+  }
+  return tailoring.projectId;
+}
+
+export async function listDeliverableOverrides(projectId: string): Promise<ProjectDeliverableOverride[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(projectDeliverableOverrides)
+    .where(eq(projectDeliverableOverrides.projectId, projectId))
+    .orderBy(projectDeliverableOverrides.nodePhaseId, projectDeliverableOverrides.deliverableName);
+}
+
+export async function setDeliverableOverride(input: {
+  projectId: string;
+  nodePhaseId: string;
+  deliverableName: string;
+  action: "add" | "remove" | "clear";
+  createdBy: number;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const project = await getProjectById(input.projectId);
+  if (!project) throw new Error("项目不存在");
+  const phases = getPhasesForCategory(project.category);
+  if (!phases.some((phase) => phase.id === input.nodePhaseId)) {
+    throw new Error("交付物提交节点不存在");
+  }
+
+  if (input.action !== "clear") {
+    const library = getDeliverableLibrary(project.category);
+    if (!library.includes(input.deliverableName)) {
+      throw new Error("交付物不在当前品类资源库中");
+    }
+  }
+
+  const whereClause = and(
+    eq(projectDeliverableOverrides.projectId, input.projectId),
+    eq(projectDeliverableOverrides.nodePhaseId, input.nodePhaseId),
+    eq(projectDeliverableOverrides.deliverableName, input.deliverableName)
+  );
+
+  if (input.action === "clear") {
+    await db.delete(projectDeliverableOverrides).where(whereClause);
+    return;
+  }
+
+  const existing = await db
+    .select({ id: projectDeliverableOverrides.id })
+    .from(projectDeliverableOverrides)
+    .where(whereClause)
+    .limit(1);
+
+  if (existing[0]) {
+    await db
+      .update(projectDeliverableOverrides)
+      .set({ action: input.action })
+      .where(eq(projectDeliverableOverrides.id, existing[0].id));
+    return;
+  }
+
+  await db.insert(projectDeliverableOverrides).values({
+    projectId: input.projectId,
+    nodePhaseId: input.nodePhaseId,
+    deliverableName: input.deliverableName,
+    action: input.action,
+    createdBy: input.createdBy,
+  });
+}
+
+export async function getProjectEffectiveProcess(projectId: string): Promise<EffectiveProcess | null> {
+  const project = await getProjectById(projectId);
+  if (!project) return null;
+  const sets = await getApprovedTailoringSets(projectId);
+  const overrides = await listDeliverableOverrides(projectId);
+  return getEffectiveProcess(
+    project.category,
+    sets.tailoredPhaseIds,
+    sets.tailoredTaskIds,
+    overrides.map((override) => ({
+      nodePhaseId: override.nodePhaseId,
+      deliverableName: override.deliverableName,
+      action: override.action,
+    }))
+  );
+}
+
 /**
  * 按角色把未分配的任务自动指派给对应项目成员（responsible role 取自任务 visibleRoles 首个非管理角色）。
  * 不覆盖已手动分配的任务。返回新建的分配明细，供上层发钉钉通知。
@@ -1511,15 +1823,26 @@ export async function getReleaseGateStatus(project: ProjectRow): Promise<Release
   const taskRows = await getProjectTasks(project.id, phase.id);
   const statusByTask: Record<string, Record<string, boolean>> = {};
   for (const r of taskRows) statusByTask[r.taskId] = r.deliverables ?? {};
-  let total = 0, done = 0;
-  const missing: string[] = [];
+  const effective = await getProjectEffectiveProcess(project.id);
+  const effectivePhase = effective?.phases.find((item) => item.id === phase.id);
+  const expectedDeliverables = effectivePhase?.submittedDeliverables ?? Array.from(
+    new Set([...(phase.deliverables ?? []), ...(phase.gateStandard?.requiredDeliverables ?? [])])
+  );
+  let legacyTotal = 0, legacyDone = 0;
   for (const t of phase.tasks) {
     if (t.id === phase.gateTaskId) continue;
-    for (const name of getTaskDeliverables(t.id, phase.deliverables)) {
-      total++;
-      if (statusByTask[t.id]?.[name]) done++;
-      else missing.push(name);
-    }
+    const names = getTaskDeliverables(t.id, phase.deliverables);
+    legacyTotal += names.length;
+    legacyDone += names.filter((name) => statusByTask[t.id]?.[name]).length;
+  }
+  const legacyAllDone = legacyTotal > 0 && legacyDone === legacyTotal;
+  let done = 0;
+  const missing: string[] = [];
+  for (const name of expectedDeliverables) {
+    const checkedOnGate = !!statusByTask[phase.gateTaskId]?.[name];
+    const checkedOnAnyPhaseTask = phase.tasks.some((task) => !!statusByTask[task.id]?.[name]);
+    if (checkedOnGate || checkedOnAnyPhaseTask || legacyAllDone) done++;
+    else missing.push(name);
   }
   return {
     phaseId: phase.id,
@@ -1527,7 +1850,7 @@ export async function getReleaseGateStatus(project: ProjectRow): Promise<Release
     decision: latest?.decision ?? null,
     conditions: latest?.conditions ?? null,
     roundNumber: latest?.roundNumber ?? 0,
-    deliverables: { done, total, missing },
+    deliverables: { done, total: expectedDeliverables.length, missing },
   };
 }
 
