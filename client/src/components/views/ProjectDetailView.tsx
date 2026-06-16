@@ -1600,7 +1600,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
           existingReviews={activePhaseData?.gateReviews}
           projectId={project.id}
           gateTaskId={activePhase?.gateTaskId}
-          blockers={computeGateReadiness(activePhase, activePhaseData).blockers}
+          blockers={computeGateReadiness(activePhase, activePhaseData, activeGateDeliverables).blockers}
           onConfirm={perms.canGateReview ? handleGateReviewConfirm : () => {}}
           onCancel={() => setGateReviewPending(null)}
           readOnly={!perms.canGateReview}

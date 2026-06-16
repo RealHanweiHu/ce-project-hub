@@ -1902,6 +1902,13 @@ export async function getGateReadiness(projectId: string, phaseId: string): Prom
   const phase = getPhasesForCategory(project.category).find((p) => p.id === phaseId);
   if (!phase) return null;
 
+  // 裁剪集成：被裁阶段的 Gate 视为 N/A（不阻塞）；非裁剪阶段的应交付物用"有效提交集"（含归集+override）。
+  const effective = await getProjectEffectiveProcess(projectId);
+  const effPhase = effective?.phases.find((p) => p.id === phaseId);
+  if (effPhase?.tailored) {
+    return { phaseId, gateName: phase.gate, ready: true, dimensions: [], blockerCount: 0 };
+  }
+
   const tasks = await getProjectTasks(projectId, phaseId);
   const byTask = new Map(tasks.map((t) => [t.taskId, t]));
   const isDone = (id: string) => {
@@ -1910,7 +1917,7 @@ export async function getGateReadiness(projectId: string, phaseId: string): Prom
   };
   const incompleteTaskIds = phase.tasks.filter((t) => t.id !== phase.gateTaskId && !isDone(t.id)).map((t) => t.id);
 
-  const required = phase.gateStandard.requiredDeliverables;
+  const required = effPhase?.submittedDeliverables ?? phase.gateStandard.requiredDeliverables;
   const gateFiles = await getProjectFiles(projectId, phaseId, phase.gateTaskId);
   const uploaded = Array.from(new Set(
     gateFiles.map((f) => f.deliverableName).filter((n): n is string => !!n && required.includes(n))
@@ -2380,6 +2387,10 @@ export async function getCalendar(userId: number, fromDate: string, toDate: stri
   const inWindow = (d: string | null): d is string => !!d && d >= fromDate && d <= toDate;
   const events: CalendarEvent[] = [];
 
+  // 被裁阶段的截止里程碑不上日历（按项目聚合已批准裁剪的阶段集）
+  const tailoredByProject = new Map<string, Set<string>>();
+  for (const pid of ids) tailoredByProject.set(pid, (await getApprovedTailoringSets(pid)).tailoredPhaseIds);
+
   for (const p of Array.from(projById.values())) {
     if (inWindow(p.targetDate)) {
       events.push({ date: p.targetDate, type: "target", projectId: p.id, projectName: p.name, label: "目标交付" });
@@ -2390,6 +2401,7 @@ export async function getCalendar(userId: number, fromDate: string, toDate: stri
     projectId: projectPhases.projectId, phaseId: projectPhases.phaseId, endDate: projectPhases.endDate,
   }).from(projectPhases).where(and(inArray(projectPhases.projectId, ids), between(projectPhases.endDate, fromDate, toDate)));
   for (const r of phaseRows) {
+    if (tailoredByProject.get(r.projectId)?.has(r.phaseId)) continue;
     const p = projById.get(r.projectId);
     if (p) events.push({ date: r.endDate!, type: "phase", projectId: p.id, projectName: p.name, label: `${r.phaseId} 阶段截止` });
   }
