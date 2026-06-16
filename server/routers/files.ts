@@ -169,10 +169,11 @@ export function registerFileUploadRoute(app: Express) {
           return;
         }
 
-        const { projectId, phaseId, taskId } = req.body as {
+        const { projectId, phaseId, taskId, deliverableName } = req.body as {
           projectId?: string;
           phaseId?: string;
           taskId?: string;
+          deliverableName?: string;
         };
 
         if (!projectId) {
@@ -217,6 +218,7 @@ export function registerFileUploadRoute(app: Express) {
           projectId,
           phaseId: phaseId || null,
           taskId: taskId || null,
+          deliverableName: deliverableName || null,
           name: originalName,
           mimeType: file.mimetype,
           size: file.size,
