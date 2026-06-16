@@ -16,7 +16,7 @@ export type GateReadiness = { phaseId: string; gateName: string; ready: boolean;
 export function computeGateReadiness(input: GateReadinessInput): GateReadiness {
   const dimensions: GateDimResult[] = [];
 
-  const prereqBlockers = input.prereq.incompleteTaskIds;
+  const prereqBlockers = [...input.prereq.incompleteTaskIds];
   dimensions.push({
     dimension: "prereq",
     ok: prereqBlockers.length === 0,

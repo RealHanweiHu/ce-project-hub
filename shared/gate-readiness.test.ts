@@ -15,6 +15,7 @@ describe("computeGateReadiness", () => {
     expect(r.ready).toBe(true);
     expect(r.blockerCount).toBe(0);
     expect(r.dimensions.every((d) => d.ok)).toBe(true);
+    expect(r.dimensions.map((d) => d.dimension)).toEqual(["prereq", "deliverables", "critical_issues", "review_conditions"]);
   });
   it("前置未完 → prereq 阻塞", () => {
     const r = computeGateReadiness({ ...base, prereq: { incompleteTaskIds: ["d2", "d4"] } });
@@ -40,6 +41,9 @@ describe("computeGateReadiness", () => {
     const dim = r.dimensions.find((d) => d.dimension === "review_conditions")!;
     expect(dim.ok).toBe(false);
     expect(dim.blockers).toEqual(["补充可靠性数据"]);
+    // conditions 为空时用 fallback
+    const r2 = computeGateReadiness({ ...base, latestReview: { decision: "conditional", conditions: null, notes: null } });
+    expect(r2.dimensions.find((d) => d.dimension === "review_conditions")!.blockers).toEqual(["上轮评审有遗留条件"]);
   });
   it("评审 rejected → 阻塞用 notes，缺则 conditions", () => {
     const r1 = computeGateReadiness({ ...base, latestReview: { decision: "rejected", conditions: null, notes: "结构强度不达标" } });
