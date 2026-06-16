@@ -144,11 +144,21 @@ describe("runHealthDigestScan（注入 deps）", () => {
     expect(calls.group).toBe(0);
   });
 
-  it("pushPmPersonal=false 只发群", async () => {
+  it("pushPmPersonal=false 只发群（个人渠道全静默）", async () => {
     const { deps, calls } = makeDeps({ getConfigRow: async () => ({ enabled: true, config: { ...cfg, pushPmPersonal: false } }) });
     await runHealthDigestScan(NOW, deps);
     expect(calls.notifications).toEqual([]);
+    expect(calls.notify).toEqual([]); // 个人钉钉也不发
     expect(calls.group).toBe(1);
+    expect(calls.runs[0].status).toBe("fired");
+  });
+
+  it("pushManagerGroup=false 只发 PM 个人", async () => {
+    const { deps, calls } = makeDeps({ getConfigRow: async () => ({ enabled: true, config: { ...cfg, pushManagerGroup: false } }) });
+    await runHealthDigestScan(NOW, deps);
+    expect(calls.notifications).toEqual([7]);
+    expect(calls.notify).toEqual([[7]]);
+    expect(calls.group).toBe(0); // 管理群不发
     expect(calls.runs[0].status).toBe("fired");
   });
 });
