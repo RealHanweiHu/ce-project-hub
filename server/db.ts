@@ -26,6 +26,7 @@ import {
 import { ENV } from './_core/env';
 import { getSopPhasesForCategory } from "./sop-data";
 import { getPhasesForCategory, getReleaseGatePhase } from "../shared/sop-templates";
+import { computeGateReadiness, type GateReadiness } from "../shared/gate-readiness";
 import { getTaskDeliverables } from "../shared/task-deliverables";
 import { scheduleForCategory, buildSchedTasks } from "../shared/schedule-graph";
 import { rescheduleFrom, type Schedule } from "../shared/scheduling";
@@ -620,7 +621,7 @@ export async function upsertProjectTask(
   projectId: string,
   phaseId: string,
   taskId: string,
-  patch: { completed?: boolean; instructions?: string | null; visibleRoles?: string[]; status?: TaskStatus; completedAt?: Date | null; updatedBy?: number | null }
+  patch: { completed?: boolean; instructions?: string | null; visibleRoles?: string[]; status?: TaskStatus; completedAt?: Date | null; updatedBy?: number | null; dueDate?: string | null }
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -1480,13 +1481,13 @@ export async function getOpenP0P1Count(projectId: string): Promise<number> {
   return rows.length;
 }
 
-/** 取最新 Gate 记录：roundNumber 最大；并列取 createdAt 最新。 */
+/** 取最新 Gate 记录：roundNumber 最大；并列取 createdAt 最新；再并列取 id 最大。 */
 function pickLatestReview(reviews: ProjectGateReview[]): ProjectGateReview | null {
   if (reviews.length === 0) return null;
   return reviews.reduce((best, r) => {
-    if (r.roundNumber > best.roundNumber) return r;
-    if (r.roundNumber === best.roundNumber && r.createdAt > best.createdAt) return r;
-    return best;
+    if (r.roundNumber !== best.roundNumber) return r.roundNumber > best.roundNumber ? r : best;
+    if (r.createdAt.getTime() !== best.createdAt.getTime()) return r.createdAt > best.createdAt ? r : best;
+    return r.id > best.id ? r : best;
   });
 }
 
@@ -1528,6 +1529,82 @@ export async function getReleaseGateStatus(project: ProjectRow): Promise<Release
     roundNumber: latest?.roundNumber ?? 0,
     deliverables: { done, total, missing },
   };
+}
+
+/** 阶段级未关闭 P0/P1（不动项目级 getOpenP0P1Count）。 */
+export async function getPhaseOpenP0P1(projectId: string, phaseId: string): Promise<{ count: number; titles: string[] }> {
+  const db = await getDb();
+  if (!db) return { count: 0, titles: [] };
+  const rows = await db.select({ title: projectIssues.title })
+    .from(projectIssues)
+    .where(and(
+      eq(projectIssues.projectId, projectId),
+      eq(projectIssues.phaseId, phaseId),
+      inArray(projectIssues.severity, ["P0", "P1"] as const),
+      inArray(projectIssues.status, ["open", "in_progress"] as const),
+    ));
+  return { count: rows.length, titles: rows.map((r) => r.title) };
+}
+
+/** 跨活跃项目，gate 任务有 dueDate 且未完成（供就绪度推送扫描；与 getAutomationGatePrereqs 并存）。 */
+export async function getApproachingGates(): Promise<Array<{
+  projectId: string; phaseId: string; gateTaskId: string; gateName: string; dueDate: string; status: string;
+}>> {
+  const db = await getDb();
+  if (!db) return [];
+  const projs = await db.select({ id: projects.id, category: projects.category }).from(projects).where(eq(projects.archived, false));
+  const out: Array<{ projectId: string; phaseId: string; gateTaskId: string; gateName: string; dueDate: string; status: string }> = [];
+  for (const p of projs) {
+    const phases = getPhasesForCategory(p.category);
+    const rows = await db.select({ taskId: projectTasks.taskId, status: projectTasks.status, dueDate: projectTasks.dueDate, completed: projectTasks.completed })
+      .from(projectTasks).where(eq(projectTasks.projectId, p.id));
+    const byTask = new Map(rows.map((r) => [r.taskId, r]));
+    for (const phase of phases) {
+      const gate = byTask.get(phase.gateTaskId);
+      if (!gate?.dueDate) continue;
+      const done = gate.status === "done" || gate.status === "skipped" || !!gate.completed;
+      if (done) continue;
+      out.push({ projectId: p.id, phaseId: phase.id, gateTaskId: phase.gateTaskId, gateName: phase.gate, dueDate: gate.dueDate, status: gate.status });
+    }
+  }
+  return out;
+}
+
+/** 计算某项目某 phase 的 Gate 就绪度（4 维）。phase 不存在→null。 */
+export async function getGateReadiness(projectId: string, phaseId: string): Promise<GateReadiness | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const project = await getProjectById(projectId);
+  if (!project) return null;
+  const phase = getPhasesForCategory(project.category).find((p) => p.id === phaseId);
+  if (!phase) return null;
+
+  const tasks = await getProjectTasks(projectId, phaseId);
+  const byTask = new Map(tasks.map((t) => [t.taskId, t]));
+  const isDone = (id: string) => {
+    const t = byTask.get(id);
+    return t ? (t.status === "done" || t.status === "skipped" || !!t.completed) : false;
+  };
+  const incompleteTaskIds = phase.tasks.filter((t) => t.id !== phase.gateTaskId && !isDone(t.id)).map((t) => t.id);
+
+  const required = phase.gateStandard.requiredDeliverables;
+  const gateFiles = await getProjectFiles(projectId, phaseId, phase.gateTaskId);
+  const uploaded = Array.from(new Set(
+    gateFiles.map((f) => f.deliverableName).filter((n): n is string => !!n && required.includes(n))
+  ));
+
+  const critical = await getPhaseOpenP0P1(projectId, phaseId);
+
+  const reviews = await getProjectGateReviews(projectId, phaseId);
+  const latest = pickLatestReview(reviews);
+
+  return computeGateReadiness({
+    phaseId, gateName: phase.gate,
+    prereq: { incompleteTaskIds },
+    deliverables: { required, uploaded },
+    criticalIssues: { titles: critical.titles },
+    latestReview: latest ? { decision: latest.decision as "approved" | "conditional" | "rejected", conditions: latest.conditions ?? null, notes: latest.notes ?? null } : null,
+  });
 }
 
 /** Release override 专用授权（非全局权限矩阵）：创建人 / PM / 项目 owner|manager / 系统 admin。 */
