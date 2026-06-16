@@ -20,6 +20,7 @@ import {
   parseAutomationRuleConfig,
   RecipientRole,
 } from "./rules";
+import { DIGEST_RULES } from "./digestRules";
 
 type ResolvedRecipients = {
   userIds: number[];
@@ -39,13 +40,18 @@ let seededDefaults = false;
 
 export async function ensureAutomationRuleDefaults(): Promise<void> {
   if (seededDefaults) return;
-  await seedAutomationRuleDefaults(
-    AUTOMATION_RULES.map((rule) => ({
+  await seedAutomationRuleDefaults([
+    ...AUTOMATION_RULES.map((rule) => ({
       ruleKey: rule.key,
       enabled: rule.defaultEnabled,
       config: toConfigRecord(rule.defaultConfig),
-    }))
-  );
+    })),
+    ...DIGEST_RULES.map((rule) => ({
+      ruleKey: rule.key,
+      enabled: rule.defaultEnabled,
+      config: { ...rule.defaultConfig } as Record<string, unknown>,
+    })),
+  ]);
   seededDefaults = true;
 }
 

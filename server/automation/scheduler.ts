@@ -1,6 +1,7 @@
 import { ENV } from "../_core/env";
 import { getAutomationDueIssues, getAutomationDueTasks, getAutomationGatePrereqs } from "../db";
 import { runAutomation } from "./engine";
+import { runHealthDigestScan } from "./healthDigest";
 
 let timer: NodeJS.Timeout | null = null;
 
@@ -44,6 +45,13 @@ export async function runScheduledAutomationScan(now = new Date()): Promise<void
       now,
       after: { isGate: true, taskId: g.taskId, title: g.title, dueDate: g.dueDate, status: g.status, incompletePrereqCount: g.incompletePrereqCount },
     });
+  }
+
+  // 健康度摘要（聚合型，自带到点/去重；失败不影响其他扫描）
+  try {
+    await runHealthDigestScan(now);
+  } catch (error) {
+    console.warn("[automation] health digest failed (non-fatal):", error);
   }
 }
 

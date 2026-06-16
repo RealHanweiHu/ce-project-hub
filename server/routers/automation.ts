@@ -11,6 +11,7 @@ import {
   AUTOMATION_RULES,
   parseAutomationRuleConfig,
 } from "../automation/rules";
+import { DIGEST_RULES, DIGEST_RULE_KEYS, isDigestRuleKey, parseDigestRuleConfig } from "../automation/digestRules";
 
 export const automationRouter = router({
   listRules: adminProcedure.query(async () => {
@@ -18,32 +19,49 @@ export const automationRouter = router({
     const rows = await listAutomationRuleRows();
     const rowByKey = new Map(rows.map((row) => [row.ruleKey, row]));
 
-    return AUTOMATION_RULES.map((rule) => {
+    const builtIn = AUTOMATION_RULES.map((rule) => {
       const row = rowByKey.get(rule.key);
       return {
-        key: rule.key,
+        key: rule.key as string,
         label: rule.label,
-        triggerType: rule.triggerType,
+        triggerType: rule.triggerType as string,
         defaultEnabled: rule.defaultEnabled,
         enabled: row?.enabled ?? rule.defaultEnabled,
-        config: parseAutomationRuleConfig(rule.key, row?.config ?? rule.defaultConfig),
-        recipientRoles: rule.recipientRoles,
+        config: parseAutomationRuleConfig(rule.key, row?.config ?? rule.defaultConfig) as Record<string, unknown>,
+        recipientRoles: rule.recipientRoles as readonly string[],
         updatedAt: row?.updatedAt ?? null,
         updatedBy: row?.updatedBy ?? null,
       };
     });
+    const digest = DIGEST_RULES.map((rule) => {
+      const row = rowByKey.get(rule.key);
+      return {
+        key: rule.key as string,
+        label: rule.label,
+        triggerType: rule.triggerType as string,
+        defaultEnabled: rule.defaultEnabled,
+        enabled: row?.enabled ?? rule.defaultEnabled,
+        config: parseDigestRuleConfig(rule.key, row?.config ?? rule.defaultConfig) as Record<string, unknown>,
+        recipientRoles: [] as readonly string[],
+        updatedAt: row?.updatedAt ?? null,
+        updatedBy: row?.updatedBy ?? null,
+      };
+    });
+    return [...builtIn, ...digest];
   }),
 
   updateRule: adminProcedure
     .input(z.object({
-      ruleKey: z.enum(AUTOMATION_RULE_KEYS),
+      ruleKey: z.enum([...AUTOMATION_RULE_KEYS, ...DIGEST_RULE_KEYS] as [string, ...string[]]),
       enabled: z.boolean().optional(),
       config: z.record(z.string(), z.unknown()).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       await ensureAutomationRuleDefaults();
       const parsedConfig = input.config
-        ? parseAutomationRuleConfig(input.ruleKey, input.config)
+        ? (isDigestRuleKey(input.ruleKey)
+            ? parseDigestRuleConfig(input.ruleKey, input.config)
+            : parseAutomationRuleConfig(input.ruleKey as (typeof AUTOMATION_RULE_KEYS)[number], input.config))
         : undefined;
       await updateAutomationRuleRow({
         ruleKey: input.ruleKey,
