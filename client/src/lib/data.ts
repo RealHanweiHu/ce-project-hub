@@ -221,9 +221,10 @@ export const computePhaseProgress = (
 ): number => {
   const phase = phaseObj || PHASE_MAP[phaseId];
   if (!phase || !phaseData?.tasks) return 0;
-  const total = phase.tasks.length;
-  if (total === 0) return 0;
-  const done = phase.tasks.filter((t) => phaseData.tasks[t.id]).length;
+  const effectiveTasks = phase.tasks.filter((t) => phaseData.taskDetails?.[t.id]?.taskStatus !== 'skipped');
+  const total = effectiveTasks.length;
+  if (total === 0) return phase.tasks.length > 0 ? 100 : 0;
+  const done = effectiveTasks.filter((t) => phaseData.tasks[t.id]).length;
   return Math.round((done / total) * 100);
 };
 
@@ -231,12 +232,15 @@ export const computeOverallProgress = (project: Project): number => {
   const phases = getProjectPhases(project);
   let totalTasks = 0;
   let doneTasks = 0;
+  let rawTasks = 0;
   phases.forEach((phase) => {
     const pd = project.phases[phase.id];
-    totalTasks += phase.tasks.length;
-    if (pd?.tasks) doneTasks += phase.tasks.filter((t) => pd.tasks[t.id]).length;
+    rawTasks += phase.tasks.length;
+    const effectiveTasks = phase.tasks.filter((t) => pd?.taskDetails?.[t.id]?.taskStatus !== 'skipped');
+    totalTasks += effectiveTasks.length;
+    if (pd?.tasks) doneTasks += effectiveTasks.filter((t) => pd.tasks[t.id]).length;
   });
-  if (totalTasks === 0) return 0;
+  if (totalTasks === 0) return rawTasks > 0 ? 100 : 0;
   return Math.round((doneTasks / totalTasks) * 100);
 };
 

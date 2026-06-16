@@ -23,6 +23,7 @@ import { commentsRouter, notificationsRouter } from "./routers/collab";
 import { customFieldsRouter } from "./routers/customFields";
 import { automationRouter } from "./routers/automation";
 import { meetingsRouter } from "./routers/meetings";
+import { tailoringRouter } from "./routers/tailoring";
 import * as db from "./db";
 
 export const appRouter = router({
@@ -221,6 +222,7 @@ export const appRouter = router({
   members: membersRouter,
   admin: adminRouter,
   tasks: tasksRouter,
+  tailoring: tailoringRouter,
   issues: issuesRouter,
   gateReviews: gateReviewsRouter,
   changelog: changelogRouter,
