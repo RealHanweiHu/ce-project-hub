@@ -127,6 +127,13 @@
       "when": 1781545278405,
       "tag": "0017_high_radioactive_man",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1781592038710,
+      "tag": "0018_fluffy_pretty_boy",
+      "breakpoints": true
     }
   ]
 }
