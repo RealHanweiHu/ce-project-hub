@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AUTOMATION_RULES, isAutomationRuleMatch, parseAutomationRuleConfig } from "./rules";
+import { AUTOMATION_RULES, isAutomationRuleMatch, parseAutomationRuleConfig, getAutomationRule } from "./rules";
 
 describe("built-in automation rule matching", () => {
   it("keeps exactly the MVP built-in rule keys", () => {
@@ -179,11 +179,11 @@ describe("built-in automation rule matching", () => {
     expect(isAutomationRuleMatch("task_blocked_notify", { action: "task.update_meta", entityType: "task", before: { status: "blocked" }, after: { status: "blocked" } })).toBe(false);
   });
 
-  it("gate_prereq_incomplete fires for approaching gate with incomplete prereqs", () => {
+  it("gate_prereq_incomplete fires for approaching gate when not ready", () => {
     const ev = (extra: Record<string, unknown>) => ({ action: "scheduled" as const, entityType: "task" as const, entityId: "g", now: "2026-06-14", after: { isGate: true, status: "todo", dueDate: "2026-06-16", ...extra } });
-    expect(isAutomationRuleMatch("gate_prereq_incomplete", ev({ incompletePrereqCount: 3 }), { leadDays: 3 })).toBe(true);
-    expect(isAutomationRuleMatch("gate_prereq_incomplete", ev({ incompletePrereqCount: 0 }), { leadDays: 3 })).toBe(false); // 前置都完成
-    expect(isAutomationRuleMatch("overdue_reminder", ev({ incompletePrereqCount: 3, dueDate: "2026-06-01" }), {})).toBe(false); // gate 事件不触发 overdue
+    expect(isAutomationRuleMatch("gate_prereq_incomplete", ev({ notReady: true }), { leadDays: 3 })).toBe(true);
+    expect(isAutomationRuleMatch("gate_prereq_incomplete", ev({ notReady: false }), { leadDays: 3 })).toBe(false); // 已就绪
+    expect(isAutomationRuleMatch("overdue_reminder", ev({ notReady: true, dueDate: "2026-06-01" }), {})).toBe(false); // gate 事件不触发 overdue
   });
 
   it("matches MP release completion events", () => {
@@ -208,5 +208,28 @@ describe("built-in automation rule matching", () => {
       scope: "issues",
       notifyRoles: ["assignee", "pm"],
     });
+  });
+});
+
+describe("gate_prereq_incomplete 升级为就绪度", () => {
+  const evt = (over: Record<string, unknown>) => ({
+    action: "scheduled" as const, entityType: "task" as const, projectId: "p1",
+    now: new Date("2026-06-16T00:00:00Z"),
+    after: { isGate: true, gateName: "设计冻结", dueDate: "2026-06-18", status: "in_progress", notReady: true, blockerSummaries: ["还差 2 项前置任务", "缺 1/4 项交付物"], ...over },
+  });
+  it("临近且未就绪 → 触发", () => {
+    expect(isAutomationRuleMatch("gate_prereq_incomplete", evt({}), { leadDays: 3 })).toBe(true);
+  });
+  it("已就绪 → 不触发", () => {
+    expect(isAutomationRuleMatch("gate_prereq_incomplete", evt({ notReady: false, blockerSummaries: [] }), { leadDays: 3 })).toBe(false);
+  });
+  it("超出 leadDays → 不触发", () => {
+    expect(isAutomationRuleMatch("gate_prereq_incomplete", evt({ dueDate: "2026-07-01" }), { leadDays: 3 })).toBe(false);
+  });
+  it("消息含具体缺项", () => {
+    const rule = getAutomationRule("gate_prereq_incomplete")!;
+    const msg = rule.buildMessage(evt({}) as any, { leadDays: 3 } as any, { projectName: "充气泵" });
+    expect(msg.markdown).toContain("还差 2 项前置任务");
+    expect(msg.markdown).toContain("缺 1/4 项交付物");
   });
 });

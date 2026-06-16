@@ -1,16 +1,16 @@
 import { ENV } from "../_core/env";
-import { getAutomationDueIssues, getAutomationDueTasks, getAutomationGatePrereqs } from "../db";
+import { getAutomationDueIssues, getAutomationDueTasks, getApproachingGates, getGateReadiness } from "../db";
 import { runAutomation } from "./engine";
 import { runHealthDigestScan } from "./healthDigest";
 
 let timer: NodeJS.Timeout | null = null;
 
 export async function runScheduledAutomationScan(now = new Date()): Promise<void> {
-  const [tasks, issues, gates] = await Promise.all([
+  const [tasks, issues] = await Promise.all([
     getAutomationDueTasks(),
     getAutomationDueIssues(),
-    getAutomationGatePrereqs(),
   ]);
+  const approachingGates = await getApproachingGates();
 
   // 逾期催办 + 截止前提醒 共用这批 task/issue 事件（规则各自过滤）
   for (const task of tasks) {
@@ -35,15 +35,26 @@ export async function runScheduledAutomationScan(now = new Date()): Promise<void
     });
   }
 
-  // Gate 前置未完提醒（gate 任务事件带 isGate + 未完成前置数）
-  for (const g of gates) {
+  // Gate 就绪度提醒：对临近 gate 算就绪度，未就绪才发（规则再按 leadDays 精确过滤）
+  for (const g of approachingGates) {
+    const readiness = await getGateReadiness(g.projectId, g.phaseId);
+    if (!readiness) continue;
     await runAutomation({
       action: "scheduled",
       entityType: "task",
       projectId: g.projectId,
-      entityId: `gate:${g.projectId}:${g.taskId}`,
+      entityId: `gate:${g.projectId}:${g.gateTaskId}`,
       now,
-      after: { isGate: true, taskId: g.taskId, title: g.title, dueDate: g.dueDate, status: g.status, incompletePrereqCount: g.incompletePrereqCount },
+      after: {
+        isGate: true,
+        taskId: g.gateTaskId,
+        gateName: g.gateName,
+        title: g.gateName,
+        dueDate: g.dueDate,
+        status: g.status,
+        notReady: !readiness.ready,
+        blockerSummaries: readiness.dimensions.filter((d) => !d.ok).map((d) => d.summary),
+      },
     });
   }
 

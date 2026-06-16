@@ -158,7 +158,7 @@ export const AUTOMATION_RULES = [
   },
   {
     key: "gate_prereq_incomplete",
-    label: "Gate 前置未完提醒",
+    label: "Gate 就绪度提醒",
     triggerType: "scheduled",
     defaultEnabled: true,
     defaultConfig: gatePrereqConfigSchema.parse({}),
@@ -272,10 +272,9 @@ function matchesGatePrereq(event: AutomationEvent, config: GatePrereqConfig): bo
   if (event.action !== "scheduled" || event.entityType !== "task") return false;
   if (event.after?.isGate !== true) return false;
   if (isClosedStatus("task", String(event.after?.status ?? ""))) return false;
-  const incomplete = Number(event.after?.incompletePrereqCount ?? 0);
-  if (!(incomplete > 0)) return false;
+  if (event.after?.notReady !== true) return false;
   const d = daysUntilDue(event);
-  return d !== null && d >= 0 && d <= config.leadDays; // gate 临近且仍有前置未完成
+  return d !== null && d >= 0 && d <= config.leadDays;
 }
 
 // 严重度排序：序号越小越严重（P0 最严重）
@@ -412,13 +411,15 @@ function buildTaskBlockedMessage(event: AutomationEvent, ctx: AutomationMessageC
 }
 
 function buildGatePrereqMessage(event: AutomationEvent, ctx: AutomationMessageContext): AutomationMessage {
-  const title = ctx.entityTitle || String(event.after?.title ?? event.after?.taskId ?? event.entityId ?? "Gate");
+  const title = ctx.entityTitle || String(event.after?.gateName ?? event.after?.taskId ?? "Gate");
   const project = ctx.projectName ? `「${ctx.projectName}」` : "项目";
-  const n = Number(event.after?.incompletePrereqCount ?? 0);
   const d = daysUntilDue(event);
-  const messageTitle = "Gate 前置未完成";
-  const text = `${project}评审「${title}」${d === 0 ? "今天" : `还有 ${d} 天`}到期，仍有 ${n} 个前置任务未完成，请推进。`;
-  return { title: messageTitle, text, markdown: `#### ${messageTitle}\n${text}` };
+  const summaries = Array.isArray(event.after?.blockerSummaries) ? (event.after?.blockerSummaries as string[]) : [];
+  const lines = summaries.length ? summaries.map((s) => `- ${s}`).join("\n") : "- 仍有未就绪项";
+  const messageTitle = "Gate 就绪度提醒";
+  const when = d === 0 ? "今天" : `还有 ${d} 天`;
+  const text = `${project}评审「${title}」${when}到期，尚未就绪：${summaries.join("；") || "仍有未就绪项"}。`;
+  return { title: messageTitle, text, markdown: `#### ${messageTitle}\n${project}评审「${title}」${when}到期，还差以下项不能过会：\n${lines}` };
 }
 
 function changedInto(
