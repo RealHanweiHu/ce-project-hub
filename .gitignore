@@ -2,6 +2,9 @@
 **/node_modules
 .pnpm-store/
 
+# Git worktrees (isolated workspaces)
+.claude/worktrees/
+
 # Build outputs
 dist/
 build/
