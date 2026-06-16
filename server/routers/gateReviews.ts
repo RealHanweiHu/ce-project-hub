@@ -9,6 +9,7 @@ import {
   updateProjectGateReview,
   deleteProjectGateReview,
   createActivityLog,
+  getGateReadiness,
 } from "../db";
 import { ROLE_PERMISSIONS } from "./members";
 import { GATE_DECISIONS } from "../../drizzle/schema";
@@ -126,6 +127,17 @@ export const gateReviewsRouter = router({
         });
       }
       return { success: true };
+    }),
+
+  /** Gate 就绪度（4 维：前置/交付物/本阶段P0P1/遗留评审条件） */
+  readiness: protectedProcedure
+    .input(z.object({ projectId: z.string(), phaseId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const role = await getEffectiveRole(input.projectId, ctx.user.id);
+      if (!role || !ROLE_PERMISSIONS[role].canView) {
+        throw new TRPCError({ code: "FORBIDDEN" });
+      }
+      return getGateReadiness(input.projectId, input.phaseId);
     }),
 
   /** Delete a gate review (requires canGateReview) */
