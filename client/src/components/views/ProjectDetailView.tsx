@@ -320,9 +320,152 @@ function ReadinessRow({ label, ok, detail, soft }: { label: string; ok: boolean;
   );
 }
 
+/**
+ * Gate 交付物资源库手工增删面板（仅 PM/admin 可见）
+ * - 从资源库选择并添加交付物
+ * - 对手工添加项提供"移除"，对模板/归集项提供"排除"
+ */
+function GateDeliverableOverridePanel({
+  projectId, phaseId, effectiveDeliverables, canEdit,
+}: {
+  projectId: string;
+  phaseId: string;
+  /** 当前 gate 的有效交付物列表 */
+  effectiveDeliverables: string[];
+  canEdit: boolean;
+}) {
+  const utils = trpc.useUtils();
+  const [selectValue, setSelectValue] = useState('');
+  const [pending, setPending] = useState<string | null>(null);
+
+  const { data: library = [] } = trpc.tailoring.deliverableLibrary.useQuery({ projectId });
+  const { data: overrides = [] } = trpc.tailoring.deliverableOverrides.useQuery({ projectId });
+
+  const overrideMut = trpc.tailoring.setDeliverableOverride.useMutation({
+    onSettled: () => {
+      utils.tailoring.effectiveProcess.invalidate({ projectId });
+      utils.tailoring.deliverableOverrides.invalidate({ projectId });
+      setPending(null);
+    },
+  });
+
+  if (!canEdit) return null;
+
+  // 当前 gate 阶段的 override 集合（action → Set<deliverableName>）
+  const addedNames = new Set(
+    overrides
+      .filter((o) => o.nodePhaseId === phaseId && o.action === 'add')
+      .map((o) => o.deliverableName)
+  );
+  const removedNames = new Set(
+    overrides
+      .filter((o) => o.nodePhaseId === phaseId && o.action === 'remove')
+      .map((o) => o.deliverableName)
+  );
+
+  const effectiveSet = new Set(effectiveDeliverables);
+
+  // 资源库中未在有效集合中的条目（可添加）
+  const addableItems = library.filter((name) => !effectiveSet.has(name));
+
+  const handleAdd = (name: string) => {
+    if (!name) return;
+    setPending(name);
+    setSelectValue('');
+    overrideMut.mutate({ projectId, nodePhaseId: phaseId, deliverableName: name, action: 'add' });
+  };
+
+  const handleRemoveOverride = (name: string, action: 'clear' | 'remove') => {
+    setPending(name);
+    overrideMut.mutate({ projectId, nodePhaseId: phaseId, deliverableName: name, action });
+  };
+
+  // 只要有可添加条目、有手动项或有已排除项，就渲染面板
+  const hasContent =
+    addableItems.length > 0 ||
+    effectiveDeliverables.some((name) => addedNames.has(name)) ||
+    removedNames.size > 0;
+
+  if (!hasContent) return null;
+
+  return (
+    <div className="mt-3 pt-3 border-t border-stone-100 space-y-2">
+      <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400">资源库管理</div>
+
+      {/* 从资源库添加 */}
+      {addableItems.length > 0 && (
+        <div className="flex items-center gap-1.5">
+          <select
+            value={selectValue}
+            onChange={(e) => { setSelectValue(e.target.value); handleAdd(e.target.value); }}
+            disabled={overrideMut.isPending}
+            className="flex-1 text-xs border border-stone-200 bg-white text-stone-700 px-1.5 py-1 focus:outline-none focus:border-amber-400 min-w-0"
+          >
+            <option value="">＋ 从资源库添加…</option>
+            {addableItems.map((name) => (
+              <option key={name} value={name}>{name}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {/* 手工添加的项（action=add）→ 可移除（clear） */}
+      {effectiveDeliverables.filter((name) => addedNames.has(name)).map((name) => (
+        <div key={name} className="flex items-center justify-between gap-2 text-xs text-stone-600">
+          <span className="flex items-center gap-1 min-w-0">
+            <span className="text-[9px] font-mono text-emerald-600 bg-emerald-50 border border-emerald-200 px-1 py-0.5 shrink-0">手动添加</span>
+            <span className="truncate">{name}</span>
+          </span>
+          <button
+            disabled={pending === name || overrideMut.isPending}
+            onClick={() => handleRemoveOverride(name, 'clear')}
+            className="shrink-0 text-[10px] font-mono text-stone-400 hover:text-rose-500 disabled:opacity-40 transition-colors"
+            title="撤销添加"
+          >
+            × 移除
+          </button>
+        </div>
+      ))}
+
+      {/* 模板/归集项（非手动添加）→ 可排除（remove） */}
+      {effectiveDeliverables.filter((name) => !addedNames.has(name)).map((name) => (
+        <div key={name} className="flex items-center justify-between gap-2 text-xs text-stone-500">
+          <span className="truncate min-w-0">{name}</span>
+          <button
+            disabled={pending === name || overrideMut.isPending}
+            onClick={() => handleRemoveOverride(name, 'remove')}
+            className="shrink-0 text-[10px] font-mono text-stone-400 hover:text-rose-500 disabled:opacity-40 transition-colors"
+            title="从本阶段排除此交付物"
+          >
+            × 排除
+          </button>
+        </div>
+      ))}
+
+      {/* 已被排除的项（action=remove）→ 显示并提供恢复 */}
+      {Array.from(removedNames).map((name) => (
+        <div key={name} className="flex items-center justify-between gap-2 text-xs text-stone-400">
+          <span className="flex items-center gap-1 min-w-0">
+            <span className="text-[9px] font-mono text-stone-400 bg-stone-50 border border-stone-200 px-1 py-0.5 shrink-0">已排除</span>
+            <span className="truncate line-through">{name}</span>
+          </span>
+          <button
+            disabled={pending === name || overrideMut.isPending}
+            onClick={() => handleRemoveOverride(name, 'clear')}
+            className="shrink-0 text-[10px] font-mono text-stone-400 hover:text-amber-600 disabled:opacity-40 transition-colors"
+            title="恢复此交付物"
+          >
+            ↩ 恢复
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** 任务交付物清单：模板预置交付物 + 完成勾选（持久化到 project_tasks.deliverables） */
 function DeliverablesChecklist({
-  projectId, phaseId, taskId, items, status, canEdit,
+  projectId, phaseId, taskId, items, status, canEdit, carried,
 }: {
   projectId: string;
   phaseId: string;
@@ -330,6 +473,8 @@ function DeliverablesChecklist({
   items: string[];
   status: Record<string, boolean>;
   canEdit: boolean;
+  /** 归集项映射：deliverableName → 来源阶段名 */
+  carried?: Record<string, string>;
 }) {
   const utils = trpc.useUtils();
   const [pending, setPending] = useState<string | null>(null);
@@ -347,6 +492,7 @@ function DeliverablesChecklist({
       </div>
       {items.map((d) => {
         const done = !!status[d];
+        const fromPhase = carried?.[d];
         return (
           <button
             key={d}
@@ -357,7 +503,14 @@ function DeliverablesChecklist({
             {done
               ? <CheckCircle2 size={15} className="shrink-0 mt-0.5 text-emerald-600" />
               : <Circle size={15} className="shrink-0 mt-0.5 text-stone-300" />}
-            <span className={done ? 'text-stone-400 line-through' : 'text-stone-700'}>{d}</span>
+            <span className="flex items-center gap-1.5 min-w-0">
+              <span className={done ? 'text-stone-400 line-through' : 'text-stone-700'}>{d}</span>
+              {fromPhase && (
+                <span className="shrink-0 text-[9px] font-mono text-amber-600 bg-amber-50 border border-amber-200 px-1 py-0.5 leading-none">
+                  来自 {fromPhase}
+                </span>
+              )}
+            </span>
           </button>
         );
       })}
@@ -659,6 +812,13 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
   const effectiveActivePhase = effectiveProcess?.phases.find((phase) => phase.id === activePhaseId);
   const activeGateDeliverables =
     effectiveActivePhase?.submittedDeliverables ?? activePhase?.gateStandard?.requiredDeliverables ?? [];
+  // 归集项映射：deliverableName → 来源阶段显示名（用于 DeliverablesChecklist 标注）
+  const activeGateCarriedMap: Record<string, string> = Object.fromEntries(
+    (effectiveActivePhase?.carriedDeliverables ?? []).map(({ name, fromPhaseId }) => [
+      name,
+      PHASE_MAP[fromPhaseId]?.name ?? fromPhaseId,
+    ])
+  );
   const activePhaseData = project.phases[activePhaseId];
   const activeProgress = computePhaseProgress(activePhaseData, activePhaseId, activePhase);
   const overallProgress = computeOverallProgress(project);
@@ -1404,7 +1564,16 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                           }
                           status={selectedTaskDetails?.deliverables || {}}
                           canEdit={perms.canEditTasks && isCurrentPhaseUnlocked}
+                          carried={selectedTaskIsGate ? activeGateCarriedMap : undefined}
                         />
+                        {selectedTaskIsGate && (
+                          <GateDeliverableOverridePanel
+                            projectId={project.id}
+                            phaseId={activePhaseId}
+                            effectiveDeliverables={activeGateDeliverables}
+                            canEdit={perms.canEditTasks}
+                          />
+                        )}
                       </div>
                     </div>
 
