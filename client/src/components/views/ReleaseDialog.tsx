@@ -66,7 +66,7 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
   const gateOk = gateDecision === 'approved';
   const gateConditional = gateDecision === 'conditional';
   const gateWarn = gateConditional; // amber warning
-  const gateCheck = gateOk ? true : false;
+  const gateCheck = gateOk;
 
   // Deliverables check
   const delMissing = precheck?.deliverables?.missing ?? [];
@@ -232,8 +232,8 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
               />
             </div>
 
-            {/* 阻断原因列表 */}
-            {blockers.length > 0 && (
+            {/* 阻断原因列表（可强制发布时由上方强制表单替代，避免红框与表单并存） */}
+            {blockers.length > 0 && !precheck?.canForceRelease && (
               <div className="space-y-1 border border-rose-100 p-2.5 bg-rose-50">
                 <div className="text-[10px] font-mono uppercase tracking-widest text-rose-400">发布阻断</div>
                 {blockers.map((b, i) => (
