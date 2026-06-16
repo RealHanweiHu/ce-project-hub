@@ -18,6 +18,11 @@ scp -q .env.production "$ECS:$DIR/.env"
 echo "==> 构建并启动（app + minio，数据库用 RDS）"
 ssh "$ECS" "cd $DIR && docker compose -f docker-compose.prod.yml up -d --build"
 
+echo "==> 应用数据库迁移（drizzle-orm migrator，幂等；prod 镜像不含 drizzle-kit 故走 runtime migrator）"
+MIGRATE_JS='const{drizzle}=require("drizzle-orm/node-postgres");const{migrate}=require("drizzle-orm/node-postgres/migrator");const{Pool}=require("pg");const p=new Pool({connectionString:process.env.DATABASE_URL});migrate(drizzle(p),{migrationsFolder:"./drizzle"}).then(()=>{console.log("migrated OK");return p.end()}).catch(e=>{console.error("MIGRATE_ERR",e.message);process.exit(1)})'
+MIGRATE_B64=$(printf '%s' "$MIGRATE_JS" | base64 | tr -d '\n')
+ssh "$ECS" "cd $DIR && docker compose -f docker-compose.prod.yml run --rm -T app sh -c 'echo $MIGRATE_B64 | base64 -d | node -'"
+
 echo "==> 创建 MinIO bucket（幂等）"
 ssh "$ECS" "cd $DIR && docker compose -f docker-compose.prod.yml exec -T minio mkdir -p /data/cehub"
 
