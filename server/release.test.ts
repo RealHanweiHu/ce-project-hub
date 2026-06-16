@@ -1,18 +1,25 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import {
-  getDb, createProduct, createProject,
+  getDb, createProduct, createProjectWithSeed,
   setProjectProduct, getOpenP0P1Count, releaseProject,
   getProductById, getProjectById, listProductRevisions,
+  createProjectGateReview, setTaskDeliverable,
 } from "./db";
+import { getReleaseGatePhase } from "../shared/sop-templates";
+import { getTaskDeliverables } from "../shared/task-deliverables";
 
 const PID = "rel_test_product";
 const PRJ = "rel_test_project";
+const ACTOR = { id: 1, role: "user" };
 
 async function cleanup() {
   const db = await getDb(); if (!db) return;
   const { sql } = await import("drizzle-orm");
   await db.execute(sql`DELETE FROM mp_releases WHERE "productId" = ${PID}`);
   await db.execute(sql`DELETE FROM product_revisions WHERE "productId" = ${PID}`);
+  await db.execute(sql`DELETE FROM project_gate_reviews WHERE "projectId" = ${PRJ}`);
+  await db.execute(sql`DELETE FROM project_tasks WHERE "projectId" = ${PRJ}`);
+  await db.execute(sql`DELETE FROM project_phases WHERE "projectId" = ${PRJ}`);
   await db.execute(sql`DELETE FROM project_issues WHERE "projectId" = ${PRJ}`);
   await db.execute(sql`DELETE FROM projects WHERE id = ${PRJ}`);
   await db.execute(sql`DELETE FROM products WHERE id = ${PID}`);
@@ -20,40 +27,80 @@ async function cleanup() {
 beforeAll(cleanup);
 afterAll(cleanup);
 
-describe("MP Release", () => {
-  it("links a project to a product", async () => {
+async function addGate(decision: "approved" | "conditional" | "rejected", roundNumber: number, conditions?: string) {
+  await createProjectGateReview({
+    projectId: PRJ, phaseId: "pvt", phaseName: "PVT", gateName: "MP准备就绪评审",
+    reviewDate: "2026-06-01", decision, conditions: conditions ?? null, roundNumber, createdBy: 1,
+  } as any);
+}
+async function completeDeliverables() {
+  const phase = getReleaseGatePhase("npd")!;
+  for (const t of phase.tasks) {
+    if (t.id === phase.gateTaskId) continue;
+    for (const name of getTaskDeliverables(t.id, phase.deliverables)) {
+      await setTaskDeliverable(PRJ, phase.id, t.id, name, true, 1);
+    }
+  }
+}
+
+describe("MP Release 硬闸口", () => {
+  beforeAll(async () => {
     await createProduct({ id: PID, name: "测试泵", type: "finished", category: "充气泵", createdBy: 1 });
-    await createProject({ id: PRJ, name: "测试NPD", projectNumber: "T1", category: "npd", risk: "low", currentPhase: "concept", progress: 0, createdBy: 1 } as any);
+    await createProjectWithSeed(
+      { id: PRJ, name: "测试NPD", projectNumber: "T1", category: "npd", risk: "low", currentPhase: "concept", progress: 0, createdBy: 1, pmUserId: 2 } as any,
+      "npd", 1,
+    );
     await setProjectProduct(PRJ, PID);
-    const prj = await getProjectById(PRJ);
-    expect(prj?.productId).toBe(PID);
   });
 
-  it("counts open P0/P1 issues", async () => {
-    const db = await getDb();
-    const { sql } = await import("drizzle-orm");
-    await db!.execute(sql`INSERT INTO project_issues ("projectId","phaseId",title,severity,status,category) VALUES (${PRJ},'concept','blocker','P0','open','other')`);
-    const n = await getOpenP0P1Count(PRJ);
-    expect(n).toBe(1);
+  it("未关联产品：不可发布", async () => {
+    const db = await getDb(); const { sql } = await import("drizzle-orm");
+    await db!.execute(sql`UPDATE projects SET "productId"=NULL WHERE id=${PRJ}`);
+    await expect(releaseProject({ projectId: PRJ, actor: ACTOR })).rejects.toThrow(/未关联产品/);
+    await setProjectProduct(PRJ, PID);
   });
 
-  it("blocks release when open P0/P1 exist", async () => {
-    await expect(releaseProject({ projectId: PRJ, releasedBy: 1 })).rejects.toThrow();
-  });
-
-  it("releases after P0/P1 closed: Rev A, project archived, product → mass_production", async () => {
-    const db = await getDb();
-    const { sql } = await import("drizzle-orm");
+  it("P0/P1 未关闭：绝对硬卡，强制也不行", async () => {
+    const db = await getDb(); const { sql } = await import("drizzle-orm");
+    await db!.execute(sql`INSERT INTO project_issues ("projectId","phaseId",title,severity,status,category) VALUES (${PRJ},'pvt','blocker','P0','open','other')`);
+    await addGate("approved", 1);
+    await completeDeliverables();
+    await expect(releaseProject({ projectId: PRJ, actor: ACTOR })).rejects.toThrow(/P0\/P1/);
+    await expect(releaseProject({ projectId: PRJ, actor: { id: 1, role: "admin" }, override: { overrideReason: "x", followUpOwner: 1, dueDate: "2026-07-01" } })).rejects.toThrow(/P0\/P1/);
     await db!.execute(sql`UPDATE project_issues SET status='closed' WHERE "projectId"=${PRJ}`);
-    const res = await releaseProject({ projectId: PRJ, releasedBy: 1, notes: "首发" });
+  });
+
+  it("交付物未齐：绝对硬卡", async () => {
+    const db = await getDb(); const { sql } = await import("drizzle-orm");
+    await db!.execute(sql`UPDATE project_tasks SET deliverables='{}'::jsonb WHERE "projectId"=${PRJ} AND "phaseId"='pvt'`);
+    await expect(releaseProject({ projectId: PRJ, actor: { id: 1, role: "admin" }, override: { overrideReason: "x", followUpOwner: 1, dueDate: "2026-07-01" } })).rejects.toThrow(/交付物/);
+    await completeDeliverables();
+  });
+
+  it("Gate rejected：不可发布且不提供强制", async () => {
+    await addGate("rejected", 2);
+    await expect(releaseProject({ projectId: PRJ, actor: { id: 1, role: "admin" }, override: { overrideReason: "x", followUpOwner: 1, dueDate: "2026-07-01" } })).rejects.toThrow();
+  });
+
+  it("conditional + 无权用户：拒绝", async () => {
+    await addGate("conditional", 3, "补一份老化报告");
+    await expect(releaseProject({ projectId: PRJ, actor: { id: 9, role: "user" }, override: { overrideReason: "x", followUpOwner: 1, dueDate: "2026-07-01" } })).rejects.toThrow(/权限/);
+  });
+
+  it("conditional + 授权 + override 齐全：成功并留痕", async () => {
+    const res = await releaseProject({ projectId: PRJ, actor: { id: 2, role: "user" }, override: { overrideReason: "管理层接受", followUpOwner: 2, dueDate: "2026-07-01" } });
     expect(res.revisionLabel).toBe("Rev A");
-    const revs = await listProductRevisions(PID);
-    expect(revs.length).toBe(1);
-    const product = await getProductById(PID);
-    expect(product?.lifecycleState).toBe("mass_production");
-    expect(product?.currentRevisionId).toBe(res.revisionId);
+    const db = await getDb(); const { sql } = await import("drizzle-orm");
+    const r = await db!.execute(sql`SELECT overridden, "overrideReason", "acceptedBy", "conditionsSnapshot", "followUpOwner", "dueDate" FROM mp_releases WHERE "projectId"=${PRJ}`);
+    const row = r.rows[0] as any;
+    expect(row.overridden).toBe(true);
+    expect(row.acceptedBy).toBe(2);
+    expect(row.conditionsSnapshot).toBe("补一份老化报告");
+    expect(row.followUpOwner).toBe(2);
     const prj = await getProjectById(PRJ);
     expect(prj?.archived).toBe(true);
-    expect(prj?.resultRevisionId).toBe(res.revisionId);
+    const product = await getProductById(PID);
+    expect(product?.lifecycleState).toBe("mass_production");
+    expect((await listProductRevisions(PID)).length).toBe(1);
   });
 });

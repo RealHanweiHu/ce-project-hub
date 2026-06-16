@@ -1553,15 +1553,46 @@ export async function nextRevisionLabel(productId: string): Promise<string> {
  * 抛错表示校验未过（绕不过去的硬闸）。
  */
 export async function releaseProject(input: {
-  projectId: string; releasedBy: number; notes?: string;
+  projectId: string;
+  actor: { id: number; role: string };
+  notes?: string;
+  override?: { overrideReason: string; followUpOwner: number; dueDate: string };
 }): Promise<{ revisionId: number; revisionLabel: string }> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const project = await getProjectById(input.projectId);
   if (!project) throw new Error("项目不存在");
+
+  // —— 绝对硬卡 1：已关联产品 ——
   if (!project.productId) throw new Error("项目未关联产品，无法发布");
+  // —— 绝对硬卡 2：P0/P1 全关闭 ——
   const openCount = await getOpenP0P1Count(input.projectId);
   if (openCount > 0) throw new Error(`存在 ${openCount} 个未关闭的 P0/P1 问题，不能发布`);
+
+  // —— 前置 Gate ——
+  const gate = await getReleaseGateStatus(project);
+  if (!gate.phaseId) throw new Error("未定义 MP Release 前置 Gate，无法发布");
+  // —— 绝对硬卡 3：交付物齐 ——
+  if (gate.deliverables.missing.length > 0) {
+    throw new Error(`前置 Gate 必备交付物未齐（${gate.deliverables.done}/${gate.deliverables.total}）`);
+  }
+  // —— 绝对硬卡 4：Gate 有记录且非 rejected ——
+  if (gate.decision === null || gate.decision === "rejected") {
+    throw new Error("前置 Gate 未通过（无评审记录或已驳回），不能发布");
+  }
+
+  // —— conditional 仅授权用户留痕强制 ——
+  let overridden = false;
+  if (gate.decision === "conditional") {
+    if (!input.override) throw new Error("前置 Gate 为有条件通过，需 owner/PM/manager 填写理由强制发布");
+    const authorized = await isReleaseOverrideAuthorized(project, input.actor);
+    if (!authorized) throw new Error("无权限强制发布（需项目创建人/PM/manager 或系统管理员）");
+    const ov = input.override;
+    if (!ov.overrideReason?.trim() || !ov.followUpOwner || !ov.dueDate?.trim()) {
+      throw new Error("强制发布需填写理由、跟进负责人与截止日期");
+    }
+    overridden = true;
+  }
 
   const productId = project.productId;
   const label = await nextRevisionLabel(productId);
@@ -1575,17 +1606,23 @@ export async function releaseProject(input: {
       productId, revisionLabel: label,
       parentRevisionId: project.baseRevisionId ?? null,
       createdByProjectId: input.projectId,
-      status: "released", releasedAt: new Date(), releasedBy: input.releasedBy,
+      status: "released", releasedAt: new Date(), releasedBy: input.actor.id,
     }).returning({ id: productRevisions.id });
 
-    // 冻结工作态 BOM 进新版本，并写入发布快照
     const frozenBom = await freezeBomToRevision(input.projectId, rev.id, tx);
 
     await tx.insert(mpReleases).values({
       productId, revisionId: rev.id, projectId: input.projectId,
       snapshotBom: frozenBom as unknown[],
       openIssues: open as unknown[], notes: input.notes ?? null,
-      releasedBy: input.releasedBy,
+      releasedBy: input.actor.id,
+      overridden,
+      overrideReason: overridden ? input.override!.overrideReason : null,
+      acceptedBy: overridden ? input.actor.id : null,
+      acceptedAt: overridden ? new Date() : null,
+      conditionsSnapshot: overridden ? gate.conditions : null,
+      followUpOwner: overridden ? input.override!.followUpOwner : null,
+      dueDate: overridden ? input.override!.dueDate : null,
     } as InsertMpRelease);
 
     await tx.update(products)
@@ -1599,6 +1636,7 @@ export async function releaseProject(input: {
     return { revisionId: rev.id, revisionLabel: label };
   });
 }
+
 
 // ── BOM ───────────────────────────────────────────────────────────────────────
 
