@@ -256,6 +256,9 @@ ALTER TABLE "project_files" ADD COLUMN "deliverableName" varchar(256);
 ```
 
 > 说明：测试 harness（`scripts/test.mjs`）按 `drizzle/*.sql` 顺序执行，故新增列必须有此 .sql。生产用 `pnpm db:push`；如需 drizzle 元数据一致，可在本机另跑 `npx drizzle-kit generate`，但本计划以 .sql + schema.ts 为准（测试与 ORM 类型都满足）。
+>
+> **迁移号确认**：现有最高 `0017`，全分支无 0018，故 0018 安全。
+> **索引决策（延后到 2b）**：2a 的就绪查询走 `getProjectFiles(projectId, phaseId, gateTaskId)`，按 `taskId` 过滤、`deliverableName` 在 JS 里过滤；现有 `idx_project_files_project_phase` 已够，每个 gate 任务下交付物文件数为个位数，2a 不加新索引。2b 审核工作流会「按 deliverableName 直接查/改审核态」，届时再加 `(projectId, phaseId, deliverableName)` 索引（访问模式才匹配）。
 
 - [ ] **Step 5: 上传路由透传 deliverableName**。在 `server/routers/files.ts` 的 `registerFileUploadRoute` 内：
 
