@@ -130,6 +130,7 @@ async function hasCurrentSchema() {
     "organizations",
     "project_changelog",
     "project_deliverable_overrides",
+    "project_deliverable_reviews",
     "project_files",
     "project_gate_reviews",
     "project_issues",
