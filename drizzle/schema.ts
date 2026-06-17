@@ -293,6 +293,37 @@ export type ProjectDeliverableOverride = typeof projectDeliverableOverrides.$inf
 export type InsertProjectDeliverableOverride = typeof projectDeliverableOverrides.$inferInsert;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Deliverable Reviews
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const deliverableReviewStatusEnum = pgEnum("deliverable_review_status", ["pending", "approved", "rejected"]);
+
+export const projectDeliverableReviews = pgTable(
+  "project_deliverable_reviews",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 }).notNull(),
+    phaseId: varchar("phaseId", { length: 32 }).notNull(),
+    deliverableName: varchar("deliverableName", { length: 256 }).notNull(),
+    status: deliverableReviewStatusEnum("status").notNull().default("pending"),
+    reviewerUserId: integer("reviewerUserId").notNull(),
+    submittedBy: integer("submittedBy").notNull(),
+    submittedAt: timestamp("submittedAt").defaultNow().notNull(),
+    reviewedBy: integer("reviewedBy"),
+    reviewedAt: timestamp("reviewedAt"),
+    reviewNote: text("reviewNote"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    uniq: uniqueIndex("uniq_deliverable_review").on(table.projectId, table.phaseId, table.deliverableName),
+    idxReviewer: index("idx_deliverable_review_reviewer").on(table.reviewerUserId, table.status),
+  })
+);
+export type ProjectDeliverableReview = typeof projectDeliverableReviews.$inferSelect;
+export type InsertProjectDeliverableReview = typeof projectDeliverableReviews.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Tasks (per-project, per-phase task completion state)
 // ─────────────────────────────────────────────────────────────────────────────
 
