@@ -329,7 +329,7 @@ function ReadinessRow({ label, ok, detail, soft }: { label: string; ok: boolean;
 /** 每条 gate 交付物的审核态徽标 + 提交/通过/驳回操作 */
 function DeliverableReviewControls({
   projectId, phaseId, deliverableNames, canEditTasks, currentUserId, isAdmin,
-  gateTaskId,
+  gateTaskId, pmUserId,
 }: {
   projectId: string;
   phaseId: string;
@@ -338,6 +338,7 @@ function DeliverableReviewControls({
   currentUserId: number | undefined;
   isAdmin: boolean;
   gateTaskId?: string;
+  pmUserId: number | null;
 }) {
   const utils = trpc.useUtils();
   const { data: reviewList = [] } = trpc.deliverableReviews.list.useQuery({ projectId });
@@ -381,7 +382,7 @@ function DeliverableReviewControls({
   const uploadedNames = new Set(files.map((f) => (f as { deliverableName?: string | null }).deliverableName).filter((n): n is string => !!n));
 
   // PM fallback for reviewer picker default
-  const pmMember = members.find((m) => m.role === 'pm' || m.isOwner);
+  const pmMember = members.find((m) => m.userId === pmUserId) ?? members.find((m) => m.role === 'pm' || m.isOwner);
 
   return (
     <div className="mt-3 pt-3 border-t border-stone-100 space-y-2">
@@ -1776,6 +1777,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                             currentUserId={currentUser?.id}
                             isAdmin={currentUser?.role === 'admin'}
                             gateTaskId={activePhase?.gateTaskId}
+                            pmUserId={project.pmUserId ?? null}
                           />
                         )}
                       </div>
