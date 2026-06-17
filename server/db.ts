@@ -952,8 +952,10 @@ export async function createProjectFile(record: Omit<InsertProjectFile, "id" | "
   const result = await db.insert(projectFiles).values(record).returning({ id: projectFiles.id });
   // 上传新版本后触发交付物重审（若已审核过则回退待审）
   if (record.deliverableName && record.phaseId) {
-    const { resetReviewOnReupload } = await import("./deliverable-review-service");
-    await resetReviewOnReupload(record.projectId, record.phaseId, record.deliverableName);
+    try {
+      const { resetReviewOnReupload } = await import("./deliverable-review-service");
+      await resetReviewOnReupload(record.projectId, record.phaseId, record.deliverableName);
+    } catch { /* 重审钩子 best-effort，不影响上传 */ }
   }
   return result[0].id;
 }

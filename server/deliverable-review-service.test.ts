@@ -67,10 +67,14 @@ describe("deliverable review service", () => {
     expect(mine.length).toBeGreaterThan(0);
   });
   it("createProjectFile 自动触发重审：approved 后传新版本 → pending", async () => {
-    // "ID外观图" 在前面的用例里被 submit 过；先确保它是 approved
-    await reviewDeliverable({ projectId: PROJ, phaseId: "design", deliverableName: "ID外观图", decision: "approved", reviewedBy: REVIEWER, note: null }, deps).catch(() => {});
-    await addFile("ID外观图"); // 上传新版本 → createProjectFile 内部应触发 resetReviewOnReupload
-    const rows = await listDeliverableReviews(PROJ);
-    expect(rows.find((r) => r.deliverableName === "ID外观图")?.status).toBe("pending");
+    const NAME = "重审专用交付物";
+    await addFile(NAME);
+    await submitDeliverableReview({ projectId: PROJ, phaseId: "design", deliverableName: NAME, reviewerUserId: REVIEWER, submittedBy: SUBMITTER }, deps);
+    await reviewDeliverable({ projectId: PROJ, phaseId: "design", deliverableName: NAME, decision: "approved", reviewedBy: REVIEWER, note: null }, deps);
+    let rows = await listDeliverableReviews(PROJ);
+    expect(rows.find((r) => r.deliverableName === NAME)?.status).toBe("approved");
+    await addFile(NAME); // 上传新版本 → createProjectFile 触发 resetReviewOnReupload
+    rows = await listDeliverableReviews(PROJ);
+    expect(rows.find((r) => r.deliverableName === NAME)?.status).toBe("pending");
   });
 });
