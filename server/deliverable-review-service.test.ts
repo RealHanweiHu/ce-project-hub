@@ -66,4 +66,11 @@ describe("deliverable review service", () => {
     expect(mine.every((r) => r.reviewerUserId === REVIEWER && r.status === "pending")).toBe(true);
     expect(mine.length).toBeGreaterThan(0);
   });
+  it("createProjectFile 自动触发重审：approved 后传新版本 → pending", async () => {
+    // "ID外观图" 在前面的用例里被 submit 过；先确保它是 approved
+    await reviewDeliverable({ projectId: PROJ, phaseId: "design", deliverableName: "ID外观图", decision: "approved", reviewedBy: REVIEWER, note: null }, deps).catch(() => {});
+    await addFile("ID外观图"); // 上传新版本 → createProjectFile 内部应触发 resetReviewOnReupload
+    const rows = await listDeliverableReviews(PROJ);
+    expect(rows.find((r) => r.deliverableName === "ID外观图")?.status).toBe("pending");
+  });
 });

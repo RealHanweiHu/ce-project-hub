@@ -950,6 +950,11 @@ export async function createProjectFile(record: Omit<InsertProjectFile, "id" | "
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const result = await db.insert(projectFiles).values(record).returning({ id: projectFiles.id });
+  // 上传新版本后触发交付物重审（若已审核过则回退待审）
+  if (record.deliverableName && record.phaseId) {
+    const { resetReviewOnReupload } = await import("./deliverable-review-service");
+    await resetReviewOnReupload(record.projectId, record.phaseId, record.deliverableName);
+  }
   return result[0].id;
 }
 
