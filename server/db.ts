@@ -1918,10 +1918,8 @@ export async function getGateReadiness(projectId: string, phaseId: string): Prom
   const incompleteTaskIds = phase.tasks.filter((t) => t.id !== phase.gateTaskId && !isDone(t.id)).map((t) => t.id);
 
   const required = effPhase?.submittedDeliverables ?? phase.gateStandard.requiredDeliverables;
-  const gateFiles = await getProjectFiles(projectId, phaseId, phase.gateTaskId);
-  const uploaded = Array.from(new Set(
-    gateFiles.map((f) => f.deliverableName).filter((n): n is string => !!n && required.includes(n))
-  ));
+  const { getReviewSatisfiedSet } = await import("./deliverable-review-service");
+  const uploaded = Array.from(await getReviewSatisfiedSet(projectId, phaseId, required));
 
   const critical = await getPhaseOpenP0P1(projectId, phaseId);
 
