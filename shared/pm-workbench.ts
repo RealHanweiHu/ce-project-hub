@@ -123,7 +123,7 @@ export function buildTodayItems(tasks: PmTask[], myRows: PmProjectRow[], today: 
         tag: "风险",
         tone: "rose",
         priority: 40,
-        sortDate: r.targetDate ?? "9999-99-99",
+        sortDate: r.targetDate ?? "9999-12-31",
       });
     }
   }

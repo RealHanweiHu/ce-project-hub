@@ -62,6 +62,24 @@ describe("buildTodayItems", () => {
     expect(items.map((i) => i.key)).toEqual(["gate-a"]);
   });
 
+  it("Gate 窗口边界：today+7 含、today+8 不含", () => {
+    const rows = [
+      row({ id: "in", gateName: "Edge In", gateDueDate: "2026-06-25", gateDone: false }), // today+7，含
+      row({ id: "out", gateName: "Edge Out", gateDueDate: "2026-06-26", gateDone: false }), // today+8，不含
+    ];
+    const items = buildTodayItems([], rows, today);
+    expect(items.map((i) => i.key)).toEqual(["gate-in"]);
+  });
+
+  it("同为逾期任务时按 sortDate 升序", () => {
+    const tasks = [
+      task({ id: 1, dueDate: "2026-06-12", priority: "medium" }),
+      task({ id: 2, dueDate: "2026-06-10", priority: "medium" }),
+    ];
+    const items = buildTodayItems(tasks, [], today);
+    expect(items.map((i) => i.key)).toEqual(["task-2", "task-1"]);
+  });
+
   it("纳入 red 或预计晚于目标的风险项目", () => {
     const rows = [
       row({ id: "a", ragLevel: "red" }),
