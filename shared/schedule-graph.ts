@@ -1,16 +1,22 @@
 // IPD 消费电子(锂电充气泵/车载吸尘器等)自动排期依赖图。
-// 格式：taskId -> [工期(日历日), ...前置任务id]。无前置=阶段入口（依赖上一阶段 gate 由下方手动接上）。
-// 工期为首版经验值，可随时调（纯数据，不改逻辑）。
-import { generateSchedule, type SchedTask, type Schedule } from "./scheduling";
+// 格式：taskId -> [工期(工作日), ...前置任务id]。无前置=阶段入口（依赖上一阶段 gate 由下方手动接上）。
+// 工期为首版经验值；buildSchedTasks/scheduleForCategory 支持传入运行时图覆盖。
+import {
+  generateSchedule,
+  resolveScheduleOrder,
+  type SchedTask,
+  type Schedule,
+  type ScheduleOptions,
+} from "./scheduling";
 import { getPhasesForCategory } from "./sop-templates";
 
-type G = Record<string, [number, ...string[]]>;
+export type ScheduleGraph = Record<string, [number, ...string[]]>;
 
 // 压缩版（目标:整机开发约 3-4 个月）。关键提速:
 //  1) 认证(v3)与开模(v4)在「设计冻结 d8」即启动,与 EVT/DVT 并行(长交期项早开工);
 //  2) 设计多轨并行(ID/MD/EE/SW);测试项并行;工期按快速消费电子收紧。
 // 仍是纯数据,可按实际产品微调。当前关键路径:NPD ≈ DVT 3.1 月 / 试产 3.9 月,ECO ≈ 2.5 月,IDR ≈ 2.6 月。
-export const SCHEDULE_GRAPH: G = {
+export const SCHEDULE_GRAPH: ScheduleGraph = {
   // ── NPD ───────────────────────────────────────────────
   // 概念 P1
   c1: [5], c2: [5], c3: [4, "c1", "c2"], c4: [5, "c3"], c5: [4, "c3"], c6: [1, "c4", "c5"],
@@ -42,13 +48,16 @@ export const SCHEDULE_GRAPH: G = {
   im1: [6, "iv7"], im2: [8, "im1"], im3: [6, "im1"], im4: [4, "im2"], im5: [6, "im2"], im6: [1, "im3", "im4", "im5"],
 };
 
-/** 把某 category 的阶段（按顺序）转成排期任务；工期/依赖取自 SCHEDULE_GRAPH，缺省 1 天、无依赖。 */
-export function buildSchedTasks(phases: Array<{ bufferDays?: number; tasks: Array<{ id: string }> }>): SchedTask[] {
+/** 把某 category 的阶段（按顺序）转成排期任务；工期/依赖取自 graph，缺省 1 天、无依赖。 */
+export function buildSchedTasks(
+  phases: Array<{ bufferDays?: number; tasks: Array<{ id: string }> }>,
+  graph: ScheduleGraph = SCHEDULE_GRAPH
+): SchedTask[] {
   const out: SchedTask[] = [];
   for (const phase of phases) {
     const phaseIds = new Set(phase.tasks.map((t) => t.id));
     for (const t of phase.tasks) {
-      const g = SCHEDULE_GRAPH[t.id];
+      const g = graph[t.id];
       const durationDays = g ? g[0] : 1;
       const dependsOn = g ? (g.slice(1) as string[]) : [];
       const isEntry = dependsOn.length === 0 || dependsOn.every((d) => !phaseIds.has(d));
@@ -58,38 +67,68 @@ export function buildSchedTasks(phases: Array<{ bufferDays?: number; tasks: Arra
   return out;
 }
 
+type ScheduleForCategoryOptions = ScheduleOptions & { graph?: ScheduleGraph };
+
 /** 按 category + 开始日生成整套任务起止日（taskId -> {start, due}） */
-export function scheduleForCategory(category: string | undefined, startDate: string): Schedule {
-  return generateSchedule(buildSchedTasks(getPhasesForCategory(category)), startDate);
+export function scheduleForCategory(
+  category: string | undefined,
+  startDate: string,
+  options: ScheduleForCategoryOptions = {}
+): Schedule {
+  return generateSchedule(buildSchedTasks(getPhasesForCategory(category), options.graph), startDate, options);
+}
+
+const criticalPathCache = new Map<string, Set<string>>();
+
+export function clearCriticalPathCache(): void {
+  criticalPathCache.clear();
 }
 
 /**
  * 计算某 category 的关键路径任务集合（决定整体工期的最长链)。
  * 用于 Gantt 高亮关键路径。
  */
-export function criticalPathTasks(category: string | undefined): Set<string> {
+export function criticalPathTasks(
+  category: string | undefined,
+  graph: ScheduleGraph = SCHEDULE_GRAPH
+): Set<string> {
+  const cacheKey = graph === SCHEDULE_GRAPH ? category ?? "__default" : null;
+  const cached = cacheKey ? criticalPathCache.get(cacheKey) : undefined;
+  if (cached) return new Set(cached);
+
   const phases = getPhasesForCategory(category);
-  const idList = phases.flatMap((p) => p.tasks.map((t) => t.id));
-  const ids = new Set<string>(idList);
-  const g: Record<string, [number, string[]]> = {};
-  for (const id of idList) {
-    const e = SCHEDULE_GRAPH[id];
-    g[id] = e ? [e[0], (e.slice(1) as string[]).filter((d) => ids.has(d))] : [1, []];
-  }
+  const tasks = buildSchedTasks(phases, graph);
+  const order = resolveScheduleOrder(tasks);
+  const byId = new Map(tasks.map((t) => [t.id, t]));
   const finish: Record<string, number> = {};
   const pick: Record<string, string | null> = {};
-  const calc = (id: string): number => {
-    if (finish[id] != null) return finish[id];
-    const entry = g[id] ?? [1, []];
-    let best = 0, bp: string | null = null;
-    for (const dep of entry[1]) { const f = calc(dep); if (f > best) { best = f; bp = dep; } }
+
+  for (const id of order) {
+    const task = byId.get(id)!;
+    let best = 0;
+    let bp: string | null = null;
+    for (const dep of task.dependsOn ?? []) {
+      const f = finish[dep];
+      if (f > best) {
+        best = f;
+        bp = dep;
+      }
+    }
     pick[id] = bp;
-    return (finish[id] = best + entry[0]);
-  };
+    finish[id] = best + (task.lagDays ?? 0) + (task.durationDays ?? 1);
+  }
+
   let endId: string | null = null, endF = -1;
-  for (const id of idList) { const f = calc(id); if (f > endF) { endF = f; endId = id; } }
+  for (const id of order) {
+    const f = finish[id];
+    if (f > endF) {
+      endF = f;
+      endId = id;
+    }
+  }
   const path = new Set<string>();
   let cur: string | null = endId;
   while (cur) { path.add(cur); cur = pick[cur]; }
+  if (cacheKey) criticalPathCache.set(cacheKey, new Set(path));
   return path;
 }

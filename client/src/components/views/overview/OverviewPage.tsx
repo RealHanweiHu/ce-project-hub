@@ -48,6 +48,7 @@ export function OverviewPage({ onSelectProject }: { onSelectProject: (id: string
   const activeLens: Lens = lens && allowedLenses.includes(lens) ? lens : allowedLenses[0];
 
   const [drill, setDrill] = useState<"overdue" | "blocked" | null>(null);
+  const isPersonalOnly = activeLens === "mine" && allowedLenses.length === 1;
 
   const phaseDistribution = useMemo(() => {
     const m = new Map<string, { count: number; name: string; color: string }>();
@@ -82,25 +83,33 @@ export function OverviewPage({ onSelectProject }: { onSelectProject: (id: string
         )}
       </div>
 
-      <KpiStrip rows={portfolio} onDrill={setDrill} />
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <RagHealthPanel rows={portfolio} onSelectProject={onSelectProject} />
-        <div className="ce-panel p-5">
-          <h3 className="font-serif text-lg text-stone-900 mb-4">阶段分布</h3>
-          <Suspense fallback={<div className="h-[220px]" />}>
-            <PhaseDistributionChart data={phaseDistribution} />
-          </Suspense>
-        </div>
-      </div>
-      <PortfolioTable rows={portfolio} onSelectProject={onSelectProject} />
+      {isPersonalOnly ? (
+        <PerspectivePanel lens="mine" rows={portfolio} onSelectProject={onSelectProject} allowProjectNavigation={false} showRelatedProjects />
+      ) : (
+        <>
+          <KpiStrip rows={portfolio} onDrill={setDrill} />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <RagHealthPanel rows={portfolio} onSelectProject={onSelectProject} />
+            <div className="ce-panel p-5">
+              <h3 className="font-serif text-lg text-stone-900 mb-4">阶段分布</h3>
+              <Suspense fallback={<div className="h-[220px]" />}>
+                <PhaseDistributionChart data={phaseDistribution} />
+              </Suspense>
+            </div>
+          </div>
+          <PortfolioTable rows={portfolio} onSelectProject={onSelectProject} />
 
-      <div className="pt-2">
-        <PerspectivePanel lens={activeLens} rows={portfolio} onSelectProject={onSelectProject} />
-      </div>
+          <div className="pt-2">
+            <PerspectivePanel lens={activeLens} rows={portfolio} onSelectProject={onSelectProject} />
+          </div>
 
-      <MilestoneCalendar onSelectProject={onSelectProject} />
+          <MilestoneCalendar onSelectProject={onSelectProject} />
+        </>
+      )}
 
-      {drill && <DrillDown kind={drill} onClose={() => setDrill(null)} onSelectProject={onSelectProject} />}
+      {!isPersonalOnly && drill && (
+        <DrillDown kind={drill} onClose={() => setDrill(null)} onSelectProject={onSelectProject} />
+      )}
     </div>
   );
 }

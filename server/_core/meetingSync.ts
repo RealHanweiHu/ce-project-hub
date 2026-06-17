@@ -3,6 +3,7 @@ import { buildWeeklyEvent } from "./dingtalkCalendar";
 type Cfg = { enabled: boolean; weekday: number; time: string; durationMin: number; title: string };
 type Proj = { id: string; name: string; startDate: string | null; targetDate: string | null; pmUserId: number | null; dingtalkEventId: string | null };
 type Member = { id: number; dingtalkUserId?: string | null; mobile?: string | null };
+const PENDING_SYNC_EVENT_ID = "pending_sync";
 
 export type MeetingSyncDeps = {
   resolveUserId: (u: Member) => Promise<string | null>;
@@ -32,8 +33,10 @@ export async function syncProjectMeeting(args: {
       title: config.title, weekday: config.weekday, time: config.time, durationMin: config.durationMin,
       startDate: startAnchor, targetDate: project.targetDate, timeZone: "Asia/Shanghai", attendees,
     });
-    const eventId = await deps.upsert({ organizerUserId: pmUserId, existingEventId: project.dingtalkEventId, event });
+    const existingEventId = project.dingtalkEventId === PENDING_SYNC_EVENT_ID ? null : project.dingtalkEventId;
+    const eventId = await deps.upsert({ organizerUserId: pmUserId, existingEventId, event });
     if (eventId) { await deps.saveEventId(project.id, eventId); return { mode: "dingtalk" }; }
+    if (!existingEventId) await deps.saveEventId(project.id, PENDING_SYNC_EVENT_ID);
   }
 
   // 降级：群推文字提醒

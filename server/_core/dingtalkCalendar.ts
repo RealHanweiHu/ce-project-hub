@@ -1,4 +1,4 @@
-import { getAccessToken, isDingtalkConfigured } from "./dingtalk";
+import { fetchDingtalkApi, isDingtalkConfigured } from "./dingtalk";
 
 export type WeeklyEventInput = {
   title: string; weekday: number; time: string; durationMin: number;
@@ -56,6 +56,17 @@ export function buildWeeklyEvent(input: WeeklyEventInput): DingtalkEvent {
 
 const CAL_BASE = "https://api.dingtalk.com/v1.0/calendar/users";
 
+async function confirmEventExists(organizerUserId: string, eventId: string): Promise<boolean> {
+  const resp = await fetchDingtalkApi((token) => ({
+    url: `${CAL_BASE}/${encodeURIComponent(organizerUserId)}/calendars/primary/events/${encodeURIComponent(eventId)}`,
+    init: {
+      method: "GET",
+      headers: { "x-acs-dingtalk-access-token": token },
+    },
+  }));
+  return !!resp?.ok;
+}
+
 /** 建或更新组织者日历上的循环日程；返回 eventId；未配置/失败返回 null（上层降级） */
 export async function upsertWeeklyMeeting(params: {
   organizerUserId: string;
@@ -64,18 +75,26 @@ export async function upsertWeeklyMeeting(params: {
 }): Promise<string | null> {
   if (!isDingtalkConfigured()) return null;
   try {
-    const token = await getAccessToken();
-    if (!token) return null;
     const base = `${CAL_BASE}/${encodeURIComponent(params.organizerUserId)}/calendars/primary/events`;
     const url = params.existingEventId ? `${base}/${encodeURIComponent(params.existingEventId)}` : base;
-    const resp = await fetch(url, {
-      method: params.existingEventId ? "PUT" : "POST",
-      headers: { "Content-Type": "application/json", "x-acs-dingtalk-access-token": token },
-      body: JSON.stringify(params.event),
-    });
+    const resp = await fetchDingtalkApi((token) => ({
+      url,
+      init: {
+        method: params.existingEventId ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json", "x-acs-dingtalk-access-token": token },
+        body: JSON.stringify(params.event),
+      },
+    }));
+    if (!resp) return null;
     if (!resp.ok) { console.warn("[dingtalk] upsert event http", resp.status); return null; }
-    const j = (await resp.json()) as { id?: string };
-    return j.id ?? params.existingEventId ?? null;
+    const j = (await resp.json().catch(() => ({}))) as { id?: string };
+    const eventId = j.id ?? params.existingEventId ?? null;
+    if (!eventId) return null;
+    if (!(await confirmEventExists(params.organizerUserId, eventId))) {
+      console.warn("[dingtalk] event upsert returned id but follow-up GET did not confirm", eventId);
+      return null;
+    }
+    return eventId;
   } catch (e) {
     console.warn("[dingtalk] upsert event failed (degrade):", e);
     return null;
@@ -85,12 +104,13 @@ export async function upsertWeeklyMeeting(params: {
 export async function cancelMeeting(organizerUserId: string, eventId: string): Promise<void> {
   if (!isDingtalkConfigured()) return;
   try {
-    const token = await getAccessToken();
-    if (!token) return;
-    await fetch(`${CAL_BASE}/${encodeURIComponent(organizerUserId)}/calendars/primary/events/${encodeURIComponent(eventId)}`, {
-      method: "DELETE",
-      headers: { "x-acs-dingtalk-access-token": token },
-    });
+    await fetchDingtalkApi((token) => ({
+      url: `${CAL_BASE}/${encodeURIComponent(organizerUserId)}/calendars/primary/events/${encodeURIComponent(eventId)}`,
+      init: {
+        method: "DELETE",
+        headers: { "x-acs-dingtalk-access-token": token },
+      },
+    }));
   } catch (e) {
     console.warn("[dingtalk] cancel event failed (non-fatal):", e);
   }

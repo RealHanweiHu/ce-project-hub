@@ -1,4 +1,4 @@
-import { eq, desc, and, or, isNull, inArray, between, sql as drizzleSql } from "drizzle-orm";
+import { eq, desc, and, or, isNull, inArray, between, sql as drizzleSql, getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import {
   InsertUser, users, projects, InsertProject, ProjectRow,
@@ -268,15 +268,19 @@ export async function createProjectWithSeed(
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const phases = getSopPhasesForCategory(category);
+  const schedule = project.startDate ? scheduleForCategory(category, project.startDate) : null;
   await db.transaction(async (tx) => {
     await tx.insert(projects).values(project);
     for (const phase of phases) {
       await tx.insert(projectPhases).values({ projectId: project.id, phaseId: phase.id });
       for (const task of phase.tasks) {
+        const dates = schedule?.[task.id];
         await tx.insert(projectTasks).values({
           projectId: project.id,
           phaseId: phase.id,
           taskId: task.id,
+          startDate: dates?.start ?? null,
+          dueDate: dates?.due ?? null,
           completed: false,
           visibleRoles: task.visibleRoles,
           updatedBy: createdBy,
@@ -342,12 +346,11 @@ export type PortfolioRow = {
   openIssues: number; criticalIssues: number; projectedEnd: string | null;
 };
 
-/** 跨项目组合看板：用户可见项目 + 每项目健康度聚合(任务/逾期/阻塞/开放问题/预计完成) */
+/** 跨项目组合看板：用户可进入的项目 + 每项目健康度聚合(任务/逾期/阻塞/开放问题/预计完成) */
 export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
   const db = await getDb();
   if (!db) return [];
-  // 总览全员只读可见全部未归档项目（详情/编辑仍按各自权限拦截），避免信息闭塞。
-  const allProjects = await db.select().from(projects).where(eq(projects.archived, false));
+  const allProjects = await getProjectsByUser(userId);
   const projById = new Map<string, ProjectRow>();
   for (const p of allProjects) projById.set(p.id, p);
   const ids = Array.from(projById.keys());
@@ -424,7 +427,7 @@ export async function getPortfolioHealthForDigest(todayISO: string): Promise<Por
   }).from(projectIssues).where(inArray(projectIssues.projectId, ids)).groupBy(projectIssues.projectId);
 
   // getAutomationGatePrereqs 已只返回 archived=false 项目，无需再按 ids 过滤。
-  const gateRows = await getAutomationGatePrereqs();
+  const gateRows = await getAutomationGatePrereqs({ todayISO, horizonDays: GATE_AMBER_DAYS, limit: 5000 });
   const gateByProject = new Map<string, "red" | "amber">();
   for (const g of gateRows) {
     if (!g.dueDate) continue;
@@ -986,6 +989,17 @@ export async function getProjectFileById(id: number): Promise<ProjectFile | unde
     .select()
     .from(projectFiles)
     .where(eq(projectFiles.id, id))
+    .limit(1);
+  return row;
+}
+
+export async function getProjectFileByStorageKey(storageKey: string): Promise<ProjectFile | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const [row] = await db
+    .select()
+    .from(projectFiles)
+    .where(eq(projectFiles.storageKey, storageKey))
     .limit(1);
   return row;
 }
@@ -2120,9 +2134,13 @@ export async function bomDiff(revA: number, revB: number): Promise<{ added: BomI
 
 // ── 协作：评论 + @提及 + 通知 ─────────────────────────────────────────────────
 
+export function extractMentionNames(body: string): string[] {
+  return Array.from(new Set((body.match(/@([A-Za-z0-9_.\-]+)/g) || []).map((m) => m.slice(1).toLowerCase())));
+}
+
 /** 从正文提取 @username，匹配候选用户名（不区分大小写），返回命中用户 id */
 export function parseMentions(body: string, candidates: { id: number; username: string | null }[]): number[] {
-  const names = new Set((body.match(/@([A-Za-z0-9_.\-]+)/g) || []).map((m) => m.slice(1).toLowerCase()));
+  const names = new Set(extractMentionNames(body));
   if (names.size === 0) return [];
   return candidates.filter((c) => c.username && names.has(c.username.toLowerCase())).map((c) => c.id);
 }
@@ -2142,7 +2160,13 @@ export async function addComment(input: {
   entityType: string; entityId: string; projectId?: string | null; authorId: number; body: string;
 }): Promise<Comment> {
   const db = await getDb(); if (!db) throw new Error("Database not available");
-  const candidates = await db.select({ id: users.id, username: users.username }).from(users);
+  const mentionNames = extractMentionNames(input.body);
+  const candidates = mentionNames.length > 0
+    ? await db
+      .select({ id: users.id, username: users.username })
+      .from(users)
+      .where(inArray(drizzleSql<string>`lower(${users.username})`, mentionNames))
+    : [];
   const mentions = parseMentions(input.body, candidates);
   const [c] = await db.insert(comments).values({
     entityType: input.entityType, entityId: input.entityId,
@@ -2223,6 +2247,56 @@ export type AutomationRuleDefault = {
   config: Record<string, unknown>;
 };
 
+export type AutomationDueScanOptions = {
+  todayISO?: string;
+  horizonDays?: number;
+  limit?: number;
+  offset?: number;
+};
+
+const AUTOMATION_SCAN_TIME_ZONE = "Asia/Shanghai";
+const DEFAULT_AUTOMATION_SCAN_HORIZON_DAYS = 14;
+const DEFAULT_AUTOMATION_SCAN_LIMIT = 500;
+const MAX_AUTOMATION_SCAN_LIMIT = 5000;
+
+function normalizeAutomationDueScanOptions(input: AutomationDueScanOptions = {}) {
+  const todayISO = isISODate(input.todayISO) ? input.todayISO : todayISOInTimeZone(new Date(), AUTOMATION_SCAN_TIME_ZONE);
+  const horizonDays = clampInteger(input.horizonDays, DEFAULT_AUTOMATION_SCAN_HORIZON_DAYS, 0, 365);
+  return {
+    todayISO,
+    throughISO: addDaysISO(todayISO, horizonDays),
+    limit: clampInteger(input.limit, DEFAULT_AUTOMATION_SCAN_LIMIT, 1, MAX_AUTOMATION_SCAN_LIMIT),
+    offset: clampInteger(input.offset, 0, 0, Number.MAX_SAFE_INTEGER),
+  };
+}
+
+function todayISOInTimeZone(now: Date, timeZone: string): string {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts: Record<string, string> = {};
+  for (const part of formatter.formatToParts(now)) parts[part.type] = part.value;
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function addDaysISO(iso: string, days: number): string {
+  const time = Date.parse(`${iso}T00:00:00Z`);
+  if (Number.isNaN(time)) return iso;
+  return new Date(time + days * 86400000).toISOString().slice(0, 10);
+}
+
+function isISODate(value: unknown): value is string {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function clampInteger(value: unknown, fallback: number, min: number, max: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.min(Math.max(Math.floor(value), min), max);
+}
+
 export async function seedAutomationRuleDefaults(defaults: AutomationRuleDefault[]): Promise<void> {
   const db = await getDb();
   if (!db) return;
@@ -2276,6 +2350,7 @@ export async function createAutomationRun(record: Omit<InsertAutomationRun, "id"
 
 export async function hasRecentAutomationFire(input: {
   ruleKey: string;
+  eventType: string;
   entityId: string;
   since: Date;
 }): Promise<boolean> {
@@ -2286,6 +2361,7 @@ export async function hasRecentAutomationFire(input: {
     .from(automationRuns)
     .where(and(
       eq(automationRuns.ruleKey, input.ruleKey),
+      eq(automationRuns.eventType, input.eventType),
       eq(automationRuns.entityId, input.entityId),
       eq(automationRuns.status, "fired"),
       drizzleSql`${automationRuns.createdAt} >= ${input.since}`
@@ -2313,59 +2389,107 @@ export async function listAutomationRuns(input: {
 }
 
 /** 逾期或 14 天内到期的未完成任务（逾期催办 + 截止前提醒 共用此扫描，规则各自精确过滤） */
-export async function getAutomationDueTasks(): Promise<ProjectTask[]> {
+export async function getAutomationDueTasks(input: AutomationDueScanOptions = {}): Promise<ProjectTask[]> {
   const db = await getDb();
   if (!db) return [];
+  const { throughISO, limit, offset } = normalizeAutomationDueScanOptions(input);
   return db
-    .select()
+    .select(getTableColumns(projectTasks))
     .from(projectTasks)
+    .innerJoin(projects, eq(projectTasks.projectId, projects.id))
     .where(and(
+      eq(projects.archived, false),
       drizzleSql`${projectTasks.dueDate} IS NOT NULL`,
-      drizzleSql`${projectTasks.dueDate} <= CURRENT_DATE + INTERVAL '14 days'`,
+      drizzleSql`${projectTasks.dueDate} <= ${throughISO}`,
       drizzleSql`${projectTasks.status} NOT IN ('done','skipped')`
-    ));
+    ))
+    .orderBy(projectTasks.dueDate, projectTasks.projectId, projectTasks.phaseId, projectTasks.taskId)
+    .limit(limit)
+    .offset(offset);
 }
 
 /** 逾期或 14 天内到期的未关闭问题 */
-export async function getAutomationDueIssues(): Promise<ProjectIssue[]> {
+export async function getAutomationDueIssues(input: AutomationDueScanOptions = {}): Promise<ProjectIssue[]> {
   const db = await getDb();
   if (!db) return [];
+  const { throughISO, limit, offset } = normalizeAutomationDueScanOptions(input);
   return db
-    .select()
+    .select(getTableColumns(projectIssues))
     .from(projectIssues)
+    .innerJoin(projects, eq(projectIssues.projectId, projects.id))
     .where(and(
+      eq(projects.archived, false),
       drizzleSql`${projectIssues.targetDate} IS NOT NULL`,
       drizzleSql`${projectIssues.targetDate} <> ''`,
-      drizzleSql`${projectIssues.targetDate} <= TO_CHAR(CURRENT_DATE + INTERVAL '14 days', 'YYYY-MM-DD')`,
+      drizzleSql`${projectIssues.targetDate} <= ${throughISO}`,
       drizzleSql`${projectIssues.status} NOT IN ('resolved','closed','wont_fix')`
-    ));
+    ))
+    .orderBy(projectIssues.targetDate, projectIssues.projectId, projectIssues.id)
+    .limit(limit)
+    .offset(offset);
 }
 
 /** Gate 前置未完扫描：跨活跃项目，找"未完成且 dueDate 已设"的 gate 任务 + 其阶段内未完成前置数。 */
 export async function getAutomationGatePrereqs(): Promise<Array<{
   projectId: string; taskId: string; phaseId: string; dueDate: string | null; status: string; incompletePrereqCount: number; title: string;
+}>>;
+export async function getAutomationGatePrereqs(input: AutomationDueScanOptions): Promise<Array<{
+  projectId: string; taskId: string; phaseId: string; dueDate: string | null; status: string; incompletePrereqCount: number; title: string;
+}>>;
+export async function getAutomationGatePrereqs(input: AutomationDueScanOptions = {}): Promise<Array<{
+  projectId: string; taskId: string; phaseId: string; dueDate: string | null; status: string; incompletePrereqCount: number; title: string;
 }>> {
   const db = await getDb();
   if (!db) return [];
-  const projs = await db.select({ id: projects.id, category: projects.category }).from(projects).where(eq(projects.archived, false));
+  const { throughISO, limit, offset } = normalizeAutomationDueScanOptions(input);
+  const taskRows = await db
+    .select({
+      projectId: projectTasks.projectId,
+      category: projects.category,
+      taskId: projectTasks.taskId,
+      status: projectTasks.status,
+      dueDate: projectTasks.dueDate,
+      completed: projectTasks.completed,
+    })
+    .from(projectTasks)
+    .innerJoin(projects, eq(projectTasks.projectId, projects.id))
+    .where(eq(projects.archived, false))
+    .orderBy(projectTasks.projectId, projectTasks.phaseId, projectTasks.taskId);
+
+  type AutomationGateTaskRow = (typeof taskRows)[number];
+  const grouped = new Map<string, { category: string; rows: AutomationGateTaskRow[] }>();
+  for (const row of taskRows) {
+    const group = grouped.get(row.projectId);
+    if (group) {
+      group.rows.push(row);
+    } else {
+      grouped.set(row.projectId, { category: row.category, rows: [row] });
+    }
+  }
+
   const out: Array<{ projectId: string; taskId: string; phaseId: string; dueDate: string | null; status: string; incompletePrereqCount: number; title: string }> = [];
-  for (const p of projs) {
-    const phases = getPhasesForCategory(p.category);
-    const rows = await db.select({ taskId: projectTasks.taskId, status: projectTasks.status, dueDate: projectTasks.dueDate, completed: projectTasks.completed })
-      .from(projectTasks).where(eq(projectTasks.projectId, p.id));
-    const byTask = new Map(rows.map((r) => [r.taskId, r]));
+  for (const [projectId, group] of Array.from(grouped.entries())) {
+    const phases = getPhasesForCategory(group.category);
+    const byTask = new Map<string, AutomationGateTaskRow>(
+      group.rows.map((r): [string, AutomationGateTaskRow] => [r.taskId, r])
+    );
     const isDone = (id: string) => { const r = byTask.get(id); return r ? (r.status === "done" || r.status === "skipped" || !!r.completed) : false; };
     for (const phase of phases) {
       const gate = byTask.get(phase.gateTaskId);
-      if (!gate?.dueDate || isDone(phase.gateTaskId)) continue;
+      if (!gate?.dueDate || gate.dueDate > throughISO || isDone(phase.gateTaskId)) continue;
       let incomplete = 0;
       for (const t of phase.tasks) { if (t.id !== phase.gateTaskId && !isDone(t.id)) incomplete += 1; }
       if (incomplete > 0) {
-        out.push({ projectId: p.id, taskId: phase.gateTaskId, phaseId: phase.id, dueDate: gate.dueDate, status: gate.status, incompletePrereqCount: incomplete, title: phase.gate || phase.gateTaskId });
+        out.push({ projectId, taskId: phase.gateTaskId, phaseId: phase.id, dueDate: gate.dueDate, status: gate.status, incompletePrereqCount: incomplete, title: phase.gate || phase.gateTaskId });
       }
     }
   }
-  return out;
+  out.sort((a, b) =>
+    (a.dueDate ?? "").localeCompare(b.dueDate ?? "") ||
+    a.projectId.localeCompare(b.projectId) ||
+    a.phaseId.localeCompare(b.phaseId)
+  );
+  return out.slice(offset, offset + limit);
 }
 
 /** 里程碑日历事件：阶段截止 / Gate 评审 / 项目目标日。 */
@@ -2378,14 +2502,13 @@ export type CalendarEvent = {
 };
 
 /**
- * 在 [fromDate, toDate] 时间窗内聚合用户可见项目(owned ∪ member)的里程碑级事件。
+ * 在 [fromDate, toDate] 时间窗内聚合用户可进入项目(owned ∪ member)的里程碑级事件。
  * 仅里程碑：阶段截止日(projectPhases.endDate)、Gate评审(projectGateReviews.reviewDate)、项目目标日(projects.targetDate)。
  */
 export async function getCalendar(userId: number, fromDate: string, toDate: string): Promise<CalendarEvent[]> {
   const db = await getDb();
   if (!db) return [];
-  // 总览日历全员只读可见全部未归档项目里程碑（详情/编辑仍按各自权限），避免信息闭塞。
-  const allProjects = await db.select().from(projects).where(eq(projects.archived, false));
+  const allProjects = await getProjectsByUser(userId);
   const projById = new Map<string, ProjectRow>();
   for (const p of allProjects) projById.set(p.id, p);
   const ids = Array.from(projById.keys());

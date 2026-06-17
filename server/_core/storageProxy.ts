@@ -1,5 +1,8 @@
 import type { Express } from "express";
+import type { CreateExpressContextOptions } from "@trpc/server/adapters/express";
 import { storageGetObject } from "../storage";
+import { getProjectById, getProjectFileByStorageKey, getProjectMember } from "../db";
+import { createContext } from "./context";
 
 /**
  * Serve stored objects through the app at /storage/{key}.
@@ -22,6 +25,28 @@ export function registerStorageProxy(app: Express) {
       return;
     }
     try {
+      const ctx = await createContext({ req, res } as CreateExpressContextOptions);
+      if (!ctx.user) {
+        res.status(401).send("Unauthorized");
+        return;
+      }
+
+      const file = await getProjectFileByStorageKey(key);
+      if (!file) {
+        res.status(404).send("Not found");
+        return;
+      }
+      const project = await getProjectById(file.projectId);
+      if (!project) {
+        res.status(404).send("Not found");
+        return;
+      }
+      const member = project.createdBy === ctx.user.id ? { role: "owner" } : await getProjectMember(file.projectId, ctx.user.id);
+      if (!member) {
+        res.status(403).send("Forbidden");
+        return;
+      }
+
       const obj = await storageGetObject(key);
       if (obj.contentType) res.set("Content-Type", obj.contentType);
       if (obj.contentLength !== undefined) {

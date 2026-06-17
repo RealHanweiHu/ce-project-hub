@@ -239,7 +239,7 @@ function matchesOverdueReminder(event: AutomationEvent, config: OverdueConfig): 
 
   const now = asDate(event.now ?? new Date());
   if (!now) return false;
-  const daysOverdue = Math.floor((startOfDay(now).getTime() - startOfDay(dueDate).getTime()) / DAY_MS);
+  const daysOverdue = dayNumberInAutomationZone(now) - dayNumberInAutomationZone(dueDate);
   return daysOverdue > config.graceDays;
 }
 
@@ -248,7 +248,7 @@ function daysUntilDue(event: AutomationEvent): number | null {
   const due = asDate(event.after?.dueDate ?? event.after?.targetDate);
   const now = asDate(event.now ?? new Date());
   if (!due || !now) return null;
-  return Math.floor((startOfDay(due).getTime() - startOfDay(now).getTime()) / DAY_MS);
+  return dayNumberInAutomationZone(due) - dayNumberInAutomationZone(now);
 }
 
 function matchesDueSoon(event: AutomationEvent, config: DueSoonConfig): boolean {
@@ -437,7 +437,7 @@ function daysOverdueFromEvent(event: AutomationEvent): number | null {
   const dueDate = asDate(event.after?.dueDate ?? event.after?.targetDate);
   const now = asDate(event.now ?? new Date());
   if (!dueDate || !now) return null;
-  return Math.max(0, Math.floor((startOfDay(now).getTime() - startOfDay(dueDate).getTime()) / DAY_MS));
+  return Math.max(0, dayNumberInAutomationZone(now) - dayNumberInAutomationZone(dueDate));
 }
 
 function entityLabel(entityType: AutomationEntityType): string {
@@ -454,6 +454,7 @@ function isClosedStatus(entityType: AutomationEntityType, status: string): boole
   return false;
 }
 
+const AUTOMATION_RULE_TIME_ZONE = "Asia/Shanghai";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function asDate(value: unknown): Date | null {
@@ -463,8 +464,21 @@ function asDate(value: unknown): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function startOfDay(date: Date): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+function dayNumberInAutomationZone(date: Date): number {
+  const time = Date.parse(`${dateISOInAutomationZone(date)}T00:00:00Z`);
+  return Math.floor(time / DAY_MS);
+}
+
+function dateISOInAutomationZone(date: Date): string {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: AUTOMATION_RULE_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts: Record<string, string> = {};
+  for (const part of formatter.formatToParts(date)) parts[part.type] = part.value;
+  return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

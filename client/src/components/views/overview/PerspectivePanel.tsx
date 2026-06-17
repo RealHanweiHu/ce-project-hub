@@ -14,7 +14,19 @@ export type Lens = "exec" | "pm" | "mine";
 const prog = (r: PortfolioTableRow) => (r.taskTotal > 0 ? Math.round((r.taskDone / r.taskTotal) * 100) : 0);
 const overdue = (r: PortfolioTableRow) => isProjectedOverdue(r.projectedEnd, r.targetDate);
 
-export function PerspectivePanel({ lens, rows, onSelectProject }: { lens: Lens; rows: PortfolioTableRow[]; onSelectProject: (id: string) => void }) {
+export function PerspectivePanel({
+  lens,
+  rows,
+  onSelectProject,
+  allowProjectNavigation = true,
+  showRelatedProjects = false,
+}: {
+  lens: Lens;
+  rows: PortfolioTableRow[];
+  onSelectProject: (id: string) => void;
+  allowProjectNavigation?: boolean;
+  showRelatedProjects?: boolean;
+}) {
   const { user } = useAuth();
   const { data: myTasks = [], isLoading: myLoading, refetch: refetchMine } = trpc.tasks.myTasks.useQuery();
 
@@ -70,7 +82,16 @@ export function PerspectivePanel({ lens, rows, onSelectProject }: { lens: Lens; 
     );
   }
 
-  return <MyTasks tasks={myTasks} isLoading={myLoading} onRefetch={() => refetchMine()} onSelectProject={onSelectProject} />;
+  return (
+    <MyTasks
+      tasks={myTasks}
+      isLoading={myLoading}
+      onRefetch={() => refetchMine()}
+      relatedProjects={showRelatedProjects ? rows : []}
+      onSelectRelatedProject={onSelectProject}
+      onNavigateToProject={allowProjectNavigation ? onSelectProject : undefined}
+    />
+  );
 }
 
 type MyTaskApiRow = {
@@ -80,8 +101,13 @@ type MyTaskApiRow = {
   assigneeUserId: number | null; completed: boolean;
 };
 
-function MyTasks({ tasks, isLoading, onRefetch, onSelectProject }: {
-  tasks: MyTaskApiRow[]; isLoading: boolean; onRefetch: () => void; onSelectProject: (id: string) => void;
+function MyTasks({ tasks, isLoading, onRefetch, relatedProjects = [], onSelectRelatedProject, onNavigateToProject }: {
+  tasks: MyTaskApiRow[];
+  isLoading: boolean;
+  onRefetch: () => void;
+  relatedProjects?: PortfolioTableRow[];
+  onSelectRelatedProject: (id: string) => void;
+  onNavigateToProject?: (id: string) => void;
 }) {
   const today = new Date().toISOString().slice(0, 10);
   const od = tasks.filter((t) => t.dueDate && t.dueDate < today).length;
@@ -101,10 +127,15 @@ function MyTasks({ tasks, isLoading, onRefetch, onSelectProject }: {
         <Stat label="3天内到期" value={soon} accent={soon > 0 ? "text-amber-600" : undefined} />
         <Stat label="被阻塞" value={blocked} accent={blocked > 0 ? "text-amber-600" : undefined} />
       </div>
+      {relatedProjects.length > 0 && (
+        <Panel title={`我相关的项目（${relatedProjects.length}）`}>
+          <ProjectRows rows={relatedProjects} onSelectProject={onSelectRelatedProject} empty="暂无可进入的相关项目" />
+        </Panel>
+      )}
       <div className="ce-table-shell">
         <TaskListView tasks={rows} isLoading={isLoading} emptyIcon={<CheckCircle2 size={24} />}
           emptyTitle="没有待办任务 🎉" emptyDesc="当前没有指派给您的未完成任务。"
-          onRefetch={onRefetch} onNavigateToProject={onSelectProject} showOverdueBadge />
+          onRefetch={onRefetch} onNavigateToProject={onNavigateToProject} showOverdueBadge />
       </div>
     </div>
   );
