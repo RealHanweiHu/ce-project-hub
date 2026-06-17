@@ -1,24 +1,45 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { protectedProcedure, router } from "../_core/trpc";
-import { getDb } from "../db";
-import { projects, projectMembers, projectDeliverableReviews } from "../../drizzle/schema";
+import { getDb, getProjectById, getProjectMember } from "../db";
+import { projects, projectDeliverableReviews } from "../../drizzle/schema";
 import { and, eq } from "drizzle-orm";
 import { listDeliverableReviews, getMyPendingReviews, submitDeliverableReview, reviewDeliverable } from "../deliverable-review-service";
+import { ROLE_PERMISSIONS } from "./members";
+
+async function getUserProjectRole(projectId: string, userId: number) {
+  const project = await getProjectById(projectId);
+  if (!project) return null;
+  if (project.createdBy === userId) return "owner" as const;
+  const member = await getProjectMember(projectId, userId);
+  return member?.role ?? null;
+}
+
+async function assertCanView(projectId: string, user: { id: number; role: string }) {
+  const project = await getProjectById(projectId);
+  if (!project) throw new TRPCError({ code: "NOT_FOUND", message: "项目不存在" });
+  if (user.role === "admin") return project;
+  const role = await getUserProjectRole(projectId, user.id);
+  if (!role || !ROLE_PERMISSIONS[role].canView) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "无访问权限" });
+  }
+  return project;
+}
 
 async function assertCanEdit(projectId: string, user: { id: number; role: string }) {
-  if (user.role === "admin") return;
-  const db = await getDb();
-  const [proj] = await db!.select({ pmUserId: projects.pmUserId, createdBy: projects.createdBy }).from(projects).where(eq(projects.id, projectId));
-  if (!proj) throw new TRPCError({ code: "NOT_FOUND" });
-  if (proj.pmUserId === user.id || proj.createdBy === user.id) return;
-  const m = await db!.select({ role: projectMembers.role }).from(projectMembers).where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, user.id)));
-  if (m[0] && m[0].role !== "viewer") return;
+  const project = await assertCanView(projectId, user);
+  if (user.role === "admin" || project.pmUserId === user.id) return project;
+  const role = await getUserProjectRole(projectId, user.id);
+  if (role === "pm") return project;
+  if (role && ROLE_PERMISSIONS[role].canEditTasks) return project;
   throw new TRPCError({ code: "FORBIDDEN", message: "无编辑权限" });
 }
 
 export const deliverableReviewsRouter = router({
-  list: protectedProcedure.input(z.object({ projectId: z.string() })).query(({ input }) => listDeliverableReviews(input.projectId)),
+  list: protectedProcedure.input(z.object({ projectId: z.string() })).query(async ({ ctx, input }) => {
+    await assertCanView(input.projectId, ctx.user);
+    return listDeliverableReviews(input.projectId);
+  }),
   myPending: protectedProcedure.query(({ ctx }) => getMyPendingReviews(ctx.user.id)),
   submit: protectedProcedure
     .input(z.object({ projectId: z.string(), phaseId: z.string(), deliverableName: z.string().min(1), reviewerUserId: z.number().optional() }))

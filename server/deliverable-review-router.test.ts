@@ -24,6 +24,12 @@ afterAll(async () => {
 });
 
 describe("deliverableReviews 权限", () => {
+  it("非成员 list → FORBIDDEN", async () => {
+    await expect(caller(OUTSIDER, "user").list({ projectId: PROJ })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+  it("PM list → ok", async () => {
+    await expect(caller(PM, "user").list({ projectId: PROJ })).resolves.toBeDefined();
+  });
   it("非成员 submit → FORBIDDEN", async () => {
     await expect(caller(OUTSIDER, "user").submit({ projectId: PROJ, phaseId: "design", deliverableName: "ID外观图", reviewerUserId: REVIEWER })).rejects.toThrow();
   });
