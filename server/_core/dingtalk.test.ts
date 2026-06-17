@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
-  __setDingtalkConfigForTest, getAccessToken, _resetTokenCacheForTest, resolveDingtalkUserId,
+  __setDingtalkConfigForTest, fetchDingtalkApi, getAccessToken, _resetTokenCacheForTest, resolveDingtalkUserId,
 } from "./dingtalk";
 
 beforeEach(() => { _resetTokenCacheForTest(); vi.restoreAllMocks(); });
@@ -19,6 +19,28 @@ describe("dingtalk token", () => {
     expect(await getAccessToken()).toBe("tok-1");
     expect(await getAccessToken()).toBe("tok-1"); // 命中缓存
     expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears cached token and retries once on 401", async () => {
+    __setDingtalkConfigForTest({ appKey: "k", appSecret: "s" });
+    let tokenFetches = 0;
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.includes("oauth2/accessToken")) {
+        tokenFetches += 1;
+        return new Response(JSON.stringify({ accessToken: `tok-${tokenFetches}`, expireIn: 7200 }), { status: 200 });
+      }
+      if (u.includes("tok-1")) return new Response("expired", { status: 401 });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+
+    const resp = await fetchDingtalkApi((token) => ({
+      url: `https://oapi.dingtalk.com/example?access_token=${encodeURIComponent(token)}`,
+    }));
+
+    expect(resp?.status).toBe(200);
+    expect(tokenFetches).toBe(2);
+    expect(spy).toHaveBeenCalledTimes(4);
   });
 });
 

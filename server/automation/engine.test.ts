@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import {
   getDb, upsertUser, getUserByOpenId, createProjectWithSeed,
-  updateAutomationRuleRow, listAutomationRuns,
+  updateAutomationRuleRow, listAutomationRuns, createAutomationRun, hasRecentAutomationFire,
 } from "../db";
 import { runAutomation } from "./engine";
 
@@ -114,6 +114,34 @@ describe("automation engine integration", () => {
     expect(b.pushes.length).toBe(1);
   });
 
+  it("continues group notification when personal DingTalk notification fails", async () => {
+    const { updateProject } = await import("../db");
+    await updateProject(PROJECT_ID, { dingtalkChatId: null });
+    const dispatch = makeDeps();
+    dispatch.deps.notifyDingtalk = async () => {
+      throw new Error("dingtalk temporary failure");
+    };
+
+    await runAutomation({
+      action: "issue.create",
+      projectId: PROJECT_ID,
+      entityType: "issue",
+      entityId: 9201,
+      after: { severity: "P0", title: "钉钉瞬时失败", assigneeUserId: asgId },
+    }, dispatch.deps);
+
+    expect(dispatch.notes.length).toBeGreaterThan(0);
+    expect(dispatch.pushes.length).toBe(1);
+    const runs = await listAutomationRuns({ projectId: PROJECT_ID });
+    const fired = runs.find((r) => r.ruleKey === "high_severity_issue" && r.entityId === "9201");
+    expect(fired?.status).toBe("fired");
+    expect(fired?.detail ?? "").toContain("Channel failures");
+    expect(fired?.recipients).toEqual(expect.arrayContaining([
+      expect.objectContaining({ channel: "dingtalk", ok: false }),
+      expect.objectContaining({ channel: "webhook", ok: true }),
+    ]));
+  });
+
   it("does not trigger high severity for out-of-set severity (P3)", async () => {
     const { notes, deps } = makeDeps();
     await runAutomation({
@@ -143,6 +171,34 @@ describe("automation engine integration", () => {
     const runs = await listAutomationRuns({ projectId: PROJECT_ID });
     expect(runs.some((r) => r.ruleKey === "overdue_reminder" && r.status === "fired")).toBe(true);
     expect(runs.some((r) => r.ruleKey === "overdue_reminder" && r.status === "skipped")).toBe(true);
+  });
+
+  it("dedup lookup includes event type in addition to rule and entity", async () => {
+    const entityId = `${PROJECT_ID}:concept:event-type`;
+    await createAutomationRun({
+      ruleKey: "overdue_reminder",
+      projectId: PROJECT_ID,
+      eventType: "manual",
+      entityType: "task",
+      entityId,
+      status: "fired",
+      recipients: [],
+      detail: "manual event",
+    });
+
+    const since = new Date("2000-01-01T00:00:00Z");
+    await expect(hasRecentAutomationFire({
+      ruleKey: "overdue_reminder",
+      eventType: "scheduled",
+      entityId,
+      since,
+    })).resolves.toBe(false);
+    await expect(hasRecentAutomationFire({
+      ruleKey: "overdue_reminder",
+      eventType: "manual",
+      entityId,
+      since,
+    })).resolves.toBe(true);
   });
 
   it("does not fire a disabled rule", async () => {

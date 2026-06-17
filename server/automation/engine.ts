@@ -29,6 +29,16 @@ type ResolvedRecipients = {
   chatId: string | null;
 };
 
+type DispatchChannel = "site" | "dingtalk" | "group" | "webhook";
+
+type DispatchResult = {
+  channel: DispatchChannel;
+  ok: boolean;
+  userId?: number;
+  group?: boolean;
+  error?: string;
+};
+
 type DispatchDeps = {
   createNotification?: typeof defaultCreateNotification;
   pushWebhook?: typeof defaultPushWebhook;
@@ -37,6 +47,7 @@ type DispatchDeps = {
 };
 
 let seededDefaults = false;
+const activeScheduledRuns = new Set<string>();
 
 export async function ensureAutomationRuleDefaults(): Promise<void> {
   if (seededDefaults) return;
@@ -66,15 +77,24 @@ export async function runAutomation(event: AutomationEvent, deps: DispatchDeps =
     const row = rowByKey.get(rule.key);
     if (!row?.enabled) continue;
 
+    let activeRunKey: string | null = null;
+    let activeRunLocked = false;
     try {
       const config = parseAutomationRuleConfig(rule.key, row.config ?? {});
       if (!rule.matches(event, config)) continue;
 
       const entityId = entityIdForRun(event);
       if (rule.triggerType === "scheduled" && entityId) {
+        activeRunKey = automationRunKey(rule.key, event.action, entityId);
+        if (activeScheduledRuns.has(activeRunKey)) {
+          await writeRun(rule, event, "skipped", [], "dedup already running");
+          continue;
+        }
+        activeScheduledRuns.add(activeRunKey);
+        activeRunLocked = true;
         const cadenceHours = getCadenceHours(config);
         const since = new Date(Date.now() - cadenceHours * 60 * 60 * 1000);
-        if (await hasRecentAutomationFire({ ruleKey: rule.key, entityId, since })) {
+        if (await hasRecentAutomationFire({ ruleKey: rule.key, eventType: event.action, entityId, since })) {
           await writeRun(rule, event, "skipped", [], `dedup within ${cadenceHours}h`);
           continue;
         }
@@ -89,43 +109,85 @@ export async function runAutomation(event: AutomationEvent, deps: DispatchDeps =
         continue;
       }
 
-      const createNotification = deps.createNotification ?? defaultCreateNotification;
-      for (const userId of recipients.userIds) {
-        await createNotification({
-          userId,
-          type: "automation",
-          title: message.title,
-          body: message.text,
-          entityType: event.entityType,
-          entityId: event.entityId == null ? null : String(event.entityId),
-        });
-      }
-
-      // 钉钉工作通知：把提醒直接推到负责人本人的钉钉（解析不到/未配则静默跳过）
-      if (recipients.userIds.length > 0) {
-        const notifyDingtalk = deps.notifyDingtalk ?? defaultNotifyDingtalk;
-        await notifyDingtalk(recipients.userIds, message.title, message.markdown ?? message.text);
-      }
-
-      if (recipients.pushGroup) {
-        const link = ENV.appBaseUrl ? `\n\n[打开 CE Project Hub](${ENV.appBaseUrl}/)` : "";
-        const md = `${message.markdown ?? message.text}${link}`;
-        if (recipients.chatId) {
-          // 有项目专属钉钉群 → 提醒发到本项目群
-          const notifyGroup = deps.notifyGroup ?? defaultNotifyGroup;
-          await notifyGroup(recipients.chatId, message.title, md);
-        } else {
-          // 否则回退到全局群机器人 webhook
-          const pushWebhook = deps.pushWebhook ?? defaultPushWebhook;
-          await pushWebhook(message.text, { title: message.title, markdown: md });
-        }
-      }
-
-      await writeRun(rule, event, "fired", serializeRecipients(recipients), message.text);
+      const dispatchResults = await dispatchMessage(event, message, recipients, deps);
+      const failures = dispatchResults.filter((result) => !result.ok);
+      await writeRun(
+        rule,
+        event,
+        "fired",
+        serializeRecipients(recipients, dispatchResults),
+        failures.length > 0 ? `${message.text}\nChannel failures: ${summarizeDispatchFailures(failures)}` : message.text
+      );
     } catch (error) {
       await writeRun(rule, event, "error", [], error instanceof Error ? error.message : String(error));
+    } finally {
+      if (activeRunLocked && activeRunKey) activeScheduledRuns.delete(activeRunKey);
     }
   }
+}
+
+async function dispatchMessage(
+  event: AutomationEvent,
+  message: ReturnType<BuiltInAutomationRule["buildMessage"]>,
+  recipients: ResolvedRecipients,
+  deps: DispatchDeps
+): Promise<DispatchResult[]> {
+  const results: DispatchResult[] = [];
+  const createNotification = deps.createNotification ?? defaultCreateNotification;
+  const siteResults = await Promise.allSettled(
+    recipients.userIds.map((userId) =>
+      createNotification({
+        userId,
+        type: "automation",
+        title: message.title,
+        body: message.text,
+        entityType: event.entityType,
+        entityId: event.entityId == null ? null : String(event.entityId),
+      })
+    )
+  );
+  siteResults.forEach((result, index) => {
+    const userId = recipients.userIds[index];
+    results.push(result.status === "fulfilled"
+      ? { channel: "site", userId, ok: true }
+      : { channel: "site", userId, ok: false, error: errorMessage(result.reason) });
+  });
+
+  if (recipients.userIds.length > 0) {
+    const notifyDingtalk = deps.notifyDingtalk ?? defaultNotifyDingtalk;
+    try {
+      await notifyDingtalk(recipients.userIds, message.title, message.markdown ?? message.text);
+      results.push({ channel: "dingtalk", ok: true });
+    } catch (error) {
+      results.push({ channel: "dingtalk", ok: false, error: errorMessage(error) });
+    }
+  }
+
+  if (recipients.pushGroup) {
+    const link = ENV.appBaseUrl ? `\n\n[打开 CE Project Hub](${ENV.appBaseUrl}/)` : "";
+    const md = `${message.markdown ?? message.text}${link}`;
+    if (recipients.chatId) {
+      const notifyGroup = deps.notifyGroup ?? defaultNotifyGroup;
+      try {
+        const ok = await notifyGroup(recipients.chatId, message.title, md);
+        results.push(ok
+          ? { channel: "group", group: true, ok: true }
+          : { channel: "group", group: true, ok: false, error: "group notification returned false" });
+      } catch (error) {
+        results.push({ channel: "group", group: true, ok: false, error: errorMessage(error) });
+      }
+    } else {
+      const pushWebhook = deps.pushWebhook ?? defaultPushWebhook;
+      try {
+        await pushWebhook(message.text, { title: message.title, markdown: md });
+        results.push({ channel: "webhook", group: true, ok: true });
+      } catch (error) {
+        results.push({ channel: "webhook", group: true, ok: false, error: errorMessage(error) });
+      }
+    }
+  }
+
+  return results;
 }
 
 async function resolveRecipients(
@@ -233,15 +295,31 @@ async function writeRun(
   }
 }
 
-function serializeRecipients(recipients: ResolvedRecipients) {
+function serializeRecipients(recipients: ResolvedRecipients, dispatchResults: DispatchResult[] = []) {
+  if (dispatchResults.length > 0) return dispatchResults;
   return [
     ...recipients.userIds.map((userId) => ({ userId, channel: "site" })),
     ...(recipients.pushGroup ? [{ group: true, channel: "webhook" }] : []),
   ];
 }
 
+function summarizeDispatchFailures(failures: DispatchResult[]): string {
+  return failures
+    .map((failure) => `${failure.channel}${failure.userId ? `:${failure.userId}` : ""}=${failure.error ?? "failed"}`)
+    .join("; ")
+    .slice(0, 500);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function entityIdForRun(event: AutomationEvent): string | null {
   return event.entityId == null ? null : String(event.entityId);
+}
+
+function automationRunKey(ruleKey: string, eventType: string, entityId: string): string {
+  return `${ruleKey}\u001f${eventType}\u001f${entityId}`;
 }
 
 function getCadenceHours(config: AutomationRuleConfig): number {

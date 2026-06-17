@@ -20,6 +20,7 @@ import {
 import { ROLE_PERMISSIONS } from "./members";
 import { TASK_STATUSES, TASK_PRIORITIES } from "../../drizzle/schema";
 import { emitAutomationEvent } from "../automation/events";
+import { isScheduleError } from "../../shared/scheduling";
 
 async function getEffectiveRole(projectId: string, userId: number) {
   const project = await getProjectById(projectId);
@@ -27,6 +28,13 @@ async function getEffectiveRole(projectId: string, userId: number) {
   if (project.createdBy === userId) return "owner" as const;
   const member = await getProjectMember(projectId, userId);
   return member?.role ?? null;
+}
+
+function throwScheduleTRPCError(error: unknown): never {
+  if (isScheduleError(error)) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: error.message });
+  }
+  throw error;
 }
 
 export const tasksRouter = router({
@@ -215,7 +223,12 @@ export const tasksRouter = router({
       if (!role || !ROLE_PERMISSIONS[role].canEditProjectInfo) {
         throw new TRPCError({ code: "FORBIDDEN", message: "没有重排排期的权限" });
       }
-      const count = await applyProjectSchedule(input.projectId);
+      let count: number;
+      try {
+        count = await applyProjectSchedule(input.projectId);
+      } catch (error) {
+        throwScheduleTRPCError(error);
+      }
       return { success: true, count } as const;
     }),
 
@@ -232,7 +245,12 @@ export const tasksRouter = router({
       if (!role || !ROLE_PERMISSIONS[role].canEditTasks) {
         throw new TRPCError({ code: "FORBIDDEN", message: "没有调整排期的权限" });
       }
-      const count = await rescheduleProjectFromTask(input.projectId, input.taskId, input.startDate, input.dueDate);
+      let count: number;
+      try {
+        count = await rescheduleProjectFromTask(input.projectId, input.taskId, input.startDate, input.dueDate);
+      } catch (error) {
+        throwScheduleTRPCError(error);
+      }
       return { success: true, count } as const;
     }),
 

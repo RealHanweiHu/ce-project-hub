@@ -35,6 +35,38 @@ describe("syncProjectMeeting", () => {
     expect(savedEvent).toBe("evt-1");
   });
 
+  it("marks pending_sync when event creation cannot be confirmed", async () => {
+    let savedEvent: string | null = null;
+    const pushed: string[] = [];
+    const res = await syncProjectMeeting({
+      project: baseProject, config, todayISO: "2026-06-15", members: [{ id: 1, dingtalkUserId: "pm-x", mobile: null }],
+      deps: {
+        resolveUserId: async (u) => u.dingtalkUserId ?? null,
+        upsert: async () => null,
+        saveEventId: async (_pid, id) => { savedEvent = id; },
+        groupPush: async (t) => { pushed.push(t); },
+      },
+    });
+    expect(res.mode).toBe("group_push");
+    expect(savedEvent).toBe("pending_sync");
+    expect(pushed.length).toBe(1);
+  });
+
+  it("does not overwrite an existing real event id when update fails", async () => {
+    let saved = false;
+    const res = await syncProjectMeeting({
+      project: { ...baseProject, dingtalkEventId: "evt-old" }, config, todayISO: "2026-06-15", members: [{ id: 1, dingtalkUserId: "pm-x", mobile: null }],
+      deps: {
+        resolveUserId: async (u) => u.dingtalkUserId ?? null,
+        upsert: async () => null,
+        saveEventId: async () => { saved = true; },
+        groupPush: async () => {},
+      },
+    });
+    expect(res.mode).toBe("group_push");
+    expect(saved).toBe(false);
+  });
+
   it("does nothing when meeting disabled", async () => {
     const res = await syncProjectMeeting({
       project: baseProject, config: { ...config, enabled: false }, todayISO: "2026-06-15", members: [],

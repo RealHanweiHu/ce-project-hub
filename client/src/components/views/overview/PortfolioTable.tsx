@@ -1,4 +1,4 @@
-// 全部项目表：可排序/筛选/下钻。rows 由父组件传入（源自 projects.portfolio）。
+// 可进入项目表：可排序/筛选/下钻。rows 由父组件传入（源自 projects.portfolio）。
 import { useMemo, useState } from "react";
 import { RISK_CONFIG, PHASE_MAP } from "@/lib/data";
 import { CATEGORY_MAP } from "@/lib/sop-templates";

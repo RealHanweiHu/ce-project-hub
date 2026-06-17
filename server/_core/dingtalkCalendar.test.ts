@@ -55,4 +55,18 @@ describe("upsertWeeklyMeeting", () => {
     const res = await upsertWeeklyMeeting({ organizerUserId: "pm-1", existingEventId: null, event: sampleEvent });
     expect(res).toBe("evt-123");
   });
+
+  it("returns null when follow-up GET cannot confirm the event", async () => {
+    __setDingtalkConfigForTest({ appKey: "k", appSecret: "s" });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const u = String(url);
+      if (u.includes("oauth2/accessToken")) return new Response(JSON.stringify({ accessToken: "tok", expireIn: 7200 }), { status: 200 });
+      if (init?.method === "GET") return new Response("missing", { status: 404 });
+      return new Response(JSON.stringify({ id: "evt-ghost" }), { status: 200 });
+    });
+
+    const res = await upsertWeeklyMeeting({ organizerUserId: "pm-1", existingEventId: null, event: sampleEvent });
+
+    expect(res).toBeNull();
+  });
 });

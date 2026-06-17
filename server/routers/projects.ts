@@ -27,6 +27,7 @@ import { createGroupChat, sendToGroupChat } from "../_core/dingtalkGroup";
 import { getProjectMembers } from "../db";
 import { getPhasesForCategory } from "../../shared/sop-templates";
 import { PROJECT_MEMBER_ROLES } from "../../drizzle/schema";
+import { isScheduleError } from "../../shared/scheduling";
 
 const DEFAULT_MEETING = { enabled: true, weekday: 3, time: "15:00", durationMin: 60, title: "项目周会" };
 
@@ -37,6 +38,13 @@ async function getEffectiveRole(projectId: string, userId: number) {
   if (project.createdBy === userId) return "owner" as const;
   const member = await getProjectMember(projectId, userId);
   return member?.role ?? null;
+}
+
+function throwScheduleTRPCError(error: unknown): never {
+  if (isScheduleError(error)) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: error.message });
+  }
+  throw error;
 }
 
 /** 按角色分配未分配任务 + (可选)逐人发钉钉通知。assignByRole / kickoff 共用。 */
@@ -153,34 +161,33 @@ export const projectsRouter = router({
           message: '您没有创建项目的权限。请联系管理员授权。',
         });
       }
-      await createProjectWithSeed({
-        id: input.id,
-        name: input.name,
-        projectNumber: input.projectNumber,
-        category: input.category,
-        pmUserId: input.pmUserId ?? null,
-        productId: input.productId ?? null,
-        description: input.description ?? null,
-        customer: input.customer ?? null,
-        background: input.background ?? null,
-        value: input.value ?? null,
-        risk: input.risk,
-        currentPhase: input.currentPhase,
-        progress: input.progress,
-        startDate: input.startDate ?? null,
-        targetDate: input.targetDate ?? null,
-        createdBy: ctx.user.id,
-        archived: false,
-      }, input.category, ctx.user.id);
+      try {
+        await createProjectWithSeed({
+          id: input.id,
+          name: input.name,
+          projectNumber: input.projectNumber,
+          category: input.category,
+          pmUserId: input.pmUserId ?? null,
+          productId: input.productId ?? null,
+          description: input.description ?? null,
+          customer: input.customer ?? null,
+          background: input.background ?? null,
+          value: input.value ?? null,
+          risk: input.risk,
+          currentPhase: input.currentPhase,
+          progress: input.progress,
+          startDate: input.startDate ?? null,
+          targetDate: input.targetDate ?? null,
+          createdBy: ctx.user.id,
+          archived: false,
+        }, input.category, ctx.user.id);
+      } catch (error) {
+        throwScheduleTRPCError(error);
+      }
       // 选了 PM 且不是创建者本人 → 自动加入项目成员并赋 pm 角色（否则 PM 看不到项目）
       if (input.pmUserId && input.pmUserId !== ctx.user.id) {
         try { await ensureProjectMember(input.id, input.pmUserId, "pm", ctx.user.id); }
         catch (e) { console.warn("[member] add pm on create failed (non-fatal):", e); }
-      }
-      // 有开始日 → 按 IPD 依赖图自动生成整套任务起止日（非阻断）
-      if (input.startDate) {
-        try { await applyProjectSchedule(input.id); }
-        catch (e) { console.warn("[schedule] generate failed (non-fatal):", e); }
       }
       await createActivityLog({
         projectId: input.id,
@@ -314,12 +321,14 @@ export const projectsRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "仅 Owner/管理层/PM 可执行立项向导" });
       }
 
-      // 1) 开始日 → 生成整套排期(非阻断)
+      // 1) 开始日 → 生成整套排期；排期错误必须暴露给调用方。
       if (input.startDate && input.startDate !== project.startDate) {
         try {
           await updateProject(input.projectId, { startDate: input.startDate });
           await applyProjectSchedule(input.projectId);
-        } catch (e) { console.warn("[kickoff] schedule failed (non-fatal):", e); }
+        } catch (error) {
+          throwScheduleTRPCError(error);
+        }
       }
 
       // 2) 各角色配人(去重;跳过创建者本人,避免覆盖 owner)

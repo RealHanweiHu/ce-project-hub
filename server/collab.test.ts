@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import {
   getDb, parseMentions, addComment, listComments,
-  unreadCount, listNotifications, markAllRead, getUserByUsername,
+  unreadCount, listNotifications, markAllRead, getUserByUsername, extractMentionNames,
 } from "./db";
 
 const ENTITY = "issue";
@@ -22,6 +22,11 @@ describe("Collaboration: comments + mentions + notifications", () => {
       { id: 10, username: "alice" }, { id: 11, username: "bob" }, { id: 12, username: "carol" },
     ]);
     expect(ids.sort()).toEqual([10, 11]);
+  });
+
+  it("extractMentionNames returns only unique mentioned names", () => {
+    expect(extractMentionNames("普通评论，无需查用户")).toEqual([]);
+    expect(extractMentionNames("@Alice 看下 @alice 和 @bob")).toEqual(["alice", "bob"]);
   });
 
   it("addComment with @mention creates a notification for the mentioned user", async () => {

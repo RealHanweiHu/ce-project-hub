@@ -1020,6 +1020,12 @@ export const automationRuns = pgTable(
       t.entityId,
       t.createdAt
     ),
+    idxRuleEventEntityCreated: index("idx_automation_runs_rule_event_entity_created").on(
+      t.ruleKey,
+      t.eventType,
+      t.entityId,
+      t.createdAt
+    ),
     idxProjectCreated: index("idx_automation_runs_project_created").on(t.projectId, t.createdAt),
   })
 );

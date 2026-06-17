@@ -1,4 +1,4 @@
-// 自动排期纯函数（日历日、正向拓扑、改一项下游联动）。无副作用、不读时钟，便于单测。
+// 自动排期纯函数（工作日、正向拓扑、改一项下游联动）。无副作用、不读时钟，便于单测。
 
 export type SchedTask = {
   id: string;
@@ -8,21 +8,206 @@ export type SchedTask = {
 };
 export type Schedule = Record<string, { start: string; due: string }>;
 
-/** ISO 日期(YYYY-MM-DD)加 n 个日历日 */
-export function addDays(iso: string, n: number): string {
-  const [y, m, d] = iso.split("-").map(Number);
-  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+export type ScheduleOptions = {
+  /** 默认 true：按周一到周五推进；设为 false 时退回日历日。 */
+  useWorkingDays?: boolean;
+  /** 额外节假日表，格式 YYYY-MM-DD。 */
+  holidays?: Iterable<string>;
+  /** 可工作星期，使用 JS getUTCDay 口径：0=周日，1=周一，...，6=周六。默认周一到周五。 */
+  workdays?: Iterable<number>;
+};
+
+type NormalizedCalendar = {
+  useWorkingDays: boolean;
+  holidays: Set<string>;
+  workdays: Set<number>;
+};
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const DEFAULT_WORKDAYS = new Set([1, 2, 3, 4, 5]);
+
+export class ScheduleError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ScheduleError";
+  }
 }
 
-/** 拓扑序；有环返回 null */
-function topoOrder(tasks: SchedTask[]): string[] | null {
+export function isScheduleError(error: unknown): error is ScheduleError {
+  return error instanceof ScheduleError;
+}
+
+function formatISODate(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function parseISODate(iso: string, label = "date"): Date {
+  if (!ISO_DATE_RE.test(iso)) {
+    throw new ScheduleError(`${label} must be a YYYY-MM-DD date: ${iso}`);
+  }
+  const date = new Date(`${iso}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime()) || formatISODate(date) !== iso) {
+    throw new ScheduleError(`${label} is not a valid calendar date: ${iso}`);
+  }
+  return date;
+}
+
+function requireInteger(value: number, label: string): number {
+  if (!Number.isInteger(value)) {
+    throw new ScheduleError(`${label} must be an integer`);
+  }
+  return value;
+}
+
+function requireNonNegativeInteger(value: number, label: string): number {
+  requireInteger(value, label);
+  if (value < 0) {
+    throw new ScheduleError(`${label} must be greater than or equal to 0`);
+  }
+  return value;
+}
+
+function normalizeCalendar(options: ScheduleOptions = {}): NormalizedCalendar {
+  const holidays = new Set<string>();
+  for (const holiday of Array.from(options.holidays ?? [])) {
+    holidays.add(formatISODate(parseISODate(holiday, "holiday")));
+  }
+
+  const workdays = new Set<number>();
+  for (const weekday of Array.from(options.workdays ?? DEFAULT_WORKDAYS)) {
+    if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6) {
+      throw new ScheduleError(`workday must be an integer from 0 to 6: ${weekday}`);
+    }
+    workdays.add(weekday);
+  }
+  if (workdays.size === 0) {
+    throw new ScheduleError("workdays must include at least one weekday");
+  }
+
+  return {
+    useWorkingDays: options.useWorkingDays ?? true,
+    holidays,
+    workdays,
+  };
+}
+
+function isWorkingDate(date: Date, calendar: NormalizedCalendar): boolean {
+  return calendar.workdays.has(date.getUTCDay()) && !calendar.holidays.has(formatISODate(date));
+}
+
+function addCalendarDaysDate(date: Date, n: number): Date {
+  const out = new Date(date);
+  out.setUTCDate(out.getUTCDate() + n);
+  return out;
+}
+
+function addWorkingDaysDate(date: Date, n: number, calendar: NormalizedCalendar): Date {
+  requireInteger(n, "working day offset");
+  if (n === 0) return new Date(date);
+
+  const step = n > 0 ? 1 : -1;
+  let remaining = Math.abs(n);
+  let cursor = new Date(date);
+  while (remaining > 0) {
+    cursor = addCalendarDaysDate(cursor, step);
+    if (isWorkingDate(cursor, calendar)) remaining -= 1;
+  }
+  return cursor;
+}
+
+function nextWorkingDateOnOrAfter(date: Date, calendar: NormalizedCalendar): Date {
+  let cursor = new Date(date);
+  while (!isWorkingDate(cursor, calendar)) {
+    cursor = addCalendarDaysDate(cursor, 1);
+  }
+  return cursor;
+}
+
+function addScheduleDays(iso: string, n: number, calendar: NormalizedCalendar): string {
+  const date = parseISODate(iso);
+  const out = calendar.useWorkingDays
+    ? addWorkingDaysDate(date, n, calendar)
+    : addCalendarDaysDate(date, n);
+  return formatISODate(out);
+}
+
+function normalizeStart(iso: string, calendar: NormalizedCalendar): string {
+  const date = parseISODate(iso);
+  return calendar.useWorkingDays ? formatISODate(nextWorkingDateOnOrAfter(date, calendar)) : iso;
+}
+
+function assertDateRange(dates: { start: string; due: string }, label: string) {
+  const start = formatISODate(parseISODate(dates.start, `${label}.start`));
+  const due = formatISODate(parseISODate(dates.due, `${label}.due`));
+  if (due < start) {
+    throw new ScheduleError(`${label}.due must be on or after ${label}.start`);
+  }
+  return { start, due };
+}
+
+/** ISO 日期(YYYY-MM-DD)加 n 个日历日 */
+export function addDays(iso: string, n: number): string {
+  requireInteger(n, "calendar day offset");
+  return formatISODate(addCalendarDaysDate(parseISODate(iso), n));
+}
+
+/** ISO 日期(YYYY-MM-DD)加 n 个工作日；默认周一到周五，可传节假日表。 */
+export function addWorkingDays(iso: string, n: number, options: ScheduleOptions = {}): string {
+  const calendar = normalizeCalendar({ ...options, useWorkingDays: true });
+  return formatISODate(addWorkingDaysDate(parseISODate(iso), n, calendar));
+}
+
+function findCycle(tasks: SchedTask[], ids: Set<string>): string[] | null {
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const stack: string[] = [];
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+
+  const dfs = (id: string): string[] | null => {
+    visiting.add(id);
+    stack.push(id);
+    for (const dep of byId.get(id)?.dependsOn ?? []) {
+      if (!ids.has(dep)) continue;
+      if (visiting.has(dep)) {
+        return [...stack.slice(stack.indexOf(dep)), dep];
+      }
+      if (!visited.has(dep)) {
+        const cycle = dfs(dep);
+        if (cycle) return cycle;
+      }
+    }
+    visiting.delete(id);
+    visited.add(id);
+    stack.pop();
+    return null;
+  };
+
+  for (const id of Array.from(ids)) {
+    if (visited.has(id)) continue;
+    const cycle = dfs(id);
+    if (cycle) return cycle;
+  }
+  return null;
+}
+
+/** 拓扑序；成环、重名、缺依赖会抛出 ScheduleError。 */
+export function resolveScheduleOrder(tasks: SchedTask[]): string[] {
   const ids = new Set(tasks.map((t) => t.id));
+  if (ids.size !== tasks.length) {
+    throw new ScheduleError("task ids must be unique");
+  }
+
   const indeg = new Map<string, number>();
   const adj = new Map<string, string[]>(); // dep -> 依赖它的任务
-  for (const t of tasks) indeg.set(t.id, 0);
+  for (const t of tasks) {
+    if (!t.id) throw new ScheduleError("task id is required");
+    indeg.set(t.id, 0);
+  }
   for (const t of tasks) {
     for (const d of t.dependsOn ?? []) {
-      if (!ids.has(d)) continue;
+      if (!ids.has(d)) {
+        throw new ScheduleError(`task "${t.id}" depends on missing task "${d}"`);
+      }
       indeg.set(t.id, (indeg.get(t.id) ?? 0) + 1);
       (adj.get(d) ?? adj.set(d, []).get(d)!).push(t.id);
     }
@@ -37,26 +222,43 @@ function topoOrder(tasks: SchedTask[]): string[] | null {
       if (indeg.get(nx) === 0) q.push(nx);
     }
   }
-  return order.length === tasks.length ? order : null;
+  if (order.length !== tasks.length) {
+    const cycle = findCycle(tasks, ids);
+    throw new ScheduleError(`schedule dependency cycle detected${cycle ? `: ${cycle.join(" -> ")}` : ""}`);
+  }
+  return order;
 }
 
-function computeStart(t: SchedTask, sched: Schedule, startDate: string, idsInScope: Set<string>): string {
-  const deps = (t.dependsOn ?? []).filter((d) => idsInScope.has(d));
-  const dues = deps.map((d) => sched[d]?.due).filter((x): x is string => !!x);
-  let start = dues.length ? dues.reduce((a, b) => (b > a ? b : a)) : startDate; // ISO 字典序=时间序
-  return addDays(start, t.lagDays ?? 0);
+function computeStart(t: SchedTask, sched: Schedule, startDate: string, calendar: NormalizedCalendar): string {
+  const deps = t.dependsOn ?? [];
+  let start = startDate; // ISO 字典序=时间序（入参已校验）
+  for (const dep of deps) {
+    const depSchedule = sched[dep];
+    if (!depSchedule) {
+      throw new ScheduleError(`task "${t.id}" cannot start because dependency "${dep}" has no schedule`);
+    }
+    const due = assertDateRange(depSchedule, `schedule.${dep}`).due;
+    if (due > start) start = due;
+  }
+  const lag = requireNonNegativeInteger(t.lagDays ?? 0, `task "${t.id}" lagDays`);
+  return normalizeStart(addScheduleDays(start, lag, calendar), calendar);
+}
+
+function taskDuration(t: SchedTask): number {
+  return requireNonNegativeInteger(t.durationDays ?? 1, `task "${t.id}" durationDays`);
 }
 
 /** 从 startDate 正向生成整套任务起止日 */
-export function generateSchedule(tasks: SchedTask[], startDate: string): Schedule {
+export function generateSchedule(tasks: SchedTask[], startDate: string, options: ScheduleOptions = {}): Schedule {
   const byId = new Map(tasks.map((t) => [t.id, t]));
-  const ids = new Set(tasks.map((t) => t.id));
-  const order = topoOrder(tasks) ?? tasks.map((t) => t.id); // 有环则按给定序尽力而为
+  const order = resolveScheduleOrder(tasks);
+  const calendar = normalizeCalendar(options);
+  const normalizedStart = normalizeStart(formatISODate(parseISODate(startDate, "startDate")), calendar);
   const sched: Schedule = {};
   for (const id of order) {
     const t = byId.get(id)!;
-    const start = computeStart(t, sched, startDate, ids);
-    sched[id] = { start, due: addDays(start, Math.max(0, t.durationDays ?? 1)) };
+    const start = computeStart(t, sched, normalizedStart, calendar);
+    sched[id] = { start, due: addScheduleDays(start, taskDuration(t), calendar) };
   }
   return sched;
 }
@@ -66,11 +268,21 @@ export function rescheduleFrom(
   tasks: SchedTask[],
   current: Schedule,
   changedTaskId: string,
-  newDates: { start: string; due: string }
+  newDates: { start: string; due: string },
+  options: ScheduleOptions = {}
 ): Schedule {
   const byId = new Map(tasks.map((t) => [t.id, t]));
+  const order = resolveScheduleOrder(tasks);
+  if (!byId.has(changedTaskId)) {
+    throw new ScheduleError(`changed task "${changedTaskId}" is not in the schedule task list`);
+  }
+  const calendar = normalizeCalendar(options);
   const ids = new Set(tasks.map((t) => t.id));
-  const sched: Schedule = { ...current, [changedTaskId]: { ...newDates } };
+  const sched: Schedule = {};
+  for (const id of Array.from(ids)) {
+    if (current[id]) sched[id] = assertDateRange(current[id], `current.${id}`);
+  }
+  sched[changedTaskId] = assertDateRange(newDates, `newDates.${changedTaskId}`);
 
   // dep -> 依赖它的任务
   const dependents = new Map<string, string[]>();
@@ -86,11 +298,11 @@ export function rescheduleFrom(
     for (const s of dependents.get(id) ?? []) stack.push(s);
   }
 
-  const order = (topoOrder(tasks) ?? tasks.map((t) => t.id)).filter((id) => affected.has(id));
-  for (const id of order) {
+  const affectedOrder = order.filter((id) => affected.has(id));
+  for (const id of affectedOrder) {
     const t = byId.get(id)!;
-    const start = computeStart(t, sched, newDates.start, ids);
-    sched[id] = { start, due: addDays(start, Math.max(0, t.durationDays ?? 1)) };
+    const start = computeStart(t, sched, newDates.start, calendar);
+    sched[id] = { start, due: addScheduleDays(start, taskDuration(t), calendar) };
   }
   return sched;
 }
