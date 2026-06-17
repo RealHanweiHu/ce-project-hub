@@ -1,17 +1,20 @@
 // 顶栏通知铃铛：未读数轮询 + 下拉列表 + 已读。
 import { useState } from 'react';
-import { Bell, Check, Loader2 } from 'lucide-react';
+import { Bell, Check, Loader2, ClipboardCheck } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 
 type NotificationRow = {
   id: number; type: string; title: string; body: string | null; read: boolean; createdAt: string | Date;
 };
 
-export function NotificationBell() {
+export function NotificationBell({ onNavigate }: { onNavigate?: (projectId: string) => void } = {}) {
   const utils = trpc.useUtils();
   const [open, setOpen] = useState(false);
   const { data: unread = 0 } = trpc.notifications.unreadCount.useQuery(undefined, { refetchInterval: 30_000, refetchOnWindowFocus: true });
   const { data: list = [], isLoading } = trpc.notifications.list.useQuery(undefined, { enabled: open });
+  const { data: pending = [] } = trpc.deliverableReviews.myPending.useQuery(undefined, { refetchInterval: 60_000, refetchOnWindowFocus: true });
+
+  const totalBadge = unread + pending.length;
 
   const inval = () => { utils.notifications.unreadCount.invalidate(); utils.notifications.list.invalidate(); };
   const markRead = trpc.notifications.markRead.useMutation({ onSuccess: inval });
@@ -21,9 +24,9 @@ export function NotificationBell() {
     <div className="relative">
       <button onClick={() => setOpen((o) => !o)} className="relative text-stone-400 hover:text-stone-700 transition-colors" title="通知">
         <Bell size={16} />
-        {unread > 0 && (
+        {totalBadge > 0 && (
           <span className="absolute -top-1.5 -right-1.5 min-w-[15px] h-[15px] px-0.5 bg-rose-500 text-white text-[9px] font-mono rounded-full flex items-center justify-center">
-            {unread > 9 ? '9+' : unread}
+            {totalBadge > 9 ? '9+' : totalBadge}
           </span>
         )}
       </button>
@@ -40,11 +43,40 @@ export function NotificationBell() {
                 </button>
               )}
             </div>
+
+            {/* ── 待审交付物 ──────────────────────────────────────────── */}
+            {pending.length > 0 && (
+              <div>
+                <div className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 border-b border-amber-100">
+                  <ClipboardCheck size={11} className="text-amber-600" />
+                  <span className="text-[10px] font-mono uppercase tracking-widest text-amber-600">待你审核的交付物 ({pending.length})</span>
+                </div>
+                {pending.map((r) => (
+                  <button
+                    key={r.id}
+                    onClick={() => {
+                      setOpen(false);
+                      onNavigate?.(r.projectId);
+                    }}
+                    className="w-full text-left px-3 py-2 border-b border-amber-50 hover:bg-amber-50/60 transition-colors"
+                  >
+                    <div className="flex items-start gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 mt-1.5 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs font-medium text-stone-800 truncate">{r.deliverableName}</div>
+                        <div className="text-[10px] font-mono text-stone-500 truncate">项目 {r.projectId} · {r.phaseId}</div>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+
             {isLoading ? (
               <div className="flex justify-center py-6"><Loader2 className="animate-spin text-amber-500" size={16} /></div>
-            ) : list.length === 0 ? (
+            ) : list.length === 0 && pending.length === 0 ? (
               <p className="text-xs text-stone-400 text-center py-6">暂无通知</p>
-            ) : (
+            ) : list.length === 0 ? null : (
               (list as NotificationRow[]).map((n) => (
                 <button
                   key={n.id}

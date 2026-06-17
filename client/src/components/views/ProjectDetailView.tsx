@@ -325,6 +325,199 @@ function ReadinessRow({ label, ok, detail, soft }: { label: string; ok: boolean;
  * - 从资源库选择并添加交付物
  * - 对手工添加项提供"移除"，对模板/归集项提供"排除"
  */
+// ── DeliverableReviewControls ─────────────────────────────────────────────────
+/** 每条 gate 交付物的审核态徽标 + 提交/通过/驳回操作 */
+function DeliverableReviewControls({
+  projectId, phaseId, deliverableNames, canEditTasks, currentUserId, isAdmin,
+  gateTaskId,
+}: {
+  projectId: string;
+  phaseId: string;
+  deliverableNames: string[];
+  canEditTasks: boolean;
+  currentUserId: number | undefined;
+  isAdmin: boolean;
+  gateTaskId?: string;
+}) {
+  const utils = trpc.useUtils();
+  const { data: reviewList = [] } = trpc.deliverableReviews.list.useQuery({ projectId });
+  const { data: members = [] } = trpc.members.list.useQuery({ projectId });
+  // files for this phase to detect "has file"
+  const { data: files = [] } = trpc.files.list.useQuery(
+    { projectId, phaseId, taskId: gateTaskId ?? '' },
+    { enabled: !!gateTaskId },
+  );
+
+  const [reviewerSelections, setReviewerSelections] = useState<Record<string, number | ''>>({}); // deliverableName → selected reviewerUserId
+  const [rejectNote, setRejectNote] = useState<Record<string, string>>({}); // deliverableName → note draft
+  const [rejectOpen, setRejectOpen] = useState<Record<string, boolean>>({}); // deliverableName → note input open
+
+  const submitMut = trpc.deliverableReviews.submit.useMutation({
+    onSuccess: () => {
+      utils.deliverableReviews.list.invalidate({ projectId });
+      utils.deliverableReviews.myPending.invalidate();
+      if (gateTaskId) utils.gateReviews.readiness.invalidate({ projectId, phaseId });
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const reviewMut = trpc.deliverableReviews.review.useMutation({
+    onSuccess: () => {
+      utils.deliverableReviews.list.invalidate({ projectId });
+      utils.deliverableReviews.myPending.invalidate();
+      if (gateTaskId) utils.gateReviews.readiness.invalidate({ projectId, phaseId });
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  if (deliverableNames.length === 0) return null;
+
+  // build a lookup: deliverableName → review record
+  const reviewByName = new Map(
+    reviewList.filter((r) => r.phaseId === phaseId).map((r) => [r.deliverableName, r])
+  );
+
+  // file set for this phase
+  const uploadedNames = new Set(files.map((f) => (f as { deliverableName?: string | null }).deliverableName).filter((n): n is string => !!n));
+
+  // PM fallback for reviewer picker default
+  const pmMember = members.find((m) => m.role === 'pm' || m.isOwner);
+
+  return (
+    <div className="mt-3 pt-3 border-t border-stone-100 space-y-2">
+      <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">审核状态</div>
+      {deliverableNames.map((name) => {
+        const record = reviewByName.get(name);
+        const hasFile = uploadedNames.has(name);
+
+        // reviewer name helper
+        const reviewerMember = record ? members.find((m) => m.userId === record.reviewerUserId) : undefined;
+        const reviewerName = reviewerMember ? (reviewerMember.userName ?? reviewerMember.userEmail ?? `用户${record!.reviewerUserId}`) : (record ? `用户${record.reviewerUserId}` : '');
+
+        // can the current user act as reviewer?
+        const isReviewer = !!record && (isAdmin || record.reviewerUserId === currentUserId);
+
+        // reviewer select state for submit
+        const selReviewer = reviewerSelections[name] !== undefined ? reviewerSelections[name] : (pmMember?.userId ?? '');
+
+        return (
+          <div key={name} className="space-y-1">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <span className="text-xs text-stone-600 min-w-0 truncate">{name}</span>
+              <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+                {/* Status badge */}
+                {!record && hasFile && (
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-stone-100 text-stone-500 border border-stone-200">
+                    已上传
+                  </span>
+                )}
+                {record?.status === 'pending' && (
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
+                    待审 · {reviewerName}
+                  </span>
+                )}
+                {record?.status === 'approved' && (
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200">
+                    通过 · {reviewerName}
+                  </span>
+                )}
+                {record?.status === 'rejected' && (
+                  <span
+                    className="text-[11px] px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 border border-rose-200 cursor-help"
+                    title={record.reviewNote ? `驳回意见：${record.reviewNote}` : '驳回'}
+                  >
+                    驳回{record.reviewNote ? ' ⓘ' : ''}
+                  </span>
+                )}
+
+                {/* Submit action: canEditTasks && (no record || rejected) */}
+                {canEditTasks && (!record || record.status === 'rejected') && (
+                  <div className="flex items-center gap-1">
+                    <select
+                      value={selReviewer}
+                      onChange={(e) => setReviewerSelections((prev) => ({ ...prev, [name]: e.target.value === '' ? '' : Number(e.target.value) }))}
+                      className="text-[10px] border border-stone-200 bg-white text-stone-600 px-1 py-0.5 focus:outline-none focus:border-amber-400"
+                    >
+                      <option value="">— 选审核人 —</option>
+                      {members.map((m) => (
+                        <option key={m.userId} value={m.userId}>
+                          {m.userName ?? m.userEmail ?? `用户${m.userId}`}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      disabled={submitMut.isPending}
+                      onClick={() => {
+                        const rv = selReviewer === '' ? undefined : Number(selReviewer);
+                        submitMut.mutate({ projectId, phaseId, deliverableName: name, reviewerUserId: rv });
+                      }}
+                      className="text-[10px] font-mono px-1.5 py-0.5 bg-amber-50 text-amber-700 border border-amber-300 hover:bg-amber-100 disabled:opacity-50 transition-colors"
+                    >
+                      提交审核
+                    </button>
+                  </div>
+                )}
+
+                {/* Approve/Reject actions: reviewer & status=pending */}
+                {isReviewer && record?.status === 'pending' && (
+                  <div className="flex items-center gap-1">
+                    <button
+                      disabled={reviewMut.isPending}
+                      onClick={() => reviewMut.mutate({ projectId, phaseId, deliverableName: name, decision: 'approved' })}
+                      className="text-[10px] font-mono px-1.5 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-300 hover:bg-emerald-100 disabled:opacity-50 transition-colors"
+                    >
+                      通过
+                    </button>
+                    <button
+                      disabled={reviewMut.isPending}
+                      onClick={() => setRejectOpen((prev) => ({ ...prev, [name]: !prev[name] }))}
+                      className="text-[10px] font-mono px-1.5 py-0.5 bg-rose-50 text-rose-700 border border-rose-300 hover:bg-rose-100 disabled:opacity-50 transition-colors"
+                    >
+                      驳回
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Reject note input */}
+            {rejectOpen[name] && isReviewer && record?.status === 'pending' && (
+              <div className="flex items-center gap-1.5 pl-2">
+                <input
+                  type="text"
+                  value={rejectNote[name] ?? ''}
+                  onChange={(e) => setRejectNote((prev) => ({ ...prev, [name]: e.target.value }))}
+                  placeholder="填写驳回意见（可选）"
+                  className="flex-1 text-xs border border-rose-200 bg-rose-50 px-2 py-0.5 focus:outline-none focus:border-rose-400"
+                />
+                <button
+                  disabled={reviewMut.isPending}
+                  onClick={() => {
+                    reviewMut.mutate({
+                      projectId, phaseId, deliverableName: name,
+                      decision: 'rejected', note: rejectNote[name] || null,
+                    });
+                    setRejectOpen((prev) => ({ ...prev, [name]: false }));
+                  }}
+                  className="text-[10px] font-mono px-1.5 py-0.5 bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-50 transition-colors"
+                >
+                  确认驳回
+                </button>
+                <button
+                  onClick={() => setRejectOpen((prev) => ({ ...prev, [name]: false }))}
+                  className="text-[10px] font-mono text-stone-400 hover:text-stone-700"
+                >
+                  取消
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function GateDeliverableOverridePanel({
   projectId, phaseId, effectiveDeliverables, canEdit,
 }: {
@@ -1572,6 +1765,17 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                             phaseId={activePhaseId}
                             effectiveDeliverables={activeGateDeliverables}
                             canEdit={perms.canEditTasks}
+                          />
+                        )}
+                        {selectedTaskIsGate && activeGateDeliverables.length > 0 && (
+                          <DeliverableReviewControls
+                            projectId={project.id}
+                            phaseId={activePhaseId}
+                            deliverableNames={activeGateDeliverables}
+                            canEditTasks={perms.canEditTasks}
+                            currentUserId={currentUser?.id}
+                            isAdmin={currentUser?.role === 'admin'}
+                            gateTaskId={activePhase?.gateTaskId}
                           />
                         )}
                       </div>
