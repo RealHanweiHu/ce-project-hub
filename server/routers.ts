@@ -24,6 +24,7 @@ import { customFieldsRouter } from "./routers/customFields";
 import { automationRouter } from "./routers/automation";
 import { meetingsRouter } from "./routers/meetings";
 import { tailoringRouter } from "./routers/tailoring";
+import { deliverableReviewsRouter } from "./routers/deliverableReviews";
 import * as db from "./db";
 
 export const appRouter = router({
@@ -225,6 +226,7 @@ export const appRouter = router({
   tailoring: tailoringRouter,
   issues: issuesRouter,
   gateReviews: gateReviewsRouter,
+  deliverableReviews: deliverableReviewsRouter,
   changelog: changelogRouter,
   phases: phasesRouter,
   files: filesRouter,
