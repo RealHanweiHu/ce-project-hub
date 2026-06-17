@@ -268,26 +268,33 @@ interface GateReadiness {
   signoffRoles: string[]; blockers: string[]; ready: boolean;
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function computeGateReadiness(phase: any, phaseData: any, submittedDeliverables?: string[]): GateReadiness {
+function computeGateReadiness(phase: any, phaseData: any, submittedDeliverables?: string[], satisfiedSet?: string[]): GateReadiness {
   const allTasks: Array<{ id: string }> = phase?.tasks ?? [];
   const tasks = allTasks.filter((t) => t.id !== phase?.gateTaskId);
   const tasksDone = tasks.filter((t) => phaseData?.tasks?.[t.id]).length;
   let delivDone = 0, delivTotal = 0;
   if (submittedDeliverables) {
-    const gateStatus: Record<string, boolean> = phaseData?.taskDetails?.[phase?.gateTaskId]?.deliverables ?? {};
-    let legacyTotal = 0, legacyDone = 0;
-    for (const t of tasks) {
-      const names = getTaskDeliverables(t.id, phase?.deliverables ?? []);
-      const status: Record<string, boolean> = phaseData?.taskDetails?.[t.id]?.deliverables ?? {};
-      legacyTotal += names.length;
-      legacyDone += names.filter((n) => status[n]).length;
-    }
-    const legacyAllDone = legacyTotal > 0 && legacyDone === legacyTotal;
     delivTotal = submittedDeliverables.length;
-    delivDone = submittedDeliverables.filter((name) => {
-      if (gateStatus[name] || legacyAllDone) return true;
-      return allTasks.some((task) => !!phaseData?.taskDetails?.[task.id]?.deliverables?.[name]);
-    }).length;
+    if (satisfiedSet) {
+      // Review-aware path: use server-provided satisfied set
+      const satisfiedNames = new Set(satisfiedSet);
+      delivDone = submittedDeliverables.filter((name) => satisfiedNames.has(name)).length;
+    } else {
+      // Legacy file-presence path (fallback while server data loads)
+      const gateStatus: Record<string, boolean> = phaseData?.taskDetails?.[phase?.gateTaskId]?.deliverables ?? {};
+      let legacyTotal = 0, legacyDone = 0;
+      for (const t of tasks) {
+        const names = getTaskDeliverables(t.id, phase?.deliverables ?? []);
+        const status: Record<string, boolean> = phaseData?.taskDetails?.[t.id]?.deliverables ?? {};
+        legacyTotal += names.length;
+        legacyDone += names.filter((n) => status[n]).length;
+      }
+      const legacyAllDone = legacyTotal > 0 && legacyDone === legacyTotal;
+      delivDone = submittedDeliverables.filter((name) => {
+        if (gateStatus[name] || legacyAllDone) return true;
+        return allTasks.some((task) => !!phaseData?.taskDetails?.[task.id]?.deliverables?.[name]);
+      }).length;
+    }
   } else {
     for (const t of tasks) {
       const names = getTaskDeliverables(t.id, phase?.deliverables ?? []);
@@ -343,11 +350,9 @@ function DeliverableReviewControls({
   const utils = trpc.useUtils();
   const { data: reviewList = [] } = trpc.deliverableReviews.list.useQuery({ projectId });
   const { data: members = [] } = trpc.members.list.useQuery({ projectId });
-  // files for this phase to detect "has file"
-  const { data: files = [] } = trpc.files.list.useQuery(
-    { projectId, phaseId, taskId: gateTaskId ?? '' },
-    { enabled: !!gateTaskId },
-  );
+  // files for this phase to detect "has file" — no taskId filter, so it matches
+  // the server's getReviewSatisfiedSet which scopes by projectId+phaseId only.
+  const { data: files = [] } = trpc.files.list.useQuery({ projectId, phaseId });
 
   const [reviewerSelections, setReviewerSelections] = useState<Record<string, number | ''>>({}); // deliverableName → selected reviewerUserId
   const [rejectNote, setRejectNote] = useState<Record<string, string>>({}); // deliverableName → note draft
@@ -971,6 +976,13 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
     { staleTime: 5_000 }
   );
 
+  // Server-side gate readiness (review-aware) for the active phase — used to make
+  // the inline gate panel's deliverables dimension consistent with the server.
+  const { data: serverGateReadiness } = trpc.gateReviews.readiness.useQuery(
+    { projectId: project.id, phaseId: activePhaseId },
+    { staleTime: 5_000 }
+  );
+
   // Change Log helpers
   const changeLog: ChangeRecord[] = project.changeLog || [];
   const pendingChangeCount = changeLog.filter((r) => r.status === 'proposed').length;
@@ -1006,6 +1018,15 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
   const effectiveActivePhase = effectiveProcess?.phases.find((phase) => phase.id === activePhaseId);
   const activeGateDeliverables =
     effectiveActivePhase?.submittedDeliverables ?? activePhase?.gateStandard?.requiredDeliverables ?? [];
+  // Derive satisfied deliverable names from server readiness: required minus the blockers list.
+  // When loaded, this makes the inline gate panel's deliverables dimension review-aware.
+  // Falls back to undefined (legacy file-presence logic) while server data is loading.
+  const serverDelivSatisfiedSet: string[] | undefined = (() => {
+    const dim = serverGateReadiness?.dimensions.find((d) => d.dimension === 'deliverables');
+    if (!dim) return undefined;
+    const missingSet = new Set(dim.blockers);
+    return activeGateDeliverables.filter((name) => !missingSet.has(name));
+  })();
   // 归集项映射：deliverableName → 来源阶段显示名（用于 DeliverablesChecklist 标注）
   const activeGateCarriedMap: Record<string, string> = Object.fromEntries(
     (effectiveActivePhase?.carriedDeliverables ?? []).map(({ name, fromPhaseId }) => [
@@ -1791,7 +1812,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                     )}
 
                     {selectedTaskIsGate && (() => {
-                      const r = computeGateReadiness(activePhase, activePhaseData, activeGateDeliverables);
+                      const r = computeGateReadiness(activePhase, activePhaseData, activeGateDeliverables, serverDelivSatisfiedSet);
                       return (
                         <div className={`mt-4 p-3 border ${r.ready ? 'border-emerald-200 bg-emerald-50/50' : 'border-amber-200 bg-amber-50/50'}`}>
                           <div className="flex items-center justify-between mb-2">
@@ -1975,7 +1996,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
           existingReviews={activePhaseData?.gateReviews}
           projectId={project.id}
           gateTaskId={activePhase?.gateTaskId}
-          blockers={computeGateReadiness(activePhase, activePhaseData, activeGateDeliverables).blockers}
+          blockers={computeGateReadiness(activePhase, activePhaseData, activeGateDeliverables, serverDelivSatisfiedSet).blockers}
           onConfirm={perms.canGateReview ? handleGateReviewConfirm : () => {}}
           onCancel={() => setGateReviewPending(null)}
           readOnly={!perms.canGateReview}

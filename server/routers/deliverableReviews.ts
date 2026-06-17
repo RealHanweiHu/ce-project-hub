@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { protectedProcedure, router } from "../_core/trpc";
-import { getDb, getProjectById, getProjectMember } from "../db";
+import { getDb, getProjectById, getProjectMember, getProjectFiles, getProjectEffectiveProcess } from "../db";
 import { projects, projectDeliverableReviews } from "../../drizzle/schema";
 import { and, eq } from "drizzle-orm";
 import { listDeliverableReviews, getMyPendingReviews, submitDeliverableReview, reviewDeliverable } from "../deliverable-review-service";
@@ -45,6 +45,21 @@ export const deliverableReviewsRouter = router({
     .input(z.object({ projectId: z.string(), phaseId: z.string(), deliverableName: z.string().min(1), reviewerUserId: z.number().optional() }))
     .mutation(async ({ ctx, input }) => {
       await assertCanEdit(input.projectId, ctx.user);
+
+      // Validation 1: there must be ≥1 file for (projectId, phaseId, deliverableName)
+      const phaseFiles = await getProjectFiles(input.projectId, input.phaseId);
+      const hasFile = phaseFiles.some((f) => f.deliverableName === input.deliverableName);
+      if (!hasFile) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "该交付物尚未上传文件，无法提交审核" });
+      }
+
+      // Validation 2: deliverableName must be in the phase's effective submission set
+      const effective = await getProjectEffectiveProcess(input.projectId);
+      const effPhase = effective?.phases.find((p) => p.id === input.phaseId);
+      if (!effPhase || !effPhase.submittedDeliverables.includes(input.deliverableName)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "该交付物不在本节点的有效提交集内" });
+      }
+
       const db = await getDb();
       const [proj] = await db!.select({ pmUserId: projects.pmUserId }).from(projects).where(eq(projects.id, input.projectId));
       const reviewerUserId = input.reviewerUserId ?? proj?.pmUserId;

@@ -23,6 +23,7 @@ import {
   customFieldDefs, CustomFieldDef, InsertCustomFieldDef,
   projectTailoring, ProjectTailoring, InsertProjectTailoring, TailoringTarget,
   projectDeliverableOverrides, ProjectDeliverableOverride,
+  projectDeliverableReviews,
   type TaskStatus, type TaskPriority, type GateDecision,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -1719,6 +1720,7 @@ export async function hardDeleteProjectForTest(projectId: string): Promise<void>
   // Delete child records first (no FK cascade configured)
   await db.delete(projectChangelog).where(eq(projectChangelog.projectId, projectId));
   await db.delete(projectGateReviews).where(eq(projectGateReviews.projectId, projectId));
+  await db.delete(projectDeliverableReviews).where(eq(projectDeliverableReviews.projectId, projectId));
   await db.delete(projectIssues).where(eq(projectIssues.projectId, projectId));
   await db.delete(projectRequirements).where(eq(projectRequirements.projectId, projectId));
   await db.delete(projectFiles).where(eq(projectFiles.projectId, projectId));

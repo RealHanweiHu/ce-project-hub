@@ -33,6 +33,10 @@ describe("deliverableReviews 权限", () => {
   it("非成员 submit → FORBIDDEN", async () => {
     await expect(caller(OUTSIDER, "user").submit({ projectId: PROJ, phaseId: "design", deliverableName: "ID外观图", reviewerUserId: REVIEWER })).rejects.toThrow();
   });
+  it("PM submit 无文件 → BAD_REQUEST", async () => {
+    // "MD结构图" is in design's effective submission set but has no uploaded file
+    await expect(caller(PM, "user").submit({ projectId: PROJ, phaseId: "design", deliverableName: "MD结构图", reviewerUserId: REVIEWER })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
   it("PM submit → ok", async () => {
     await expect(caller(PM, "user").submit({ projectId: PROJ, phaseId: "design", deliverableName: "ID外观图", reviewerUserId: REVIEWER })).resolves.toBeTruthy();
   });
