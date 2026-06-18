@@ -2,13 +2,14 @@
 
 import "dotenv/config";
 import { spawn } from "node:child_process";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { migrate } from "drizzle-orm/node-postgres/migrator";
 import pg from "pg";
 
-const { Client } = pg;
+const { Client, Pool } = pg;
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
 const defaultDatabaseUrl = "postgres://postgres:cehub@127.0.0.1:55432/cehub";
 
@@ -113,73 +114,27 @@ async function prepareDatabase() {
   await waitForDatabase();
 }
 
-async function withClient(callback) {
-  const client = new Client({ connectionString: databaseUrl });
-  await client.connect();
+async function applyMigrations() {
+  // Use Drizzle's own migrator so the test DB tracks migrations the same way
+  // `db:push` (drizzle-kit migrate) does. It applies only the entries newer than
+  // what `drizzle.__drizzle_migrations` records, so a fresh DB gets the full schema
+  // and an already-migrated DB is a no-op. Adding a new table only requires
+  // `drizzle-kit generate` — no manual SQL and no hand-maintained table list.
+  const pool = new Pool({ connectionString: databaseUrl });
 
   try {
-    return await callback(client);
+    const db = drizzle(pool);
+    await migrate(db, { migrationsFolder: path.join(projectRoot, "drizzle") });
   } finally {
-    await client.end();
+    await pool.end();
   }
-}
-
-async function hasCurrentSchema() {
-  const expectedTables = [
-    "activity_logs",
-    "organizations",
-    "project_changelog",
-    "project_deliverable_overrides",
-    "project_deliverable_reviews",
-    "project_files",
-    "project_gate_reviews",
-    "project_issues",
-    "project_members",
-    "project_phases",
-    "project_tailoring",
-    "project_tasks",
-    "projects",
-    "users",
-  ];
-
-  return withClient(async (client) => {
-    const result = await client.query(
-      "select tablename from pg_tables where schemaname = 'public'"
-    );
-    const tables = new Set(result.rows.map((row) => row.tablename));
-    return expectedTables.every((table) => tables.has(table));
-  });
-}
-
-async function applySqlMigrations() {
-  if (await hasCurrentSchema()) return;
-
-  const migrationsDir = path.join(projectRoot, "drizzle");
-  const files = (await fs.readdir(migrationsDir))
-    .filter((file) => /^\d+.*\.sql$/.test(file))
-    .sort();
-
-  await withClient(async (client) => {
-    for (const file of files) {
-      console.log(`Applying ${file}...`);
-      const sql = await fs.readFile(path.join(migrationsDir, file), "utf8");
-      const statements = sql
-        .split(/--> statement-breakpoint\s*/g)
-        .map((statement) => statement.trim())
-        .filter(Boolean);
-
-      for (const statement of statements) {
-        await client.query(statement);
-      }
-    }
-  });
 }
 
 try {
   await prepareDatabase();
 
   console.log("Applying database migrations...");
-  await applySqlMigrations();
+  await applyMigrations();
 
   await run(localBin("vitest"), ["run", ...process.argv.slice(2)]);
 } catch (error) {

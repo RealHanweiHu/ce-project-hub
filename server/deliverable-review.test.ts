@@ -6,8 +6,8 @@ describe("isDeliverableSatisfied", () => {
     expect(isDeliverableSatisfied(false, null)).toBe(false);
     expect(isDeliverableSatisfied(false, "approved")).toBe(false);
   });
-  it("有文件 + 无审核记录(存量豁免) → 满足", () => {
-    expect(isDeliverableSatisfied(true, null)).toBe(true);
+  it("有文件 + 无审核记录 → 不满足", () => {
+    expect(isDeliverableSatisfied(true, null)).toBe(false);
   });
   it("有文件 + 已通过 → 满足", () => {
     expect(isDeliverableSatisfied(true, "approved")).toBe(true);

@@ -223,7 +223,7 @@ export function useProjectData(projectId: string | null) {
       id: projectRow.id,
       name: projectRow.name,
       code: projectRow.projectNumber ?? '',
-      category: (projectRow.category as 'npd' | 'eco' | 'idr') ?? 'npd',
+      category: (projectRow.category as 'npd' | 'eco' | 'idr' | 'jdm' | 'obt') ?? 'npd',
       pm: '',  // pmName resolved in UI via listUsersForSelect
       pmUserId: projectRow.pmUserId ?? null,
       productId: (projectRow as { productId?: string | null }).productId ?? null,
@@ -232,7 +232,7 @@ export function useProjectData(projectId: string | null) {
       background: (projectRow as { background?: string | null }).background ?? null,
       value: (projectRow as { value?: string | null }).value ?? null,
       dingtalkChatId: (projectRow as { dingtalkChatId?: string | null }).dingtalkChatId ?? null,
-      risk: (projectRow.risk as 'low' | 'medium' | 'high') ?? 'low',
+      risk: (projectRow.risk as Project["risk"]) ?? "low",
       currentPhase: projectRow.currentPhase ?? 'concept',
       startDate: projectRow.startDate ?? '',
       targetDate: projectRow.targetDate ?? '',

@@ -4,6 +4,7 @@ import {
   InsertUser, users, projects, InsertProject, ProjectRow,
   projectMembers, InsertProjectMember, ProjectMember, ProjectMemberRole,
   projectPhases, ProjectPhase, InsertProjectPhase,
+  projectCalendarEvents, ProjectCalendarEvent, InsertProjectCalendarEvent,
   projectTasks, ProjectTask, InsertProjectTask,
   projectIssues, ProjectIssue, InsertProjectIssue,
   projectRequirements, ProjectRequirement, InsertProjectRequirement,
@@ -15,6 +16,7 @@ import {
   products, InsertProduct, ProductRow,
   productRevisions, InsertProductRevision, ProductRevision,
   mpReleases, InsertMpRelease,
+  customerVariants, CustomerVariant, InsertCustomerVariant,
   bomItems, BomItem, InsertBomItem,
   comments, Comment,
   notifications,
@@ -29,12 +31,26 @@ import {
 import { ENV } from './_core/env';
 import { getSopPhasesForCategory } from "./sop-data";
 import { getPhasesForCategory, getReleaseGatePhase } from "../shared/sop-templates";
+import { computeDownstreamImpact, type DownstreamImpactRow, type VariantStatus } from "../shared/oem-variant";
 import { computeGateReadiness, type GateReadiness } from "../shared/gate-readiness";
-import { getTaskDeliverables } from "../shared/task-deliverables";
 import { getDeliverableLibrary, getEffectiveProcess, type EffectiveProcess } from "../shared/effective-process";
 import { scheduleForCategory, buildSchedTasks } from "../shared/schedule-graph";
-import { rescheduleFrom, type Schedule } from "../shared/scheduling";
-import { daysBetween, GATE_RED_DAYS, GATE_AMBER_DAYS } from "../shared/health";
+import {
+  forecastSchedule,
+  projectedEndFromSchedule,
+  rescheduleFrom,
+  type ForecastTaskState,
+  type Schedule,
+} from "../shared/scheduling";
+import {
+  computeAutoRisk,
+  computeRag,
+  daysBetween,
+  GATE_RED_DAYS,
+  GATE_AMBER_DAYS,
+  ragReasons,
+  type RagLevel,
+} from "../shared/health";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -268,8 +284,13 @@ export async function createProjectWithSeed(
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const phases = getSopPhasesForCategory(category);
+  // 安全网：currentPhase 必须是该 category 真实存在的阶段（如 jdm→input / obt→intake），
+  // 否则（如非 UI 调用方沿用默认 "concept"）落到不存在的阶段。缺省取首阶段。
+  const seeded = phases.some((p) => p.id === project.currentPhase)
+    ? project
+    : { ...project, currentPhase: phases[0]?.id ?? project.currentPhase };
   await db.transaction(async (tx) => {
-    await tx.insert(projects).values(project);
+    await tx.insert(projects).values(seeded);
     for (const phase of phases) {
       await tx.insert(projectPhases).values({ projectId: project.id, phaseId: phase.id });
       for (const task of phase.tasks) {
@@ -284,6 +305,7 @@ export async function createProjectWithSeed(
       }
     }
   });
+  await refreshProjectTaskStatuses(project.id);
 }
 
 export async function updateProject(
@@ -327,20 +349,122 @@ export async function getProjectsByMember(userId: number): Promise<ProjectRow[]>
     .from(projectMembers)
     .where(eq(projectMembers.userId, userId));
   const memberProjectIds = memberRows.map((r) => r.projectId);
-  if (memberProjectIds.length === 0) return [];
+  const projectScope = memberProjectIds.length > 0
+    ? or(eq(projects.pmUserId, userId), inArray(projects.id, memberProjectIds))
+    : eq(projects.pmUserId, userId);
   return db
     .select()
     .from(projects)
-    .where(and(eq(projects.archived, false), inArray(projects.id, memberProjectIds)))
+    .where(and(eq(projects.archived, false), projectScope))
     .orderBy(desc(projects.updatedAt));
 }
 
 export type PortfolioRow = {
   id: string; name: string; projectNumber: string; category: string; risk: string;
+  ragLevel: RagLevel;
+  ragReasons: string[];
+  customer: string | null;
   currentPhase: string; startDate: string | null; targetDate: string | null; pmUserId: number | null; pmName: string | null;
-  taskTotal: number; taskDone: number; overdueTasks: number; blockedTasks: number;
-  openIssues: number; criticalIssues: number; projectedEnd: string | null;
+  taskTotal: number; taskDone: number; taskInProgress: number; overdueTasks: number; blockedTasks: number;
+  openIssues: number; criticalIssues: number; plannedEnd: string | null; projectedEnd: string | null;
+  progressBehindPct: number | null;
+  unassignedTasks: number;
+  memberGap: number;
+  gateTaskTotal: number;
+  gateTaskDone: number;
+  gatePhaseId: string | null;
+  gateName: string | null;
+  gateDueDate: string | null;
+  gateDone: boolean;
+  gateReady: boolean | null;
+  gateBlockers: number;
+  gateNotReady: "red" | "amber" | null;
+  deliverableGap: number;
+  releaseDecision: GateDecision | null;
+  releaseGateName: string | null;
+  releaseGateReady: boolean;
+  releaseDeliverableDone: number;
+  releaseDeliverableTotal: number;
+  releaseHardBlockers: number;
+  releaseConditions: string | null;
 };
+
+const PORTFOLIO_REQUIRED_ROLES: ProjectMemberRole[] = ["pm", "rd_hw", "rd_mech", "rd_sw", "qa", "scm"];
+
+function todayInShanghaiISO(now = new Date()): string {
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts = Object.fromEntries(fmt.formatToParts(now).map((part) => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function maxISODate(values: Array<string | null | undefined>): string | null {
+  let out: string | null = null;
+  for (const value of values) {
+    if (!value) continue;
+    const iso = String(value).slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) continue;
+    if (!out || iso > out) out = iso;
+  }
+  return out;
+}
+
+function progressBehindPct(plannedItems: number, dueItems: number, donePlannedItems: number): number | null {
+  if (plannedItems <= 0) return null;
+  return Math.max(0, ((dueItems - donePlannedItems) / plannedItems) * 100);
+}
+
+function forecastProjectEnd(
+  project: Pick<ProjectRow, "category" | "startDate">,
+  rows: Array<{
+    taskId: string;
+    status: string;
+    completed: boolean;
+    startDate: string | null;
+    dueDate: string | null;
+    completedAt: Date | null;
+  }>,
+  todayISO: string
+): string | null {
+  if (rows.length === 0) return null;
+  const hasScheduleSignal = !!project.startDate || rows.some((row) => row.startDate || row.dueDate || row.completedAt);
+  if (!hasScheduleSignal) return null;
+  const rowIds = new Set(rows.map((row) => row.taskId));
+  const schedTasks = buildSchedTasks(getPhasesForCategory(project.category)).filter((task) => rowIds.has(task.id));
+  if (schedTasks.length === 0) return maxISODate(rows.map((row) => row.dueDate));
+  const states: ForecastTaskState[] = rows.map((row) => ({
+    id: row.taskId,
+    startDate: row.startDate,
+    dueDate: row.dueDate,
+    completed: row.completed,
+    status: row.status,
+    completedAtISO: row.completedAt ? todayInShanghaiISO(row.completedAt) : null,
+  }));
+  return projectedEndFromSchedule(forecastSchedule(schedTasks, states, todayISO, project.startDate));
+}
+
+function computePortfolioHealth(input: {
+  projectedEnd: string | null;
+  targetDate: string | null;
+  overdueTasks: number;
+  blockedTasks: number;
+  openIssues: number;
+  criticalIssues: number;
+  progressBehindPct: number | null;
+  gateNotReady: "red" | "amber" | null;
+}): { ragLevel: RagLevel; risk: "low" | "medium" | "high"; reasons: string[] } {
+  const ragInput = { risk: "low" as const, ...input };
+  const ragLevel = computeRag(ragInput);
+  return {
+    ragLevel,
+    risk: computeAutoRisk(input),
+    reasons: ragReasons(ragInput),
+  };
+}
 
 /** 跨项目组合看板：用户可见项目 + 每项目健康度聚合(任务/逾期/阻塞/开放问题/预计完成) */
 export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
@@ -352,15 +476,31 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
   for (const p of allProjects) projById.set(p.id, p);
   const ids = Array.from(projById.keys());
   if (ids.length === 0) return [];
+  const todayISO = todayInShanghaiISO();
 
   const taskAgg = await db.select({
     projectId: projectTasks.projectId,
     total: drizzleSql<number>`count(*)::int`,
     done: drizzleSql<number>`count(*) filter (where ${projectTasks.status} in ('done','skipped'))::int`,
-    overdue: drizzleSql<number>`count(*) filter (where ${projectTasks.dueDate} is not null and ${projectTasks.dueDate} < CURRENT_DATE and ${projectTasks.status} not in ('done','skipped'))::int`,
+    inProgress: drizzleSql<number>`count(*) filter (where ${projectTasks.status} = 'in_progress')::int`,
+    overdue: drizzleSql<number>`count(*) filter (where ${projectTasks.dueDate} is not null and ${projectTasks.dueDate} < ${todayISO} and ${projectTasks.status} not in ('done','skipped'))::int`,
     blocked: drizzleSql<number>`count(*) filter (where ${projectTasks.status} = 'blocked')::int`,
-    projectedEnd: drizzleSql<string | null>`max(${projectTasks.dueDate})::text`,
+    unassigned: drizzleSql<number>`count(*) filter (where ${projectTasks.assigneeUserId} is null and ${projectTasks.status} not in ('done','skipped'))::int`,
+    plannedItems: drizzleSql<number>`count(*) filter (where ${projectTasks.dueDate} is not null)::int`,
+    dueItems: drizzleSql<number>`count(*) filter (where ${projectTasks.dueDate} is not null and ${projectTasks.dueDate} <= ${todayISO})::int`,
+    donePlannedItems: drizzleSql<number>`count(*) filter (where ${projectTasks.dueDate} is not null and ${projectTasks.status} in ('done','skipped'))::int`,
+    plannedEnd: drizzleSql<string | null>`max(${projectTasks.dueDate})::text`,
   }).from(projectTasks).where(inArray(projectTasks.projectId, ids)).groupBy(projectTasks.projectId);
+
+  const taskRows = await db.select({
+    projectId: projectTasks.projectId,
+    taskId: projectTasks.taskId,
+    status: projectTasks.status,
+    completed: projectTasks.completed,
+    startDate: projectTasks.startDate,
+    dueDate: projectTasks.dueDate,
+    completedAt: projectTasks.completedAt,
+  }).from(projectTasks).where(inArray(projectTasks.projectId, ids));
 
   const issueAgg = await db.select({
     projectId: projectIssues.projectId,
@@ -368,35 +508,122 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
     critical: drizzleSql<number>`count(*) filter (where ${projectIssues.status} in ('open','in_progress') and ${projectIssues.severity} in ('P0','P1'))::int`,
   }).from(projectIssues).where(inArray(projectIssues.projectId, ids)).groupBy(projectIssues.projectId);
 
+  const memberRows = await db.select({
+    projectId: projectMembers.projectId,
+    role: projectMembers.role,
+  }).from(projectMembers).where(inArray(projectMembers.projectId, ids));
+
   const pmIds = Array.from(new Set(Array.from(projById.values()).map((p) => p.pmUserId).filter((x): x is number => !!x)));
   const pmRows = pmIds.length ? await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, pmIds)) : [];
   const pmName = new Map(pmRows.map((r) => [r.id, r.name]));
   const taskMap = new Map(taskAgg.map((t) => [t.projectId, t]));
+  const taskRowsByProject = new Map<string, typeof taskRows>();
+  for (const row of taskRows) {
+    const list = taskRowsByProject.get(row.projectId) ?? [];
+    list.push(row);
+    taskRowsByProject.set(row.projectId, list);
+  }
+  const taskByProjectTask = new Map(taskRows.map((t) => [`${t.projectId}:${t.taskId}`, t]));
   const issueMap = new Map(issueAgg.map((i) => [i.projectId, i]));
+  const roleMap = new Map<string, Set<ProjectMemberRole>>();
+  for (const row of memberRows) {
+    const roles = roleMap.get(row.projectId) ?? new Set<ProjectMemberRole>();
+    roles.add(row.role);
+    roleMap.set(row.projectId, roles);
+  }
 
-  return Array.from(projById.values()).map((p) => {
+  return Promise.all(Array.from(projById.values()).map(async (p) => {
     const t = taskMap.get(p.id);
+    const projectTaskRows = taskRowsByProject.get(p.id) ?? [];
     const i = issueMap.get(p.id);
+    const roles = new Set(roleMap.get(p.id) ?? []);
+    if (p.pmUserId) roles.add("pm");
+    const memberGap = PORTFOLIO_REQUIRED_ROLES.filter((role) => !roles.has(role)).length;
+    const phases = getPhasesForCategory(p.category);
+    const phase = phases.find((item) => item.id === p.currentPhase) ?? null;
+    const gateTaskIds = phases.map((item) => item.gateTaskId).filter(Boolean);
+    const gateTaskTotal = gateTaskIds.length;
+    const gateTaskDone = gateTaskIds.filter((taskId) => {
+      const gate = taskByProjectTask.get(`${p.id}:${taskId}`);
+      return !!gate && (gate.status === "done" || gate.status === "skipped" || gate.completed);
+    }).length;
+    const gateTask = phase ? taskByProjectTask.get(`${p.id}:${phase.gateTaskId}`) : undefined;
+    const gateDone = !!gateTask && (gateTask.status === "done" || gateTask.status === "skipped" || gateTask.completed);
+    const readiness = phase ? await getGateReadiness(p.id, phase.id) : null;
+    const deliverableDim = readiness?.dimensions.find((d) => d.dimension === "deliverables");
+    const gateBlockers = gateDone ? 0 : readiness?.blockerCount ?? 0;
+    let gateNotReady: "red" | "amber" | null = null;
+    if (!gateDone && readiness && !readiness.ready && gateTask?.dueDate) {
+      const distance = daysBetween(todayISO, gateTask.dueDate);
+      gateNotReady = distance !== null && distance <= GATE_RED_DAYS
+        ? "red"
+        : distance !== null && distance <= GATE_AMBER_DAYS
+          ? "amber"
+          : null;
+    }
+    const releaseGate = await getReleaseGateStatus(p);
+    const releaseHardBlockers = releaseGate.dimensions.filter((d) => !d.ok && d.dimension !== "review_conditions").length;
+    const progressBehind = progressBehindPct(t?.plannedItems ?? 0, t?.dueItems ?? 0, t?.donePlannedItems ?? 0);
+    const projectedEnd = forecastProjectEnd(p, projectTaskRows, todayISO);
+    const health = computePortfolioHealth({
+      projectedEnd,
+      targetDate: p.targetDate,
+      overdueTasks: t?.overdue ?? 0,
+      blockedTasks: t?.blocked ?? 0,
+      openIssues: i?.open ?? 0,
+      criticalIssues: i?.critical ?? 0,
+      progressBehindPct: progressBehind,
+      gateNotReady,
+    });
     return {
-      id: p.id, name: p.name, projectNumber: p.projectNumber, category: p.category, risk: p.risk,
+      id: p.id, name: p.name, projectNumber: p.projectNumber, category: p.category, risk: health.risk,
+      ragLevel: health.ragLevel,
+      ragReasons: health.reasons,
+      customer: p.customer ?? null,
       currentPhase: p.currentPhase, startDate: p.startDate, targetDate: p.targetDate,
       pmUserId: p.pmUserId ?? null,
       pmName: p.pmUserId ? (pmName.get(p.pmUserId) ?? null) : null,
-      taskTotal: t?.total ?? 0, taskDone: t?.done ?? 0, overdueTasks: t?.overdue ?? 0, blockedTasks: t?.blocked ?? 0,
-      openIssues: i?.open ?? 0, criticalIssues: i?.critical ?? 0, projectedEnd: t?.projectedEnd ?? null,
+      taskTotal: t?.total ?? 0, taskDone: t?.done ?? 0, taskInProgress: t?.inProgress ?? 0, overdueTasks: t?.overdue ?? 0, blockedTasks: t?.blocked ?? 0,
+      openIssues: i?.open ?? 0, criticalIssues: i?.critical ?? 0,
+      plannedEnd: t?.plannedEnd ?? null,
+      projectedEnd,
+      progressBehindPct: progressBehind,
+      unassignedTasks: t?.unassigned ?? 0,
+      memberGap,
+      gateTaskTotal,
+      gateTaskDone,
+      gatePhaseId: phase?.id ?? null,
+      gateName: phase?.gate ?? null,
+      gateDueDate: gateTask?.dueDate ?? null,
+      gateDone,
+      gateReady: gateDone ? true : readiness?.ready ?? null,
+      gateBlockers,
+      gateNotReady,
+      deliverableGap: deliverableDim?.blockers.length ?? 0,
+      releaseDecision: releaseGate.decision,
+      releaseGateName: releaseGate.gateName || null,
+      releaseGateReady: releaseGate.ready,
+      releaseDeliverableDone: releaseGate.deliverables.done,
+      releaseDeliverableTotal: releaseGate.deliverables.total,
+      releaseHardBlockers,
+      releaseConditions: releaseGate.conditions ?? null,
     };
-  });
+  }));
 }
 
 /** digest 用：全量活跃项目的健康聚合（不依赖用户视角）。SQL 一律用传入 todayISO。 */
 export type PortfolioHealthRow = {
   id: string; name: string; projectNumber: string; category: string; risk: string;
+  ragLevel: RagLevel;
+  ragReasons: string[];
   currentPhase: string; targetDate: string | null; pmUserId: number | null; pmName: string | null;
   overdueTasks: number; blockedTasks: number; openIssues: number; criticalIssues: number;
   plannedEnd: string | null;
+  projectedEnd: string | null;
   plannedItems: number;
   dueItems: number;
   donePlannedItems: number;
+  progressBehindPct: number | null;
   gateNotReady: "red" | "amber" | null;
 };
 
@@ -423,37 +650,72 @@ export async function getPortfolioHealthForDigest(todayISO: string): Promise<Por
     critical: drizzleSql<number>`count(*) filter (where ${projectIssues.status} in ('open','in_progress') and ${projectIssues.severity} in ('P0','P1'))::int`,
   }).from(projectIssues).where(inArray(projectIssues.projectId, ids)).groupBy(projectIssues.projectId);
 
-  // getAutomationGatePrereqs 已只返回 archived=false 项目，无需再按 ids 过滤。
-  const gateRows = await getAutomationGatePrereqs();
-  const gateByProject = new Map<string, "red" | "amber">();
-  for (const g of gateRows) {
-    if (!g.dueDate) continue;
-    const d = daysBetween(todayISO, g.dueDate);
-    if (d === null) continue;
-    const level: "red" | "amber" | null = d <= GATE_RED_DAYS ? "red" : d <= GATE_AMBER_DAYS ? "amber" : null;
-    if (level === null) continue;
-    if (gateByProject.get(g.projectId) === "red") continue;
-    if (level === "red" || !gateByProject.has(g.projectId)) gateByProject.set(g.projectId, level);
-  }
+  const taskRows = await db.select({
+    projectId: projectTasks.projectId,
+    taskId: projectTasks.taskId,
+    status: projectTasks.status,
+    completed: projectTasks.completed,
+    startDate: projectTasks.startDate,
+    dueDate: projectTasks.dueDate,
+    completedAt: projectTasks.completedAt,
+  }).from(projectTasks).where(inArray(projectTasks.projectId, ids));
 
   const pmIds = Array.from(new Set(projRows.map((p) => p.pmUserId).filter((x): x is number => !!x)));
   const pmRows = pmIds.length ? await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, pmIds)) : [];
   const pmName = new Map(pmRows.map((r) => [r.id, r.name]));
   const taskMap = new Map(taskAgg.map((t) => [t.projectId, t]));
+  const taskRowsByProject = new Map<string, typeof taskRows>();
+  for (const row of taskRows) {
+    const list = taskRowsByProject.get(row.projectId) ?? [];
+    list.push(row);
+    taskRowsByProject.set(row.projectId, list);
+  }
   const issueMap = new Map(issueAgg.map((i) => [i.projectId, i]));
+  const gateByProject = new Map<string, "red" | "amber">();
+  await Promise.all(projRows.map(async (p) => {
+    const phases = getPhasesForCategory(p.category);
+    const phase = phases.find((item) => item.id === p.currentPhase);
+    if (!phase) return;
+    const gate = (taskRowsByProject.get(p.id) ?? []).find((task) => task.taskId === phase.gateTaskId);
+    if (!gate?.dueDate || gate.status === "done" || gate.status === "skipped" || gate.completed) return;
+    const readiness = await getGateReadiness(p.id, phase.id);
+    if (!readiness || readiness.ready) return;
+    const d = daysBetween(todayISO, gate.dueDate);
+    if (d === null) return;
+    const level: "red" | "amber" | null = d <= GATE_RED_DAYS ? "red" : d <= GATE_AMBER_DAYS ? "amber" : null;
+    if (level === null) return;
+    gateByProject.set(p.id, level);
+  }));
 
   return projRows.map((p) => {
     const t = taskMap.get(p.id);
     const i = issueMap.get(p.id);
+    const gateNotReady = gateByProject.get(p.id) ?? null;
+    const progressBehind = progressBehindPct(t?.plannedItems ?? 0, t?.dueItems ?? 0, t?.donePlannedItems ?? 0);
+    const projectedEnd = forecastProjectEnd(p, taskRowsByProject.get(p.id) ?? [], todayISO);
+    const health = computePortfolioHealth({
+      projectedEnd,
+      targetDate: p.targetDate,
+      overdueTasks: t?.overdue ?? 0,
+      blockedTasks: t?.blocked ?? 0,
+      openIssues: i?.open ?? 0,
+      criticalIssues: i?.critical ?? 0,
+      progressBehindPct: progressBehind,
+      gateNotReady,
+    });
     return {
-      id: p.id, name: p.name, projectNumber: p.projectNumber, category: p.category, risk: p.risk,
+      id: p.id, name: p.name, projectNumber: p.projectNumber, category: p.category, risk: health.risk,
+      ragLevel: health.ragLevel,
+      ragReasons: health.reasons,
       currentPhase: p.currentPhase, targetDate: p.targetDate, pmUserId: p.pmUserId ?? null,
       pmName: p.pmUserId ? (pmName.get(p.pmUserId) ?? null) : null,
       overdueTasks: t?.overdue ?? 0, blockedTasks: t?.blocked ?? 0,
       openIssues: i?.open ?? 0, criticalIssues: i?.critical ?? 0,
       plannedEnd: t?.plannedEnd ?? null,
+      projectedEnd,
       plannedItems: t?.plannedItems ?? 0, dueItems: t?.dueItems ?? 0, donePlannedItems: t?.donePlannedItems ?? 0,
-      gateNotReady: gateByProject.get(p.id) ?? null,
+      progressBehindPct: progressBehind,
+      gateNotReady,
     };
   });
 }
@@ -522,6 +784,50 @@ export async function getProjectMember(projectId: string, userId: number): Promi
     .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId)))
     .limit(1);
   return result[0];
+}
+
+async function ensureProjectCalendarEventsTable(): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.execute(drizzleSql`
+    CREATE TABLE IF NOT EXISTS "project_calendar_events" (
+      "id" serial PRIMARY KEY,
+      "projectId" varchar(32) NOT NULL,
+      "title" varchar(256) NOT NULL,
+      "description" text,
+      "eventDate" date NOT NULL,
+      "startTime" varchar(5) NOT NULL,
+      "durationMin" integer NOT NULL DEFAULT 60,
+      "organizerUserId" integer NOT NULL,
+      "dingtalkEventId" varchar(128),
+      "dingtalkSyncStatus" varchar(24) NOT NULL DEFAULT 'not_synced',
+      "createdBy" integer NOT NULL,
+      "createdAt" timestamp NOT NULL DEFAULT now(),
+      "updatedAt" timestamp NOT NULL DEFAULT now()
+    )
+  `);
+  await db.execute(drizzleSql`CREATE INDEX IF NOT EXISTS "idx_project_calendar_events_project_date" ON "project_calendar_events" ("projectId", "eventDate")`);
+  await db.execute(drizzleSql`CREATE INDEX IF NOT EXISTS "idx_project_calendar_events_date" ON "project_calendar_events" ("eventDate")`);
+}
+
+export async function createProjectCalendarEvent(
+  event: InsertProjectCalendarEvent,
+): Promise<ProjectCalendarEvent> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await ensureProjectCalendarEventsTable();
+  const [row] = await db.insert(projectCalendarEvents).values(event).returning();
+  return row;
+}
+
+export async function updateProjectCalendarEventSync(
+  id: number,
+  patch: Pick<InsertProjectCalendarEvent, "dingtalkEventId" | "dingtalkSyncStatus">,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await ensureProjectCalendarEventsTable();
+  await db.update(projectCalendarEvents).set(patch).where(eq(projectCalendarEvents.id, id));
 }
 
 /** Add a member to a project */
@@ -882,8 +1188,22 @@ export async function getProjectGateReviews(projectId: string, phaseId?: string)
 export async function createProjectGateReview(review: InsertProjectGateReview): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(projectGateReviews).values(review).returning({ id: projectGateReviews.id });
-  return result[0].id;
+  return db.transaction(async (tx) => {
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${review.projectId}:${review.phaseId}`}))`);
+    const latest = await tx
+      .select({ maxRound: drizzleSql<number>`coalesce(max(${projectGateReviews.roundNumber}), 0)::int` })
+      .from(projectGateReviews)
+      .where(and(
+        eq(projectGateReviews.projectId, review.projectId),
+        eq(projectGateReviews.phaseId, review.phaseId),
+      ));
+    const nextRound = (latest[0]?.maxRound ?? 0) + 1;
+    const result = await tx
+      .insert(projectGateReviews)
+      .values({ ...review, roundNumber: nextRound })
+      .returning({ id: projectGateReviews.id });
+    return result[0].id;
+  });
 }
 
 /** Update a gate review */
@@ -953,10 +1273,8 @@ export async function createProjectFile(record: Omit<InsertProjectFile, "id" | "
   const result = await db.insert(projectFiles).values(record).returning({ id: projectFiles.id });
   // 上传新版本后触发交付物重审（若已审核过则回退待审）
   if (record.deliverableName && record.phaseId) {
-    try {
-      const { resetReviewOnReupload } = await import("./deliverable-review-service");
-      await resetReviewOnReupload(record.projectId, record.phaseId, record.deliverableName);
-    } catch { /* 重审钩子 best-effort，不影响上传 */ }
+    const { resetReviewOnReupload } = await import("./deliverable-review-service");
+    await resetReviewOnReupload(record.projectId, record.phaseId, record.deliverableName);
   }
   return result[0].id;
 }
@@ -1082,6 +1400,93 @@ function toDbPatch(patch: TaskMetaPatch) {
   return { ...patch };
 }
 
+function getTaskDependencyMap(category: string | undefined): Map<string, string[]> {
+  return new Map(
+    buildSchedTasks(getPhasesForCategory(category)).map((task) => [task.id, task.dependsOn ?? []])
+  );
+}
+
+function automaticTaskStatus(
+  task: ProjectTask,
+  rowsByTaskId: Map<string, ProjectTask>,
+  dependencies: Map<string, string[]>,
+  todayISO: string
+): TaskStatus {
+  if (task.status === "skipped") return "skipped";
+  if (task.completed || task.status === "done") return "done";
+
+  const unresolvedDependency = (dependencies.get(task.taskId) ?? []).some((dependencyId) => {
+    const dependency = rowsByTaskId.get(dependencyId);
+    if (!dependency) return true;
+    return dependency.status !== "done" && dependency.status !== "skipped" && !dependency.completed;
+  });
+  if (unresolvedDependency) return "blocked";
+
+  if (task.startDate && task.startDate > todayISO) return "todo";
+  if (task.startDate && task.startDate <= todayISO) return "in_progress";
+  if (task.assigneeUserId) return "in_progress";
+  if (task.dueDate && task.dueDate <= todayISO) return "in_progress";
+  return "todo";
+}
+
+function applyAutomaticTaskStatuses(
+  rows: ProjectTask[],
+  category: string | undefined,
+  todayISO = todayInShanghaiISO()
+): ProjectTask[] {
+  const dependencies = getTaskDependencyMap(category);
+  const rowsByTaskId = new Map(rows.map((row) => [row.taskId, row]));
+  const now = new Date();
+
+  return rows.map((row) => {
+    const status = automaticTaskStatus(row, rowsByTaskId, dependencies, todayISO);
+    const completed = status === "done";
+    const completedAt = completed ? (row.completedAt ?? now) : null;
+    if (row.status === status && row.completed === completed && row.completedAt === completedAt) return row;
+    return { ...row, status, completed, completedAt };
+  });
+}
+
+/**
+ * Recalculate operational task status from dependencies, schedule, assignment,
+ * and completion. Manual non-terminal status changes are intentionally not a
+ * control surface; "done" and "skipped" remain explicit terminal states.
+ */
+export async function refreshProjectTaskStatuses(projectId: string, todayISO = todayInShanghaiISO()): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const project = await getProjectById(projectId);
+  if (!project) return 0;
+  const rows = await db.select().from(projectTasks).where(eq(projectTasks.projectId, projectId));
+  if (rows.length === 0) return 0;
+
+  const nextRows = applyAutomaticTaskStatuses(rows, project.category, todayISO);
+  const rowsById = new Map(rows.map((row) => [row.id, row]));
+  let changed = 0;
+
+  for (const next of nextRows) {
+    const current = rowsById.get(next.id);
+    if (!current) continue;
+    const shouldUpdate =
+      current.status !== next.status ||
+      current.completed !== next.completed ||
+      (next.status === "done" && !current.completedAt) ||
+      (next.status !== "done" && !!current.completedAt);
+    if (!shouldUpdate) continue;
+    await db
+      .update(projectTasks)
+      .set({
+        status: next.status,
+        completed: next.completed,
+        completedAt: next.status === "done" ? (current.completedAt ?? next.completedAt ?? new Date()) : null,
+      })
+      .where(eq(projectTasks.id, current.id));
+    changed += 1;
+  }
+
+  return changed;
+}
+
 /**
  * Update task meta fields (assignee, dueDate, status, priority, completedAt).
  * Upserts the row if it doesn't exist yet.
@@ -1120,6 +1525,9 @@ export async function updateTaskMeta(
   } else {
     await db.insert(projectTasks).values({ projectId, phaseId, taskId, ...dbPatch });
   }
+  if (patch.status === undefined) {
+    await refreshProjectTaskStatuses(projectId);
+  }
 }
 
 /**
@@ -1139,6 +1547,7 @@ export async function setTaskCompletion(
     completedAt: completed ? new Date() : null,
     updatedBy: updatedBy ?? null,
   });
+  await refreshProjectTaskStatuses(projectId);
 }
 
 /**
@@ -1225,6 +1634,21 @@ function resolveTailoringTargetTasks(
   return tasks;
 }
 
+function assertNoReleaseGateTailoring(category: string, targets: TailoringTarget[]): void {
+  const phases = getPhasesForCategory(category);
+  const phaseById = new Map(phases.map((phase) => [phase.id, phase]));
+  for (const target of normalizeTailoringTargets(targets)) {
+    const phase = phaseById.get(target.phaseId);
+    if (!phase) continue;
+    if (target.scope === "phase" && phase.isReleaseGate) {
+      throw new Error("MP Release 阶段不可裁剪");
+    }
+    if (target.scope === "task" && phase.isReleaseGate && target.taskId === phase.gateTaskId) {
+      throw new Error("MP Release Gate 任务不可裁剪");
+    }
+  }
+}
+
 export async function listProjectTailoring(projectId: string): Promise<ProjectTailoring[]> {
   const db = await getDb();
   if (!db) return [];
@@ -1248,6 +1672,7 @@ export async function createProjectTailoringRequest(input: {
   if (!project) throw new Error("项目不存在");
   const targets = normalizeTailoringTargets(input.targets);
   if (targets.length === 0) throw new Error("请至少选择一个裁剪对象");
+  assertNoReleaseGateTailoring(project.category, targets);
 
   const resolvedTasks = resolveTailoringTargetTasks(project.category, targets);
   const taskRows = await getProjectTasks(input.projectId);
@@ -1351,6 +1776,7 @@ export async function reviewProjectTailoring(input: {
   if (!project) throw new Error("项目不存在");
 
   if (input.decision === "approved") {
+    assertNoReleaseGateTailoring(project.category, tailoring.targets ?? []);
     await applyTailoringTargets(tailoring.projectId, project.category, tailoring.targets ?? [], input.reviewedBy);
   }
 
@@ -1514,6 +1940,7 @@ export async function assignTasksByRole(
     await db.update(projectTasks).set({ assigneeUserId: userId, updatedBy }).where(eq(projectTasks.id, t.id));
     out.push({ userId, taskId: t.taskId, phaseId: t.phaseId, dueDate: t.dueDate ?? null });
   }
+  if (out.length > 0) await refreshProjectTaskStatuses(projectId);
   return out;
 }
 
@@ -1533,6 +1960,7 @@ export async function applyProjectSchedule(projectId: string): Promise<number> {
       .where(and(eq(projectTasks.projectId, projectId), eq(projectTasks.taskId, taskId)));
     n += 1;
   }
+  if (n > 0) await refreshProjectTaskStatuses(projectId);
   return n;
 }
 
@@ -1559,6 +1987,7 @@ export async function rescheduleProjectFromTask(
       .where(and(eq(projectTasks.projectId, projectId), eq(projectTasks.taskId, id)));
     n += 1;
   }
+  if (n > 0) await refreshProjectTaskStatuses(projectId);
   return n;
 }
 
@@ -1776,6 +2205,56 @@ export async function listProductRevisions(productId: string): Promise<ProductRe
     .orderBy(productRevisions.id);
 }
 
+// ── OEM 客户变体（PLM 侧登记，不开项目） ──────────────────────────────────────
+
+export async function createCustomerVariant(v: InsertCustomerVariant): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const res = await db.insert(customerVariants).values(v).returning({ id: customerVariants.id });
+  return res[0].id;
+}
+
+/** 某客户名下的全部变体（对账 / 改版 / 召回） */
+export async function listVariantsByCustomer(customerId: string): Promise<CustomerVariant[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(customerVariants)
+    .where(eq(customerVariants.customerId, customerId))
+    .orderBy(desc(customerVariants.updatedAt));
+}
+
+/** 某母平台/基础产品的全部变体 */
+export async function listVariantsByParentProduct(parentProductId: string): Promise<CustomerVariant[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(customerVariants)
+    .where(eq(customerVariants.parentProductId, parentProductId))
+    .orderBy(customerVariants.variantCode);
+}
+
+/**
+ * 某母平台的下游引用 SKU 影响清单。供自有 ECO Gate：平台一改即列出受影响客户变体，
+ * 并标出认证/物料波及。纯计算复用 shared/oem-variant.computeDownstreamImpact。
+ */
+export async function getDownstreamVariantImpact(
+  parentProductId: string,
+  opts?: { onlyActive?: boolean; changedBomLines?: string[] },
+): Promise<DownstreamImpactRow[]> {
+  const rows = await listVariantsByParentProduct(parentProductId);
+  return computeDownstreamImpact(
+    rows.map((v) => ({
+      variantCode: v.variantCode,
+      customerSku: v.customerSku,
+      customerName: v.customerName,
+      status: v.status as VariantStatus,
+      deltas: v.deltas ?? [],
+      certReuseParent: v.certReuseParent,
+      certAffectedMarks: v.certAffectedMarks,
+    })),
+    opts,
+  );
+}
+
 // ── MP Release 量产发布 ───────────────────────────────────────────────────────
 
 /** 关联项目到产品；同时把项目派生起点设为产品当前版本 */
@@ -1815,51 +2294,50 @@ function pickLatestReview(reviews: ProjectGateReview[]): ProjectGateReview | nul
 export interface ReleaseGateStatus {
   phaseId: string | null;
   gateName: string;
+  ready: boolean;
   decision: GateDecision | null;
   conditions: string | null;
   roundNumber: number;
   deliverables: { done: number; total: number; missing: string[] };
+  dimensions: GateReadiness["dimensions"];
 }
 
-/** 计算某项目「MP Release 前置 Gate」的最新决议与交付物缺口。 */
+/** 计算某项目「MP Release 前置 Gate」的最新决议与 Gate Readiness。 */
 export async function getReleaseGateStatus(project: ProjectRow): Promise<ReleaseGateStatus> {
   const phase = getReleaseGatePhase(project.category);
   if (!phase) {
-    return { phaseId: null, gateName: "", decision: null, conditions: null, roundNumber: 0, deliverables: { done: 0, total: 0, missing: [] } };
+    return {
+      phaseId: null,
+      gateName: "",
+      ready: false,
+      decision: null,
+      conditions: null,
+      roundNumber: 0,
+      deliverables: { done: 0, total: 0, missing: [] },
+      dimensions: [],
+    };
   }
   const reviews = await getProjectGateReviews(project.id, phase.id);
   const latest = pickLatestReview(reviews);
-  const taskRows = await getProjectTasks(project.id, phase.id);
-  const statusByTask: Record<string, Record<string, boolean>> = {};
-  for (const r of taskRows) statusByTask[r.taskId] = r.deliverables ?? {};
   const effective = await getProjectEffectiveProcess(project.id);
   const effectivePhase = effective?.phases.find((item) => item.id === phase.id);
   const expectedDeliverables = effectivePhase?.submittedDeliverables ?? Array.from(
     new Set([...(phase.deliverables ?? []), ...(phase.gateStandard?.requiredDeliverables ?? [])])
   );
-  let legacyTotal = 0, legacyDone = 0;
-  for (const t of phase.tasks) {
-    if (t.id === phase.gateTaskId) continue;
-    const names = getTaskDeliverables(t.id, phase.deliverables);
-    legacyTotal += names.length;
-    legacyDone += names.filter((name) => statusByTask[t.id]?.[name]).length;
-  }
-  const legacyAllDone = legacyTotal > 0 && legacyDone === legacyTotal;
-  let done = 0;
-  const missing: string[] = [];
-  for (const name of expectedDeliverables) {
-    const checkedOnGate = !!statusByTask[phase.gateTaskId]?.[name];
-    const checkedOnAnyPhaseTask = phase.tasks.some((task) => !!statusByTask[task.id]?.[name]);
-    if (checkedOnGate || checkedOnAnyPhaseTask || legacyAllDone) done++;
-    else missing.push(name);
-  }
+  const readiness = await getGateReadiness(project.id, phase.id);
+  const deliverableDim = readiness?.dimensions.find((d) => d.dimension === "deliverables");
+  const missing = deliverableDim?.blockers ?? [];
+  const total = deliverableDim ? expectedDeliverables.length : 0;
+  const done = Math.max(0, total - missing.length);
   return {
     phaseId: phase.id,
     gateName: latest?.gateName || phase.gate,
+    ready: readiness?.ready ?? false,
     decision: latest?.decision ?? null,
     conditions: latest?.conditions ?? null,
     roundNumber: latest?.roundNumber ?? 0,
-    deliverables: { done, total: expectedDeliverables.length, missing },
+    deliverables: { done, total, missing },
+    dimensions: readiness?.dimensions ?? [],
   };
 }
 
@@ -1885,11 +2363,20 @@ export async function getApproachingGates(): Promise<Array<{
   const db = await getDb();
   if (!db) return [];
   const projs = await db.select({ id: projects.id, category: projects.category }).from(projects).where(eq(projects.archived, false));
+  if (projs.length === 0) return [];
+  const projectIds = projs.map((p) => p.id);
+  const allTasks = await db.select({ projectId: projectTasks.projectId, taskId: projectTasks.taskId, status: projectTasks.status, dueDate: projectTasks.dueDate, completed: projectTasks.completed })
+    .from(projectTasks).where(inArray(projectTasks.projectId, projectIds));
+  const tasksByProject = new Map<string, typeof allTasks>();
+  for (const task of allTasks) {
+    const list = tasksByProject.get(task.projectId) ?? [];
+    list.push(task);
+    tasksByProject.set(task.projectId, list);
+  }
   const out: Array<{ projectId: string; phaseId: string; gateTaskId: string; gateName: string; dueDate: string; status: string }> = [];
   for (const p of projs) {
     const phases = getPhasesForCategory(p.category);
-    const rows = await db.select({ taskId: projectTasks.taskId, status: projectTasks.status, dueDate: projectTasks.dueDate, completed: projectTasks.completed })
-      .from(projectTasks).where(eq(projectTasks.projectId, p.id));
+    const rows = tasksByProject.get(p.id) ?? [];
     const byTask = new Map(rows.map((r) => [r.taskId, r]));
     for (const phase of phases) {
       const gate = byTask.get(phase.gateTaskId);
@@ -1924,7 +2411,11 @@ export async function getGateReadiness(projectId: string, phaseId: string): Prom
     const t = byTask.get(id);
     return t ? (t.status === "done" || t.status === "skipped" || !!t.completed) : false;
   };
-  const incompleteTaskIds = phase.tasks.filter((t) => t.id !== phase.gateTaskId && !isDone(t.id)).map((t) => t.id);
+  const incompleteTaskIds = phase.tasks
+    .filter((t) => t.id !== phase.gateTaskId)
+    .filter((t) => !(effective?.isTaskTailored(phaseId, t.id) ?? false))
+    .filter((t) => !isDone(t.id))
+    .map((t) => t.id);
 
   const required = effPhase?.submittedDeliverables ?? phase.gateStandard.requiredDeliverables;
   const { getReviewSatisfiedSet } = await import("./deliverable-review-service");
@@ -1976,6 +2467,8 @@ export async function releaseProject(input: {
   if (!db) throw new Error("Database not available");
   const project = await getProjectById(input.projectId);
   if (!project) throw new Error("项目不存在");
+  const canReleaseActor = await isReleaseOverrideAuthorized(project, input.actor);
+  if (!canReleaseActor) throw new Error("无权限量产发布（需项目创建人/PM/manager 或系统管理员）");
 
   // —— 绝对硬卡 1：已关联产品 ——
   if (!project.productId) throw new Error("项目未关联产品，无法发布");
@@ -1986,9 +2479,15 @@ export async function releaseProject(input: {
   // —— 前置 Gate ——
   const gate = await getReleaseGateStatus(project);
   if (!gate.phaseId) throw new Error("未定义 MP Release 前置 Gate，无法发布");
-  // —— 绝对硬卡 3：交付物齐 ——
-  if (gate.deliverables.missing.length > 0) {
-    throw new Error(`前置 Gate 必备交付物未齐（${gate.deliverables.done}/${gate.deliverables.total}）`);
+  const failedHardDimensions = gate.dimensions.filter((d) => !d.ok && d.dimension !== "review_conditions");
+  const deliverableBlock = failedHardDimensions.find((d) => d.dimension === "deliverables");
+  // —— 绝对硬卡 3：交付物审核合格 ——
+  if (deliverableBlock) {
+    throw new Error(`前置 Gate 必备交付物未审核通过（${gate.deliverables.done}/${gate.deliverables.total}）`);
+  }
+  const otherHardBlocks = failedHardDimensions.filter((d) => d.dimension !== "deliverables");
+  if (otherHardBlocks.length > 0) {
+    throw new Error(`前置 Gate 未就绪：${otherHardBlocks.map((d) => d.summary).join("；")}`);
   }
   // —— 绝对硬卡 4：Gate 有记录且非 rejected ——
   if (gate.decision === null || gate.decision === "rejected") {
@@ -1999,8 +2498,6 @@ export async function releaseProject(input: {
   let overridden = false;
   if (gate.decision === "conditional") {
     if (!input.override) throw new Error("前置 Gate 为有条件通过，需 owner/PM/manager 填写理由强制发布");
-    const authorized = await isReleaseOverrideAuthorized(project, input.actor);
-    if (!authorized) throw new Error("无权限强制发布（需项目创建人/PM/manager 或系统管理员）");
     const ov = input.override;
     if (!ov.overrideReason?.trim() || !ov.followUpOwner || !ov.dueDate?.trim()) {
       throw new Error("强制发布需填写理由、跟进负责人与截止日期");
@@ -2009,9 +2506,21 @@ export async function releaseProject(input: {
   }
 
   const productId = project.productId;
-  const label = await nextRevisionLabel(productId);
 
   return db.transaction(async (tx) => {
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`release:${input.projectId}`}))`);
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`product:${productId}`}))`);
+    const existingRelease = await tx.select({ id: mpReleases.id })
+      .from(mpReleases)
+      .where(eq(mpReleases.projectId, input.projectId))
+      .limit(1);
+    if (existingRelease.length > 0) throw new Error("项目已发布，不能重复发布");
+
+    const existingRevisions = await tx.select({ id: productRevisions.id })
+      .from(productRevisions)
+      .where(eq(productRevisions.productId, productId));
+    const label = `Rev ${String.fromCharCode(65 + existingRevisions.length)}`;
+
     const open = await tx.select().from(projectIssues)
       .where(and(eq(projectIssues.projectId, input.projectId),
         drizzleSql`${projectIssues.status} NOT IN ('resolved','closed','wont_fix')`));
@@ -2058,6 +2567,11 @@ export async function addBomLine(projectId: string, line: Partial<InsertBomItem>
   const db = await getDb(); if (!db) throw new Error("Database not available");
   const r = await db.insert(bomItems).values({ ...line, projectId, revisionId: null }).returning({ id: bomItems.id });
   return r[0].id;
+}
+export async function getBomLineById(id: number): Promise<BomItem | undefined> {
+  const db = await getDb(); if (!db) return undefined;
+  const [row] = await db.select().from(bomItems).where(eq(bomItems.id, id)).limit(1);
+  return row;
 }
 export async function updateBomLine(id: number, patch: Partial<InsertBomItem>): Promise<void> {
   const db = await getDb(); if (!db) throw new Error("Database not available");
@@ -2348,11 +2862,20 @@ export async function getAutomationGatePrereqs(): Promise<Array<{
   const db = await getDb();
   if (!db) return [];
   const projs = await db.select({ id: projects.id, category: projects.category }).from(projects).where(eq(projects.archived, false));
+  if (projs.length === 0) return [];
+  const projectIds = projs.map((p) => p.id);
+  const allTasks = await db.select({ projectId: projectTasks.projectId, taskId: projectTasks.taskId, status: projectTasks.status, dueDate: projectTasks.dueDate, completed: projectTasks.completed })
+    .from(projectTasks).where(inArray(projectTasks.projectId, projectIds));
+  const tasksByProject = new Map<string, typeof allTasks>();
+  for (const task of allTasks) {
+    const list = tasksByProject.get(task.projectId) ?? [];
+    list.push(task);
+    tasksByProject.set(task.projectId, list);
+  }
   const out: Array<{ projectId: string; taskId: string; phaseId: string; dueDate: string | null; status: string; incompletePrereqCount: number; title: string }> = [];
   for (const p of projs) {
     const phases = getPhasesForCategory(p.category);
-    const rows = await db.select({ taskId: projectTasks.taskId, status: projectTasks.status, dueDate: projectTasks.dueDate, completed: projectTasks.completed })
-      .from(projectTasks).where(eq(projectTasks.projectId, p.id));
+    const rows = tasksByProject.get(p.id) ?? [];
     const byTask = new Map(rows.map((r) => [r.taskId, r]));
     const isDone = (id: string) => { const r = byTask.get(id); return r ? (r.status === "done" || r.status === "skipped" || !!r.completed) : false; };
     for (const phase of phases) {
@@ -2371,10 +2894,13 @@ export async function getAutomationGatePrereqs(): Promise<Array<{
 /** 里程碑日历事件：阶段截止 / Gate 评审 / 项目目标日。 */
 export type CalendarEvent = {
   date: string;          // YYYY-MM-DD
-  type: "phase" | "gate" | "target";
+  type: "phase" | "gate" | "target" | "schedule";
   projectId: string;
   projectName: string;
   label: string;
+  startTime?: string | null;
+  durationMin?: number | null;
+  dingtalkSyncStatus?: string | null;
 };
 
 /**
@@ -2410,7 +2936,31 @@ export async function getCalendar(userId: number, fromDate: string, toDate: stri
   for (const r of phaseRows) {
     if (tailoredByProject.get(r.projectId)?.has(r.phaseId)) continue;
     const p = projById.get(r.projectId);
-    if (p) events.push({ date: r.endDate!, type: "phase", projectId: p.id, projectName: p.name, label: `${r.phaseId} 阶段截止` });
+    const phase = p ? getPhasesForCategory(p.category).find((item) => item.id === r.phaseId) : null;
+    if (p) events.push({ date: r.endDate!, type: "phase", projectId: p.id, projectName: p.name, label: `${phase?.name ?? r.phaseId} 截止` });
+  }
+
+  const taskRows = await db.select({
+    projectId: projectTasks.projectId,
+    phaseId: projectTasks.phaseId,
+    taskId: projectTasks.taskId,
+    dueDate: projectTasks.dueDate,
+  }).from(projectTasks).where(and(
+    inArray(projectTasks.projectId, ids),
+    between(projectTasks.dueDate, fromDate, toDate),
+  ));
+  for (const r of taskRows) {
+    const p = projById.get(r.projectId);
+    if (!p || tailoredByProject.get(r.projectId)?.has(r.phaseId)) continue;
+    const phase = getPhasesForCategory(p.category).find((item) => item.id === r.phaseId);
+    if (!phase || phase.gateTaskId !== r.taskId) continue;
+    events.push({
+      date: r.dueDate!,
+      type: "gate",
+      projectId: p.id,
+      projectName: p.name,
+      label: `${phase.gate || phase.name} 截止`,
+    });
   }
 
   const gateRows = await db.select({
@@ -2421,5 +2971,30 @@ export async function getCalendar(userId: number, fromDate: string, toDate: stri
     if (p) events.push({ date: r.reviewDate!, type: "gate", projectId: p.id, projectName: p.name, label: r.gateName || "Gate 评审" });
   }
 
-  return events.sort((a, b) => a.date.localeCompare(b.date));
+  await ensureProjectCalendarEventsTable();
+  const scheduleRows = await db.select({
+    projectId: projectCalendarEvents.projectId,
+    title: projectCalendarEvents.title,
+    eventDate: projectCalendarEvents.eventDate,
+    startTime: projectCalendarEvents.startTime,
+    durationMin: projectCalendarEvents.durationMin,
+    dingtalkSyncStatus: projectCalendarEvents.dingtalkSyncStatus,
+  }).from(projectCalendarEvents).where(and(inArray(projectCalendarEvents.projectId, ids), between(projectCalendarEvents.eventDate, fromDate, toDate)));
+  for (const r of scheduleRows) {
+    const p = projById.get(r.projectId);
+    if (p) {
+      events.push({
+        date: r.eventDate,
+        type: "schedule",
+        projectId: p.id,
+        projectName: p.name,
+        label: r.title,
+        startTime: r.startTime,
+        durationMin: r.durationMin,
+        dingtalkSyncStatus: r.dingtalkSyncStatus,
+      });
+    }
+  }
+
+  return events.sort((a, b) => a.date.localeCompare(b.date) || (a.startTime ?? "").localeCompare(b.startTime ?? ""));
 }

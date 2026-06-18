@@ -46,9 +46,6 @@ function nextEffectivePhaseId(phases: SOPPhase[], index: number, tailoredPhaseId
   for (let i = index + 1; i < phases.length; i++) {
     if (!tailoredPhaseIds.has(phases[i].id)) return phases[i].id;
   }
-  for (let i = phases.length - 1; i >= 0; i--) {
-    if (!tailoredPhaseIds.has(phases[i].id)) return phases[i].id;
-  }
   return null;
 }
 

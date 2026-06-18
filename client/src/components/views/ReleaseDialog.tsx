@@ -82,6 +82,12 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
 
   const blockers = precheck?.blockers ?? [];
   const blockersText = blockers.join('；');
+  const hardCardsSatisfied =
+    !!precheck?.hasProduct &&
+    (precheck?.openP0P1 ?? 0) === 0 &&
+    delOk &&
+    gateDecision !== null &&
+    gateDecision !== 'rejected';
 
   const handleNormalRelease = () => {
     releaseMutation.mutate({ projectId, notes: notes.trim() || undefined });
@@ -113,6 +119,30 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
           <div className="flex justify-center py-8"><Loader2 className="animate-spin text-amber-500" /></div>
         ) : (
           <div className="space-y-4 py-2">
+            <div className={`border p-3 ${
+              precheck?.canRelease
+                ? 'border-emerald-200 bg-emerald-50/60'
+                : precheck?.canForceRelease
+                  ? 'border-amber-200 bg-amber-50/60'
+                  : 'border-rose-200 bg-rose-50/60'
+            }`}>
+              <div className="text-[10px] font-mono uppercase tracking-widest text-stone-500 mb-1">发布结论</div>
+              <div className={`text-sm font-semibold ${
+                precheck?.canRelease ? 'text-emerald-800' : precheck?.canForceRelease ? 'text-amber-800' : 'text-rose-800'
+              }`}>
+                {precheck?.canRelease && '硬卡已满足，可以正常发布'}
+                {precheck?.canForceRelease && '硬卡已满足，但 Gate 为有条件通过'}
+                {!precheck?.canRelease && !precheck?.canForceRelease && '硬卡未满足，暂不可发布'}
+              </div>
+              <div className="mt-1 text-[11px] text-stone-600 leading-snug">
+                {hardCardsSatisfied
+                  ? gateConditional
+                    ? '需要记录例外风险、跟进负责人与截止日，发布责任由批准人承接。'
+                    : '产品、P0/P1、交付物审核、Gate 决议均已满足。'
+                  : '下方红色项是发布硬卡，补齐后再拍板。'}
+              </div>
+            </div>
+
             {/* 前置校验 */}
             <div className="space-y-2 border border-stone-200 p-3 bg-stone-50">
               <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400">前置校验</div>
@@ -123,11 +153,11 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
               {/* 前置 Gate 交付物 */}
               <div>
                 <Check ok={delOk}>
-                  前置 Gate 交付物{!delOk ? `（${delDone}/${delTotal}）` : ''}
+                  前置 Gate 交付物审核{!delOk ? `（${delDone}/${delTotal}）` : ''}
                 </Check>
                 {!delOk && delMissing.length > 0 && (
                   <div className="ml-[23px] mt-0.5 text-[11px] text-rose-500 leading-snug">
-                    缺：{delMissing.slice(0, 5).join('、')}{delMissing.length > 5 ? `…等 ${delMissing.length} 项` : ''}
+                    未通过：{delMissing.slice(0, 5).join('、')}{delMissing.length > 5 ? `…等 ${delMissing.length} 项` : ''}
                   </div>
                 )}
               </div>

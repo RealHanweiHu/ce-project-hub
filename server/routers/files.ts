@@ -26,8 +26,6 @@ import {
   getProjectFiles,
   getProjectFileById,
   deleteProjectFile,
-  getProjectById,
-  getProjectMember,
   createActivityLog,
 } from "../db";
 import { TRPCError } from "@trpc/server";
@@ -36,16 +34,9 @@ import { storagePut, storageDelete } from "../storage";
 import multer from "multer";
 import type { Express, Request, Response } from "express";
 import { createContext } from "../_core/context";
+import { getEffectiveProjectRoleById as getEffectiveRole } from "../project-access";
 
 // ── Permission helper ─────────────────────────────────────────────────────────
-
-async function getEffectiveRole(projectId: string, userId: number) {
-  const project = await getProjectById(projectId);
-  if (!project) return null;
-  if (project.createdBy === userId) return "owner" as const;
-  const member = await getProjectMember(projectId, userId);
-  return member?.role ?? null;
-}
 
 function canMutateFile(role: keyof typeof ROLE_PERMISSIONS, taskScoped: boolean) {
   const permissions = ROLE_PERMISSIONS[role];

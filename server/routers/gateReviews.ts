@@ -2,8 +2,6 @@ import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import { TRPCError } from "@trpc/server";
 import {
-  getProjectById,
-  getProjectMember,
   getProjectGateReviews,
   createProjectGateReview,
   updateProjectGateReview,
@@ -14,14 +12,7 @@ import {
 import { ROLE_PERMISSIONS } from "./members";
 import { GATE_DECISIONS } from "../../drizzle/schema";
 import { emitAutomationEvent } from "../automation/events";
-
-async function getEffectiveRole(projectId: string, userId: number) {
-  const project = await getProjectById(projectId);
-  if (!project) return null;
-  if (project.createdBy === userId) return "owner" as const;
-  const member = await getProjectMember(projectId, userId);
-  return member?.role ?? null;
-}
+import { getEffectiveProjectRoleById as getEffectiveRole } from "../project-access";
 
 export const gateReviewsRouter = router({
   /** List all gate reviews for a project (optionally filtered by phase) */
@@ -50,7 +41,6 @@ export const gateReviewsRouter = router({
       decision: z.enum(GATE_DECISIONS).default("conditional"),
       conditions: z.string().optional().nullable(),
       notes: z.string().optional().nullable(),
-      roundNumber: z.number().default(1),
     }))
     .mutation(async ({ ctx, input }) => {
       const role = await getEffectiveRole(input.projectId, ctx.user.id);
@@ -61,6 +51,9 @@ export const gateReviewsRouter = router({
         ...input,
         createdBy: ctx.user.id,
       });
+      const createdReview = (await getProjectGateReviews(input.projectId, input.phaseId))
+        .find((review) => review.id === id);
+      const roundNumber = createdReview?.roundNumber ?? 1;
       await createActivityLog({
         projectId: input.projectId,
         userId: ctx.user.id,
@@ -70,7 +63,7 @@ export const gateReviewsRouter = router({
         meta: {
           phaseId: input.phaseId,
           decision: input.decision,
-          roundNumber: input.roundNumber,
+          roundNumber,
         },
       });
       await emitAutomationEvent({
@@ -79,7 +72,7 @@ export const gateReviewsRouter = router({
         entityType: "gate_review",
         entityId: id,
         actorId: ctx.user.id,
-        after: { ...input, id, createdBy: ctx.user.id },
+        after: { ...input, roundNumber, id, createdBy: ctx.user.id },
       });
       return { success: true, id };
     }),
@@ -96,7 +89,6 @@ export const gateReviewsRouter = router({
       decision: z.enum(GATE_DECISIONS).optional(),
       conditions: z.string().optional().nullable(),
       notes: z.string().optional().nullable(),
-      roundNumber: z.number().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const role = await getEffectiveRole(input.projectId, ctx.user.id);

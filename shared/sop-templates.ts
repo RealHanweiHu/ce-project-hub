@@ -12,7 +12,7 @@ export interface SOPTask {
    * Empty array (default) = visible to ALL roles.
    */
   visibleRoles?: string[];
-  /** 自动排期：任务工期（日历日）。缺省按 1 天处理。 */
+  /** 自动排期：任务工期（工厂工作日）。缺省按 1 天处理。 */
   durationDays?: number;
   /** 自动排期：前置任务 id（finish-to-start；可指向上一阶段 gateTaskId）。缺省=阶段入口。 */
   dependsOn?: string[];
@@ -55,7 +55,7 @@ export interface SOPPhase {
 // ─────────────────────────────────────────────────────────────────────────────
 // Project Category Definition
 // ─────────────────────────────────────────────────────────────────────────────
-export type ProjectCategory = 'npd' | 'eco' | 'idr';
+export type ProjectCategory = 'npd' | 'eco' | 'idr' | 'jdm' | 'obt';
 
 export interface ProjectCategoryConfig {
   id: ProjectCategory;
@@ -294,6 +294,177 @@ const IDR_GATE_STANDARDS: Record<string, SOPGateStandard> = {
     responsibleRoles: ['ME/工厂负责试产与工艺', 'QA 负责首批质量和外观判定', 'SCM 负责物料与库存切换', 'PM/市场/销售负责上市资料', '管理层/Owner 负责 MP Release 批准'],
     evidenceRequirements: ['首件确认和试产检验记录', '分工位良率与外观合格率数据', 'SOP/WI 与培训记录', '库存和系统切换记录', '渠道/市场物料更新截图或签核'],
     exceptionStrategy: ['试产质量不稳定则暂停上市并追加改善', '物料或认证文件未切换完成不得 MP Release', '库存处理未闭环则限制渠道切换'],
+  },
+};
+
+// JDM —— 客户委托设计轨。客户出 ID/规格，工厂做 MD/EE/SW 并量产。
+// 关键差异：以「设计输入冻结」替代概念/规划入口，并在每个 Gate 强制客户签核
+// （签核以「必交付物」形式落地，经现有 deliverable-review 服务校验）。
+const JDM_GATE_STANDARDS: Record<string, SOPGateStandard> = {
+  input: {
+    entryCriteria: [
+      '客户已提供 ID/CMF 与产品规格初稿，委托范围基本清晰',
+      'PM 已确认双方对设计边界、责任分工和商务条款无重大分歧',
+      '初步可行性与 NRE/模具方向已有判断',
+    ],
+    exitCriteria: [
+      '设计输入（ID/CMF/规格）冻结并经客户书面确认',
+      'RACI、初步 BOM、NRE/模具方案和项目计划已基线',
+      '关键技术、供应与认证归属风险已登记责任人',
+    ],
+    requiredDeliverables: ['ID/CMF 输入包', '规格确认书（客户签字）', 'RACI 责任矩阵', '初步 BOM 与 NRE/模具方案', '项目计划'],
+    responsibleRoles: ['PM 负责输入冻结与商务对齐', 'R&D Lead 负责可行性判断', 'SCM 负责 NRE/模具与供应', '客户负责输入确认签字', '管理层/Owner 负责受理决策'],
+    evidenceRequirements: ['规格确认书签核记录', 'ID/CMF 输入包版本', '初步 BOM 与 NRE 报价', 'RACI 与风险登记表'],
+    exceptionStrategy: ['输入不完整或未签字则不得进入详细设计', '边界争议需升级双方对齐会', '认证/模具归属不清需补充确认后再 Gate'],
+  },
+  design: {
+    entryCriteria: [
+      '设计输入冻结 Gate 已通过，输入包和项目计划已基线',
+      'MD/EE/SW 设计资源与关键料件窗口已具备',
+      '客户外观一致性判定口径已明确',
+    ],
+    exitCriteria: [
+      'MD/EE/SW 设计输出完成并通过跨部门评审',
+      'DFM/DFA、BOM v1.0 和关键料件定型已确认',
+      '客户对外观一致性完成签核，开放问题均有责任人与关闭计划',
+    ],
+    requiredDeliverables: ['MD 结构图纸', 'EE 原理图 & PCB Layout', 'SW 架构文档', 'BOM v1.0', '客户外观签核记录'],
+    responsibleRoles: ['R&D Lead 负责设计完整性', 'ID/MD 负责外观一致性落地', 'PM 负责范围与客户协调', '客户负责外观签核', '管理层/Owner 负责设计冻结批准'],
+    evidenceRequirements: ['设计评审纪要', '图纸/原理图/Layout/架构版本', 'DFM/DFA Checklist', 'BOM v1.0', '客户外观签核记录'],
+    exceptionStrategy: ['设计输出不完整则不得释放 EVT', '外观偏离客户输入需回到客户裁决', '成本偏离目标需提交客户/管理层取舍'],
+  },
+  evt: {
+    entryCriteria: [
+      '设计冻结 Gate 已通过，EVT Build Plan 已批准',
+      'EVT 样机、测试计划和问题跟踪机制已就绪',
+      '客户样机确认安排与判定口径已确认',
+    ],
+    exitCriteria: [
+      '主要功能 Pass Rate 达到 95% 以上',
+      'P0 问题全部关闭，P1 问题关闭或获得明确豁免',
+      '客户完成 EVT 样机确认，DVT 输入版本已冻结',
+    ],
+    requiredDeliverables: ['EVT 样机', '功能/性能测试报告', '软硬件联调记录', '问题清单', '客户样机确认记录'],
+    responsibleRoles: ['EE/SW/ME 负责问题定位修正', 'QA 负责测试结论', 'PM 负责 Issue 闭环与客户确认', '客户负责样机确认', '管理层/Owner 负责进入 DVT 决策'],
+    evidenceRequirements: ['EVT 样机清单与版本', '功能/性能测试报告', 'Issue List 与关闭证据', '客户样机确认记录'],
+    exceptionStrategy: ['未达准出条件则 Re-EVT', '客户未确认不得进入 DVT', '开放问题需有责任人、期限与影响评估'],
+  },
+  dvt: {
+    entryCriteria: [
+      'EVT Gate 已通过，DVT 样机版本和测试矩阵已冻结',
+      '认证、可靠性、模具和包装验证资源已排期',
+      '客户 DVT 确认计划已明确，认证归属已对齐',
+    ],
+    exitCriteria: [
+      '可靠性、认证、模具尺寸/外观和软件回归达到目标',
+      '无未关闭 P0/P1 问题，量产关键风险已有控制计划',
+      '客户完成 DVT 确认，PVT 试产条件已确认',
+    ],
+    requiredDeliverables: ['DVT 样机', '可靠性测试报告', '安规与认证报告', '模具 T1/T2 样品', '包装验证报告', '客户 DVT 确认记录'],
+    responsibleRoles: ['QA 负责可靠性与认证结论', 'R&D 负责设计整改', 'ME/SCM 负责工艺与供应准备', '客户负责 DVT 确认', '管理层/Owner 负责进入 PVT 决策'],
+    evidenceRequirements: ['DVT 样机 Build Record', '可靠性/认证报告', '模具 T1/T2 评审记录', '客户 DVT 确认记录'],
+    exceptionStrategy: ['可靠性或认证失败必须复测并记录根因', '客户未确认不得进入 PVT', '模具/外观不达标则冻结修模计划'],
+  },
+  pvt: {
+    entryCriteria: [
+      'DVT Gate 已通过，量产工艺、治具和测试程序已准备',
+      '试产物料齐套，SOP/WI 草案和产线排程已确认',
+      '客户 golden sample 签样安排已明确',
+    ],
+    exitCriteria: [
+      '试产良率达到目标，关键异常已关闭或有受控计划',
+      'SOP/WI、治具、测试程序和人员培训全部就绪',
+      '客户完成 golden sample 签样，MP Release 条件已确认',
+    ],
+    requiredDeliverables: ['试产（50-300台）报告', 'SOP/WI', '治具与测试程序', '良率报告', '客户 golden sample 签样记录'],
+    responsibleRoles: ['ME/工厂负责试产执行', 'QA 负责质量判定', 'SCM 负责物料与供应', '客户负责 golden sample 签样', 'PM/管理层负责 MP Release 决策'],
+    evidenceRequirements: ['PVT 试产报告', '分工位良率与 FPY 数据', 'SOP/WI 与培训记录', '客户 golden sample 签样记录'],
+    exceptionStrategy: ['良率未达标则重复 PVT', '客户未签样不得发布 MP', '工艺/治具未就绪不得 MP Release'],
+  },
+  mp: {
+    entryCriteria: [
+      'PVT Gate 已通过，MP Release 文件包完整且客户量产授权到位',
+      '首批订单、产能、供应和售后反馈机制已准备',
+      '量产质量目标和异常升级路径已确认',
+    ],
+    exitCriteria: [
+      '量产爬坡达到计划产能和良率目标',
+      '关键质量、成本、交付和售后进入常态化管理',
+      'ECN/ECR 和持续改善机制运行稳定',
+    ],
+    requiredDeliverables: ['量产产品', '良率周报', 'ECN/ECR 记录', '售后数据分析'],
+    responsibleRoles: ['工厂/ME 负责产能与工艺', 'QA 负责出货质量', 'SCM 负责供应连续性', 'PM/管理层负责量产经营目标'],
+    evidenceRequirements: ['MP Release 记录', '周良率/产能/出货数据', 'OQC/RMA 分析', 'ECN/ECR 关闭记录'],
+    exceptionStrategy: ['重大质量异常启动围堵/停线/召回评估', '良率/交付偏差进入管理层周会跟踪', '持续不达标需启动专项改善'],
+  },
+};
+
+// OBT —— openBOM 转产导入轨。客户出完整设计 + BOM，工厂纯生产。
+// 核心工作 = DFM 反馈 + 料件齐套 + 治具/测试程序；客户签样/放行强制。
+const OBT_GATE_STANDARDS: Record<string, SOPGateStandard> = {
+  intake: {
+    entryCriteria: [
+      '客户已提交完整设计与 openBOM，转产意向明确',
+      'PM 已确认资料完整度足以启动可制造性评审',
+      '模具/治具归属和商务条款已进入对齐',
+    ],
+    exitCriteria: [
+      'openBOM、图纸/规格完整性核对完成，DFM 反馈已提交客户',
+      '料件齐套与替代料策略、模具/治具归属与 NRE 已确认',
+      '设计输入冻结并经客户确认，报价和项目计划已基线',
+    ],
+    requiredDeliverables: ['openBOM 核对清单', '图纸/规格完整性确认', 'DFM/可制造性反馈报告', '料件齐套与替代料策略', '模具/治具归属与 NRE 确认', '报价', '项目计划', '设计输入冻结确认（客户）'],
+    responsibleRoles: ['PM 负责转产受理与对齐', 'ME/工厂负责 DFM 可制造性', 'SCM 负责料件齐套与归属', '客户负责输入冻结确认', '管理层/Owner 负责受理决策'],
+    evidenceRequirements: ['openBOM 核对记录', 'DFM 反馈报告', '模具/治具归属确认', '客户输入冻结确认记录'],
+    exceptionStrategy: ['资料不完整则退回客户补充', 'DFM 重大问题需客户决策', '归属/NRE 不清需补充确认后再 Gate'],
+  },
+  sample: {
+    entryCriteria: [
+      '转产受理 Gate 已通过，输入冻结和料件策略已基线',
+      '首件/样机制作资源和测试程序/治具已准备',
+      '客户签样判定口径已明确',
+    ],
+    exitCriteria: [
+      'FAI 首件检验通过，测试程序与治具调试完成',
+      '客户完成样品签样，开放问题已关闭或有计划',
+      'PVT 试产条件已确认',
+    ],
+    requiredDeliverables: ['首件样品', 'FAI 首件检验报告', '测试程序与治具', '客户签样记录'],
+    responsibleRoles: ['ME/工厂负责首件制作', 'QA 负责 FAI 判定', '测试工程负责治具与程序', '客户负责样品签样', 'PM 负责进入试产决策'],
+    evidenceRequirements: ['FAI 首件检验报告', '测试程序与治具验收记录', '客户签样记录'],
+    exceptionStrategy: ['FAI 不合格则整改复检', '客户未签样不得进入 PVT', '治具/程序未就绪需补齐'],
+  },
+  pvt: {
+    entryCriteria: [
+      '首件确认 Gate 已通过，小批试产计划已批准',
+      'SOP/WI、物料齐套和产线排程已准备',
+      '客户放行判定口径和包装/物流验证安排已明确',
+    ],
+    exitCriteria: [
+      '小批试产良率达到目标，关键异常已关闭或受控',
+      'SOP/WI、包装与物流验证完成',
+      '客户完成放行，MP Release 条件已确认',
+    ],
+    requiredDeliverables: ['小批试产报告', '良率分析与改善', 'SOP/WI', '包装与物流验证', '客户放行记录'],
+    responsibleRoles: ['ME/工厂负责试产执行', 'QA 负责质量判定', 'SCM 负责物料与物流', '客户负责放行', 'PM/管理层负责 MP Release 决策'],
+    evidenceRequirements: ['PVT 试产报告', '良率与改善记录', 'SOP/WI 记录', '客户放行记录'],
+    exceptionStrategy: ['良率未达标则重复 PVT', '客户未放行不得发布 MP', '包装/物流未验证不得 MP Release'],
+  },
+  mp: {
+    entryCriteria: [
+      'PVT Gate 已通过，客户 PO/量产授权到位',
+      '量产监控、出货质量和售后机制已准备',
+      '认证/模具归属确认已归档',
+    ],
+    exitCriteria: [
+      '量产良率和交付达到目标',
+      '出货质量和售后进入常态化管理',
+      '变更与归属责任清晰，文件完整',
+    ],
+    requiredDeliverables: ['量产产品', '良率周报', '售后问题跟踪'],
+    responsibleRoles: ['工厂/ME 负责产能与工艺', 'QA 负责出货质量', 'SCM 负责供应连续性', 'PM/管理层负责量产经营目标'],
+    evidenceRequirements: ['MP Release 记录', '周良率/出货数据', 'OQC/RMA 分析'],
+    exceptionStrategy: ['重大质量异常启动围堵/停线评估', '良率/交付偏差进入周会跟踪', '归属争议需回到合同对齐'],
   },
 };
 
@@ -665,6 +836,229 @@ export const IDR_PHASES: SOPPhase[] = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
+// JDM — Joint Design Manufacture / 客户委托设计 (6-phase)
+// 客户出 ID/规格；工厂做 MD+EE+SW 并量产。= NPD 砍掉概念/规划，换「设计输入冻结」
+// 入口闸，并在 EVT/DVT/PVT 强制客户签核（签核以必交付物落地）。
+// ─────────────────────────────────────────────────────────────────────────────
+export const JDM_PHASES: SOPPhase[] = [
+  {
+    id: 'input',
+    code: 'P1',
+    name: '设计输入冻结',
+    nameEn: 'Design Input Freeze',
+    duration: '2-3周',
+    desc: '接收并冻结客户 ID/CMF/规格输入',
+    gate: '输入冻结评审',
+    gateTaskId: 'jin5',
+    color: '#78716c',
+    deliverables: ['ID/CMF 输入包', '规格确认书（客户签字）', 'RACI 责任矩阵', '初步 BOM 与 NRE/模具方案', '项目计划'],
+    gateStandard: JDM_GATE_STANDARDS.input,
+    tasks: [
+      { id: 'jin1', name: '接收客户 ID/CMF/规格输入', desc: '汇总并核对客户提供的外观与规格资料', owner: 'PM', visibleRoles: ['pm', 'manager', 'owner'], guide: '1) 接收 ID/CMF 文件与规格书\n2) 核对完整性与版本\n3) 登记缺口清单' },
+      { id: 'jin2', name: '设计边界与 RACI 确认', desc: '明确工厂/客户责任分工与设计边界', owner: 'PM', visibleRoles: ['pm', 'manager', 'owner'], guide: '1) 划定 MD/EE/SW 设计边界\n2) 输出 RACI 责任矩阵\n3) 与客户对齐确认' },
+      { id: 'jin3', name: '可行性与初步 DFM', desc: '评估设计可行性与可制造性', owner: 'R&D Lead', visibleRoles: ['rd_hw', 'rd_mech', 'pm', 'manager', 'owner'], guide: '1) 关键技术可行性判断\n2) 初步 DFM 风险\n3) 输出可行性结论' },
+      { id: 'jin4', name: '报价 / NRE / 模具方案确认', desc: '确认 NRE、模具方案与报价', owner: 'SCM/采购', visibleRoles: ['scm', 'pm', 'manager', 'owner'], guide: '1) NRE 与模具方案\n2) 初步 BOM 成本\n3) 报价确认' },
+      { id: 'jin5', name: '输入冻结评审 (Gate 1, 客户确认)', desc: '冻结设计输入，客户书面确认', owner: '跨部门', visibleRoles: [], guide: '评审:\n1) 输入完整性\n2) 规格确认书签字\n3) RACI 与初步 BOM/NRE\n4) 项目计划' },
+    ],
+  },
+  {
+    id: 'design',
+    code: 'P2',
+    name: '详细设计',
+    nameEn: 'Detailed Design',
+    duration: '5-9周',
+    desc: 'MD/EE/SW 并行设计与外观一致性落地',
+    gate: '设计冻结评审 + 客户外观签核',
+    gateTaskId: 'jd7',
+    color: '#0369a1',
+    deliverables: ['MD 结构图纸', 'EE 原理图 & PCB Layout', 'SW 架构文档', 'BOM v1.0', '客户外观签核记录'],
+    gateStandard: JDM_GATE_STANDARDS.design,
+    tasks: [
+      { id: 'jd1', name: 'MD 结构设计', desc: '内部结构、装配与外观件落地', owner: 'MD', visibleRoles: ['rd_mech', 'pm', 'manager', 'owner'], guide: '1) 结构 3D/2D\n2) 装配工艺\n3) 外观件还原客户 ID' },
+      { id: 'jd2', name: 'EE 原理设计', desc: '电源/MCU/传感器/通信架构', owner: 'EE', visibleRoles: ['rd_hw', 'pm', 'manager', 'owner'], guide: '1) 系统框图\n2) 原理图\n3) 电源树与功耗' },
+      { id: 'jd3', name: 'PCB Layout', desc: 'PCB 布线、阻抗与 EMC', owner: 'EE/PCB', visibleRoles: ['rd_hw', 'pm', 'manager', 'owner'], guide: '1) 叠层规划\n2) 关键信号阻抗\n3) EMC/DRC' },
+      { id: 'jd4', name: 'SW 架构设计', desc: 'Firmware 架构与通信协议', owner: 'SW', visibleRoles: ['rd_sw', 'pm', 'manager', 'owner'], guide: '1) 系统架构\n2) 协议定义\n3) OTA 方案' },
+      { id: 'jd5', name: 'DFM/DFA 评审', desc: '可制造/可装配性评审', owner: 'ME/工厂', visibleRoles: ['rd_mech', 'rd_hw', 'qa', 'pm', 'manager', 'owner'], guide: '1) 工厂参与评审\n2) DFM/DFA Checklist' },
+      { id: 'jd6', name: '关键料件定型', desc: '主芯片/屏/电池等规格冻结', owner: 'EE/采购', visibleRoles: ['rd_hw', 'scm', 'pm', 'manager', 'owner'], guide: '1) 2nd Source 验证\n2) 规格与供货锁定' },
+      { id: 'jd7', name: '设计冻结评审 (Gate 2, 客户外观签核)', desc: 'Design Freeze + 客户外观一致性签核', owner: '跨部门', visibleRoles: [], guide: '评审:\n1) 设计完整度\n2) BOM v1.0 成本\n3) 客户外观签核\n4) EVT 计划' },
+    ],
+  },
+  {
+    id: 'evt',
+    code: 'P3',
+    name: 'EVT 工程验证',
+    nameEn: 'EVT',
+    duration: '4-6周',
+    desc: '工程样机功能/性能验证',
+    gate: 'EVT 评审 + 客户样机确认',
+    gateTaskId: 'je6',
+    color: '#7c3aed',
+    deliverables: ['EVT 样机', '功能/性能测试报告', '软硬件联调记录', '问题清单', '客户样机确认记录'],
+    gateStandard: JDM_GATE_STANDARDS.evt,
+    tasks: [
+      { id: 'je1', name: '工程样机制作', desc: '制作 EVT 样机用于验证', owner: 'EE/EMS', visibleRoles: ['rd_hw', 'pm', 'manager', 'owner'], guide: '1) PCBA 打样\n2) 整机组装\n3) 标注版本序号' },
+      { id: 'je2', name: '功能测试 (FT)', desc: '功能点逐一验证', owner: 'QA/EE', visibleRoles: ['qa', 'rd_hw', 'pm', 'manager', 'owner'], guide: '1) FT Test Plan\n2) 逐项 Pass/Fail\n3) Bug 入 Issue List' },
+      { id: 'je3', name: '性能测试 (PT)', desc: '续航/信号/热设计初测', owner: 'QA/EE', visibleRoles: ['qa', 'rd_hw', 'pm', 'manager', 'owner'], guide: '1) 续航\n2) RF 性能\n3) 温升' },
+      { id: 'je4', name: '软硬件联调', desc: 'Firmware 与硬件联调', owner: 'SW/EE', visibleRoles: ['rd_sw', 'rd_hw', 'pm', 'manager', 'owner'], guide: '1) Bringup\n2) 驱动/协议\n3) 稳定性优化' },
+      { id: 'je5', name: '问题清单', desc: '记录 bug、缺陷与改善方案', owner: 'PM/QA', visibleRoles: ['pm', 'qa', 'rd_hw', 'rd_sw', 'rd_mech', 'manager', 'owner'], guide: '每个 Issue:\n- 现象\n- 根因\n- 改善方案\n- 责任人/期限' },
+      { id: 'je6', name: 'EVT 评审 (Gate 3, 客户样机确认)', desc: '是否达到进入 DVT 条件 + 客户样机确认', owner: '跨部门', visibleRoles: [], guide: '标准:\n- 功能 Pass Rate ≥95%\n- 无 P0 未解\n- 客户样机确认' },
+    ],
+  },
+  {
+    id: 'dvt',
+    code: 'P4',
+    name: 'DVT 设计验证',
+    nameEn: 'DVT',
+    duration: '4-8周',
+    desc: '设计成熟度、可靠性与认证验证',
+    gate: 'DVT 评审 + 客户 DVT 确认',
+    gateTaskId: 'jv6',
+    color: '#0f766e',
+    deliverables: ['DVT 样机', '可靠性测试报告', '安规与认证报告', '模具 T1/T2 样品', '包装验证报告', '客户 DVT 确认记录'],
+    gateStandard: JDM_GATE_STANDARDS.dvt,
+    tasks: [
+      { id: 'jv1', name: 'DVT 样机制作', desc: '半量产工艺制作 DVT 样机', owner: 'EMS', visibleRoles: ['rd_hw', 'pm', 'manager', 'owner'], guide: '1) 半正式 SMT\n2) 整机组装\n3) 模拟量产工艺' },
+      { id: 'jv2', name: '可靠性测试', desc: '跌落/温湿/震动/老化', owner: 'QA', visibleRoles: ['qa', 'pm', 'manager', 'owner'], guide: '标准测试矩阵:\n- 跌落\n- 高低温\n- 湿热\n- 振动' },
+      { id: 'jv3', name: '安规与认证', desc: 'CE/FCC/3C 等目标市场认证', owner: 'QA/认证', visibleRoles: ['qa', 'pm', 'manager', 'owner'], guide: '1) 按目标市场送样\n2) 安规/EMC/RF\n3) 归档证书' },
+      { id: 'jv4', name: '模具 T1/T2 试模', desc: '塑胶模具开模与试模', owner: 'MD/模厂', visibleRoles: ['rd_mech', 'pm', 'manager', 'owner'], guide: '1) 开模\n2) T1/T2 试模\n3) 修模与认证样品' },
+      { id: 'jv5', name: '包装设计验证', desc: '包装跌落与运输测试', owner: '包装', visibleRoles: ['scm', 'pm', 'manager', 'owner'], guide: '1) 包装结构\n2) ISTA 跌落\n3) 运输振动' },
+      { id: 'jv6', name: 'DVT 评审 (Gate 4, 客户 DVT 确认)', desc: '进入 PVT 前关键评审 + 客户 DVT 确认', owner: '跨部门', visibleRoles: [], guide: '标准:\n- 可靠性/认证 Pass\n- 模具尺寸/外观 OK\n- 客户 DVT 确认' },
+    ],
+  },
+  {
+    id: 'pvt',
+    code: 'P5',
+    name: 'PVT 试产验证',
+    nameEn: 'PVT',
+    duration: '3-6周',
+    desc: '生产工艺与良率验证',
+    gate: 'MP 准备就绪评审 + 客户 golden sample 签样',
+    gateTaskId: 'jp6',
+    isReleaseGate: true,
+    color: '#b45309',
+    deliverables: ['试产（50-300台）报告', 'SOP/WI', '治具与测试程序', '良率报告', '客户 golden sample 签样记录'],
+    gateStandard: JDM_GATE_STANDARDS.pvt,
+    tasks: [
+      { id: 'jp1', name: '试产规划', desc: '产线排程、物料齐套、培训', owner: 'ME/工厂', visibleRoles: ['rd_mech', 'rd_hw', 'qa', 'scm', 'pm', 'manager', 'owner'], guide: '1) 试产数量与排程\n2) 物料齐套\n3) 人员培训' },
+      { id: 'jp2', name: 'SOP/WI 制定', desc: '标准作业流程与作业指导书', owner: 'ME/IE', visibleRoles: ['rd_mech', 'qa', 'pm', 'manager', 'owner'], guide: '每工位:\n- SOP\n- WI\n- 检验标准' },
+      { id: 'jp3', name: '治具与测试程序', desc: 'ICT/FCT/老化治具与测试软件', owner: '测试工程', visibleRoles: ['rd_hw', 'qa', 'pm', 'manager', 'owner'], guide: '1) ICT/FCT 治具\n2) 老化柜\n3) 测试程序与判定' },
+      { id: 'jp4', name: '试产 (50-300台)', desc: '按量产工艺试制', owner: '工厂', visibleRoles: ['rd_mech', 'rd_hw', 'qa', 'pm', 'manager', 'owner'], guide: '1) FAI\n2) 全程良率监控\n3) FPY 记录' },
+      { id: 'jp5', name: '良率分析与改善', desc: 'SMT/组装/测试良率追踪', owner: 'QE/ME', visibleRoles: ['qa', 'rd_hw', 'rd_mech', 'pm', 'manager', 'owner'], guide: '良率目标与 Pareto 改善' },
+      { id: 'jp6', name: 'PVT 评审 (Gate 5, 客户 golden sample 签样)', desc: '量产准备就绪 + 客户 golden sample 签样', owner: '跨部门', visibleRoles: [], guide: 'GO 条件:\n- 试产良率达标\n- SOP/WI 完整\n- 治具/产能就绪\n- 客户 golden sample 签样' },
+    ],
+  },
+  {
+    id: 'mp',
+    code: 'P6',
+    name: 'MP 量产阶段',
+    nameEn: 'Mass Production',
+    duration: '持续',
+    desc: '量产爬坡与持续改善',
+    gate: '产品交付 / EOL',
+    gateTaskId: 'jm5',
+    color: '#166534',
+    deliverables: ['量产产品', '良率周报', 'ECN/ECR 记录', '售后数据分析'],
+    gateStandard: JDM_GATE_STANDARDS.mp,
+    tasks: [
+      { id: 'jm1', name: '首批量产 (Ramp-up)', desc: '小批爬坡，监控良率', owner: '工厂/PM', visibleRoles: ['scm', 'qa', 'pm', 'manager', 'owner'], guide: '1) 首批爬坡\n2) 日良率监控\n3) 客户样品确认' },
+      { id: 'jm2', name: '良率监控与改善', desc: '日/周良率追踪与 CAR', owner: 'QE/工厂', visibleRoles: ['qa', 'pm', 'manager', 'owner'], guide: '1) 良率报告\n2) Pareto Top3\n3) CAR 关闭' },
+      { id: 'jm3', name: '工程变更管理', desc: 'ECN/ECR 评审与执行', owner: 'PM/CM', visibleRoles: ['rd_hw', 'rd_sw', 'rd_mech', 'pm', 'manager', 'owner'], guide: '1) ECR 评估\n2) CCB 审批\n3) ECN 执行' },
+      { id: 'jm4', name: '售后问题跟踪', desc: 'RMA 与市场反馈 FA', owner: '售后/QA', visibleRoles: ['qa', 'pm', 'manager', 'owner'], guide: '1) RMA 分析\n2) 失效模式 FA\n3) 客诉改善' },
+      { id: 'jm5', name: '产品交付/EOL 评审 (Gate 6)', desc: '量产交付与 EOL 决策', owner: '跨部门', visibleRoles: [], guide: '关注:\n- 量产经营目标\n- 持续改善\n- EOL 计划' },
+    ],
+  },
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OBT — openBOM Transfer / 转产导入 (4-phase)
+// 客户出完整设计 + BOM；工厂纯生产。核心 = DFM 反馈 + 料件齐套 + 治具/测试程序。
+// ─────────────────────────────────────────────────────────────────────────────
+export const OBT_PHASES: SOPPhase[] = [
+  {
+    id: 'intake',
+    code: 'P1',
+    name: '设计接收与可制造性评审',
+    nameEn: 'Design Intake & DFM',
+    duration: '2-4周',
+    desc: '核对设计与 openBOM，输出 DFM 反馈并冻结输入',
+    gate: '转产受理 + 设计输入冻结',
+    gateTaskId: 'or7',
+    color: '#78716c',
+    deliverables: ['openBOM 核对清单', '图纸/规格完整性确认', 'DFM/可制造性反馈报告', '料件齐套与替代料策略', '模具/治具归属与 NRE 确认', '报价', '项目计划', '设计输入冻结确认（客户）'],
+    gateStandard: OBT_GATE_STANDARDS.intake,
+    tasks: [
+      { id: 'or1', name: 'openBOM 核对', desc: '料件可得性/替代料/版本核对', owner: 'SCM/采购', visibleRoles: ['scm', 'rd_hw', 'pm', 'manager', 'owner'], guide: '1) 逐行核对 openBOM\n2) 可得性与版本\n3) 替代料标注' },
+      { id: 'or2', name: '图纸 / 规格完整性核对', desc: '核对图纸与规格完整性', owner: 'R&D Lead', visibleRoles: ['rd_hw', 'rd_mech', 'pm', 'manager', 'owner'], guide: '1) 图纸版本核对\n2) 规格完整性\n3) 缺口清单' },
+      { id: 'or3', name: 'DFM / 可制造性反馈', desc: '输出 DFM 反馈并提交客户', owner: 'ME/工厂', visibleRoles: ['rd_mech', 'rd_hw', 'qa', 'pm', 'manager', 'owner'], guide: '1) DFM Checklist\n2) 制造风险\n3) 提交客户' },
+      { id: 'or4', name: '料件齐套与替代料策略', desc: '建立齐套与替代料计划', owner: 'SCM', visibleRoles: ['scm', 'rd_hw', 'pm', 'manager', 'owner'], guide: '1) 齐套分析\n2) 长交期/单一来源\n3) 替代料策略' },
+      { id: 'or5', name: '模具 / 治具归属与 NRE 确认', desc: '逐项确认模具/治具归属与 NRE', owner: 'PM/SCM', visibleRoles: ['scm', 'rd_mech', 'pm', 'manager', 'owner'], guide: '1) 归属逐项钉死\n2) NRE 确认\n3) 记录责任方' },
+      { id: 'or6', name: '报价', desc: '完成转产报价', owner: 'PM/SCM', visibleRoles: ['scm', 'pm', 'manager', 'owner'], guide: '1) 制造成本\n2) NRE 摊销\n3) 报价确认' },
+      { id: 'or7', name: '转产受理 + 设计输入冻结评审 (Gate 1, 客户确认)', desc: '受理转产并冻结输入，客户确认', owner: '跨部门', visibleRoles: [], guide: '评审:\n1) 资料完整性\n2) DFM 反馈关闭\n3) 归属/NRE\n4) 客户输入冻结确认' },
+    ],
+  },
+  {
+    id: 'sample',
+    code: 'P2',
+    name: '打样与首件确认',
+    nameEn: 'Sample & FAI',
+    duration: '3-5周',
+    desc: '首件制作、FAI 与客户签样',
+    gate: '首件确认 (FAI) + 客户签样',
+    gateTaskId: 'os5',
+    color: '#7c3aed',
+    deliverables: ['首件样品', 'FAI 首件检验报告', '测试程序与治具', '客户签样记录'],
+    gateStandard: OBT_GATE_STANDARDS.sample,
+    tasks: [
+      { id: 'os1', name: '首件 / 样机制作', desc: '按客户设计制作首件样品', owner: 'ME/工厂', visibleRoles: ['rd_mech', 'rd_hw', 'pm', 'manager', 'owner'], guide: '1) 物料备齐\n2) 首件制作\n3) 标注版本' },
+      { id: 'os2', name: 'FAI 首件检验', desc: '首件检验与尺寸/功能确认', owner: 'QA', visibleRoles: ['qa', 'rd_mech', 'pm', 'manager', 'owner'], guide: '1) 尺寸检验\n2) 功能检验\n3) FAI 报告' },
+      { id: 'os3', name: '测试程序与治具调试', desc: '调试测试程序与治具', owner: '测试工程', visibleRoles: ['rd_hw', 'qa', 'pm', 'manager', 'owner'], guide: '1) 治具调试\n2) 测试程序\n3) 判定标准' },
+      { id: 'os4', name: '客户样品确认', desc: '送样客户并收集确认意见', owner: 'PM', visibleRoles: ['pm', 'qa', 'manager', 'owner'], guide: '1) 送样\n2) 收集意见\n3) 整改闭环' },
+      { id: 'os5', name: '首件确认评审 (Gate 2, 客户签样)', desc: 'FAI 通过 + 客户签样', owner: '跨部门', visibleRoles: [], guide: '标准:\n- FAI 合格\n- 治具/程序就绪\n- 客户签样' },
+    ],
+  },
+  {
+    id: 'pvt',
+    code: 'P3',
+    name: '试产验证 PVT',
+    nameEn: 'PVT',
+    duration: '2-4周',
+    desc: '小批试产、良率改善与切换准备',
+    gate: 'MP 准备就绪评审 + 客户放行',
+    gateTaskId: 'op5',
+    isReleaseGate: true,
+    color: '#b45309',
+    deliverables: ['小批试产报告', '良率分析与改善', 'SOP/WI', '包装与物流验证', '客户放行记录'],
+    gateStandard: OBT_GATE_STANDARDS.pvt,
+    tasks: [
+      { id: 'op1', name: '小批试产', desc: '按量产工艺小批试产', owner: '工厂', visibleRoles: ['rd_mech', 'rd_hw', 'qa', 'pm', 'manager', 'owner'], guide: '1) FAI\n2) 全程良率监控\n3) FPY 记录' },
+      { id: 'op2', name: '良率分析与改善', desc: '良率追踪与异常改善', owner: 'QE/ME', visibleRoles: ['qa', 'rd_hw', 'rd_mech', 'pm', 'manager', 'owner'], guide: '1) 良率统计\n2) Pareto 改善\n3) 异常关闭' },
+      { id: 'op3', name: 'SOP/WI 制定', desc: '标准作业流程与作业指导书', owner: 'ME/IE', visibleRoles: ['rd_mech', 'qa', 'pm', 'manager', 'owner'], guide: '每工位 SOP/WI 与检验标准' },
+      { id: 'op4', name: '包装与物流验证', desc: '包装、运输与物流验证', owner: '包装/物流', visibleRoles: ['scm', 'pm', 'manager', 'owner'], guide: '1) 包装方案\n2) 运输测试\n3) 物流路径' },
+      { id: 'op5', name: 'MP 准备就绪评审 (Gate 3, 客户放行)', desc: '量产准备就绪 + 客户放行', owner: '跨部门', visibleRoles: [], guide: 'GO 条件:\n- 试产良率达标\n- SOP/WI 完整\n- 包装/物流验证\n- 客户放行' },
+    ],
+  },
+  {
+    id: 'mp',
+    code: 'P4',
+    name: 'MP 量产阶段',
+    nameEn: 'Mass Production',
+    duration: '持续',
+    desc: '量产监控与售后跟踪',
+    gate: '产品交付 / EOL',
+    gateTaskId: 'om4',
+    color: '#166534',
+    deliverables: ['量产产品', '良率周报', '售后问题跟踪'],
+    gateStandard: OBT_GATE_STANDARDS.mp,
+    tasks: [
+      { id: 'om1', name: '首批量产', desc: '首批量产与爬坡', owner: '工厂/PM', visibleRoles: ['scm', 'qa', 'pm', 'manager', 'owner'], guide: '1) 首批量产\n2) 日良率监控\n3) 客户确认' },
+      { id: 'om2', name: '良率监控', desc: '量产良率监控', owner: 'QE/工厂', visibleRoles: ['qa', 'pm', 'manager', 'owner'], guide: '1) 周良率报告\n2) 异常响应\n3) CAR 关闭' },
+      { id: 'om3', name: '售后问题跟踪', desc: 'RMA 与客诉跟踪', owner: '售后/QA', visibleRoles: ['qa', 'pm', 'manager', 'owner'], guide: '1) RMA 分析\n2) 客诉处理\n3) 改善反馈' },
+      { id: 'om4', name: '产品交付/EOL 评审 (Gate 4)', desc: '量产交付与 EOL 决策', owner: '跨部门', visibleRoles: [], guide: '关注:\n- 量产经营目标\n- 归属责任\n- EOL 计划' },
+    ],
+  },
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Category Registry
 // ─────────────────────────────────────────────────────────────────────────────
 export const PROJECT_CATEGORIES: ProjectCategoryConfig[] = [
@@ -710,12 +1104,42 @@ export const PROJECT_CATEGORIES: ProjectCategoryConfig[] = [
     typicalDuration: '约 2-3 个月',
     phases: IDR_PHASES,
   },
+  {
+    id: 'jdm',
+    name: '客户委托设计',
+    nameEn: 'Joint Design Manufacture',
+    badge: 'JDM',
+    color: 'bg-indigo-50',
+    textColor: 'text-indigo-800',
+    borderColor: 'border-indigo-300',
+    icon: '🤝',
+    desc: '客户提供 ID/外观与产品规格，委托工厂完成结构、硬件与软件设计并量产；以设计输入冻结为入口，EVT/DVT/PVT 强制客户签核，共 6 个阶段。',
+    phaseCount: 6,
+    typicalDuration: '约 4-6 个月',
+    phases: JDM_PHASES,
+  },
+  {
+    id: 'obt',
+    name: '转产导入',
+    nameEn: 'openBOM Transfer',
+    badge: 'OBT',
+    color: 'bg-cyan-50',
+    textColor: 'text-cyan-800',
+    borderColor: 'border-cyan-300',
+    icon: '📦',
+    desc: '客户提供完整设计与 openBOM，工厂完成可制造性导入、首件确认、试产与量产；核心为 DFM 反馈与料件齐套，共 4 个阶段。',
+    phaseCount: 4,
+    typicalDuration: '约 1.5-3 个月',
+    phases: OBT_PHASES,
+  },
 ];
 
 export const CATEGORY_MAP: Record<ProjectCategory, ProjectCategoryConfig> = {
   npd: PROJECT_CATEGORIES[0],
   eco: PROJECT_CATEGORIES[1],
   idr: PROJECT_CATEGORIES[2],
+  jdm: PROJECT_CATEGORIES[3],
+  obt: PROJECT_CATEGORIES[4],
 };
 
 /**

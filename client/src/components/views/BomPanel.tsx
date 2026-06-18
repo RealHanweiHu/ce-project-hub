@@ -20,8 +20,8 @@ export function BomPanel({ projectId, canEdit }: { projectId: string; canEdit: b
 
   const inval = () => utils.bom.working.invalidate({ projectId });
   const addM = trpc.bom.add.useMutation({ onSuccess: inval, onError: (e) => toast.error(e.message) });
-  const updM = trpc.bom.update.useMutation({ onSuccess: inval });
-  const delM = trpc.bom.delete.useMutation({ onSuccess: inval });
+  const updM = trpc.bom.update.useMutation({ onSuccess: inval, onError: (e) => toast.error(e.message) });
+  const delM = trpc.bom.delete.useMutation({ onSuccess: inval, onError: (e) => toast.error(e.message) });
 
   const [draft, setDraft] = useState({ ...EMPTY });
 
@@ -43,8 +43,22 @@ export function BomPanel({ projectId, canEdit }: { projectId: string; canEdit: b
   return (
     <div className="space-y-3 py-2">
       <div className="flex items-center justify-between">
-        <div className="text-[11px] font-mono text-stone-400">工作态 BOM · {rows.length} 行 · 估算成本 {totalCost.toFixed(2)}</div>
+        <div>
+          <div className="text-[11px] font-mono text-stone-400">工作态 BOM · {rows.length} 行 · 估算成本 {totalCost.toFixed(2)}</div>
+          {!canEdit && <div className="text-[11px] text-stone-400 mt-1">当前角色仅可查看 BOM，编辑请联系 PM / Manager / SCM。</div>}
+        </div>
       </div>
+      {rows.length === 0 && (
+        <div className="border border-dashed border-stone-300 bg-stone-50 p-5 flex items-start gap-3">
+          <Boxes size={18} className="text-stone-400 mt-0.5 shrink-0" />
+          <div>
+            <div className="text-sm font-medium text-stone-800">暂无 BOM 行</div>
+            <div className="text-xs text-stone-500 mt-1">
+              {canEdit ? '先新增关键物料、长交期件或供应风险项。' : '有编辑权限的成员添加后会显示在这里。'}
+            </div>
+          </div>
+        </div>
+      )}
       <div className="border border-stone-200 overflow-x-auto">
         <table className="w-full text-sm">
           <thead>

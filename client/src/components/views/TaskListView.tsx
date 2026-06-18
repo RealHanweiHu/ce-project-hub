@@ -2,21 +2,14 @@
  * TaskListView – reusable task list table used by PerspectivePanel (我的视角)
  * and OverviewPage's drill-down drawer.
  * Displays tasks with project context, priority badge, status badge, assignee, and due date.
- * Allows inline status/priority updates via trpc.tasks.setMeta.
+ * Status is system-derived from dependencies, schedule, and completion.
  */
-import { useState } from 'react';
 import {
-  AlertTriangle, Calendar, User, ChevronRight, RefreshCw,
-  Clock, Flag, CheckCircle2, XCircle, Loader2,
+  AlertTriangle, Calendar, ChevronRight, RefreshCw, Loader2,
 } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
-import { trpc } from '@/lib/trpc';
 import { getPhasesForCategory } from '@/lib/sop-templates';
-import { TASK_STATUSES, TASK_PRIORITIES, type TaskStatus, type TaskPriority } from '@shared/const';
+import { type TaskStatus, type TaskPriority } from '@shared/const';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -95,52 +88,14 @@ function isOverdue(dueDate: string | null): boolean {
   return dueDate < new Date().toISOString().slice(0, 10);
 }
 
-// ─── Inline Status Selector ───────────────────────────────────────────────────
+// ─── Status Badge ─────────────────────────────────────────────────────────────
 
-function StatusSelector({
-  value,
-  projectId,
-  phaseId,
-  taskId,
-  onSuccess,
-}: {
-  value: TaskStatus;
-  projectId: string;
-  phaseId: string;
-  taskId: string;
-  onSuccess: () => void;
-}) {
-  const utils = trpc.useUtils();
-  const setMeta = trpc.tasks.setMeta.useMutation({
-    onSuccess: () => {
-      utils.tasks.myTasks.invalidate();
-      utils.tasks.overdue.invalidate();
-      utils.tasks.blocked.invalidate();
-      onSuccess();
-    },
-  });
-
+function StatusBadge({ value }: { value: TaskStatus }) {
+  const cfg = STATUS_CONFIG[value] ?? STATUS_CONFIG.todo;
   return (
-    <Select
-      value={value}
-      onValueChange={(v) =>
-        setMeta.mutate({ projectId, phaseId, taskId, status: v as TaskStatus })
-      }
-    >
-      <SelectTrigger
-        className={`h-6 text-[11px] font-mono border px-2 py-0 w-28 ${STATUS_CONFIG[value].color}`}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {TASK_STATUSES.map((s) => (
-          <SelectItem key={s} value={s} className="text-xs">
-            {STATUS_CONFIG[s].label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <span className={`inline-flex h-6 w-28 items-center justify-center border px-2 text-[11px] font-mono rounded-sm ${cfg.color}`}>
+      {cfg.label}
+    </span>
   );
 }
 
@@ -157,8 +112,6 @@ export function TaskListView({
   showAssignee = false,
   showOverdueBadge = false,
 }: TaskListViewProps) {
-  const [updatingId, setUpdatingId] = useState<number | null>(null);
-
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -206,7 +159,6 @@ export function TaskListView({
         const phaseLabel = resolvePhaseLabel(task.phaseId, task.projectCategory);
         const overdue = showOverdueBadge && isOverdue(task.dueDate);
         const priorityCfg = PRIORITY_CONFIG[task.priority];
-        const isUpdating = updatingId === task.id;
 
         return (
           <div
@@ -232,15 +184,9 @@ export function TaskListView({
               </div>
             </div>
 
-            {/* Status selector */}
+            {/* System status */}
             <div className="w-28">
-              <StatusSelector
-                value={task.status}
-                projectId={task.projectId}
-                phaseId={task.phaseId}
-                taskId={task.taskId}
-                onSuccess={() => setUpdatingId(null)}
-              />
+              <StatusBadge value={task.status} />
             </div>
 
             {/* Priority badge */}

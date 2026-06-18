@@ -42,16 +42,15 @@ describe("effective process deliverables", () => {
     });
   });
 
-  it("falls back trailing tailored phase deliverables to the last effective gate", () => {
+  it("drops trailing tailored phase deliverables instead of carrying them backward", () => {
     const process = getEffectiveProcess("npd", ["mp"]);
     const pvt = phase(process, "pvt");
 
-    expect(pvt.submittedDeliverables).toContain("量产产品");
-    expect(pvt.submittedDeliverables).toContain("售后数据分析");
-    expect(pvt.carriedDeliverables).toContainEqual({
-      name: "量产产品",
-      fromPhaseId: "mp",
-    });
+    expect(phase(process, "mp").tailored).toBe(true);
+    expect(phase(process, "mp").submittedDeliverables).toEqual([]);
+    expect(pvt.submittedDeliverables).not.toContain("量产产品");
+    expect(pvt.submittedDeliverables).not.toContain("售后数据分析");
+    expect(pvt.carriedDeliverables.some((item) => item.fromPhaseId === "mp")).toBe(false);
   });
 
   it("applies add and remove overrides per node", () => {

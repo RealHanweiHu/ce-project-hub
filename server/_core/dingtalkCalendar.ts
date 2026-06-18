@@ -10,7 +10,7 @@ export type DingtalkEvent = {
   start: { dateTime: string; timeZone: string };
   end: { dateTime: string; timeZone: string };
   // 经真机核定：pattern.type:"weekly"（非 repeatType）+ interval；range.type:"endDate" + ISO8601 时间戳
-  recurrence: { pattern: { type: "weekly"; interval: number }; range: { type: "endDate"; endDate: string } };
+  recurrence?: { pattern: { type: "weekly"; interval: number }; range: { type: "endDate"; endDate: string } };
   attendees: { id: string }[];
   onlineMeetingInfo: { type: "dingtalk" };
 };
@@ -54,10 +54,27 @@ export function buildWeeklyEvent(input: WeeklyEventInput): DingtalkEvent {
   };
 }
 
+export function buildSingleEvent(input: {
+  title: string;
+  date: string;
+  time: string;
+  durationMin: number;
+  timeZone: string;
+  attendees: string[];
+}): DingtalkEvent {
+  const endTime = addMinutes(input.time, input.durationMin);
+  return {
+    summary: input.title,
+    start: { dateTime: `${input.date}T${input.time}:00+08:00`, timeZone: input.timeZone },
+    end: { dateTime: `${input.date}T${endTime}:00+08:00`, timeZone: input.timeZone },
+    attendees: input.attendees.map((id) => ({ id })),
+    onlineMeetingInfo: { type: "dingtalk" },
+  };
+}
+
 const CAL_BASE = "https://api.dingtalk.com/v1.0/calendar/users";
 
-/** 建或更新组织者日历上的循环日程；返回 eventId；未配置/失败返回 null（上层降级） */
-export async function upsertWeeklyMeeting(params: {
+async function upsertCalendarEvent(params: {
   organizerUserId: string;
   existingEventId: string | null;
   event: DingtalkEvent;
@@ -80,6 +97,24 @@ export async function upsertWeeklyMeeting(params: {
     console.warn("[dingtalk] upsert event failed (degrade):", e);
     return null;
   }
+}
+
+/** 建或更新组织者日历上的循环日程；返回 eventId；未配置/失败返回 null（上层降级） */
+export async function upsertWeeklyMeeting(params: {
+  organizerUserId: string;
+  existingEventId: string | null;
+  event: DingtalkEvent;
+}): Promise<string | null> {
+  return upsertCalendarEvent(params);
+}
+
+/** 建或更新组织者日历上的单次日程；返回 eventId；未配置/失败返回 null。 */
+export async function upsertSingleMeeting(params: {
+  organizerUserId: string;
+  existingEventId: string | null;
+  event: DingtalkEvent;
+}): Promise<string | null> {
+  return upsertCalendarEvent(params);
 }
 
 export async function cancelMeeting(organizerUserId: string, eventId: string): Promise<void> {

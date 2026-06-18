@@ -1,6 +1,6 @@
 import { describe, it, expect, afterAll, beforeAll } from "vitest";
 import { getCalendar, getDb } from "./db";
-import { projects, projectPhases, projectGateReviews } from "../drizzle/schema";
+import { projects, projectPhases, projectGateReviews, projectTasks } from "../drizzle/schema";
 import { eq } from "drizzle-orm";
 
 const OWNER = 778001;
@@ -14,6 +14,9 @@ beforeAll(async () => {
     risk: "low", currentPhase: "concept", createdBy: OWNER, targetDate: "2026-07-20",
   });
   await db.insert(projectPhases).values({ projectId: PROJ, phaseId: "concept", endDate: "2026-07-05" });
+  await db.insert(projectTasks).values({
+    projectId: PROJ, phaseId: "concept", taskId: "c6", dueDate: "2026-07-08", status: "in_progress",
+  });
   await db.insert(projectGateReviews).values({
     projectId: PROJ, phaseId: "concept", reviewDate: "2026-07-10", decision: "conditional",
   });
@@ -23,6 +26,7 @@ afterAll(async () => {
   const db = await getDb();
   if (!db) return;
   await db.delete(projectGateReviews).where(eq(projectGateReviews.projectId, PROJ));
+  await db.delete(projectTasks).where(eq(projectTasks.projectId, PROJ));
   await db.delete(projectPhases).where(eq(projectPhases.projectId, PROJ));
   await db.delete(projects).where(eq(projects.id, PROJ));
 });
@@ -32,11 +36,11 @@ describe("getCalendar", () => {
     const events = await getCalendar(OWNER, "2026-07-01", "2026-07-31");
     const mine = events.filter((e) => e.projectId === PROJ);
     const types = mine.map((e) => e.type).sort();
-    expect(types).toEqual(["gate", "phase", "target"]);
+    expect(types).toEqual(["gate", "gate", "phase", "target"]);
     const phase = mine.find((e) => e.type === "phase");
     expect(phase?.date).toBe("2026-07-05");
-    const gate = mine.find((e) => e.type === "gate");
-    expect(gate?.date).toBe("2026-07-10");
+    const gateDates = mine.filter((e) => e.type === "gate").map((e) => e.date).sort();
+    expect(gateDates).toEqual(["2026-07-08", "2026-07-10"]);
     const target = mine.find((e) => e.type === "target");
     expect(target?.date).toBe("2026-07-20");
   });

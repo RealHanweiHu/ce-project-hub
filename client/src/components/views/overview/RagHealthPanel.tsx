@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { computeRag, type RagLevel } from "@shared/health";
+import { type RagLevel } from "@shared/health";
 import type { PortfolioTableRow } from "./PortfolioTable";
 import { PHASE_MAP } from "@/lib/data";
 import { Activity, ChevronRight } from "lucide-react";
@@ -11,15 +11,7 @@ export function RagHealthPanel({ rows, onSelectProject }: { rows: PortfolioTable
     () =>
       rows.map((r) => ({
         row: r,
-        level: computeRag({
-          risk: r.risk as "low" | "medium" | "high",
-          projectedEnd: r.projectedEnd,
-          targetDate: r.targetDate,
-          overdueTasks: r.overdueTasks,
-          blockedTasks: r.blockedTasks,
-          openIssues: r.openIssues,
-          criticalIssues: r.criticalIssues,
-        }),
+        level: r.ragLevel,
       })),
     [rows]
   );

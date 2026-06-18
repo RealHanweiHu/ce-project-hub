@@ -10,6 +10,8 @@
     "check": "tsc --noEmit",
     "format": "prettier --write .",
     "test": "node scripts/test.mjs",
+    "audit:project-axis": "tsx scripts/audit-project-axis.ts",
+    "migrate:working-calendar": "tsx scripts/migrate-working-calendar.ts",
     "db:push": "drizzle-kit generate && drizzle-kit migrate"
   },
   "dependencies": {

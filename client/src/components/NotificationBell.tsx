@@ -1,10 +1,11 @@
 // 顶栏通知铃铛：未读数轮询 + 下拉列表 + 已读。
 import { useState } from 'react';
-import { Bell, Check, Loader2, ClipboardCheck } from 'lucide-react';
+import { Bell, Check, Loader2, ClipboardCheck, Activity } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 
 type NotificationRow = {
   id: number; type: string; title: string; body: string | null; read: boolean; createdAt: string | Date;
+  entityType?: string | null; entityId?: string | null;
 };
 
 export function NotificationBell({ onNavigate }: { onNavigate?: (projectId: string) => void } = {}) {
@@ -84,9 +85,16 @@ export function NotificationBell({ onNavigate }: { onNavigate?: (projectId: stri
                   className={`w-full text-left px-3 py-2.5 border-b border-stone-50 hover:bg-stone-50 transition-colors ${n.read ? 'opacity-60' : ''}`}
                 >
                   <div className="flex items-start gap-2">
-                    {!n.read && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 mt-1.5 shrink-0" />}
+                    {n.entityType === 'portfolio'
+                      ? <Activity size={13} className="text-amber-500 mt-0.5 shrink-0" />
+                      : !n.read && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 mt-1.5 shrink-0" />}
                     <div className="flex-1 min-w-0">
-                      <div className="text-xs font-medium text-stone-800">{n.title}</div>
+                      <div className="flex items-center gap-1.5">
+                        <div className="text-xs font-medium text-stone-800">{n.title}</div>
+                        {n.entityType === 'portfolio' && (
+                          <span className="text-[9px] font-mono bg-amber-50 text-amber-700 border border-amber-200 px-1 py-0.5">聚合</span>
+                        )}
+                      </div>
                       {n.body && <div className="text-[11px] text-stone-500 truncate">{n.body}</div>}
                       <div className="text-[9px] font-mono text-stone-400 mt-0.5">{new Date(n.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</div>
                     </div>

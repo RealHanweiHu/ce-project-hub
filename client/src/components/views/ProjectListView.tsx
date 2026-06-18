@@ -9,7 +9,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import {
-  Project, SOP_PHASES, PHASE_MAP, RISK_CONFIG,
+  Project, SOP_PHASES, PHASE_MAP, HEALTH_CONFIG,
   computePhaseProgress, computeOverallProgress,
 } from '@/lib/data';
 import {
@@ -96,7 +96,7 @@ export function ProjectListView({
     newProductName: '' as string,   // 新产品(填写则建档并关联)
     startDate: '',
     targetDate: '',
-    risk: 'medium' as 'low' | 'medium' | 'high',
+    risk: 'low' as 'low' | 'medium' | 'high',
   };
   const [form, setForm] = useState(emptyForm);
 
@@ -172,7 +172,7 @@ export function ProjectListView({
           const phaseObj = phases.find((p) => p.id === project.currentPhase) || PHASE_MAP[project.currentPhase];
           const phaseProgress = computePhaseProgress(project.phases[project.currentPhase], project.currentPhase);
           const overallProgress = computeOverallProgress(project);
-          const risk = RISK_CONFIG[project.risk];
+          const health = HEALTH_CONFIG[project.risk];
           const catConfig = project.category ? CATEGORY_MAP[project.category] : null;
 
           return (
@@ -249,9 +249,9 @@ export function ProjectListView({
 
                 {/* Footer */}
                 <div className="flex items-center justify-between pt-2 border-t border-stone-100">
-                  <div className={`inline-flex items-center gap-1.5 px-2 py-0.5 ${risk.bg} ${risk.border} border`}>
-                    <div className={`w-1.5 h-1.5 rounded-full ${risk.dot}`} />
-                    <span className={`text-xs font-medium ${risk.color}`}>{risk.label}风险</span>
+                  <div className={`inline-flex items-center gap-1.5 px-2 py-0.5 ${health.bg} ${health.border} border`}>
+                    <div className={`w-1.5 h-1.5 rounded-full ${health.dot}`} />
+                    <span className={`text-xs font-medium ${health.color}`}>{health.label}</span>
                   </div>
                   <span className="text-[10px] font-mono text-stone-400">{project.targetDate}</span>
                 </div>
@@ -595,27 +595,6 @@ export function ProjectListView({
                         onChange={(e) => setForm({ ...form, targetDate: e.target.value })}
                         className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors"
                       />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">风险等级</label>
-                    <div className="flex gap-2">
-                      {(['low', 'medium', 'high'] as const).map((r) => {
-                        const rc = RISK_CONFIG[r];
-                        return (
-                          <button
-                            key={r}
-                            onClick={() => setForm({ ...form, risk: r })}
-                            className={`flex-1 py-2 text-xs font-medium border transition-all ${
-                              form.risk === r
-                                ? `${rc.bg} ${rc.border} ${rc.color} border-2`
-                                : 'bg-white border-stone-200 text-stone-500 hover:border-stone-300'
-                            }`}
-                          >
-                            {rc.label}风险
-                          </button>
-                        );
-                      })}
                     </div>
                   </div>
                 </div>

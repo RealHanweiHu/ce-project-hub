@@ -1,7 +1,7 @@
 // 项目总揽：左侧分区导航 + 右侧内容。把原先堆在一页的功能整理为
 // 基础信息 / 团队与分工 / 排期与周会 / 钉钉群 / 自定义字段 五个分区。
 import { useEffect, useState } from 'react';
-import { Project, RISK_CONFIG, getProjectPhases, computeOverallProgress } from '@/lib/data';
+import { Project, HEALTH_CONFIG, getProjectPhases, computeOverallProgress } from '@/lib/data';
 import { CATEGORY_MAP } from '@/lib/sop-templates';
 import { trpc } from '@/lib/trpc';
 import {
@@ -38,7 +38,7 @@ export function OverviewPanel({ project, onUpdate, canEdit, canManageMembers, is
   const phases = getProjectPhases(project);
   const currentPhaseName = phases.find((p) => p.id === project.currentPhase)?.name ?? project.currentPhase;
   const overallProgress = computeOverallProgress(project);
-  const risk = RISK_CONFIG[project.risk];
+  const health = HEALTH_CONFIG[project.risk];
   const pmName = project.pmUserId ? users.find((u) => u.id === project.pmUserId)?.name ?? '—' : '—';
 
   let doneTasks = 0, totalTasks = 0;
@@ -123,7 +123,7 @@ export function OverviewPanel({ project, onUpdate, canEdit, canManageMembers, is
                 <InfoCell icon={<Hash size={13} />} label="项目编号" value={project.code || '—'} mono />
                 <InfoCell icon={<User size={13} />} label="项目经理" value={pmName} />
                 <InfoCell icon={<Boxes size={13} />} label="关联产品" value={linkedProduct ? linkedProduct.name : (project.productId ? project.productId : '新产品 / 未关联')} />
-                <InfoCell icon={<AlertTriangle size={13} />} label="风险等级" value={<span className={risk?.color}>{risk?.label ?? project.risk}</span>} />
+                <InfoCell icon={<AlertTriangle size={13} />} label="项目健康度" value={<span className={health?.color}>{health?.label ?? project.risk}</span>} />
                 <InfoCell icon={<Flag size={13} />} label="当前阶段" value={currentPhaseName} />
                 <InfoCell icon={<CalendarRange size={13} />} label="计划起止" value={`${project.startDate || '—'} ~ ${project.targetDate || '—'}`} mono />
                 <InfoCell icon={<GaugeCircle size={13} />} label="整体进度" value={
@@ -171,7 +171,7 @@ export function OverviewPanel({ project, onUpdate, canEdit, canManageMembers, is
                   </button>
                   <button onClick={() => setKickoffOpen(true)}
                     className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-mono uppercase tracking-wider bg-stone-900 text-white hover:bg-stone-700 transition-colors"
-                    title="一步完成:设开始日 + 各角色配人 + 派任务 + 钉钉通知">
+                    title="一步完成:设开始日 + 各角色配人 + 派任务 + 建项目群 + 设置周会 + 聚合通知">
                     <Rocket size={12} />立项向导
                   </button>
                 </div>

@@ -164,7 +164,7 @@ export interface Project {
   risk: 'low' | 'medium' | 'high';
   phases: Record<string, PhaseData>;
   phaseDates?: Record<string, PhaseDate>; // custom per-phase dates
-  category?: 'npd' | 'eco' | 'idr'; // project category determines SOP template
+  category?: 'npd' | 'eco' | 'idr' | 'jdm' | 'obt'; // project category determines SOP template
   changeLog?: ChangeRecord[];          // project-level change & decision log
   /** Per-task visibleRoles overrides: taskId -> roles[] (empty = all can see) */
   taskVisibleRoles?: Record<string, string[]>;
@@ -313,11 +313,13 @@ export const getBlockingGate = (project: Project, phaseId: string): { phaseName:
   return null;
 };
 
-export const RISK_CONFIG = {
-  low: { label: '低', color: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-200', dot: 'bg-emerald-500' },
-  medium: { label: '中', color: 'text-amber-700', bg: 'bg-amber-50', border: 'border-amber-200', dot: 'bg-amber-500' },
-  high: { label: '高', color: 'text-rose-700', bg: 'bg-rose-50', border: 'border-rose-200', dot: 'bg-rose-500' },
+export const HEALTH_CONFIG = {
+  low: { label: '绿灯', shortLabel: '绿', color: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-200', dot: 'bg-emerald-500' },
+  medium: { label: '黄灯', shortLabel: '黄', color: 'text-amber-700', bg: 'bg-amber-50', border: 'border-amber-200', dot: 'bg-amber-500' },
+  high: { label: '红灯', shortLabel: '红', color: 'text-rose-700', bg: 'bg-rose-50', border: 'border-rose-200', dot: 'bg-rose-500' },
 };
+
+export const RISK_CONFIG = HEALTH_CONFIG;
 
 export const formatBytes = (bytes: number): string => {
   if (!bytes) return '0 B';
@@ -428,9 +430,9 @@ export const STATUS_CONFIG: Record<IssueStatus, {
   label: string; color: string; bg: string; border: string;
 }> = {
   open:        { label: '待处理', color: 'text-rose-700', bg: 'bg-rose-50', border: 'border-rose-200' },
-  in_progress: { label: '处理中', color: 'text-blue-700', bg: 'bg-blue-50', border: 'border-blue-200' },
-  resolved:    { label: '已解决', color: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-200' },
-  closed:      { label: '已关闭', color: 'text-stone-500', bg: 'bg-stone-100', border: 'border-stone-200' },
+  in_progress: { label: '修复中', color: 'text-blue-700', bg: 'bg-blue-50', border: 'border-blue-200' },
+  resolved:    { label: '待复测', color: 'text-amber-700', bg: 'bg-amber-50', border: 'border-amber-200' },
+  closed:      { label: '复测通过', color: 'text-stone-500', bg: 'bg-stone-100', border: 'border-stone-200' },
   wont_fix:    { label: '不修复', color: 'text-stone-400', bg: 'bg-stone-50', border: 'border-stone-200' },
 };
 

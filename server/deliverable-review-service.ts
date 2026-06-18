@@ -1,7 +1,7 @@
 import { getDb } from "./db";
 import { projectDeliverableReviews, projectFiles, projects } from "../drizzle/schema";
 import type { ProjectDeliverableReview } from "../drizzle/schema";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { isDeliverableSatisfied } from "../shared/deliverable-review";
 import { notifyUsersViaDingtalk } from "./_core/dingtalkMessage";
 
@@ -15,8 +15,16 @@ export async function listDeliverableReviews(projectId: string): Promise<Project
 
 export async function getMyPendingReviews(reviewerUserId: number): Promise<ProjectDeliverableReview[]> {
   const db = await getDb(); if (!db) return [];
-  return db.select().from(projectDeliverableReviews)
-    .where(and(eq(projectDeliverableReviews.reviewerUserId, reviewerUserId), eq(projectDeliverableReviews.status, "pending")));
+  const rows = await db
+    .select({ review: projectDeliverableReviews })
+    .from(projectDeliverableReviews)
+    .innerJoin(projects, eq(projectDeliverableReviews.projectId, projects.id))
+    .where(and(
+      eq(projectDeliverableReviews.reviewerUserId, reviewerUserId),
+      eq(projectDeliverableReviews.status, "pending"),
+      eq(projects.archived, false),
+    ));
+  return rows.map((row) => row.review);
 }
 
 async function findReview(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, projectId: string, phaseId: string, deliverableName: string) {
@@ -53,7 +61,7 @@ export async function reviewDeliverable(
   const existing = await findReview(db, input.projectId, input.phaseId, input.deliverableName);
   if (!existing || existing.status !== "pending") throw new Error("仅待审交付物可审核");
   await db.update(projectDeliverableReviews).set({
-    status: input.decision, reviewedBy: input.reviewedBy, reviewedAt: new Date(), reviewNote: input.note,
+    status: input.decision, reviewedBy: input.reviewedBy, reviewedAt: sql`now()`, reviewNote: input.note,
   }).where(eq(projectDeliverableReviews.id, existing.id));
   if (input.decision === "rejected") {
     try { await notify(deps)([existing.submittedBy], "交付物被驳回", `「${input.deliverableName}」被驳回${input.note ? "：" + input.note : ""}`); } catch { /* best-effort */ }
@@ -61,25 +69,46 @@ export async function reviewDeliverable(
 }
 
 export async function resetReviewOnReupload(projectId: string, phaseId: string, deliverableName: string, deps?: ReviewDeps): Promise<void> {
-  const db = await getDb(); if (!db) return;
+  const db = await getDb(); if (!db) throw new Error("Database not available");
   const existing = await findReview(db, projectId, phaseId, deliverableName);
   if (!existing || existing.status === "pending") return;
-  await db.update(projectDeliverableReviews).set({ status: "pending", reviewedBy: null, reviewedAt: null, reviewNote: null, submittedAt: new Date() })
+  await db.update(projectDeliverableReviews).set({ status: "pending", reviewedBy: null, reviewedAt: null, reviewNote: null, submittedAt: sql`now()` })
     .where(eq(projectDeliverableReviews.id, existing.id));
   try { await notify(deps)([existing.reviewerUserId], "交付物已更新待重审", `「${deliverableName}」已上传新版本，待你重新审核`); } catch { /* best-effort */ }
 }
 
 export async function getReviewSatisfiedSet(projectId: string, phaseId: string, requiredNames: string[]): Promise<Set<string>> {
   const db = await getDb(); if (!db || requiredNames.length === 0) return new Set();
-  const files = await db.select({ deliverableName: projectFiles.deliverableName }).from(projectFiles)
+  const files = await db.select({ deliverableName: projectFiles.deliverableName, createdAt: projectFiles.createdAt }).from(projectFiles)
     .where(and(eq(projectFiles.projectId, projectId), eq(projectFiles.phaseId, phaseId)));
-  const haveFile = new Set(files.map((f) => f.deliverableName).filter((n): n is string => !!n));
-  const reviews = await db.select().from(projectDeliverableReviews)
+  const latestFileByName = new Map<string, Date>();
+  for (const file of files) {
+    if (!file.deliverableName) continue;
+    const prev = latestFileByName.get(file.deliverableName);
+    if (!prev || file.createdAt > prev) latestFileByName.set(file.deliverableName, file.createdAt);
+  }
+  const reviews = await db.select({
+    deliverableName: projectDeliverableReviews.deliverableName,
+    status: projectDeliverableReviews.status,
+    reviewedAt: projectDeliverableReviews.reviewedAt,
+  }).from(projectDeliverableReviews)
     .where(and(eq(projectDeliverableReviews.projectId, projectId), eq(projectDeliverableReviews.phaseId, phaseId)));
-  const statusByName = new Map(reviews.map((r) => [r.deliverableName, r.status]));
+  const reviewByName = new Map(reviews.map((r) => [r.deliverableName, r]));
   const out = new Set<string>();
   for (const name of requiredNames) {
-    if (isDeliverableSatisfied(haveFile.has(name), statusByName.get(name) ?? null)) out.add(name);
+    const latestFileAt = latestFileByName.get(name);
+    const review = reviewByName.get(name);
+    const approvedAfterLatestFile =
+      !!latestFileAt &&
+      review?.status === "approved" &&
+      !!review.reviewedAt &&
+      review.reviewedAt >= latestFileAt;
+    const reviewStatus = approvedAfterLatestFile
+      ? "approved"
+      : review?.status === "approved"
+        ? null
+        : review?.status ?? null;
+    if (isDeliverableSatisfied(!!latestFileAt, reviewStatus)) out.add(name);
   }
   return out;
 }

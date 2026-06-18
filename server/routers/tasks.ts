@@ -2,8 +2,6 @@ import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import { TRPCError } from "@trpc/server";
 import {
-  getProjectById,
-  getProjectMember,
   getProjectTasks,
   upsertProjectTask,
   setTaskCompletion,
@@ -20,14 +18,10 @@ import {
 import { ROLE_PERMISSIONS } from "./members";
 import { TASK_STATUSES, TASK_PRIORITIES } from "../../drizzle/schema";
 import { emitAutomationEvent } from "../automation/events";
+import { isISODate } from "../../shared/scheduling";
+import { getEffectiveProjectRoleById as getEffectiveRole } from "../project-access";
 
-async function getEffectiveRole(projectId: string, userId: number) {
-  const project = await getProjectById(projectId);
-  if (!project) return null;
-  if (project.createdBy === userId) return "owner" as const;
-  const member = await getProjectMember(projectId, userId);
-  return member?.role ?? null;
-}
+const isoDateInput = z.string().refine(isISODate, "日期必须是有效的 YYYY-MM-DD");
 
 export const tasksRouter = router({
   /** List all tasks for a project (optionally filtered by phase) */
@@ -126,7 +120,7 @@ export const tasksRouter = router({
     }),
 
   /**
-   * Update task meta fields: assignee, dueDate, status, priority.
+   * Update task meta fields. Status is system-derived from dependencies/completion.
    * Requires canEditTasks permission.
    */
   setMeta: protectedProcedure
@@ -145,6 +139,7 @@ export const tasksRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "没有编辑任务的权限" });
       }
       const { projectId, phaseId, taskId, ...patch } = input;
+      delete patch.status;
       const existingTasks = await getProjectTasks(projectId, phaseId);
       const beforeTask = existingTasks.find((task) => task.taskId === taskId) ?? {
         projectId,
@@ -156,7 +151,6 @@ export const tasksRouter = router({
         status: "todo",
         priority: "medium",
       };
-      // status 为主状态；completed/completedAt 由 updateTaskMeta 内 deriveCompletion 派生
       const metaPatch = { ...patch, updatedBy: ctx.user.id };
       await updateTaskMeta(projectId, phaseId, taskId, metaPatch);
       await createActivityLog({
@@ -224,8 +218,8 @@ export const tasksRouter = router({
     .input(z.object({
       projectId: z.string(),
       taskId: z.string(),
-      startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-      dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      startDate: isoDateInput,
+      dueDate: isoDateInput,
     }))
     .mutation(async ({ ctx, input }) => {
       const role = await getEffectiveRole(input.projectId, ctx.user.id);

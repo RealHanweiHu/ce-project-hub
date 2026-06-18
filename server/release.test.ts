@@ -3,20 +3,23 @@ import {
   getDb, createProduct, createProjectWithSeed,
   setProjectProduct, getOpenP0P1Count, releaseProject,
   getProductById, getProjectById, listProductRevisions,
-  createProjectGateReview, setTaskDeliverable,
+  createProjectGateReview, createProjectFile, upsertProjectTask,
 } from "./db";
 import { getReleaseGatePhase } from "../shared/sop-templates";
-import { getTaskDeliverables } from "../shared/task-deliverables";
+import { submitDeliverableReview, reviewDeliverable } from "./deliverable-review-service";
 
 const PID = "rel_test_product";
 const PRJ = "rel_test_project";
 const ACTOR = { id: 1, role: "user" };
+const deps = { notifyDingtalk: async () => {} };
 
 async function cleanup() {
   const db = await getDb(); if (!db) return;
   const { sql } = await import("drizzle-orm");
   await db.execute(sql`DELETE FROM mp_releases WHERE "productId" = ${PID}`);
   await db.execute(sql`DELETE FROM product_revisions WHERE "productId" = ${PID}`);
+  await db.execute(sql`DELETE FROM project_deliverable_reviews WHERE "projectId" = ${PRJ}`);
+  await db.execute(sql`DELETE FROM project_files WHERE "projectId" = ${PRJ}`);
   await db.execute(sql`DELETE FROM project_gate_reviews WHERE "projectId" = ${PRJ}`);
   await db.execute(sql`DELETE FROM project_tasks WHERE "projectId" = ${PRJ}`);
   await db.execute(sql`DELETE FROM project_phases WHERE "projectId" = ${PRJ}`);
@@ -35,11 +38,19 @@ async function addGate(decision: "approved" | "conditional" | "rejected", roundN
 }
 async function completeDeliverables(projectId: string = PRJ) {
   const phase = getReleaseGatePhase("npd")!;
-  for (const t of phase.tasks) {
-    if (t.id === phase.gateTaskId) continue;
-    for (const name of getTaskDeliverables(t.id, phase.deliverables)) {
-      await setTaskDeliverable(projectId, phase.id, t.id, name, true, 1);
+  for (const task of phase.tasks) {
+    if (task.id !== phase.gateTaskId) {
+      await upsertProjectTask(projectId, phase.id, task.id, { status: "done", completed: true, completedAt: new Date(), updatedBy: 1 });
     }
+  }
+  const deliverables = Array.from(new Set([...(phase.deliverables ?? []), ...(phase.gateStandard?.requiredDeliverables ?? [])]));
+  for (const name of deliverables) {
+    await createProjectFile({
+      projectId, phaseId: phase.id, taskId: phase.gateTaskId, deliverableName: name,
+      name: `${name}.pdf`, mimeType: "application/pdf", size: 1, storageKey: `${projectId}/${name}`, storageUrl: `/storage/${projectId}/${name}`, uploadedBy: 1,
+    });
+    await submitDeliverableReview({ projectId, phaseId: phase.id, deliverableName: name, reviewerUserId: 1, submittedBy: 1 }, deps);
+    await reviewDeliverable({ projectId, phaseId: phase.id, deliverableName: name, decision: "approved", reviewedBy: 1, note: null }, deps);
   }
 }
 
@@ -72,7 +83,8 @@ describe("MP Release 硬闸口", () => {
 
   it("交付物未齐：绝对硬卡", async () => {
     const db = await getDb(); const { sql } = await import("drizzle-orm");
-    await db!.execute(sql`UPDATE project_tasks SET deliverables='{}'::jsonb WHERE "projectId"=${PRJ} AND "phaseId"='pvt'`);
+    await db!.execute(sql`DELETE FROM project_deliverable_reviews WHERE "projectId"=${PRJ} AND "phaseId"='pvt'`);
+    await db!.execute(sql`DELETE FROM project_files WHERE "projectId"=${PRJ} AND "phaseId"='pvt'`);
     await expect(releaseProject({ projectId: PRJ, actor: { id: 1, role: "admin" }, override: { overrideReason: "x", followUpOwner: 1, dueDate: "2026-07-01" } })).rejects.toThrow(/交付物/);
     await completeDeliverables();
   });
@@ -118,6 +130,8 @@ async function cleanup2() {
   const { sql } = await import("drizzle-orm");
   await db.execute(sql`DELETE FROM mp_releases WHERE "productId" = ${PID2}`);
   await db.execute(sql`DELETE FROM product_revisions WHERE "productId" = ${PID2}`);
+  await db.execute(sql`DELETE FROM project_deliverable_reviews WHERE "projectId" = ${PRJ2}`);
+  await db.execute(sql`DELETE FROM project_files WHERE "projectId" = ${PRJ2}`);
   await db.execute(sql`DELETE FROM project_gate_reviews WHERE "projectId" = ${PRJ2}`);
   await db.execute(sql`DELETE FROM project_tasks WHERE "projectId" = ${PRJ2}`);
   await db.execute(sql`DELETE FROM project_phases WHERE "projectId" = ${PRJ2}`);
@@ -140,6 +154,7 @@ describe("MP Release 正常发布（approved 普通路径）", () => {
   afterAll(cleanup2);
 
   it("approved + 四硬卡过：普通发布成功，留痕字段为空（overridden=false）", async () => {
+    await expect(releaseProject({ projectId: PRJ2, actor: { id: 9, role: "user" } })).rejects.toThrow(/权限/);
     const res = await releaseProject({ projectId: PRJ2, actor: ACTOR });
     expect(res.revisionLabel).toBe("Rev A");
     const db = await getDb(); const { sql } = await import("drizzle-orm");
@@ -156,5 +171,6 @@ describe("MP Release 正常发布（approved 普通路径）", () => {
     expect(prj?.archived).toBe(true);
     const product = await getProductById(PID2);
     expect(product?.lifecycleState).toBe("mass_production");
+    await expect(releaseProject({ projectId: PRJ2, actor: ACTOR })).rejects.toThrow(/已发布/);
   });
 });

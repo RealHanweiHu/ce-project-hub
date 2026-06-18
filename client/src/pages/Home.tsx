@@ -8,7 +8,7 @@ import { useLocation } from 'wouter';
 import {
   LayoutDashboard, FolderKanban, BookOpen, Save, CheckCircle2,
   ChevronRight, Menu, X, Cpu, Search, LogIn, Loader2, Cloud, Shield, KeyRound,
-  LogOut, Package, Inbox,
+  LogOut, Package, Inbox, CalendarDays,
 } from 'lucide-react';
 import { nanoid } from 'nanoid';
 import {
@@ -23,7 +23,7 @@ import { getQueryKey } from '@trpc/react-query';
 import { useProjectData } from '@/hooks/useProjectData';
 import { NotificationBell } from '@/components/NotificationBell';
 
-type View = 'overview' | 'projects' | 'products' | 'requirements' | 'sop';
+type View = 'overview' | 'projects' | 'calendar' | 'products' | 'requirements' | 'sop';
 
 const OverviewPage = lazy(() =>
   import('@/components/views/overview/OverviewPage').then((module) => ({ default: module.OverviewPage }))
@@ -42,6 +42,9 @@ const RequirementsView = lazy(() =>
 );
 const ProductLibraryView = lazy(() =>
   import('@/components/views/ProductLibraryView').then((module) => ({ default: module.ProductLibraryView }))
+);
+const CalendarPage = lazy(() =>
+  import('@/components/views/CalendarPage').then((module) => ({ default: module.CalendarPage }))
 );
 const KickoffWizard = lazy(() =>
   import('@/components/views/KickoffWizard').then((module) => ({ default: module.KickoffWizard }))
@@ -97,7 +100,7 @@ function rowToProject(row: {
     id: row.id,
     name: row.name,
     code: row.projectNumber || '',
-    category: (row.category as 'npd' | 'eco' | 'idr') || 'npd',
+    category: (row.category as 'npd' | 'eco' | 'idr' | 'jdm' | 'obt') || 'npd',
     pm: '',
     pmUserId: row.pmUserId ?? null,
     risk: (row.risk as 'low' | 'medium' | 'high') || 'low',
@@ -145,7 +148,9 @@ function ProjectDetailWrapper({
     queryClient.invalidateQueries({ queryKey: getQueryKey(trpc.gateReviews.list, { projectId }) });
     queryClient.invalidateQueries({ queryKey: getQueryKey(trpc.changelog.list, { projectId }) });
     queryClient.invalidateQueries({ queryKey: getQueryKey(trpc.phases.list, { projectId }) });
+    queryClient.invalidateQueries({ queryKey: getQueryKey(trpc.projects.get, { id: projectId }) });
     queryClient.invalidateQueries({ queryKey: getQueryKey(trpc.projects.list) });
+    queryClient.invalidateQueries({ queryKey: getQueryKey(trpc.projects.portfolio) });
   }, [queryClient, projectId]);
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -168,7 +173,6 @@ function ProjectDetailWrapper({
           updated.name !== project.name ||
           updated.code !== project.code ||
           updated.pmUserId !== project.pmUserId ||
-          updated.risk !== project.risk ||
           updated.currentPhase !== project.currentPhase ||
           updated.startDate !== project.startDate ||
           updated.targetDate !== project.targetDate ||
@@ -210,12 +214,11 @@ function ProjectDetailWrapper({
                 })
               );
             }
-            // Task meta (assignee, dueDate, status, priority)
+            // Task meta (assignee, dueDate, priority). Status is automatic.
             const oldMeta = oldPhaseData?.taskDetails?.[taskId];
             const metaChanged =
               details.assigneeUserId !== (oldMeta?.assigneeUserId ?? null) ||
               details.dueDate !== (oldMeta?.dueDate ?? null) ||
-              details.taskStatus !== (oldMeta?.taskStatus ?? 'todo') ||
               details.taskPriority !== (oldMeta?.taskPriority ?? 'medium');
             if (metaChanged) {
               ops.push(
@@ -223,7 +226,6 @@ function ProjectDetailWrapper({
                   projectId, phaseId, taskId,
                   assigneeUserId: details.assigneeUserId ?? null,
                   dueDate: details.dueDate ?? null,
-                  status: (details.taskStatus as any) ?? undefined,
                   priority: (details.taskPriority as any) ?? undefined,
                 })
               );
@@ -324,7 +326,6 @@ function ProjectDetailWrapper({
                   decision: gate.decision as 'approved' | 'conditional' | 'rejected',
                   conditions: gate.conditions || null,
                   notes: gate.notes || null,
-                  roundNumber: gate.roundNumber ?? 1,
                 })
               );
             } else {
@@ -338,7 +339,6 @@ function ProjectDetailWrapper({
                     decision: gate.decision as 'approved' | 'conditional' | 'rejected',
                     conditions: gate.conditions || null,
                     notes: gate.notes || null,
-                    roundNumber: gate.roundNumber ?? 1,
                   })
                 );
               }
@@ -503,6 +503,7 @@ export default function Home() {
   const deleteMutation = trpc.projects.delete.useMutation();
   const invalidateProjects = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: getQueryKey(trpc.projects.list) });
+    queryClient.invalidateQueries({ queryKey: getQueryKey(trpc.projects.portfolio) });
   }, [queryClient]);
   // ── Ctrl+K global shortcut ───────────────────────────────────────────────
   useEffect(() => {
@@ -605,6 +606,7 @@ export default function Home() {
   const navItems = [
     { id: 'overview' as View, label: '总览', labelEn: 'Overview', icon: LayoutDashboard },
     { id: 'projects' as View, label: '项目管理', labelEn: 'Projects', icon: FolderKanban },
+    { id: 'calendar' as View, label: '日历', labelEn: 'Calendar', icon: CalendarDays },
     { id: 'products' as View, label: '产品库', labelEn: 'Products', icon: Package },
     { id: 'requirements' as View, label: '需求池', labelEn: 'Requirements', icon: Inbox },
   ];
@@ -618,6 +620,7 @@ export default function Home() {
   const viewLabels: Record<View, string> = {
     overview: 'Overview',
     projects: 'Projects',
+    calendar: 'Calendar',
     products: 'Products',
     requirements: 'Requirements',
     sop: 'SOP Library',
@@ -935,6 +938,7 @@ export default function Home() {
                   onSaveStatus={handleSaveStatus}
                 />
               )}
+              {view === 'calendar' && <CalendarPage projects={projects} onSelectProject={handleSelectProject} />}
               {view === 'products' && <ProductLibraryView />}
               {view === 'requirements' && <RequirementsView />}
               {view === 'sop' && <SOPLibraryView />}

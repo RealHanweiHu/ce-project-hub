@@ -8,6 +8,7 @@ import {
 } from "./deliverable-review-service";
 
 const PROJ = `dr-test-${Date.now()}`;
+const ARCHIVED_PROJ = `${PROJ}-archived`;
 const PM = 920001, REVIEWER = 920002, SUBMITTER = 920003;
 const notifs: { userIds: number[]; title: string }[] = [];
 const deps = { notifyDingtalk: async (userIds: number[], title: string) => { notifs.push({ userIds, title }); } };
@@ -15,12 +16,15 @@ const deps = { notifyDingtalk: async (userIds: number[], title: string) => { not
 beforeAll(async () => {
   const db = await getDb();
   await db!.insert(projects).values({ id: PROJ, name: "审核测试", projectNumber: "DR-1", category: "npd", risk: "low", currentPhase: "design", createdBy: PM, pmUserId: PM });
+  await db!.insert(projects).values({ id: ARCHIVED_PROJ, name: "已归档审核测试", projectNumber: "DR-A", category: "npd", risk: "low", currentPhase: "design", createdBy: PM, pmUserId: PM, archived: true });
 });
 afterAll(async () => {
   const db = await getDb();
   await db!.delete(projectDeliverableReviews).where(eq(projectDeliverableReviews.projectId, PROJ));
+  await db!.delete(projectDeliverableReviews).where(eq(projectDeliverableReviews.projectId, ARCHIVED_PROJ));
   await db!.delete(projectFiles).where(eq(projectFiles.projectId, PROJ));
   await db!.delete(projects).where(eq(projects.id, PROJ));
+  await db!.delete(projects).where(eq(projects.id, ARCHIVED_PROJ));
 });
 
 async function addFile(name: string) {
@@ -40,10 +44,10 @@ describe("deliverable review service", () => {
     const set = await getReviewSatisfiedSet(PROJ, "design", ["ID外观图"]);
     expect(set.has("ID外观图")).toBe(true);
   });
-  it("存量豁免：有文件无审核记录 → satisfied", async () => {
+  it("有文件无审核记录 → 不在 satisfied", async () => {
     await addFile("MD结构图");
     const set = await getReviewSatisfiedSet(PROJ, "design", ["MD结构图"]);
-    expect(set.has("MD结构图")).toBe(true);
+    expect(set.has("MD结构图")).toBe(false);
   });
   it("pending/rejected → 不在 satisfied", async () => {
     await addFile("BOM");
@@ -66,6 +70,17 @@ describe("deliverable review service", () => {
     expect(mine.every((r) => r.reviewerUserId === REVIEWER && r.status === "pending")).toBe(true);
     expect(mine.length).toBeGreaterThan(0);
   });
+  it("myPending 排除已归档项目", async () => {
+    await submitDeliverableReview({
+      projectId: ARCHIVED_PROJ,
+      phaseId: "design",
+      deliverableName: "归档项目交付物",
+      reviewerUserId: REVIEWER,
+      submittedBy: SUBMITTER,
+    }, deps);
+    const mine = await getMyPendingReviews(REVIEWER);
+    expect(mine.some((r) => r.projectId === ARCHIVED_PROJ)).toBe(false);
+  });
   it("createProjectFile 自动触发重审：approved 后传新版本 → pending", async () => {
     const NAME = "重审专用交付物";
     await addFile(NAME);
@@ -76,5 +91,31 @@ describe("deliverable review service", () => {
     await addFile(NAME); // 上传新版本 → createProjectFile 触发 resetReviewOnReupload
     rows = await listDeliverableReviews(PROJ);
     expect(rows.find((r) => r.deliverableName === NAME)?.status).toBe("pending");
+  });
+  it("旧 approved 早于最新文件时不算 satisfied", async () => {
+    const NAME = "时效交付物";
+    await addFile(NAME);
+    await submitDeliverableReview({ projectId: PROJ, phaseId: "design", deliverableName: NAME, reviewerUserId: REVIEWER, submittedBy: SUBMITTER }, deps);
+    await reviewDeliverable({ projectId: PROJ, phaseId: "design", deliverableName: NAME, decision: "approved", reviewedBy: REVIEWER, note: null }, deps);
+    let set = await getReviewSatisfiedSet(PROJ, "design", [NAME]);
+    expect(set.has(NAME)).toBe(true);
+
+    const db = await getDb();
+    await db!.insert(projectFiles).values({
+      projectId: PROJ,
+      phaseId: "design",
+      taskId: "d8",
+      deliverableName: NAME,
+      name: `${NAME}-new.pdf`,
+      mimeType: "application/pdf",
+      size: 1,
+      storageKey: `k/${NAME}-new`,
+      storageUrl: `/storage/k/${NAME}-new`,
+      uploadedBy: SUBMITTER,
+      createdAt: new Date(Date.now() + 60_000),
+    });
+
+    set = await getReviewSatisfiedSet(PROJ, "design", [NAME]);
+    expect(set.has(NAME)).toBe(false);
   });
 });

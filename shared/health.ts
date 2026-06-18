@@ -4,7 +4,7 @@ export type RagLevel = "green" | "amber" | "red";
 /** computeRag 的输入：均来自上层聚合，避免依赖具体数据层类型。 */
 export type RagInput = {
   risk: "low" | "medium" | "high";
-  /** = max(task.dueDate)，当前计划结束日（非预测算法）。 */
+  /** 预测完成日：由计划基线 + 实绩进展 on-read 推导，不写回任务 dueDate。 */
   projectedEnd: string | null;
   targetDate: string | null;
   overdueTasks: number;
@@ -17,6 +17,9 @@ export type RagInput = {
   /** Gate 临近未就绪等级；无→null。 */
   gateNotReady?: "red" | "amber" | null;
 };
+
+export type AutoRiskInput = Omit<RagInput, "risk">;
+export type RiskLevel = RagInput["risk"];
 
 // 阈值（先写死，后续如需再做后台可配）
 const SLIP_RED = 7; // 目标日偏差 > 7 天 → 红
@@ -93,4 +96,16 @@ export function ragReasons(input: RagInput): string[] {
   if (input.gateNotReady === "red") reasons.push("Gate未就绪(临近)");
   else if (input.gateNotReady === "amber") reasons.push("Gate未就绪");
   return reasons;
+}
+
+/** 自动风险等级：风险由项目异常信号推导，不再依赖人工维护的 risk 字段。 */
+export function computeAutoRisk(input: AutoRiskInput): RiskLevel {
+  const rag = computeRag({ ...input, risk: "low" });
+  if (rag === "red") return "high";
+  if (rag === "amber") return "medium";
+  return "low";
+}
+
+export function autoRiskReasons(input: AutoRiskInput): string[] {
+  return ragReasons({ ...input, risk: "low" });
 }

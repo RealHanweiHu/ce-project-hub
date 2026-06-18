@@ -38,6 +38,11 @@ describe("getPortfolioHealthForDigest", () => {
     expect(row!.dueItems).toBe(2); // c1,c2 <= today
     expect(row!.donePlannedItems).toBe(1); // c1 done
     expect(row!.plannedEnd).toBe("2026-06-30");
+    expect(row!.projectedEnd).not.toBeNull();
+    expect(row!.projectedEnd! >= row!.plannedEnd!).toBe(true);
+    expect(row!.progressBehindPct).toBe(25);
+    expect(row!.ragLevel).toBe("red");
+    expect(row!.ragReasons).toContain("逾期×1");
     expect(row!.overdueTasks).toBe(1); // c2 过期未完成
     expect(row!.blockedTasks).toBe(1); // c5 阻塞
   });

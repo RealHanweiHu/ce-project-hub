@@ -2,21 +2,12 @@ import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import { TRPCError } from "@trpc/server";
 import {
-  getProjectById,
-  getProjectMember,
   getProjectPhases,
   upsertProjectPhase,
   createActivityLog,
 } from "../db";
 import { ROLE_PERMISSIONS } from "./members";
-
-async function getEffectiveRole(projectId: string, userId: number) {
-  const project = await getProjectById(projectId);
-  if (!project) return null;
-  if (project.createdBy === userId) return "owner" as const;
-  const member = await getProjectMember(projectId, userId);
-  return member?.role ?? null;
-}
+import { getEffectiveProjectRoleById as getEffectiveRole } from "../project-access";
 
 export const phasesRouter = router({
   /** List all phase records for a project */

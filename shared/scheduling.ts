@@ -1,17 +1,69 @@
-// 自动排期纯函数（日历日、正向拓扑、改一项下游联动）。无副作用、不读时钟，便于单测。
+// 自动排期纯函数（工作日、正向拓扑、改一项下游联动）。无副作用、不读时钟，便于单测。
 
 export type SchedTask = {
   id: string;
-  durationDays?: number; // 缺省 1
+  durationDays?: number; // 缺省 1，按工作日计算
   dependsOn?: string[];  // finish-to-start 前置
-  lagDays?: number;      // start 前额外缓冲（缺省 0）
+  lagDays?: number;      // start 前额外缓冲（缺省 0，按工作日计算）
 };
 export type Schedule = Record<string, { start: string; due: string }>;
+export type ForecastTaskState = {
+  id: string;
+  startDate?: string | null;
+  dueDate?: string | null;
+  completed?: boolean | null;
+  status?: string | null;
+  completedAtISO?: string | null;
+};
+
+/** 严格 ISO 日期(YYYY-MM-DD)，不接受 2026-13-99 这类会被 Date 自动归一化的值 */
+export function isISODate(iso: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return false;
+  const y = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  const dt = new Date(Date.UTC(y, month - 1, day));
+  return dt.getUTCFullYear() === y &&
+    dt.getUTCMonth() === month - 1 &&
+    dt.getUTCDate() === day;
+}
 
 /** ISO 日期(YYYY-MM-DD)加 n 个日历日 */
 export function addDays(iso: string, n: number): string {
+  if (!isISODate(iso)) throw new Error(`Invalid ISO date: ${iso}`);
   const [y, m, d] = iso.split("-").map(Number);
   return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+}
+
+/**
+ * 工厂工作日历：周一至周六为工作日，周日休息。
+ * 法定节假日尚未接入独立假日表，排期入口需要向用户明示这一点。
+ */
+export function isWorkingDay(iso: string): boolean {
+  if (!isISODate(iso)) return false;
+  const day = new Date(`${iso}T00:00:00Z`).getUTCDay();
+  return day !== 0;
+}
+
+export function nextWorkingDay(iso: string): string {
+  if (!isISODate(iso)) throw new Error(`Invalid ISO date: ${iso}`);
+  let out = iso;
+  while (!isWorkingDay(out)) out = addDays(out, 1);
+  return out;
+}
+
+/** ISO 日期加 n 个工厂工作日；起点若落在周日，先顺延到下一个工作日。 */
+export function addWorkingDays(iso: string, n: number): string {
+  if (!Number.isFinite(n)) throw new Error(`Invalid working day delta: ${n}`);
+  let out = nextWorkingDay(iso);
+  const step = n >= 0 ? 1 : -1;
+  let remaining = Math.abs(Math.trunc(n));
+  while (remaining > 0) {
+    out = addDays(out, step);
+    if (isWorkingDay(out)) remaining -= 1;
+  }
+  return out;
 }
 
 /** 拓扑序；有环返回 null */
@@ -44,7 +96,7 @@ function computeStart(t: SchedTask, sched: Schedule, startDate: string, idsInSco
   const deps = (t.dependsOn ?? []).filter((d) => idsInScope.has(d));
   const dues = deps.map((d) => sched[d]?.due).filter((x): x is string => !!x);
   let start = dues.length ? dues.reduce((a, b) => (b > a ? b : a)) : startDate; // ISO 字典序=时间序
-  return addDays(start, t.lagDays ?? 0);
+  return addWorkingDays(start, t.lagDays ?? 0);
 }
 
 /** 从 startDate 正向生成整套任务起止日 */
@@ -56,7 +108,7 @@ export function generateSchedule(tasks: SchedTask[], startDate: string): Schedul
   for (const id of order) {
     const t = byId.get(id)!;
     const start = computeStart(t, sched, startDate, ids);
-    sched[id] = { start, due: addDays(start, Math.max(0, t.durationDays ?? 1)) };
+    sched[id] = { start, due: addWorkingDays(start, Math.max(0, t.durationDays ?? 1)) };
   }
   return sched;
 }
@@ -90,9 +142,69 @@ export function rescheduleFrom(
   for (const id of order) {
     const t = byId.get(id)!;
     const start = computeStart(t, sched, newDates.start, ids);
-    sched[id] = { start, due: addDays(start, Math.max(0, t.durationDays ?? 1)) };
+    sched[id] = { start, due: addWorkingDays(start, Math.max(0, t.durationDays ?? 1)) };
   }
   return sched;
+}
+
+function maxISO(values: Array<string | null | undefined>): string | null {
+  let out: string | null = null;
+  for (const value of values) {
+    if (!value) continue;
+    const iso = value.slice(0, 10);
+    if (!isISODate(iso)) continue;
+    if (!out || iso > out) out = iso;
+  }
+  return out;
+}
+
+function isTaskDone(state: ForecastTaskState | undefined): boolean {
+  return !!state && (
+    !!state.completed ||
+    state.status === "done" ||
+    state.status === "skipped"
+  );
+}
+
+/**
+ * 基于实绩预测排期。计划 start/due 保留为基线；这里仅 on-read 推导预测日期。
+ * 已完成任务用 completedAt 锚定；未完成任务从 today / 计划开始 / 前置预测完成的较晚者继续顺推。
+ */
+export function forecastSchedule(
+  tasks: SchedTask[],
+  states: ForecastTaskState[],
+  todayISO: string,
+  projectStartDate?: string | null
+): Schedule {
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  const stateById = new Map(states.map((s) => [s.id, s]));
+  const ids = new Set(tasks.map((t) => t.id));
+  const order = topoOrder(tasks) ?? tasks.map((t) => t.id);
+  const anchor = maxISO([projectStartDate, todayISO]) ?? todayISO;
+  const sched: Schedule = {};
+
+  for (const id of order) {
+    const t = byId.get(id)!;
+    const state = stateById.get(id);
+    const completedAt = maxISO([state?.completedAtISO]);
+    const doneAt = completedAt ?? (isTaskDone(state) ? maxISO([state?.dueDate]) : null);
+    if (isTaskDone(state) && doneAt) {
+      sched[id] = { start: doneAt, due: doneAt };
+      continue;
+    }
+
+    const deps = (t.dependsOn ?? []).filter((d) => ids.has(d));
+    const depDue = maxISO(deps.map((d) => sched[d]?.due));
+    const base = maxISO([anchor, state?.startDate, depDue]) ?? anchor;
+    const start = addWorkingDays(base, t.lagDays ?? 0);
+    sched[id] = { start, due: addWorkingDays(start, Math.max(0, t.durationDays ?? 1)) };
+  }
+
+  return sched;
+}
+
+export function projectedEndFromSchedule(schedule: Schedule): string | null {
+  return maxISO(Object.values(schedule).map((item) => item.due));
 }
 
 /** 把 SOP 阶段（按顺序）摊平成排期任务：阶段 bufferDays 作为入口任务的 lagDays */

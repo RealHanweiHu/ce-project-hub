@@ -12,20 +12,20 @@
 
 ### 关键决策（头脑风暴确定）
 - **依赖图由我按 IPD 消费电子流程预置**进 SOP 模板（PM 零录入负担）。
-- **日历日**（非工作日）——对硬件长交期（模具/认证/打样）更贴实，且不维护节假日表；工作日制留后续。
+- **工厂工作日**——周一至周六工作、周日休息；法定节假日后续接独立假日表，不和项目日程表混用。
 - **正向排期**：从项目开始日向后推；算出预计完成日，超过 `targetDate` 则标记超期。不做反向倒排。
 - **依赖 = finish-to-start**；阶段串联靠「每阶段入口任务依赖上一阶段的 gateTaskId」，复用现有 gate 把关。
 - **改一项 → 只向后重算其传递后继**，上游不动；v1 不做「锁定/手工 pin」。
 - **周会 = 轻量档**：只推群提醒，无真日历/会议链接（webhook 能力所限，已与用户确认）。
 
 ### 不在本期范围（YAGNI）
-工作日/节假日历、反向倒排、关键路径高亮、资源/产能占用、真钉钉日程+会议链接。
+法定节假日表、反向倒排、关键路径高亮、资源/产能占用、真钉钉日程+会议链接。
 
 ## 2. 数据模型
 
 ### SOP 模板（代码，无迁移）——`shared/sop-templates.ts`
 - `SOPTask` 增：
-  - `durationDays: number` —— 任务工期（日历日；评审/Gate 任务设 0–1 天）
+  - `durationDays: number` —— 任务工期（工厂工作日；评审/Gate 任务设 0–1 天）
   - `dependsOn?: string[]` —— 前置任务 id（同项目内 taskId；跨阶段可指向上一阶段 gateTaskId）
 - `SOPPhase` 增（可选）：`bufferDays?: number` —— 进入该阶段前的缓冲天数（默认 0）
 
@@ -67,7 +67,7 @@
 `shared/scheduling.ts`：
 - `generateSchedule(category, startDateISO) → Record<taskId, { start: string; due: string }>`
   - 取该 category 的 phases→tasks，按 `dependsOn` 拓扑序正向遍历；
-  - `start = max(各前置.due) + 阶段 bufferDays`（无前置 = 项目开始日）；`due = start + durationDays`（日历日）；
+  - `start = max(各前置.due) + 阶段 bufferDays`（无前置 = 项目开始日）；`due = start + durationDays`（工厂工作日）；
   - 返回每任务 start/due；项目预计完成 = 最大 due。
 - `rescheduleFrom(schedule, deps, changedTaskId, newDates) → schedule'`
   - 锚定被改任务的新 start/due，**仅重算其传递后继**（BFS/拓扑），上游与无关分支不动。

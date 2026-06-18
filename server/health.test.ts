@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeRag, ragReasons, type RagInput } from "@shared/health";
+import { computeAutoRisk, computeRag, ragReasons, type RagInput } from "@shared/health";
 
 const base: RagInput = {
   risk: "low", projectedEnd: null, targetDate: null,
@@ -94,5 +94,14 @@ describe("ragReasons 不短路", () => {
   });
   it("绿项目返回空数组", () => {
     expect(ragReasons(base)).toEqual([]);
+  });
+});
+
+describe("computeAutoRisk", () => {
+  it("从实际异常信号自动升高风险", () => {
+    const { risk: _risk, ...input } = base;
+    expect(computeAutoRisk(input)).toBe("low");
+    expect(computeAutoRisk({ ...input, blockedTasks: 1 })).toBe("medium");
+    expect(computeAutoRisk({ ...input, criticalIssues: 1 })).toBe("high");
   });
 });

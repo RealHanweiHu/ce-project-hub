@@ -2,34 +2,21 @@ import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import { TRPCError } from "@trpc/server";
 import {
-  getProjectById,
-  getProjectMember,
   getProjectChangelog,
   createProjectChangeRecord,
   updateProjectChangeRecord,
   deleteProjectChangeRecord,
   createActivityLog,
 } from "../db";
-import { ROLE_PERMISSIONS } from "./members";
+import { assertProjectAccess, assertProjectPermission } from "../project-access";
 import { CHANGE_TYPES, CHANGE_STATUSES } from "../../drizzle/schema";
-
-async function getEffectiveRole(projectId: string, userId: number) {
-  const project = await getProjectById(projectId);
-  if (!project) return null;
-  if (project.createdBy === userId) return "owner" as const;
-  const member = await getProjectMember(projectId, userId);
-  return member?.role ?? null;
-}
 
 export const changelogRouter = router({
   /** List all changelog records for a project */
   list: protectedProcedure
     .input(z.object({ projectId: z.string() }))
     .query(async ({ ctx, input }) => {
-      const role = await getEffectiveRole(input.projectId, ctx.user.id);
-      if (!role || !ROLE_PERMISSIONS[role].canView) {
-        throw new TRPCError({ code: "FORBIDDEN" });
-      }
+      await assertProjectAccess(input.projectId, ctx.user);
       return getProjectChangelog(input.projectId);
     }),
 
@@ -52,13 +39,11 @@ export const changelogRouter = router({
       implementedDate: z.string().optional().nullable(),
     }))
     .mutation(async ({ ctx, input }) => {
-      const role = await getEffectiveRole(input.projectId, ctx.user.id);
-      if (!role || !ROLE_PERMISSIONS[role].canEditChangelog) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "没有创建变更记录的权限" });
-      }
+      const { project } = await assertProjectPermission(input.projectId, ctx.user, "canEditChangelog", "没有创建变更记录的权限");
       const id = await createProjectChangeRecord({
         ...input,
         creatorId: ctx.user.id,
+        productId: project?.productId ?? null,
       });
       await createActivityLog({
         projectId: input.projectId,
@@ -91,15 +76,14 @@ export const changelogRouter = router({
       implementedDate: z.string().optional().nullable(),
     }))
     .mutation(async ({ ctx, input }) => {
-      const role = await getEffectiveRole(input.projectId, ctx.user.id);
-      if (!role) throw new TRPCError({ code: "FORBIDDEN" });
+      const access = await assertProjectAccess(input.projectId, ctx.user);
 
       const records = await getProjectChangelog(input.projectId);
       const record = records.find((r) => r.id === input.id);
       if (!record) throw new TRPCError({ code: "NOT_FOUND" });
 
       const isCreator = record.creatorId === ctx.user.id;
-      const canManage = ROLE_PERMISSIONS[role].canEditChangelog;
+      const canManage = access.isAdmin || access.permissions.canEditChangelog;
       if (!isCreator && !canManage) {
         throw new TRPCError({ code: "FORBIDDEN", message: "只有记录创建者或有管理权限的角色可以编辑" });
       }
@@ -124,15 +108,14 @@ export const changelogRouter = router({
       projectId: z.string(),
     }))
     .mutation(async ({ ctx, input }) => {
-      const role = await getEffectiveRole(input.projectId, ctx.user.id);
-      if (!role) throw new TRPCError({ code: "FORBIDDEN" });
+      const access = await assertProjectAccess(input.projectId, ctx.user);
 
       const records = await getProjectChangelog(input.projectId);
       const record = records.find((r) => r.id === input.id);
       if (!record) throw new TRPCError({ code: "NOT_FOUND" });
 
       const isCreator = record.creatorId === ctx.user.id;
-      const canManage = ROLE_PERMISSIONS[role].canEditChangelog;
+      const canManage = access.isAdmin || access.permissions.canEditChangelog;
       if (!isCreator && !canManage) {
         throw new TRPCError({ code: "FORBIDDEN", message: "只有记录创建者或有管理权限的角色可以删除" });
       }

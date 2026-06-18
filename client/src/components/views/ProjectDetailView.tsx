@@ -5,12 +5,12 @@ import { useState, useRef, useEffect } from 'react';
 import {
   ArrowLeft, CheckCircle2, Circle, ChevronRight,
   Upload, Download, Trash2, Paperclip, FileText, Image as ImageIcon,
-  Edit3, Calendar, AlertTriangle, Target, Zap, BarChart2, ListChecks,
+  Edit3, Calendar, AlertTriangle, Target, Zap, BarChart2, ListChecks, Activity,
   Lock, ShieldAlert, Flag, Bug, GitBranch, Filter, Rocket, LayoutDashboard,
   Inbox, LayoutGrid, FolderOpen, Eye, X,
 } from 'lucide-react';
 import {
-  Project, SOP_PHASES, PHASE_MAP, RISK_CONFIG,
+  Project, SOP_PHASES, PHASE_MAP, HEALTH_CONFIG,
   computePhaseProgress, computeOverallProgress, getPhaseStatus,
   isPhaseUnlocked, getBlockingGate, getProjectPhases,
   TaskDetails, FileAttachment, formatBytes,
@@ -31,6 +31,7 @@ import { RequirementPoolPanel } from './RequirementPoolPanel';
 import { KanbanBoard } from './KanbanBoard';
 import { FilesPanel } from './FilesPanel';
 import { FilePreviewModal, canPreview } from './FilePreviewModal';
+import { CommentThread } from '@/components/CommentThread';
 import { useProjectPermission } from '@/hooks/useProjectPermission';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { trpc } from '@/lib/trpc';
@@ -44,6 +45,41 @@ interface ProjectDetailViewProps {
   project: Project;
   onUpdate: (project: Project) => void;
   onBack: () => void;
+}
+
+type ProjectMainTab = 'overview' | 'tasks' | 'kanban' | 'requirements' | 'gantt' | 'issues' | 'changelog' | 'bom' | 'files';
+
+const EXECUTION_ROLES = new Set(['rd_hw', 'rd_sw', 'rd_mech', 'qa', 'scm', 'pe', 'mfg', 'sales', 'cert', 'battery_safety']);
+
+function defaultTabForRole(role?: string | null): ProjectMainTab {
+  if (role === 'qa') return 'issues';
+  if (role === 'scm') return 'bom';
+  if (role === 'sales') return 'requirements';
+  if (role === 'cert' || role === 'battery_safety') return 'files';
+  if (role === 'rd_hw' || role === 'rd_sw' || role === 'rd_mech' || role === 'pe' || role === 'mfg') return 'tasks';
+  return 'overview';
+}
+
+function isExecutionRole(role?: string | null) {
+  return !!role && EXECUTION_ROLES.has(role);
+}
+
+function issueStatusLabel(status: string) {
+  if (status === 'resolved') return '待复测';
+  if (status === 'closed') return '复测通过';
+  if (status === 'open') return '待处理';
+  if (status === 'in_progress') return '处理中';
+  if (status === 'wont_fix') return '不修复';
+  return status;
+}
+
+function categoryForRole(role?: string | null): Issue['category'] {
+  if (role === 'rd_sw') return 'software';
+  if (role === 'rd_hw') return 'hardware';
+  if (role === 'rd_mech') return 'mechanical';
+  if (role === 'qa') return 'reliability';
+  if (role === 'cert' || role === 'battery_safety') return 'safety';
+  return 'other';
 }
 
 function EditableText({
@@ -255,12 +291,17 @@ const ROLE_OPTIONS = [
   { value: 'rd_mech', label: '结构/ID' },
   { value: 'qa',     label: '测试/品质' },
   { value: 'scm',    label: '供应链' },
+  { value: 'pe',     label: 'PE 工艺' },
+  { value: 'mfg',    label: 'MFG 生产' },
+  { value: 'sales',  label: '销售/渠道' },
+  { value: 'cert',   label: '认证' },
+  { value: 'battery_safety', label: '电池安全' },
   { value: 'pm',     label: '产品经理' },
   { value: 'manager', label: '管理层' },
   { value: 'owner',  label: '项目创建者' },
 ] as const;
 
-/** Gate 就绪检查：从现有数据(任务/交付物/问题/文件)计算关卡是否就绪。 */
+/** Gate 就绪检查：任务/问题本地聚合，交付物只使用服务端审核通过集合。 */
 interface GateReadiness {
   tasksDone: number; tasksTotal: number;
   delivDone: number; delivTotal: number;
@@ -275,26 +316,8 @@ function computeGateReadiness(phase: any, phaseData: any, submittedDeliverables?
   let delivDone = 0, delivTotal = 0;
   if (submittedDeliverables) {
     delivTotal = submittedDeliverables.length;
-    if (satisfiedSet) {
-      // Review-aware path: use server-provided satisfied set
-      const satisfiedNames = new Set(satisfiedSet);
-      delivDone = submittedDeliverables.filter((name) => satisfiedNames.has(name)).length;
-    } else {
-      // Legacy file-presence path (fallback while server data loads)
-      const gateStatus: Record<string, boolean> = phaseData?.taskDetails?.[phase?.gateTaskId]?.deliverables ?? {};
-      let legacyTotal = 0, legacyDone = 0;
-      for (const t of tasks) {
-        const names = getTaskDeliverables(t.id, phase?.deliverables ?? []);
-        const status: Record<string, boolean> = phaseData?.taskDetails?.[t.id]?.deliverables ?? {};
-        legacyTotal += names.length;
-        legacyDone += names.filter((n) => status[n]).length;
-      }
-      const legacyAllDone = legacyTotal > 0 && legacyDone === legacyTotal;
-      delivDone = submittedDeliverables.filter((name) => {
-        if (gateStatus[name] || legacyAllDone) return true;
-        return allTasks.some((task) => !!phaseData?.taskDetails?.[task.id]?.deliverables?.[name]);
-      }).length;
-    }
+    const satisfiedNames = new Set(satisfiedSet ?? []);
+    delivDone = submittedDeliverables.filter((name) => satisfiedNames.has(name)).length;
   } else {
     for (const t of tasks) {
       const names = getTaskDeliverables(t.id, phase?.deliverables ?? []);
@@ -313,6 +336,155 @@ function computeGateReadiness(phase: any, phaseData: any, submittedDeliverables?
   if (tasksDone < tasks.length) blockers.push(`${tasks.length - tasksDone} 项任务未完成`);
   if (delivTotal > 0 && delivDone < delivTotal) blockers.push(`交付物未齐(${delivDone}/${delivTotal})`);
   return { tasksDone, tasksTotal: tasks.length, delivDone, delivTotal, openP0P1, fileCount, signoffRoles: phase?.gateStandard?.responsibleRoles ?? [], blockers, ready: blockers.length === 0 };
+}
+
+type GateReadinessSummary = {
+  ready: boolean;
+  blockerCount: number;
+  dimensions: Array<{ dimension: string; ok: boolean; summary: string; blockers: string[] }>;
+} | null | undefined;
+
+type ReleasePrecheckSummary = {
+  canRelease: boolean;
+  canForceRelease: boolean;
+  blockers: string[];
+  releaseGate: { decision: string | null; gateName?: string | null } | null;
+} | null | undefined;
+
+function ProjectFocusBand({
+  phaseName,
+  activeProgress,
+  gateName,
+  readiness,
+  openIssueCount,
+  pendingChangeCount,
+  releasePrecheck,
+  canReleaseAction,
+  onTasks,
+  onGate,
+  onIssues,
+  onChanges,
+  onRelease,
+}: {
+  phaseName: string;
+  activeProgress: number;
+  gateName: string;
+  readiness: GateReadinessSummary;
+  openIssueCount: number;
+  pendingChangeCount: number;
+  releasePrecheck: ReleasePrecheckSummary;
+  canReleaseAction: boolean;
+  onTasks: () => void;
+  onGate: () => void;
+  onIssues: () => void;
+  onChanges: () => void;
+  onRelease: () => void;
+}) {
+  const gateBlocked = readiness ? !readiness.ready : false;
+  const firstGateBlocker = readiness?.dimensions.find((dim) => !dim.ok)?.summary;
+  const releaseBlocked = releasePrecheck ? !releasePrecheck.canRelease && !releasePrecheck.canForceRelease : false;
+  const releaseLabel = !releasePrecheck
+    ? '预检中'
+    : releasePrecheck.canRelease
+      ? '可发布'
+      : releasePrecheck.canForceRelease
+        ? '需强制发布'
+        : `${releasePrecheck.blockers.length} 项阻断`;
+  const releaseTone = !releasePrecheck
+    ? 'text-stone-500'
+    : releasePrecheck.canRelease
+      ? 'text-emerald-700'
+      : releasePrecheck.canForceRelease
+        ? 'text-amber-700'
+        : 'text-rose-700';
+  const issueChangeLabel = openIssueCount > 0 || pendingChangeCount > 0
+    ? `${openIssueCount} 问题 · ${pendingChangeCount} 变更`
+    : '暂无开放项';
+
+  return (
+    <div className="ce-panel overflow-hidden">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 divide-y md:divide-y-0 md:divide-x divide-stone-200">
+        <FocusItem
+          icon={<Target size={15} />}
+          label="当前阶段"
+          value={phaseName}
+          detail={`${activeProgress}% 完成`}
+          tone={activeProgress >= 100 ? 'text-emerald-700' : 'text-stone-800'}
+          actionLabel="处理任务"
+          onAction={onTasks}
+        />
+        <FocusItem
+          icon={<Flag size={15} />}
+          label="Gate"
+          value={gateBlocked ? `${readiness?.blockerCount ?? 0} 项未就绪` : readiness?.ready ? '已就绪' : gateName}
+          detail={gateBlocked ? firstGateBlocker ?? gateName : gateName}
+          tone={gateBlocked ? 'text-amber-700' : readiness?.ready ? 'text-emerald-700' : 'text-stone-800'}
+          actionLabel="查看 Gate"
+          onAction={onGate}
+        />
+        <FocusItem
+          icon={<Bug size={15} />}
+          label="问题与变更"
+          value={issueChangeLabel}
+          detail={openIssueCount > 0 ? '开放问题需要先收口' : pendingChangeCount > 0 ? '有待决变更' : '无开放问题或待决变更'}
+          tone={openIssueCount > 0 ? 'text-rose-700' : pendingChangeCount > 0 ? 'text-amber-700' : 'text-emerald-700'}
+          actionLabel={openIssueCount > 0 ? '处理问题' : pendingChangeCount > 0 ? '看变更' : '查看问题'}
+          onAction={openIssueCount > 0 ? onIssues : pendingChangeCount > 0 ? onChanges : onIssues}
+        />
+        <FocusItem
+          icon={<Rocket size={15} />}
+          label="量产发布"
+          value={releaseLabel}
+          detail={releaseBlocked ? releasePrecheck?.blockers[0] ?? '发布条件未满足' : releasePrecheck?.releaseGate?.decision === 'conditional' ? '有条件通过需留痕' : '发布前置条件'}
+          tone={releaseTone}
+          actionLabel={canReleaseAction ? '打开预检' : '仅可查看'}
+          onAction={onRelease}
+          disabled={!canReleaseAction}
+        />
+      </div>
+    </div>
+  );
+}
+
+function FocusItem({
+  icon,
+  label,
+  value,
+  detail,
+  tone,
+  actionLabel,
+  onAction,
+  disabled,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: React.ReactNode;
+  detail: React.ReactNode;
+  tone: string;
+  actionLabel: string;
+  onAction: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="min-h-[116px] p-4 flex flex-col justify-between gap-3 bg-white">
+      <div>
+        <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-stone-400">
+          <span className="text-stone-400">{icon}</span>
+          {label}
+        </div>
+        <div className={`mt-2 text-lg font-semibold leading-tight ${tone}`}>{value}</div>
+        <div className="mt-1 max-h-8 overflow-hidden text-xs text-stone-500 leading-snug">{detail}</div>
+      </div>
+      <button
+        type="button"
+        onClick={onAction}
+        disabled={disabled}
+        className="self-start text-[11px] font-mono uppercase tracking-wider text-stone-600 border border-stone-200 px-2 py-1 hover:border-stone-400 hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+      >
+        {actionLabel}
+      </button>
+    </div>
+  );
 }
 
 function ReadinessRow({ label, ok, detail, soft }: { label: string; ok: boolean; detail: React.ReactNode; soft?: boolean }) {
@@ -334,6 +506,26 @@ function ReadinessRow({ label, ok, detail, soft }: { label: string; ok: boolean;
  */
 // ── DeliverableReviewControls ─────────────────────────────────────────────────
 /** 每条 gate 交付物的审核态徽标 + 提交/通过/驳回操作 */
+function pickDeliverableReviewer(
+  deliverableName: string,
+  members: Array<{ userId: number; role: string; isOwner?: boolean | null }>,
+) {
+  const lower = deliverableName.toLowerCase();
+  const rolePreference =
+    /电池|battery|bms|cell|pack/.test(lower)
+      ? ['battery_safety', 'cert', 'qa']
+      : /认证|安规|合规|cert|compliance|emc|fcc|ce\b|ul\b|rohs|safety/.test(lower)
+        ? ['cert', 'battery_safety', 'qa']
+        : /测试|验证|可靠|报告|检验|品质|test|qa|reliability|evt|dvt|pvt/.test(lower)
+          ? ['qa']
+          : /bom|物料|供应|采购|成本|替代料|supplier|supply|cost|material/.test(lower)
+            ? ['scm']
+            : [];
+  return rolePreference
+    .map((role) => members.find((member) => member.role === role))
+    .find(Boolean);
+}
+
 function DeliverableReviewControls({
   projectId, phaseId, deliverableNames, canEditTasks, currentUserId, isAdmin,
   gateTaskId, pmUserId,
@@ -386,7 +578,7 @@ function DeliverableReviewControls({
   // file set for this phase
   const uploadedNames = new Set(files.map((f) => (f as { deliverableName?: string | null }).deliverableName).filter((n): n is string => !!n));
 
-  // PM fallback for reviewer picker default
+  // Type-aware reviewer default, then PM/Owner fallback.
   const pmMember = members.find((m) => m.userId === pmUserId) ?? members.find((m) => m.role === 'pm' || m.isOwner);
 
   return (
@@ -404,7 +596,8 @@ function DeliverableReviewControls({
         const isReviewer = !!record && (isAdmin || record.reviewerUserId === currentUserId);
 
         // reviewer select state for submit
-        const selReviewer = reviewerSelections[name] !== undefined ? reviewerSelections[name] : (pmMember?.userId ?? '');
+        const defaultReviewer = pickDeliverableReviewer(name, members) ?? pmMember;
+        const selReviewer = reviewerSelections[name] !== undefined ? reviewerSelections[name] : (defaultReviewer?.userId ?? '');
 
         return (
           <div key={name} className="space-y-1">
@@ -447,7 +640,7 @@ function DeliverableReviewControls({
                       <option value="">— 选审核人 —</option>
                       {members.map((m) => (
                         <option key={m.userId} value={m.userId}>
-                          {m.userName ?? m.userEmail ?? `用户${m.userId}`}
+                          {m.userName ?? m.userEmail ?? `用户${m.userId}`} · {ROLE_OPTIONS.find((role) => role.value === m.role)?.label ?? m.role}
                         </option>
                       ))}
                     </select>
@@ -719,7 +912,7 @@ function DeliverablesChecklist({
 
 function TaskDetail({
   taskId, taskDetails, onUpdate, visibleRoles, onVisibleRolesChange, canEditRoles,
-  projectId, phaseId, canEdit = true,
+  projectId, phaseId, canEdit = true, compact = false,
 }: {
   taskId: string;
   taskDetails: TaskDetails;
@@ -730,6 +923,7 @@ function TaskDetail({
   projectId: string;
   phaseId?: string;
   canEdit?: boolean;
+  compact?: boolean;
 }) {
   const [draft, setDraft] = useState(taskDetails?.instructions || '');
   const [dirty, setDirty] = useState(false);
@@ -771,14 +965,16 @@ function TaskDetail({
   };
 
   // Task meta: users for assignee dropdown
-  const { data: metaUsers = [] } = trpc.admin.listUsersForSelect.useQuery(undefined, { staleTime: 60_000 });
-  const TASK_STATUS_OPTIONS = [
-    { value: 'todo', label: '待开始' },
-    { value: 'in_progress', label: '进行中' },
-    { value: 'blocked', label: '阻塞' },
-    { value: 'done', label: '已完成' },
-    { value: 'skipped', label: '跳过' },
-  ];
+  const { data: metaUsers = [] } = trpc.admin.listUsersForSelect.useQuery(undefined, { staleTime: 60_000, enabled: !compact });
+  const TASK_STATUS_CONFIG: Record<string, { label: string; className: string }> = {
+    todo: { label: '待开始', className: 'bg-stone-50 text-stone-600 border-stone-200' },
+    in_progress: { label: '进行中', className: 'bg-blue-50 text-blue-700 border-blue-200' },
+    blocked: { label: '阻塞', className: 'bg-red-50 text-red-700 border-red-200' },
+    done: { label: '已完成', className: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+    skipped: { label: '跳过', className: 'bg-stone-50 text-stone-400 border-stone-200' },
+  };
+  const taskStatus = taskDetails?.taskStatus ?? 'todo';
+  const taskStatusCfg = TASK_STATUS_CONFIG[taskStatus] ?? TASK_STATUS_CONFIG.todo;
   const TASK_PRIORITY_OPTIONS = [
     { value: 'critical', label: 'P0 紧急' },
     { value: 'high', label: 'P1 高' },
@@ -789,6 +985,7 @@ function TaskDetail({
   return (
     <div className="mt-3 border-t border-stone-100 pt-3 space-y-3">
       {/* Task Meta Row: assignee / due date / status / priority */}
+      {!compact && (
       <div className="grid grid-cols-2 gap-2">
         <div>
           <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">负责人</div>
@@ -819,16 +1016,10 @@ function TaskDetail({
         </div>
         <div>
           <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">状态</div>
-          <select
-            value={taskDetails?.taskStatus ?? 'todo'}
-            disabled={!canEdit}
-            onChange={(e) => onUpdate({ ...taskDetails, taskStatus: e.target.value })}
-            className="w-full text-xs bg-stone-50 border border-stone-200 px-2 py-1 outline-none focus:border-amber-400 transition-colors"
-          >
-            {TASK_STATUS_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
+          <div className={`flex h-[30px] items-center justify-between border px-2 text-xs ${taskStatusCfg.className}`}>
+            <span>{taskStatusCfg.label}</span>
+            <span className="text-[10px] font-mono opacity-60">自动</span>
+          </div>
         </div>
         <div>
           <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">优先级</div>
@@ -844,6 +1035,7 @@ function TaskDetail({
           </select>
         </div>
       </div>
+      )}
       <div>
         <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1.5">执行说明</div>
         <div className="relative">
@@ -878,7 +1070,7 @@ function TaskDetail({
         />
       </div>
       {/* Visible Roles Selector - only shown to canEditProjectInfo users */}
-      {canEditRoles && onVisibleRolesChange && (
+      {!compact && canEditRoles && onVisibleRolesChange && (
         <div className="border-t border-stone-100 pt-3">
           <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-2 flex items-center gap-1.5">
             <Lock size={10} />可见岗位（空=所有人可见）
@@ -967,7 +1159,8 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedTaskId]);
-  const [mainTab, setMainTab] = useState<'overview' | 'tasks' | 'kanban' | 'requirements' | 'gantt' | 'issues' | 'changelog' | 'bom' | 'files'>('overview');
+  const [mainTab, setMainTab] = useState<ProjectMainTab>('overview');
+  const roleDefaultAppliedRef = useRef(false);
   const [ganttMode, setGanttMode] = useState<'task' | 'phase'>('task');
   const perms = useProjectPermission(project.id);
   const { user: currentUser } = useAuth();
@@ -982,6 +1175,16 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
     { projectId: project.id, phaseId: activePhaseId },
     { staleTime: 5_000 }
   );
+  const { data: releasePrecheck } = trpc.products.releasePrecheck.useQuery(
+    { projectId: project.id },
+    { staleTime: 10_000 }
+  );
+
+  useEffect(() => {
+    if (roleDefaultAppliedRef.current || perms.isLoading) return;
+    setMainTab(defaultTabForRole(perms.role));
+    roleDefaultAppliedRef.current = true;
+  }, [perms.isLoading, perms.role]);
 
   // Change Log helpers
   const changeLog: ChangeRecord[] = project.changeLog || [];
@@ -1019,11 +1222,10 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
   const activeGateDeliverables =
     effectiveActivePhase?.submittedDeliverables ?? activePhase?.gateStandard?.requiredDeliverables ?? [];
   // Derive satisfied deliverable names from server readiness: required minus the blockers list.
-  // When loaded, this makes the inline gate panel's deliverables dimension review-aware.
-  // Falls back to undefined (legacy file-presence logic) while server data is loading.
-  const serverDelivSatisfiedSet: string[] | undefined = (() => {
+  // While loading, keep a conservative empty set instead of falling back to legacy task checks.
+  const serverDelivSatisfiedSet: string[] = (() => {
     const dim = serverGateReadiness?.dimensions.find((d) => d.dimension === 'deliverables');
-    if (!dim) return undefined;
+    if (!dim) return [];
     const missingSet = new Set(dim.blockers);
     return activeGateDeliverables.filter((name) => !missingSet.has(name));
   })();
@@ -1037,7 +1239,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
   const activePhaseData = project.phases[activePhaseId];
   const activeProgress = computePhaseProgress(activePhaseData, activePhaseId, activePhase);
   const overallProgress = computeOverallProgress(project);
-  const risk = RISK_CONFIG[project.risk];
+  const health = HEALTH_CONFIG[project.risk];
   const isCurrentPhaseUnlocked = isPhaseUnlocked(project, activePhaseId);
   const blockingGate = getBlockingGate(project, activePhaseId);
   const catConfig = project.category ? CATEGORY_MAP[project.category] : null;
@@ -1059,6 +1261,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
   const selectedTaskRoleLabels = selectedTaskRoles.length > 0
     ? selectedTaskRoles.map((role) => ROLE_OPTIONS.find((option) => option.value === role)?.label || role).join(' / ')
     : '所有项目成员';
+  const compactTaskDetail = isExecutionRole(perms.role) && !selectedTaskIsGate;
 
   const updateField = (field: keyof Project, value: string) => onUpdate({ ...project, [field]: value });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1104,13 +1307,46 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
 
   // Issue List helpers
   const activeIssues: Issue[] = activePhaseData?.issues || [];
+  const selectedTaskIssues = selectedTask
+    ? activeIssues.filter((issue) => issue.relatedTaskId === selectedTask.id)
+    : [];
   const openIssueCount = activeIssues.filter((i) => i.status === 'open' || i.status === 'in_progress').length;
+  const projectOpenIssueCount = projectPhases.reduce(
+    (sum, phase) => sum + (project.phases[phase.id]?.issues ?? []).filter((i) => i.status === 'open' || i.status === 'in_progress').length,
+    0,
+  );
+  const firstOpenIssuePhaseId = projectPhases.find((phase) =>
+    (project.phases[phase.id]?.issues ?? []).some((i) => i.status === 'open' || i.status === 'in_progress')
+  )?.id;
 
   const updateIssues = (issues: Issue[]) => {
     const newProject = { ...project };
     newProject.phases = { ...project.phases };
     newProject.phases[activePhaseId] = { ...activePhaseData, issues };
     onUpdate(newProject);
+  };
+
+  const handleCreateIssueFromSelectedTask = () => {
+    if (!selectedTask || !perms.canEditIssues) return;
+    const now = new Date();
+    const newIssue: Issue = {
+      id: `tmp-${now.getTime()}`,
+      title: `[任务] ${selectedTask.name}`,
+      desc: selectedTask.desc || '',
+      severity: 'P2',
+      status: 'open',
+      category: categoryForRole(perms.role),
+      owner: selectedTask.owner || '',
+      reporter: currentUser?.name || currentUser?.username || '',
+      foundDate: now.toISOString().slice(0, 10),
+      targetDate: '',
+      rootCause: '',
+      solution: '',
+      relatedTaskId: selectedTask.id,
+      creatorId: currentUser?.id ? String(currentUser.id) : undefined,
+    };
+    updateIssues([...activeIssues, newIssue]);
+    toast.success('已从当前任务创建关联 Issue');
   };
 
   // Gate Review Modal state
@@ -1165,7 +1401,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
           >
             <ArrowLeft size={14} /> 返回项目列表
           </button>
-          {perms.canGateReview && (
+          {perms.canEditProjectInfo && (
             <button
               onClick={() => setReleaseOpen(true)}
               className="ce-control flex items-center gap-1.5 text-xs font-medium bg-stone-900 hover:bg-stone-800 text-stone-50 px-3 py-1.5 shadow-sm transition-colors"
@@ -1218,12 +1454,8 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
               </div>
               <div className="flex items-center gap-1.5">
                 <AlertTriangle size={12} className="text-stone-400" />
-                <EditableSelect
-                  value={risk.label + '风险'}
-                  options={['低风险', '中风险', '高风险']}
-                  onChange={(v) => updateField('risk', v === '低风险' ? 'low' : v === '中风险' ? 'medium' : 'high')}
-                  className={`text-xs font-medium ${risk.color}`}
-                />
+                <span className={`text-xs font-medium ${health.color}`}>项目健康度：{health.label}</span>
+                <span className="text-[10px] font-mono text-stone-400">自动</span>
               </div>
             </div>
           </div>
@@ -1238,6 +1470,28 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
         </div>
       </div>
 
+      <ProjectFocusBand
+        phaseName={activePhase?.name ?? activePhaseId}
+        activeProgress={activeProgress}
+        gateName={activePhase?.gate ?? 'Gate 评审'}
+        readiness={serverGateReadiness}
+        openIssueCount={projectOpenIssueCount}
+        pendingChangeCount={pendingChangeCount}
+        releasePrecheck={releasePrecheck}
+        canReleaseAction={perms.canEditProjectInfo}
+        onTasks={() => setMainTab('tasks')}
+        onGate={() => {
+          setMainTab('tasks');
+          if (activePhase?.gateTaskId) setSelectedTaskId(activePhase.gateTaskId);
+        }}
+        onIssues={() => {
+          if (firstOpenIssuePhaseId) setActivePhaseId(firstOpenIssuePhaseId);
+          setMainTab('issues');
+        }}
+        onChanges={() => setMainTab('changelog')}
+        onRelease={() => setReleaseOpen(true)}
+      />
+
       {/* Main Tab Bar: Overview / Tasks / Issues / Gantt / Members */}
       <div className="ce-panel ce-scroll-x flex items-center gap-0 px-1">
         <button
@@ -1249,7 +1503,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
           }`}
         >
           <LayoutDashboard size={14} />
-          总揽
+          总览
         </button>
         <button
           onClick={() => setMainTab('tasks')}
@@ -1453,7 +1707,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
 
       {mainTab === 'bom' && (
         <div className="p-6">
-          <BomPanel projectId={project.id} canEdit={perms.canEditProjectInfo} />
+          <BomPanel projectId={project.id} canEdit={perms.canEditProjectInfo || perms.canEditChangelog} />
         </div>
       )}
 
@@ -1733,6 +1987,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                     )}
 
                     <div className="mt-4 border-t border-stone-100 pt-4 space-y-4">
+                      {!compactTaskDetail && (
                       <div>
                         <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-2">
                           <Users size={11} />
@@ -1762,6 +2017,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                           )}
                         </div>
                       </div>
+                      )}
 
                       <div>
                         <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-2">
@@ -1823,7 +2079,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                           </div>
                           <div className="divide-y divide-stone-100">
                             <ReadinessRow label="阶段任务完成" ok={r.tasksDone === r.tasksTotal} detail={`${r.tasksDone}/${r.tasksTotal}`} />
-                            <ReadinessRow label="交付物齐备" ok={r.delivTotal === 0 || r.delivDone === r.delivTotal} detail={`${r.delivDone}/${r.delivTotal}`} />
+                            <ReadinessRow label="交付物审核" ok={r.delivTotal === 0 || r.delivDone === r.delivTotal} detail={`${r.delivDone}/${r.delivTotal}`} />
                             <ReadinessRow label="无未关闭 P0/P1" ok={r.openP0P1 === 0} detail={r.openP0P1 === 0 ? '通过' : `${r.openP0P1} 个待关闭`} />
                             <ReadinessRow label="关键文件已上传" ok={r.fileCount > 0} detail={`${r.fileCount} 个`} soft />
                           </div>
@@ -1853,6 +2109,46 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                       </div>
                     )}
 
+                    <div className="mt-4 p-3 border border-stone-200 bg-white">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-stone-400">
+                          <Bug size={11} />
+                          关联问题
+                        </div>
+                        {perms.canEditIssues && isCurrentPhaseUnlocked && (
+                          <button
+                            onClick={handleCreateIssueFromSelectedTask}
+                            className="text-[10px] font-mono px-2 py-1 border border-stone-300 text-stone-600 hover:border-amber-400 hover:text-amber-700 transition-colors"
+                          >
+                            从此任务创建 Issue
+                          </button>
+                        )}
+                      </div>
+                      {selectedTaskIssues.length === 0 ? (
+                        <div className="mt-2 text-xs text-stone-400">暂无关联问题。</div>
+                      ) : (
+                        <div className="mt-2 divide-y divide-stone-100">
+                          {selectedTaskIssues.map((issue) => (
+                            <div key={issue.id} className="py-2 flex items-start gap-2">
+                              <span className={`mt-0.5 text-[10px] font-mono px-1.5 py-0.5 border ${
+                                issue.severity === 'P0' || issue.severity === 'P1'
+                                  ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                  : 'bg-stone-50 text-stone-600 border-stone-200'
+                              }`}>
+                                {issue.severity}
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                <div className="text-sm text-stone-800 truncate">{issue.title}</div>
+                                <div className="text-[11px] text-stone-500">
+                                  {issueStatusLabel(issue.status)}{issue.owner ? ` · ${issue.owner}` : ''}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
                     <TaskDetail
                       taskId={selectedTask.id}
                       taskDetails={selectedTaskDetails || { instructions: '', files: [] }}
@@ -1869,9 +2165,18 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                       }}
                       canEditRoles={perms.canEditProjectInfo}
                       canEdit={perms.canEditTasks && isCurrentPhaseUnlocked}
+                      compact={compactTaskDetail}
                       projectId={project.id}
                       phaseId={activePhaseId}
                     />
+
+                    <div className="mt-4 border-t border-stone-100 pt-4">
+                      <CommentThread
+                        entityType="task"
+                        entityId={`${project.id}:${selectedTask.id}`}
+                        projectId={project.id}
+                      />
+                    </div>
 
                     {selectedTaskIsGate && (() => {
                       const reviews = activePhaseData?.gateReviews || [];

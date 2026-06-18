@@ -1,44 +1,67 @@
 // 全部项目表：可排序/筛选/下钻。rows 由父组件传入（源自 projects.portfolio）。
 import { useMemo, useState } from "react";
-import { RISK_CONFIG, PHASE_MAP } from "@/lib/data";
+import { HEALTH_CONFIG, PHASE_MAP } from "@/lib/data";
 import { CATEGORY_MAP } from "@/lib/sop-templates";
 import { ProgressBar } from "@/components/shared/ProgressBar";
 import { ChevronRight, ArrowUpDown } from "lucide-react";
-import { isProjectedOverdue } from "@shared/health";
+import { isProjectedOverdue, type RagLevel } from "@shared/health";
 
 export type PortfolioTableRow = {
   id: string; name: string; projectNumber: string; category: string; risk: string;
+  ragLevel: RagLevel;
+  ragReasons: string[];
+  customer: string | null;
   currentPhase: string; startDate: string | null; targetDate: string | null; pmUserId: number | null; pmName: string | null;
-  taskTotal: number; taskDone: number; overdueTasks: number; blockedTasks: number;
-  openIssues: number; criticalIssues: number; projectedEnd: string | null;
+  taskTotal: number; taskDone: number; taskInProgress: number; overdueTasks: number; blockedTasks: number;
+  openIssues: number; criticalIssues: number; plannedEnd: string | null; projectedEnd: string | null;
+  progressBehindPct: number | null;
+  unassignedTasks: number;
+  memberGap: number;
+  gateTaskTotal: number;
+  gateTaskDone: number;
+  gatePhaseId: string | null;
+  gateName: string | null;
+  gateDueDate: string | null;
+  gateDone: boolean;
+  gateReady: boolean | null;
+  gateBlockers: number;
+  gateNotReady: "red" | "amber" | null;
+  deliverableGap: number;
+  releaseDecision: "approved" | "conditional" | "rejected" | null;
+  releaseGateName: string | null;
+  releaseGateReady: boolean;
+  releaseDeliverableDone: number;
+  releaseDeliverableTotal: number;
+  releaseHardBlockers: number;
+  releaseConditions: string | null;
 };
 
 const progressOf = (r: PortfolioTableRow) => (r.taskTotal > 0 ? Math.round((r.taskDone / r.taskTotal) * 100) : 0);
 const isOverdue = (r: PortfolioTableRow) => isProjectedOverdue(r.projectedEnd, r.targetDate);
-const RISK_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2 };
+const HEALTH_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2 };
 type SortKey = "name" | "progress" | "risk" | "overdueTasks" | "blockedTasks" | "openIssues" | "projectedEnd";
 
 export function PortfolioTable({ rows, onSelectProject }: { rows: PortfolioTableRow[]; onSelectProject: (id: string) => void }) {
-  const [riskFilter, setRiskFilter] = useState("");
+  const [healthFilter, setHealthFilter] = useState("");
   const [catFilter, setCatFilter] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("risk");
   const [sortAsc, setSortAsc] = useState(true);
 
   const filtered = useMemo(() => {
-    let r = rows.filter((x) => (!riskFilter || x.risk === riskFilter) && (!catFilter || x.category === catFilter));
+    let r = rows.filter((x) => (!healthFilter || x.risk === healthFilter) && (!catFilter || x.category === catFilter));
     r = [...r].sort((a, b) => {
       let cmp = 0;
       switch (sortKey) {
         case "name": cmp = a.name.localeCompare(b.name); break;
         case "progress": cmp = progressOf(a) - progressOf(b); break;
-        case "risk": cmp = (RISK_ORDER[a.risk] ?? 9) - (RISK_ORDER[b.risk] ?? 9); break;
+        case "risk": cmp = (HEALTH_ORDER[a.risk] ?? 9) - (HEALTH_ORDER[b.risk] ?? 9); break;
         case "projectedEnd": cmp = (a.projectedEnd ?? "9999").localeCompare(b.projectedEnd ?? "9999"); break;
         default: cmp = (a[sortKey] as number) - (b[sortKey] as number);
       }
       return sortAsc ? cmp : -cmp;
     });
     return r;
-  }, [rows, riskFilter, catFilter, sortKey, sortAsc]);
+  }, [rows, healthFilter, catFilter, sortKey, sortAsc]);
 
   const sortBtn = (key: SortKey, label: string) => (
     <button onClick={() => { sortKey === key ? setSortAsc(!sortAsc) : (setSortKey(key), setSortAsc(true)); }}
@@ -50,8 +73,8 @@ export function PortfolioTable({ rows, onSelectProject }: { rows: PortfolioTable
   return (
     <div className="ce-panel p-0">
       <div className="flex flex-wrap items-center gap-2 text-xs p-3 border-b border-stone-100">
-        <select value={riskFilter} onChange={(e) => setRiskFilter(e.target.value)} className="ce-control border border-stone-300 bg-white px-2 py-1.5">
-          <option value="">全部风险</option><option value="high">高风险</option><option value="medium">中风险</option><option value="low">低风险</option>
+        <select value={healthFilter} onChange={(e) => setHealthFilter(e.target.value)} className="ce-control border border-stone-300 bg-white px-2 py-1.5">
+          <option value="">全部健康</option><option value="high">红灯</option><option value="medium">黄灯</option><option value="low">绿灯</option>
         </select>
         <select value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className="ce-control border border-stone-300 bg-white px-2 py-1.5">
           <option value="">全部类型</option><option value="npd">新产品开发</option><option value="eco">迭代升级</option><option value="idr">外观翻新</option>
@@ -66,7 +89,7 @@ export function PortfolioTable({ rows, onSelectProject }: { rows: PortfolioTable
               <th className="text-left px-3 py-2.5">类型</th>
               <th className="text-left px-3 py-2.5">当前阶段</th>
               <th className="text-left px-3 py-2.5 w-40">{sortBtn("progress", "进度")}</th>
-              <th className="text-center px-3 py-2.5">{sortBtn("risk", "风险")}</th>
+              <th className="text-center px-3 py-2.5">{sortBtn("risk", "健康")}</th>
               <th className="text-center px-3 py-2.5">{sortBtn("overdueTasks", "逾期")}</th>
               <th className="text-center px-3 py-2.5">{sortBtn("blockedTasks", "阻塞")}</th>
               <th className="text-center px-3 py-2.5">{sortBtn("openIssues", "开放问题")}</th>
@@ -77,7 +100,7 @@ export function PortfolioTable({ rows, onSelectProject }: { rows: PortfolioTable
           <tbody>
             {filtered.map((r) => {
               const cat = CATEGORY_MAP[r.category as keyof typeof CATEGORY_MAP];
-              const risk = RISK_CONFIG[r.risk as keyof typeof RISK_CONFIG];
+              const health = HEALTH_CONFIG[r.risk as keyof typeof HEALTH_CONFIG];
               const prog = progressOf(r);
               const overdue = isOverdue(r);
               return (
@@ -92,7 +115,7 @@ export function PortfolioTable({ rows, onSelectProject }: { rows: PortfolioTable
                     <div className="flex items-center gap-2"><div className="flex-1 min-w-[60px]"><ProgressBar value={prog} color="bg-stone-800" height="h-1.5" /></div><span className="text-[11px] font-mono text-stone-500">{prog}%</span></div>
                     <div className="text-[10px] font-mono text-stone-300">{r.taskDone}/{r.taskTotal}</div>
                   </td>
-                  <td className="px-3 py-2.5 text-center"><span className={`text-xs font-medium ${risk?.color}`}>{risk?.label ?? r.risk}</span></td>
+                  <td className="px-3 py-2.5 text-center"><span className={`text-xs font-medium ${health?.color}`}>{health?.label ?? r.risk}</span></td>
                   <td className="px-3 py-2.5 text-center"><Cell n={r.overdueTasks} tone="rose" /></td>
                   <td className="px-3 py-2.5 text-center"><Cell n={r.blockedTasks} tone="amber" /></td>
                   <td className="px-3 py-2.5 text-center"><Cell n={r.openIssues} tone="rose" /></td>

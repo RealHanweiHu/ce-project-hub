@@ -28,6 +28,7 @@ import {
   projectDeliverableOverrides,
 } from "../drizzle/schema";
 import { eq, and } from "drizzle-orm";
+import { getReleaseGatePhase } from "../shared/sop-templates";
 
 // ─── 唯一项目 ID（避免并发污染） ───────────────────────────────────────────
 const PROJ = `tsvc-${Date.now()}`;
@@ -122,9 +123,9 @@ describe("1. 批准裁剪 → 阶段任务全部变 skipped", () => {
 // ─── 测试 2：reject → 无效果 ────────────────────────────────────────────────
 describe("2. 拒绝裁剪 → 任务状态不变", () => {
   it("reject design 裁剪后 design 任务不变 & set 不包含 design", async () => {
-    // design 阶段任务初始状态为 todo
+    // design 阶段入口依赖规划 Gate；自动状态可能是 blocked，拒绝裁剪后应保持不变。
     const statusBefore = await getTaskStatus(PROJ, "design", "d1");
-    expect(statusBefore).toBe("todo");
+    expect(statusBefore).toBeTruthy();
 
     const id = await createProjectTailoringRequest({
       projectId: PROJ,
@@ -135,7 +136,7 @@ describe("2. 拒绝裁剪 → 任务状态不变", () => {
     await reviewProjectTailoring({ id, decision: "rejected", reviewedBy: U });
 
     const statusAfter = await getTaskStatus(PROJ, "design", "d1");
-    expect(statusAfter).toBe("todo");
+    expect(statusAfter).toBe(statusBefore);
 
     const sets = await getApprovedTailoringSets(PROJ);
     expect(sets.tailoredPhaseIds.has("design")).toBe(false);
@@ -270,5 +271,56 @@ describe("5. deliverable override CRUD", () => {
       action: "clear",
       createdBy: U,
     });
+  });
+});
+
+describe("6. Release Gate 裁剪防护", () => {
+  it("拒绝裁剪 MP Release 阶段", async () => {
+    const releasePhase = getReleaseGatePhase("npd");
+    expect(releasePhase?.isReleaseGate).toBe(true);
+
+    await expect(createProjectTailoringRequest({
+      projectId: PROJ,
+      reasonType: "other",
+      reasonNote: "不能跳过发布闸口",
+      targets: [{ scope: "phase", phaseId: releasePhase!.id }],
+      proposedBy: U,
+    })).rejects.toThrow("MP Release 阶段不可裁剪");
+  });
+
+  it("拒绝裁剪 MP Release Gate 任务", async () => {
+    const releasePhase = getReleaseGatePhase("npd");
+    expect(releasePhase?.isReleaseGate).toBe(true);
+    expect(releasePhase?.gateTaskId).toBeTruthy();
+
+    await expect(createProjectTailoringRequest({
+      projectId: PROJ,
+      reasonType: "other",
+      reasonNote: "不能跳过发布闸口任务",
+      targets: [{ scope: "task", phaseId: releasePhase!.id, taskId: releasePhase!.gateTaskId }],
+      proposedBy: U,
+    })).rejects.toThrow("MP Release Gate 任务不可裁剪");
+  });
+
+  it("审批时也复核 Release Gate 裁剪,防止绕过创建入口", async () => {
+    const db = await getDb();
+    if (!db) throw new Error("no db");
+    const releasePhase = getReleaseGatePhase("npd");
+    expect(releasePhase?.isReleaseGate).toBe(true);
+
+    const [row] = await db.insert(projectTailoring).values({
+      projectId: PROJ,
+      reasonType: "other",
+      reasonNote: "bypass create guard",
+      targets: [{ scope: "phase", phaseId: releasePhase!.id }],
+      proposedBy: U,
+      status: "pending",
+    }).returning({ id: projectTailoring.id });
+
+    await expect(reviewProjectTailoring({
+      id: row.id,
+      decision: "approved",
+      reviewedBy: U,
+    })).rejects.toThrow("MP Release 阶段不可裁剪");
   });
 });

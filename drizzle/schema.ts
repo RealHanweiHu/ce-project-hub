@@ -13,6 +13,7 @@ import {
   index,
   date,
 } from "drizzle-orm/pg-core";
+import type { VariantDelta } from "../shared/oem-variant";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Users
@@ -212,6 +213,40 @@ export const projectPhases = pgTable(
 
 export type ProjectPhase = typeof projectPhases.$inferSelect;
 export type InsertProjectPhase = typeof projectPhases.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Project Calendar Events
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Manager/PM-created one-off project schedules. Milestone events are derived
+ * from phases/gates; this table stores explicit meeting or coordination events.
+ */
+export const projectCalendarEvents = pgTable(
+  "project_calendar_events",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 }).notNull(),
+    title: varchar("title", { length: 256 }).notNull(),
+    description: text("description"),
+    eventDate: date("eventDate", { mode: "string" }).notNull(),
+    startTime: varchar("startTime", { length: 5 }).notNull(),
+    durationMin: integer("durationMin").notNull().default(60),
+    organizerUserId: integer("organizerUserId").notNull(),
+    dingtalkEventId: varchar("dingtalkEventId", { length: 128 }),
+    dingtalkSyncStatus: varchar("dingtalkSyncStatus", { length: 24 }).notNull().default("not_synced"),
+    createdBy: integer("createdBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    idxProjectDate: index("idx_project_calendar_events_project_date").on(table.projectId, table.eventDate),
+    idxDate: index("idx_project_calendar_events_date").on(table.eventDate),
+  })
+);
+
+export type ProjectCalendarEvent = typeof projectCalendarEvents.$inferSelect;
+export type InsertProjectCalendarEvent = typeof projectCalendarEvents.$inferInsert;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Process tailoring and deliverable overrides
@@ -915,6 +950,56 @@ export const mpReleases = pgTable("mp_releases", {
 });
 export type MpRelease = typeof mpReleases.$inferSelect;
 export type InsertMpRelease = typeof mpReleases.$inferInsert;
+
+/**
+ * OEM 客户变体 = 同一母平台（已量产基础产品）下，各客户相对 base 的差异登记。
+ * 只在 PLM 侧登记、不开项目；只存 delta，不复制整份 BOM。
+ * 支撑两类查询：按客户对账 / 按母平台列下游影响（平台级 ECO Gate）。
+ */
+export const customerVariants = pgTable(
+  "customer_variants",
+  {
+    id: serial("id").primaryKey(),
+    /** 内部变体编码 / SKU */
+    variantCode: varchar("variantCode", { length: 64 }).notNull(),
+    /** 客户料号 */
+    customerSku: varchar("customerSku", { length: 64 }),
+    /** 母平台 / 基础产品 id（软引用 products.id） */
+    parentProductId: varchar("parentProductId", { length: 32 }).notNull(),
+    /** 基于母平台的哪个 revision（Rev 标签） */
+    baseRevision: varchar("baseRevision", { length: 16 }).notNull().default(""),
+    customerId: varchar("customerId", { length: 64 }).notNull().default(""),
+    customerName: varchar("customerName", { length: 256 }).notNull().default(""),
+    /** draft | active | on_hold | eol */
+    status: varchar("status", { length: 16 }).notNull().default("draft"),
+    /** 仅记录与 base 的差异 */
+    deltas: jsonb("deltas").$type<VariantDelta[]>().notNull().default([]),
+    /** 认证：是否沿用母平台 */
+    certReuseParent: boolean("certReuseParent").notNull().default(true),
+    /** 受影响、需复核的认证标识 */
+    certAffectedMarks: jsonb("certAffectedMarks").$type<string[]>().notNull().default([]),
+    certNotes: text("certNotes"),
+    /** 客户放行：签样 / golden sample 记录引用 */
+    goldenSampleRef: varchar("goldenSampleRef", { length: 256 }),
+    customerApproved: boolean("customerApproved").notNull().default(false),
+    approvedDate: varchar("approvedDate", { length: 32 }),
+    /** 来源追溯：plm_change | project */
+    sourceType: varchar("sourceType", { length: 16 }).notNull().default("plm_change"),
+    sourceRefId: varchar("sourceRefId", { length: 64 }),
+    introducedAt: varchar("introducedAt", { length: 32 }),
+    eolAt: varchar("eolAt", { length: 32 }),
+    createdBy: integer("createdBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    uniqVariantCode: uniqueIndex("uniq_customer_variant_code").on(table.variantCode),
+    idxParentProduct: index("idx_customer_variants_parent").on(table.parentProductId),
+    idxCustomer: index("idx_customer_variants_customer").on(table.customerId),
+  })
+);
+export type CustomerVariant = typeof customerVariants.$inferSelect;
+export type InsertCustomerVariant = typeof customerVariants.$inferInsert;
 
 /** BOM 行：工作态(projectId) 或 冻结态(revisionId)；可引用零部件产品（where-used 基础） */
 export const bomItems = pgTable(

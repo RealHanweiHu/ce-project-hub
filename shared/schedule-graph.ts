@@ -1,5 +1,5 @@
 // IPD 消费电子(锂电充气泵/车载吸尘器等)自动排期依赖图。
-// 格式：taskId -> [工期(日历日), ...前置任务id]。无前置=阶段入口（依赖上一阶段 gate 由下方手动接上）。
+// 格式：taskId -> [工期(工厂工作日), ...前置任务id]。无前置=阶段入口（依赖上一阶段 gate 由下方手动接上）。
 // 工期为首版经验值，可随时调（纯数据，不改逻辑）。
 import { generateSchedule, type SchedTask, type Schedule } from "./scheduling";
 import { getPhasesForCategory } from "./sop-templates";
@@ -9,7 +9,7 @@ type G = Record<string, [number, ...string[]]>;
 // 压缩版（目标:整机开发约 3-4 个月）。关键提速:
 //  1) 认证(v3)与开模(v4)在「设计冻结 d8」即启动,与 EVT/DVT 并行(长交期项早开工);
 //  2) 设计多轨并行(ID/MD/EE/SW);测试项并行;工期按快速消费电子收紧。
-// 仍是纯数据,可按实际产品微调。当前关键路径:NPD ≈ DVT 3.1 月 / 试产 3.9 月,ECO ≈ 2.5 月,IDR ≈ 2.6 月。
+// 仍是纯数据,可按实际产品微调。工厂日历按周一至周六工作、周日休息计算。
 export const SCHEDULE_GRAPH: G = {
   // ── NPD ───────────────────────────────────────────────
   // 概念 P1
@@ -69,22 +69,23 @@ export function scheduleForCategory(category: string | undefined, startDate: str
  */
 export function criticalPathTasks(category: string | undefined): Set<string> {
   const phases = getPhasesForCategory(category);
-  const idList = phases.flatMap((p) => p.tasks.map((t) => t.id));
+  const schedTasks = buildSchedTasks(phases);
+  const idList = schedTasks.map((t) => t.id);
   const ids = new Set<string>(idList);
-  const g: Record<string, [number, string[]]> = {};
-  for (const id of idList) {
-    const e = SCHEDULE_GRAPH[id];
-    g[id] = e ? [e[0], (e.slice(1) as string[]).filter((d) => ids.has(d))] : [1, []];
-  }
+  const byId = new Map(schedTasks.map((t) => [t.id, t]));
   const finish: Record<string, number> = {};
   const pick: Record<string, string | null> = {};
   const calc = (id: string): number => {
     if (finish[id] != null) return finish[id];
-    const entry = g[id] ?? [1, []];
+    const task = byId.get(id);
+    if (!task) return 0;
     let best = 0, bp: string | null = null;
-    for (const dep of entry[1]) { const f = calc(dep); if (f > best) { best = f; bp = dep; } }
+    for (const dep of (task.dependsOn ?? []).filter((d) => ids.has(d))) {
+      const f = calc(dep);
+      if (f > best) { best = f; bp = dep; }
+    }
     pick[id] = bp;
-    return (finish[id] = best + entry[0]);
+    return (finish[id] = best + (task.lagDays ?? 0) + Math.max(0, task.durationDays ?? 1));
   };
   let endId: string | null = null, endF = -1;
   for (const id of idList) { const f = calc(id); if (f > endF) { endF = f; endId = id; } }

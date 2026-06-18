@@ -10,9 +10,11 @@ import type { HealthDigestConfig } from "./digestRules";
 function row(over: Partial<PortfolioHealthRow>): PortfolioHealthRow {
   return {
     id: "p1", name: "项目1", projectNumber: "NPD-001", category: "npd", risk: "low",
+    ragLevel: "green", ragReasons: [],
     currentPhase: "concept", targetDate: null, pmUserId: 1, pmName: "张三",
     overdueTasks: 0, blockedTasks: 0, openIssues: 0, criticalIssues: 0,
-    plannedEnd: null, plannedItems: 0, dueItems: 0, donePlannedItems: 0, gateNotReady: null, ...over,
+    plannedEnd: null, projectedEnd: null, plannedItems: 0, dueItems: 0, donePlannedItems: 0,
+    progressBehindPct: null, gateNotReady: null, ...over,
   };
 }
 
@@ -55,8 +57,8 @@ describe("评分/分组/消息", () => {
   it("scorePortfolio 过滤绿、红在前、计绿数", () => {
     const rows = [
       row({ id: "g", risk: "low" }),
-      row({ id: "a", blockedTasks: 1 }),
-      row({ id: "r", overdueTasks: 2 }),
+      row({ id: "a", blockedTasks: 1, ragLevel: "amber", ragReasons: ["阻塞×1"] }),
+      row({ id: "r", overdueTasks: 2, ragLevel: "red", ragReasons: ["逾期×2"] }),
     ];
     const { abnormal, greenCount } = scorePortfolio(rows);
     expect(greenCount).toBe(1);
@@ -65,9 +67,9 @@ describe("评分/分组/消息", () => {
   });
   it("groupByPm 跳过无 PM", () => {
     const { abnormal } = scorePortfolio([
-      row({ id: "r1", pmUserId: 1, overdueTasks: 1 }),
-      row({ id: "r2", pmUserId: 2, blockedTasks: 1 }),
-      row({ id: "r3", pmUserId: null, overdueTasks: 1 }),
+      row({ id: "r1", pmUserId: 1, overdueTasks: 1, ragLevel: "red", ragReasons: ["逾期×1"] }),
+      row({ id: "r2", pmUserId: 2, blockedTasks: 1, ragLevel: "amber", ragReasons: ["阻塞×1"] }),
+      row({ id: "r3", pmUserId: null, overdueTasks: 1, ragLevel: "red", ragReasons: ["逾期×1"] }),
     ]);
     const g = groupByPm(abnormal);
     expect(g.get(1)?.length).toBe(1);
@@ -76,7 +78,7 @@ describe("评分/分组/消息", () => {
   });
   it("buildPmMarkdown / buildGroupMarkdown 含项目名与计数", () => {
     const { abnormal, greenCount } = scorePortfolio([
-      row({ id: "r", name: "充气泵", overdueTasks: 1 }),
+      row({ id: "r", name: "充气泵", overdueTasks: 1, ragLevel: "red", ragReasons: ["逾期×1"] }),
       row({ id: "g", risk: "low" }),
     ]);
     const pm = buildPmMarkdown(abnormal, "daily");
@@ -96,7 +98,7 @@ describe("runHealthDigestScan（注入 deps）", () => {
     const calls = { notify: [] as number[][], notifications: [] as number[], group: 0, runs: [] as Array<{ status: string; key: string }> };
     const deps = {
       getConfigRow: async () => ({ enabled: true, config: cfg }),
-      getHealth: async (_today: string) => over.rows ?? [row({ id: "r", overdueTasks: 1, pmUserId: 7 })],
+      getHealth: async (_today: string) => over.rows ?? [row({ id: "r", overdueTasks: 1, pmUserId: 7, ragLevel: "red", ragReasons: ["逾期×1"] })],
       hasRun: async () => false,
       writeRun: async (status: "fired" | "skipped", key: string) => { calls.runs.push({ status, key }); },
       createNotification: async (n: { userId: number }) => { calls.notifications.push(n.userId); },

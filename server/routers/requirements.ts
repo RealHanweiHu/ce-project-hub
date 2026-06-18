@@ -8,7 +8,6 @@ import {
   createProjectChangeRecord,
   deleteProjectRequirement,
   getProjectById,
-  getProjectMember,
   getRequirements,
   getRequirementById,
   updateProjectRequirement,
@@ -23,14 +22,7 @@ import {
   type ProjectRequirement,
 } from "../../drizzle/schema";
 import { ROLE_PERMISSIONS } from "./members";
-
-async function getEffectiveRole(projectId: string, userId: number) {
-  const project = await getProjectById(projectId);
-  if (!project) return null;
-  if (project.createdBy === userId) return "owner" as const;
-  const member = await getProjectMember(projectId, userId);
-  return member?.role ?? null;
-}
+import { getEffectiveProjectRoleById as getEffectiveRole } from "../project-access";
 
 /** 鉴权:项目内需求按项目角色;无项目(产品/全局 backlog)归 admin 或创建人。 */
 async function assertCanEditRequirement(

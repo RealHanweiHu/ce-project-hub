@@ -1,6 +1,5 @@
-// 看板拖拽视图：把项目所有 SOP 任务按状态分列，拖拽改状态（复用 onUpdate→setMeta 保存路径）。
-import { useState } from 'react';
-import { Project, TaskDetails, getProjectPhases } from '@/lib/data';
+// 看板视图：把项目所有 SOP 任务按系统状态分列，仅用于查看流转分布。
+import { Project, getProjectPhases } from '@/lib/data';
 
 const COLUMNS: { status: string; label: string; accent: string }[] = [
   { status: 'todo', label: '待办', accent: 'border-t-stone-400' },
@@ -16,9 +15,7 @@ const PRIORITY_DOT: Record<string, string> = {
 
 type Card = { phaseId: string; phaseName: string; taskId: string; name: string; status: string; priority: string };
 
-export function KanbanBoard({ project, onUpdate, canEdit }: { project: Project; onUpdate: (p: Project) => void; canEdit: boolean }) {
-  const [dragOver, setDragOver] = useState<string | null>(null);
-
+export function KanbanBoard({ project }: { project: Project; onUpdate: (p: Project) => void; canEdit: boolean }) {
   // 把所有阶段的任务摊平成卡片
   const cards: Card[] = [];
   for (const phase of getProjectPhases(project)) {
@@ -33,18 +30,6 @@ export function KanbanBoard({ project, onUpdate, canEdit }: { project: Project; 
     }
   }
 
-  const moveTask = (phaseId: string, taskId: string, newStatus: string) => {
-    if (!canEdit) return;
-    const newProject: Project = { ...project, phases: { ...project.phases } };
-    const pd = newProject.phases[phaseId] || { tasks: {}, taskDetails: {}, notes: '' };
-    const existing: TaskDetails = pd.taskDetails?.[taskId] || { instructions: '', files: [] };
-    newProject.phases[phaseId] = {
-      ...pd,
-      taskDetails: { ...pd.taskDetails, [taskId]: { ...existing, taskStatus: newStatus } },
-    };
-    onUpdate(newProject);
-  };
-
   return (
     <div className="overflow-x-auto">
       <div className="flex gap-3 min-w-max pb-2">
@@ -53,16 +38,7 @@ export function KanbanBoard({ project, onUpdate, canEdit }: { project: Project; 
           return (
             <div
               key={col.status}
-              onDragOver={(e) => { if (canEdit) { e.preventDefault(); setDragOver(col.status); } }}
-              onDragLeave={() => setDragOver(null)}
-              onDrop={(e) => {
-                e.preventDefault(); setDragOver(null);
-                const raw = e.dataTransfer.getData('text/plain');
-                if (!raw) return;
-                const { phaseId, taskId } = JSON.parse(raw);
-                moveTask(phaseId, taskId, col.status);
-              }}
-              className={`w-60 shrink-0 bg-stone-50 border-t-2 ${col.accent} border border-stone-200 ${dragOver === col.status ? 'ring-2 ring-amber-300' : ''}`}
+              className={`w-60 shrink-0 bg-stone-50 border-t-2 ${col.accent} border border-stone-200`}
             >
               <div className="px-3 py-2 flex items-center justify-between border-b border-stone-100">
                 <span className="text-xs font-medium text-stone-700">{col.label}</span>
@@ -72,9 +48,7 @@ export function KanbanBoard({ project, onUpdate, canEdit }: { project: Project; 
                 {colCards.map((c) => (
                   <div
                     key={`${c.phaseId}/${c.taskId}`}
-                    draggable={canEdit}
-                    onDragStart={(e) => e.dataTransfer.setData('text/plain', JSON.stringify({ phaseId: c.phaseId, taskId: c.taskId }))}
-                    className={`bg-white border border-stone-200 p-2.5 text-sm ${canEdit ? 'cursor-grab active:cursor-grabbing hover:border-stone-400' : ''} transition-colors`}
+                    className="bg-white border border-stone-200 p-2.5 text-sm"
                   >
                     <div className="flex items-start gap-1.5">
                       <span className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${PRIORITY_DOT[c.priority] || 'bg-stone-400'}`} />

@@ -79,7 +79,7 @@ export function GlobalSearch({ open, onClose, projects, onNavigate }: GlobalSear
           type: 'project',
           title: project.name,
           subtitle: `${project.code} · PM: ${project.pm} · ${project.type}`,
-          meta: project.risk === 'high' ? '高风险' : project.risk === 'medium' ? '中风险' : '',
+          meta: project.risk === 'high' ? '红灯项目' : project.risk === 'medium' ? '黄灯项目' : '',
           projectId: project.id,
         });
       }
@@ -332,7 +332,7 @@ export function GlobalSearch({ open, onClose, projects, onNavigate }: GlobalSear
                           </div>
                           {result.meta && (
                             <span className={`text-[10px] font-mono px-1.5 py-0.5 shrink-0 ${
-                              result.meta.includes('高风险') ? 'bg-rose-100 text-rose-700' :
+                              result.meta.includes('红灯') ? 'bg-rose-100 text-rose-700' :
                               result.meta.includes('P0') ? 'bg-rose-100 text-rose-700' :
                               result.meta.includes('P1') ? 'bg-orange-100 text-orange-700' :
                               result.meta.includes('已完成') ? 'bg-emerald-100 text-emerald-700' :

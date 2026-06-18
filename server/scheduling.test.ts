@@ -1,8 +1,27 @@
 import { describe, it, expect } from "vitest";
-import { generateSchedule, rescheduleFrom, flattenPhases, addDays } from "@shared/scheduling";
+import {
+  generateSchedule, rescheduleFrom, flattenPhases, addDays, addWorkingDays,
+  forecastSchedule, projectedEndFromSchedule, isISODate,
+} from "@shared/scheduling";
+import { generateCalendarSchedule, planWorkingCalendarMigration } from "@shared/schedule-migration";
 import { scheduleForCategory, SCHEDULE_GRAPH } from "@shared/schedule-graph";
 
 const START = "2026-06-15"; // 周一
+
+describe("date helpers", () => {
+  it("rejects malformed or impossible ISO dates", () => {
+    expect(isISODate("2026-06-15")).toBe(true);
+    expect(isISODate("2026-13-15")).toBe(false);
+    expect(isISODate("2026-02-30")).toBe(false);
+    expect(() => addDays("2026-02-30", 1)).toThrow(/Invalid ISO date/);
+  });
+  it("adds factory working days and skips Sundays", () => {
+    expect(addWorkingDays("2026-06-19", 1)).toBe("2026-06-20");
+    expect(addWorkingDays("2026-06-20", 0)).toBe("2026-06-20");
+    expect(addWorkingDays("2026-06-21", 0)).toBe("2026-06-22");
+    expect(addWorkingDays("2026-06-15", 14)).toBe("2026-07-01");
+  });
+});
 
 describe("generateSchedule", () => {
   it("schedules a linear chain back-to-back by duration", () => {
@@ -12,9 +31,9 @@ describe("generateSchedule", () => {
       { id: "c6", durationDays: 1, dependsOn: ["c3"] },
     ];
     const s = generateSchedule(tasks, START);
-    expect(s.c1).toEqual({ start: "2026-06-15", due: "2026-06-22" });
-    expect(s.c3).toEqual({ start: "2026-06-22", due: "2026-06-27" });
-    expect(s.c6).toEqual({ start: "2026-06-27", due: "2026-06-28" });
+    expect(s.c1).toEqual({ start: "2026-06-15", due: "2026-06-23" });
+    expect(s.c3).toEqual({ start: "2026-06-23", due: "2026-06-29" });
+    expect(s.c6).toEqual({ start: "2026-06-29", due: "2026-06-30" });
   });
 
   it("starts a parallel-dependent task at max(deps.due)", () => {
@@ -24,9 +43,9 @@ describe("generateSchedule", () => {
       { id: "c3", durationDays: 5, dependsOn: ["c1", "c2"] },
     ];
     const s = generateSchedule(tasks, START);
-    expect(s.c1.due).toBe("2026-06-22");
+    expect(s.c1.due).toBe("2026-06-23");
     expect(s.c2.due).toBe("2026-06-20");
-    expect(s.c3.start).toBe("2026-06-22"); // max(c1,c2)
+    expect(s.c3.start).toBe("2026-06-23"); // max(c1,c2)
   });
 
   it("chains phases via cross-phase gate dependency", () => {
@@ -36,9 +55,9 @@ describe("generateSchedule", () => {
       { id: "p1", durationDays: 10, dependsOn: ["c6"] }, // 下一阶段入口依赖上一阶段 gate
     ];
     const s = generateSchedule(tasks, START);
-    expect(s.c6.due).toBe("2026-06-23");
-    expect(s.p1.start).toBe("2026-06-23");
-    expect(s.p1.due).toBe(addDays("2026-06-23", 10));
+    expect(s.c6.due).toBe("2026-06-24");
+    expect(s.p1.start).toBe("2026-06-24");
+    expect(s.p1.due).toBe(addWorkingDays("2026-06-24", 10));
   });
 
   it("does not hang on a dependency cycle", () => {
@@ -47,6 +66,90 @@ describe("generateSchedule", () => {
       { id: "b", durationDays: 1, dependsOn: ["a"] },
     ], START);
     expect(Object.keys(s).sort()).toEqual(["a", "b"]);
+  });
+});
+
+describe("forecastSchedule", () => {
+  it("anchors completed tasks by completedAt and pushes unfinished successors from today", () => {
+    const tasks = [
+      { id: "a", durationDays: 5 },
+      { id: "b", durationDays: 5, dependsOn: ["a"] },
+      { id: "c", durationDays: 1, dependsOn: ["b"] },
+    ];
+    const out = forecastSchedule(tasks, [
+      { id: "a", status: "done", completed: true, completedAtISO: "2026-06-25T10:00:00.000Z" },
+      { id: "b", status: "in_progress", startDate: "2026-06-18", dueDate: "2026-06-24" },
+      { id: "c", status: "todo", startDate: "2026-06-25", dueDate: "2026-06-26" },
+    ], "2026-06-30", "2026-06-15");
+    expect(out.a.due).toBe("2026-06-25");
+    expect(out.b).toEqual({ start: "2026-06-30", due: "2026-07-06" });
+    expect(out.c).toEqual({ start: "2026-07-06", due: "2026-07-07" });
+    expect(projectedEndFromSchedule(out)).toBe("2026-07-07");
+  });
+});
+
+describe("working calendar migration plan", () => {
+  const tasks = [
+    { id: "a", durationDays: 5 },
+    { id: "b", durationDays: 1, dependsOn: ["a"] },
+  ];
+
+  it("updates rows that exactly match the old calendar-day schedule", () => {
+    const old = generateCalendarSchedule(tasks, START);
+    const plan = planWorkingCalendarMigration({
+      tasks,
+      startDate: START,
+      current: [
+        { taskId: "a", startDate: old.a.start, dueDate: old.a.due },
+        { taskId: "b", startDate: old.b.start, dueDate: old.b.due },
+      ],
+    });
+    expect(plan.updates.map((item) => item.taskId)).toEqual(["b"]);
+    expect(plan.manualOrUnknown).toEqual([]);
+    expect(plan.alreadyWorking).toEqual(["a"]);
+    expect(plan.updates[0].to).toEqual({ start: "2026-06-20", due: "2026-06-22" });
+  });
+
+  it("does not overwrite rows that look manually edited", () => {
+    const old = generateCalendarSchedule(tasks, START);
+    const plan = planWorkingCalendarMigration({
+      tasks,
+      startDate: START,
+      current: [
+        { taskId: "a", startDate: "2026-06-16", dueDate: old.a.due },
+        { taskId: "b", startDate: old.b.start, dueDate: old.b.due },
+      ],
+    });
+    expect(plan.updates.map((item) => item.taskId)).toEqual(["b"]);
+    expect(plan.manualOrUnknown.map((item) => item.taskId)).toEqual(["a"]);
+  });
+
+  it("separates rows with no schedule yet from manual edits", () => {
+    const plan = planWorkingCalendarMigration({
+      tasks,
+      startDate: START,
+      current: [
+        { taskId: "a", startDate: null, dueDate: null },
+        { taskId: "b", startDate: null, dueDate: null },
+      ],
+    });
+    expect(plan.updates).toEqual([]);
+    expect(plan.missingSchedule.map((item) => item.taskId)).toEqual(["a", "b"]);
+    expect(plan.manualOrUnknown).toEqual([]);
+  });
+
+  it("recognizes rows that are already on the working calendar", () => {
+    const current = generateSchedule(tasks, START);
+    const plan = planWorkingCalendarMigration({
+      tasks,
+      startDate: START,
+      current: [
+        { taskId: "a", startDate: current.a.start, dueDate: current.a.due },
+        { taskId: "b", startDate: current.b.start, dueDate: current.b.due },
+      ],
+    });
+    expect(plan.updates).toEqual([]);
+    expect(plan.alreadyWorking).toEqual(["a", "b"]);
   });
 });
 

@@ -1,50 +1,47 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { protectedProcedure, router } from "../_core/trpc";
-import { getDb, getProjectById, getProjectMember, getProjectFiles, getProjectEffectiveProcess } from "../db";
-import { projects, projectDeliverableReviews } from "../../drizzle/schema";
+import { getDb, getProjectFiles, getProjectEffectiveProcess, getProjectMembers } from "../db";
+import { projectDeliverableReviews } from "../../drizzle/schema";
 import { and, eq } from "drizzle-orm";
 import { listDeliverableReviews, getMyPendingReviews, submitDeliverableReview, reviewDeliverable } from "../deliverable-review-service";
-import { ROLE_PERMISSIONS } from "./members";
+import { assertProjectAccess, assertProjectAnyPermission } from "../project-access";
 
-async function getUserProjectRole(projectId: string, userId: number) {
-  const project = await getProjectById(projectId);
-  if (!project) return null;
-  if (project.createdBy === userId) return "owner" as const;
-  const member = await getProjectMember(projectId, userId);
-  return member?.role ?? null;
+function preferredReviewerRoles(deliverableName: string) {
+  const lower = deliverableName.toLowerCase();
+  if (/电池|battery|bms|cell|pack/.test(lower)) return ["battery_safety", "cert", "qa"];
+  if (/认证|安规|合规|cert|compliance|emc|fcc|ce\b|ul\b|rohs|safety/.test(lower)) return ["cert", "battery_safety", "qa"];
+  if (/测试|验证|可靠|报告|检验|品质|test|qa|reliability|evt|dvt|pvt/.test(lower)) return ["qa"];
+  if (/bom|物料|供应|采购|成本|替代料|supplier|supply|cost|material/.test(lower)) return ["scm"];
+  return [];
 }
 
-async function assertCanView(projectId: string, user: { id: number; role: string }) {
-  const project = await getProjectById(projectId);
-  if (!project) throw new TRPCError({ code: "NOT_FOUND", message: "项目不存在" });
-  if (user.role === "admin") return project;
-  const role = await getUserProjectRole(projectId, user.id);
-  if (!role || !ROLE_PERMISSIONS[role].canView) {
-    throw new TRPCError({ code: "FORBIDDEN", message: "无访问权限" });
-  }
-  return project;
-}
-
-async function assertCanEdit(projectId: string, user: { id: number; role: string }) {
-  const project = await assertCanView(projectId, user);
-  if (user.role === "admin" || project.pmUserId === user.id) return project;
-  const role = await getUserProjectRole(projectId, user.id);
-  if (role === "pm") return project;
-  if (role && ROLE_PERMISSIONS[role].canEditTasks) return project;
-  throw new TRPCError({ code: "FORBIDDEN", message: "无编辑权限" });
+async function pickDefaultReviewer(projectId: string, deliverableName: string, pmUserId: number | null) {
+  const members = await getProjectMembers(projectId);
+  const preferred = preferredReviewerRoles(deliverableName)
+    .map((role) => members.find((member) => member.role === role))
+    .find(Boolean);
+  return preferred?.userId
+    ?? pmUserId
+    ?? members.find((member) => member.role === "pm" || member.role === "owner")?.userId
+    ?? null;
 }
 
 export const deliverableReviewsRouter = router({
   list: protectedProcedure.input(z.object({ projectId: z.string() })).query(async ({ ctx, input }) => {
-    await assertCanView(input.projectId, ctx.user);
+    await assertProjectAccess(input.projectId, ctx.user);
     return listDeliverableReviews(input.projectId);
   }),
   myPending: protectedProcedure.query(({ ctx }) => getMyPendingReviews(ctx.user.id)),
   submit: protectedProcedure
     .input(z.object({ projectId: z.string(), phaseId: z.string(), deliverableName: z.string().min(1), reviewerUserId: z.number().optional() }))
     .mutation(async ({ ctx, input }) => {
-      await assertCanEdit(input.projectId, ctx.user);
+      const { project } = await assertProjectAnyPermission(
+        input.projectId,
+        ctx.user,
+        ["canEditTasks", "canEditProjectInfo"],
+        "无提交交付物审核权限",
+      );
 
       // Validation 1: there must be ≥1 file for (projectId, phaseId, deliverableName)
       const phaseFiles = await getProjectFiles(input.projectId, input.phaseId);
@@ -60,10 +57,8 @@ export const deliverableReviewsRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "该交付物不在本节点的有效提交集内" });
       }
 
-      const db = await getDb();
-      const [proj] = await db!.select({ pmUserId: projects.pmUserId }).from(projects).where(eq(projects.id, input.projectId));
-      const reviewerUserId = input.reviewerUserId ?? proj?.pmUserId;
-      if (!reviewerUserId) throw new TRPCError({ code: "BAD_REQUEST", message: "未指定审核人且项目无 PM" });
+      const reviewerUserId = input.reviewerUserId ?? await pickDefaultReviewer(input.projectId, input.deliverableName, project.pmUserId ?? null);
+      if (!reviewerUserId) throw new TRPCError({ code: "BAD_REQUEST", message: "未指定审核人，且项目未配置匹配角色或 PM" });
       await submitDeliverableReview({ projectId: input.projectId, phaseId: input.phaseId, deliverableName: input.deliverableName, reviewerUserId, submittedBy: ctx.user.id });
       return { success: true } as const;
     }),

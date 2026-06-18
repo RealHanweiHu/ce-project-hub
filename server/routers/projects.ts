@@ -7,6 +7,7 @@ import {
   createProjectWithSeed,
   updateProject,
   deleteProject,
+  getPortfolio,
   createActivityLog,
   getMeetingParticipants,
   ensureProjectMember,
@@ -18,7 +19,6 @@ import {
 } from "../db";
 import { TRPCError } from "@trpc/server";
 import { ROLE_PERMISSIONS } from "./members";
-import { getProjectMember } from "../db";
 import { syncProjectMeeting } from "../_core/meetingSync";
 import { resolveDingtalkUserId } from "../_core/dingtalk";
 import { upsertWeeklyMeeting } from "../_core/dingtalkCalendar";
@@ -27,17 +27,11 @@ import { createGroupChat, sendToGroupChat } from "../_core/dingtalkGroup";
 import { getProjectMembers } from "../db";
 import { getPhasesForCategory } from "../../shared/sop-templates";
 import { PROJECT_MEMBER_ROLES } from "../../drizzle/schema";
+import { getEffectiveProjectRoleById as getEffectiveRole } from "../project-access";
+import { isISODate } from "../../shared/scheduling";
 
 const DEFAULT_MEETING = { enabled: true, weekday: 3, time: "15:00", durationMin: 60, title: "项目周会" };
-
-/** Resolve effective role for a user in a project */
-async function getEffectiveRole(projectId: string, userId: number) {
-  const project = await getProjectById(projectId);
-  if (!project) return null;
-  if (project.createdBy === userId) return "owner" as const;
-  const member = await getProjectMember(projectId, userId);
-  return member?.role ?? null;
-}
+const isoDateInput = z.string().refine(isISODate, "日期必须是有效的 YYYY-MM-DD");
 
 /** 按角色分配未分配任务 + (可选)逐人发钉钉通知。assignByRole / kickoff 共用。 */
 async function assignAndNotify(
@@ -89,8 +83,8 @@ const projectInputSchema = z.object({
   risk: riskEnum,
   currentPhase: z.string().default("concept"),
   progress: z.number().default(0),
-  startDate: z.string().nullable().optional(),
-  targetDate: z.string().nullable().optional(),
+  startDate: isoDateInput.nullable().optional(),
+  targetDate: isoDateInput.nullable().optional(),
   /** 立项基础信息 */
   description: z.string().nullable().optional(),
   customer: z.string().nullable().optional(),
@@ -127,7 +121,9 @@ export const projectsRouter = router({
       seen.add(r.id);
       return true;
     });
-    return all;
+    const portfolio = await getPortfolio(ctx.user.id);
+    const autoRiskByProject = new Map(portfolio.map((p) => [p.id, p.risk]));
+    return all.map((row) => ({ ...row, risk: autoRiskByProject.get(row.id) ?? "low" }));
   }),
 
   /** Get a single project by id (owner or member with canView) */
@@ -138,7 +134,9 @@ export const projectsRouter = router({
       if (!row) throw new TRPCError({ code: "NOT_FOUND" });
       const role = await getEffectiveRole(input.id, ctx.user.id);
       if (!role || !ROLE_PERMISSIONS[role].canView) throw new TRPCError({ code: "FORBIDDEN" });
-      return row;
+      const portfolio = await getPortfolio(ctx.user.id);
+      const health = portfolio.find((item) => item.id === input.id);
+      return health ? { ...row, risk: health.risk } : row;
     }),
 
   /** Create a new project (requires canCreateProject or admin role) */
@@ -164,7 +162,7 @@ export const projectsRouter = router({
         customer: input.customer ?? null,
         background: input.background ?? null,
         value: input.value ?? null,
-        risk: input.risk,
+        risk: "low",
         currentPhase: input.currentPhase,
         progress: input.progress,
         startDate: input.startDate ?? null,
@@ -238,7 +236,6 @@ export const projectsRouter = router({
         customer: input.customer ?? null,
         background: input.background ?? null,
         value: input.value ?? null,
-        risk: input.risk,
         currentPhase: input.currentPhase,
         progress: input.progress,
         startDate: input.startDate ?? null,
@@ -299,7 +296,7 @@ export const projectsRouter = router({
   kickoff: protectedProcedure
     .input(z.object({
       projectId: z.string(),
-      startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+      startDate: isoDateInput.nullable().optional(),
       staffing: z.array(z.object({
         role: z.enum(PROJECT_MEMBER_ROLES),
         userId: z.number().int(),

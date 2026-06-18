@@ -1,4 +1,4 @@
-import { computeRag, ragReasons, type RagInput, type RagLevel } from "../../shared/health";
+import { type RagLevel } from "../../shared/health";
 import { ENV } from "../_core/env";
 import { pushWebhook as defaultPushWebhook } from "../_core/notify";
 import { notifyUsersViaDingtalk as defaultNotifyDingtalk } from "../_core/dingtalkMessage";
@@ -48,34 +48,14 @@ export function computeDigestTiming(now: Date, config: HealthDigestConfig): { pe
 // ── 评分 / 分组 ───────────────────────────────────────────────────────────
 export type ScoredProject = { row: PortfolioHealthRow; level: RagLevel; reasons: string[] };
 
-function progressBehind(row: PortfolioHealthRow): number | null {
-  if (row.plannedItems <= 0) return null;
-  return Math.max(0, ((row.dueItems - row.donePlannedItems) / row.plannedItems) * 100);
-}
-
-function rowToRagInput(row: PortfolioHealthRow): RagInput {
-  return {
-    risk: (["low", "medium", "high"].includes(row.risk) ? row.risk : "low") as RagInput["risk"],
-    projectedEnd: row.plannedEnd,
-    targetDate: row.targetDate,
-    overdueTasks: row.overdueTasks,
-    blockedTasks: row.blockedTasks,
-    openIssues: row.openIssues,
-    criticalIssues: row.criticalIssues,
-    progressBehindPct: progressBehind(row),
-    gateNotReady: row.gateNotReady,
-  };
-}
-
 /** 算每项目 RAG，过滤出黄/红（红在前），并返回绿色计数。 */
 export function scorePortfolio(rows: PortfolioHealthRow[]): { abnormal: ScoredProject[]; greenCount: number } {
   const abnormal: ScoredProject[] = [];
   let greenCount = 0;
   for (const row of rows) {
-    const input = rowToRagInput(row);
-    const level = computeRag(input);
+    const level = row.ragLevel;
     if (level === "green") { greenCount += 1; continue; }
-    abnormal.push({ row, level, reasons: ragReasons(input) });
+    abnormal.push({ row, level, reasons: row.ragReasons });
   }
   abnormal.sort((a, b) => (a.level === "red" ? 0 : 1) - (b.level === "red" ? 0 : 1));
   return { abnormal, greenCount };

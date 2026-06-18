@@ -303,13 +303,14 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true
     total: issues.length,
     open: issues.filter((i) => i.status === 'open').length,
     inProgress: issues.filter((i) => i.status === 'in_progress').length,
-    resolved: issues.filter((i) => i.status === 'resolved' || i.status === 'closed').length,
+    pendingRetest: issues.filter((i) => i.status === 'resolved').length,
+    closed: issues.filter((i) => i.status === 'closed' || i.status === 'wont_fix').length,
     p0: issues.filter((i) => i.severity === 'P0').length,
     p1: issues.filter((i) => i.severity === 'P1').length,
     p2: issues.filter((i) => i.severity === 'P2').length,
     p3: issues.filter((i) => i.severity === 'P3').length,
     closureRate: issues.length > 0
-      ? Math.round((issues.filter((i) => i.status === 'resolved' || i.status === 'closed' || i.status === 'wont_fix').length / issues.length) * 100)
+      ? Math.round((issues.filter((i) => i.status === 'closed' || i.status === 'wont_fix').length / issues.length) * 100)
       : 0,
   };
 
@@ -385,9 +386,9 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true
           <div className="text-[10px] font-mono text-rose-400 mt-0.5">处理中 {stats.inProgress}</div>
         </div>
         <div className="bg-emerald-50 border border-emerald-200 p-3">
-          <div className="text-[10px] font-mono uppercase tracking-wider text-emerald-600 mb-1">已解决</div>
-          <div className="text-2xl font-serif font-semibold text-emerald-700">{stats.resolved}</div>
-          <div className="text-[10px] font-mono text-emerald-500 mt-0.5">占比 {stats.total > 0 ? Math.round(stats.resolved / stats.total * 100) : 0}%</div>
+          <div className="text-[10px] font-mono uppercase tracking-wider text-emerald-600 mb-1">待复测</div>
+          <div className="text-2xl font-serif font-semibold text-emerald-700">{stats.pendingRetest}</div>
+          <div className="text-[10px] font-mono text-emerald-500 mt-0.5">通过 {stats.closed}</div>
         </div>
         <div className="bg-white border border-stone-200 p-3">
           <div className="text-[10px] font-mono uppercase tracking-wider text-stone-400 mb-1">等级分布</div>
@@ -480,7 +481,8 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true
             const sev = SEVERITY_CONFIG[issue.severity];
             const sta = STATUS_CONFIG[issue.status];
             const isExpanded = expandedId === issue.id;
-            const isClosed = issue.status === 'closed' || issue.status === 'resolved' || issue.status === 'wont_fix';
+            const isClosed = issue.status === 'closed' || issue.status === 'wont_fix';
+            const canChangeStatus = canEdit && (canManage || (currentUserId && issue.creatorId === currentUserId));
 
             return (
               <div
@@ -520,10 +522,7 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true
                   </div>
 
                   {/* Status Selector */}
-                  {(() => {
-                    // canManage (owner/manager/pm) or issue creator can change status
-                    const canChangeStatus = canEdit && (canManage || (currentUserId && issue.creatorId === currentUserId));
-                    return canChangeStatus ? (
+                  {canChangeStatus ? (
                       <select
                         value={issue.status}
                         onChange={(e) => handleStatusChange(issue.id, e.target.value as IssueStatus)}
@@ -538,8 +537,24 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true
                       <span className={`shrink-0 text-[10px] font-mono border px-2 py-1 ${sta.bg} ${sta.border} ${sta.color}`}>
                         {STATUS_CONFIG[issue.status].label}
                       </span>
-                    );
-                  })()}
+                    )}
+
+                  {canChangeStatus && issue.status === 'resolved' && (
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleStatusChange(issue.id, 'closed'); }}
+                        className="text-[10px] font-mono px-2 py-1 border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-colors"
+                      >
+                        复测通过
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleStatusChange(issue.id, 'open'); }}
+                        className="text-[10px] font-mono px-2 py-1 border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 transition-colors"
+                      >
+                        复测失败
+                      </button>
+                    </div>
+                  )}
 
                   {/* Actions */}
                   {canEdit && (() => {
