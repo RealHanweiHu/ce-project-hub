@@ -51,6 +51,7 @@ import {
   ragReasons,
   type RagLevel,
 } from "../shared/health";
+import type { MetricGate, MetricIssue, MetricPhase, MetricTask } from "../shared/metrics";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -1182,6 +1183,74 @@ export async function getProjectGateReviews(projectId: string, phaseId?: string)
     ? and(eq(projectGateReviews.projectId, projectId), eq(projectGateReviews.phaseId, phaseId))
     : eq(projectGateReviews.projectId, projectId);
   return db.select().from(projectGateReviews).where(conditions).orderBy(projectGateReviews.createdAt);
+}
+
+export async function getProjectMetricsData(
+  projectId: string,
+  _fromISO: string,
+  _toISO: string,
+): Promise<{
+  tasks: MetricTask[];
+  issues: MetricIssue[];
+  gates: MetricGate[];
+  phases: MetricPhase[];
+  totalTaskCount: number;
+}> {
+  const db = await getDb();
+  if (!db) {
+    return { tasks: [], issues: [], gates: [], phases: [], totalTaskCount: 0 };
+  }
+
+  const [tasks, issues, gates, phases] = await Promise.all([
+    db
+      .select({
+        phaseId: projectTasks.phaseId,
+        createdAt: drizzleSql<string>`to_char(${projectTasks.createdAt}, 'YYYY-MM-DD')`,
+        completedAt: drizzleSql<string | null>`to_char(${projectTasks.completedAt}, 'YYYY-MM-DD')`,
+        dueDate: projectTasks.dueDate,
+        status: projectTasks.status,
+      })
+      .from(projectTasks)
+      .where(eq(projectTasks.projectId, projectId))
+      .orderBy(projectTasks.id),
+    db
+      .select({
+        foundDate: projectIssues.foundDate,
+        closedDate: projectIssues.closedDate,
+        severity: projectIssues.severity,
+        status: projectIssues.status,
+        category: projectIssues.category,
+      })
+      .from(projectIssues)
+      .where(eq(projectIssues.projectId, projectId))
+      .orderBy(projectIssues.createdAt),
+    db
+      .select({
+        phaseId: projectGateReviews.phaseId,
+        decision: projectGateReviews.decision,
+        roundNumber: projectGateReviews.roundNumber,
+      })
+      .from(projectGateReviews)
+      .where(eq(projectGateReviews.projectId, projectId))
+      .orderBy(projectGateReviews.createdAt),
+    db
+      .select({
+        phaseId: projectPhases.phaseId,
+        startDate: projectPhases.startDate,
+        endDate: projectPhases.endDate,
+      })
+      .from(projectPhases)
+      .where(eq(projectPhases.projectId, projectId))
+      .orderBy(projectPhases.id),
+  ]);
+
+  return {
+    tasks,
+    issues,
+    gates,
+    phases,
+    totalTaskCount: tasks.length,
+  };
 }
 
 /** Create a gate review */

@@ -31,6 +31,7 @@ import { RequirementPoolPanel } from './RequirementPoolPanel';
 import { KanbanBoard } from './KanbanBoard';
 import { FilesPanel } from './FilesPanel';
 import { FilePreviewModal, canPreview } from './FilePreviewModal';
+import { MetricsView } from './MetricsView';
 import { CommentThread } from '@/components/CommentThread';
 import { useProjectPermission } from '@/hooks/useProjectPermission';
 import { useAuth } from '@/_core/hooks/useAuth';
@@ -47,7 +48,7 @@ interface ProjectDetailViewProps {
   onBack: () => void;
 }
 
-type ProjectMainTab = 'overview' | 'tasks' | 'kanban' | 'requirements' | 'gantt' | 'issues' | 'changelog' | 'bom' | 'files';
+type ProjectMainTab = 'overview' | 'metrics' | 'tasks' | 'kanban' | 'requirements' | 'gantt' | 'issues' | 'changelog' | 'bom' | 'files';
 
 const EXECUTION_ROLES = new Set(['rd_hw', 'rd_sw', 'rd_mech', 'qa', 'scm', 'pe', 'mfg', 'sales', 'cert', 'battery_safety']);
 
@@ -1517,6 +1518,17 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
           任务清单
         </button>
         <button
+          onClick={() => setMainTab('metrics')}
+          className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all whitespace-nowrap ${
+            mainTab === 'metrics'
+              ? 'border-b-teal-600 text-teal-700'
+              : 'border-b-transparent text-stone-400 hover:text-stone-700'
+          }`}
+        >
+          <Activity size={14} />
+          度量
+        </button>
+        <button
           onClick={() => setMainTab('kanban')}
           className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all whitespace-nowrap ${
             mainTab === 'kanban'
@@ -1651,6 +1663,10 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
             onRaiseChange={perms.canEditChangelog ? handleRaiseChange : undefined}
           />
         </div>
+      )}
+
+      {mainTab === 'metrics' && (
+        <MetricsView project={project} />
       )}
 
       {/* ── Requirement Pool Tab ─────────────────────────────────────────── */}

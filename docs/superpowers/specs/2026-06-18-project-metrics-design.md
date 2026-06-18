@@ -102,7 +102,7 @@ export function computeProjectMetrics(input: {
 
 *流程/Gate*
 - `gateFirstPassRatePct = count(decision=approved 且 roundNumber=1) / count(distinct gate)`。无 Gate→`null`。
-- `phaseDurations`：`plannedDays = daysBetween(phase.startDate, phase.endDate)`；`actualDays` 优先用 phase 自身 start/end，缺失则用该阶段任务的 `min(createdAt)`→`max(completedAt)` 兜底。
+- `phaseDurations`：`plannedDays = daysBetween(phase.startDate, phase.endDate)`（计划，phase 日期可编辑）；`actualDays` **始终**从该阶段任务活动算 `min(createdAt)`→`max(completedAt)`。不要用 phase 自身 start/end 当 actual——那是计划日期，会让计划/实际对比在有数据时恒相等而失去意义。
 
 > 复用 `shared/health.ts` 已有的 `daysBetween`（两个 `YYYY-MM-DD` 字符串相减，时区无关）；若签名不便复用则在 metrics 内置同口径小工具，避免引入时区依赖。
 

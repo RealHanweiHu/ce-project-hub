@@ -26,6 +26,7 @@ import { meetingsRouter } from "./routers/meetings";
 import { tailoringRouter } from "./routers/tailoring";
 import { deliverableReviewsRouter } from "./routers/deliverableReviews";
 import { workbenchRouter } from "./routers/workbench";
+import { analyticsRouter } from "./routers/analytics";
 import * as db from "./db";
 
 export const appRouter = router({
@@ -236,6 +237,7 @@ export const appRouter = router({
   automation: automationRouter,
   meetings: meetingsRouter,
   workbench: workbenchRouter,
+  analytics: analyticsRouter,
   products: productsRouter,
   bom: bomRouter,
   comments: commentsRouter,
