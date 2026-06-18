@@ -1,23 +1,13 @@
-import { useMemo, useState, useEffect, Suspense, lazy } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { PHASE_MAP } from "@/lib/data";
 import { Loader2, X } from "lucide-react";
-import { KpiStrip } from "./KpiStrip";
-import { RagHealthPanel } from "./RagHealthPanel";
-import { PortfolioTable, type PortfolioTableRow } from "./PortfolioTable";
+import type { PortfolioTableRow } from "./PortfolioTable";
 import { PerspectivePanel, type Lens } from "./PerspectivePanel";
-import { MilestoneCalendar } from "./MilestoneCalendar";
+import { PortfolioDashboard } from "./PortfolioDashboard";
 import { TaskListView, type TaskRow } from "../TaskListView";
 import type { TaskStatus, TaskPriority } from "@shared/const";
 
-const PhaseDistributionChart = lazy(() =>
-  import("../PhaseDistributionChart").then((m) => ({ default: m.PhaseDistributionChart }))
-);
-
-const PHASE_CODE_COLORS: Record<string, string> = {
-  P1: "#78716c", P2: "#a16207", P3: "#0369a1", P4: "#7c3aed", P5: "#0f766e", P6: "#b45309", P7: "#166534",
-};
 const LENS_LABEL: Record<Lens, string> = { exec: "管理层", pm: "PM", mine: "我的" };
 
 type DrillTask = {
@@ -48,19 +38,17 @@ export function OverviewPage({ onSelectProject }: { onSelectProject: (id: string
   const activeLens: Lens = lens && allowedLenses.includes(lens) ? lens : allowedLenses[0];
 
   const [drill, setDrill] = useState<"overdue" | "blocked" | null>(null);
-
-  const phaseDistribution = useMemo(() => {
-    const m = new Map<string, { count: number; name: string; color: string }>();
-    for (const r of portfolio) {
-      const ph = PHASE_MAP[r.currentPhase];
-      const code = ph?.code ?? r.currentPhase;
-      const cur = m.get(code) ?? { count: 0, name: ph?.name ?? r.currentPhase, color: PHASE_CODE_COLORS[code] ?? "#78716c" };
-      cur.count++; m.set(code, cur);
-    }
-    return Array.from(m.entries())
-      .sort(([a], [b]) => Number(a.replace(/\D/g, "") || "0") - Number(b.replace(/\D/g, "") || "0"))
-      .map(([code, v]) => ({ name: code, fullName: v.name, count: v.count, color: v.color, label: code }));
-  }, [portfolio]);
+  const dashboardRows = useMemo(() => (
+    activeLens === "pm" ? portfolio.filter((r) => r.pmUserId === user?.id) : portfolio
+  ), [activeLens, portfolio, user?.id]);
+  const scopeLabel = activeLens === "exec" ? "全部项目组合" : "可见项目组合";
+  // pm/mine 都按「工作台」渲染（行动导向，不出组合层大盘）；仅 exec 出大盘。
+  const isWorkbench = activeLens === "mine" || activeLens === "pm";
+  const pageTitle = activeLens === "mine" ? "我的工作台" : activeLens === "pm" ? "我的项目工作台" : "项目总览";
+  const pageDesc =
+    activeLens === "mine" ? "只聚合与你有关的待办、审核、质量复测和在手任务。" :
+    activeLens === "pm" ? "聚焦我负责的项目：今天要推动什么、待我协调拍板、各项目阶段与健康。" :
+    "按项目维度查看健康、阶段、Gate、交付物、发布与延期风险。";
 
   if (isLoading) {
     return <div className="flex items-center gap-2 text-stone-400 py-12 justify-center"><Loader2 size={16} className="animate-spin" />加载总览…</div>;
@@ -68,8 +56,11 @@ export function OverviewPage({ onSelectProject }: { onSelectProject: (id: string
 
   return (
     <div className="ce-page">
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="font-serif text-xl text-stone-900">总览</h1>
+      <div className="ce-page-header flex-col items-start gap-3 sm:flex-row sm:items-center">
+        <div>
+          <h1 className="font-serif text-xl text-stone-900">{pageTitle}</h1>
+          <p className="mt-1 text-xs text-stone-500">{pageDesc}</p>
+        </div>
         {allowedLenses.length > 1 && (
           <div className="flex items-center gap-2">
             <span className="text-[11px] font-mono text-stone-400">以</span>
@@ -82,23 +73,19 @@ export function OverviewPage({ onSelectProject }: { onSelectProject: (id: string
         )}
       </div>
 
-      <KpiStrip rows={portfolio} onDrill={setDrill} />
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <RagHealthPanel rows={portfolio} onSelectProject={onSelectProject} />
-        <div className="ce-panel p-5">
-          <h3 className="font-serif text-lg text-stone-900 mb-4">阶段分布</h3>
-          <Suspense fallback={<div className="h-[220px]" />}>
-            <PhaseDistributionChart data={phaseDistribution} />
-          </Suspense>
-        </div>
-      </div>
-      <PortfolioTable rows={portfolio} onSelectProject={onSelectProject} />
+      {!isWorkbench && (
+        <PortfolioDashboard rows={dashboardRows} scopeLabel={scopeLabel} onSelectProject={onSelectProject} onDrill={setDrill} />
+      )}
 
-      <div className="pt-2">
+      {!isWorkbench && (
+        <div className="flex items-center justify-between pt-2">
+          <h2 className="text-[11px] font-mono uppercase tracking-widest text-stone-400">需要处理</h2>
+          <span className="text-[11px] text-stone-400">{LENS_LABEL[activeLens]}视角</span>
+        </div>
+      )}
+      <div>
         <PerspectivePanel lens={activeLens} rows={portfolio} onSelectProject={onSelectProject} />
       </div>
-
-      <MilestoneCalendar onSelectProject={onSelectProject} />
 
       {drill && <DrillDown kind={drill} onClose={() => setDrill(null)} onSelectProject={onSelectProject} />}
     </div>
