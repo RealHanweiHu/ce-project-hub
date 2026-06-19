@@ -113,6 +113,14 @@ describe("forecastSchedule in-progress 缩放", () => {
     const due = forecastSchedule(tasks, [{ id: "a", status: "done", completedAtISO: "2026-06-20" }], today)["a"].due;
     expect(due).toBe("2026-06-20");
   });
+  it("in_progress 且 duration=0 的里程碑不被 FLOOR 顶 +1", () => {
+    const out = forecastSchedule(
+      [{ id: "m", durationDays: 0 }],
+      [{ id: "m", status: "in_progress", startDate: "2026-06-22" }],
+      "2026-06-29",
+    )["m"];
+    expect(out.due).toBe(out.start); // 瞬时里程碑
+  });
 });
 
 describe("working calendar migration plan", () => {

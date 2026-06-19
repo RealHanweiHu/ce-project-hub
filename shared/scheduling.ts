@@ -227,7 +227,7 @@ export function forecastSchedule(
       // 进行中：从今天起算「剩余」= 工期 − 已耗(计划起始→今天，半开区间)，下限 FLOOR
       const plannedStart = state?.startDate && isISODate(state.startDate) ? state.startDate : null;
       const elapsed = plannedStart ? workingDaysBetween(plannedStart, todayISO, cal) : 0;
-      const remaining = Math.max(FORECAST_FLOOR, duration - elapsed);
+      const remaining = duration === 0 ? 0 : Math.max(FORECAST_FLOOR, duration - elapsed);
       const start = maxISO([todayISO, depDue]) ?? todayISO;
       sched[id] = { start, due: addWorkingDays(start, remaining, cal) };
     } else {
