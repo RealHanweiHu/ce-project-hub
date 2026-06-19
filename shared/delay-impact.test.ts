@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { computeDelayImpact } from "@shared/delay-impact";
-import { generateSchedule, addWorkingDays, type SchedTask } from "@shared/scheduling";
+import {
+  generateSchedule,
+  addWorkingDays,
+  rescheduleFrom,
+  type SchedTask,
+  type CalendarExceptions,
+} from "@shared/scheduling";
 
 const linear: SchedTask[] = [
   { id: "a", durationDays: 2, dependsOn: [] },
@@ -69,6 +75,37 @@ describe("computeDelayImpact", () => {
     expect(r.shifted.map((s) => s.taskId)).not.toContain("e");
     expect(r.targetBreach).toBeNull();
     expect(r.hasImpact).toBe(false);
+  });
+
+  it("透传节假日 cal：下游顺延跨法定假，newDue 比仅按周末更晚，且与 rescheduleFrom(cal) 落库口径一致", () => {
+    const current = generateSchedule(linear, START);
+    const newDates = { start: current.a.start, due: addWorkingDays(current.a.due, 10) };
+    // 2026-06-18 落在下游任务 c 的工期内（仅周末口径 c=06-17→06-19）
+    const cal: CalendarExceptions = {
+      holidays: new Set(["2026-06-18"]),
+      makeupWorkdays: new Set(),
+    };
+
+    const noCal = computeDelayImpact({
+      schedTasks: linear, current, changedTaskId: "a",
+      newDates, gateTaskIds: new Set(["g"]), gateNames: { g: "MP评审" }, targetDate: null,
+    });
+    const withCal = computeDelayImpact({
+      schedTasks: linear, current, changedTaskId: "a",
+      newDates, gateTaskIds: new Set(["g"]), gateNames: { g: "MP评审" }, targetDate: null,
+      cal,
+    });
+
+    const gNoCal = noCal.shifted.find((s) => s.taskId === "g")!;
+    const gWithCal = withCal.shifted.find((s) => s.taskId === "g")!;
+    // 跨假后下游 gate 应被进一步顺延
+    expect(gWithCal.newDue > gNoCal.newDue).toBe(true);
+
+    // 与落库口径（rescheduleFrom 传 cal）逐任务一致
+    const landed = rescheduleFrom(linear, current, "a", newDates, cal);
+    for (const s of withCal.shifted) {
+      expect(s.newDue).toBe(landed[s.taskId]!.due);
+    }
   });
 
   it("targetDate=null → targetBreach=null", () => {

@@ -2110,10 +2110,12 @@ export async function computeProjectDelayImpact(
   const gateNames: Record<string, string> = {};
   for (const p of phases) if (effectiveIds.has(p.gateTaskId)) gateNames[p.gateTaskId] = p.gate;
 
+  const cal = await getCalendarExceptions();
   return computeDelayImpact({
     schedTasks, current, changedTaskId: taskId,
     newDates: { start, due }, gateTaskIds, gateNames,
     targetDate: project.targetDate ?? null,
+    cal,
   });
 }
 

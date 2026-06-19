@@ -1,4 +1,4 @@
-import { rescheduleFrom, type SchedTask, type Schedule } from "./scheduling";
+import { rescheduleFrom, type SchedTask, type Schedule, type CalendarExceptions } from "./scheduling";
 import { daysBetween } from "./health";
 
 export type ShiftedTask = { taskId: string; oldDue: string; newDue: string; deltaDays: number };
@@ -36,9 +36,10 @@ export function computeDelayImpact(input: {
   gateTaskIds: Set<string>;
   gateNames?: Record<string, string>;
   targetDate: string | null;
+  cal?: CalendarExceptions;
 }): DelayImpact {
-  const { schedTasks, current, changedTaskId, newDates, gateTaskIds, gateNames, targetDate } = input;
-  const next = rescheduleFrom(schedTasks, current, changedTaskId, newDates);
+  const { schedTasks, current, changedTaskId, newDates, gateTaskIds, gateNames, targetDate, cal } = input;
+  const next = rescheduleFrom(schedTasks, current, changedTaskId, newDates, cal);
 
   const shifted: ShiftedTask[] = [];
   for (const taskId of Object.keys(next)) {
