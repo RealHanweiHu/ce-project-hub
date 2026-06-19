@@ -3,6 +3,7 @@ import {
   generateSchedule, rescheduleFrom, flattenPhases, addDays, addWorkingDays,
   forecastSchedule, projectedEndFromSchedule, isISODate,
   isWorkingDay, nextWorkingDay, workingDaysBetween, type CalendarExceptions, type SchedTask,
+  type ForecastTaskState,
 } from "@shared/scheduling";
 import { generateCalendarSchedule, planWorkingCalendarMigration } from "@shared/schedule-migration";
 import { scheduleForCategory, SCHEDULE_GRAPH } from "@shared/schedule-graph";
@@ -83,9 +84,34 @@ describe("forecastSchedule", () => {
       { id: "c", status: "todo", startDate: "2026-06-25", dueDate: "2026-06-26" },
     ], "2026-06-30", "2026-06-15");
     expect(out.a.due).toBe("2026-06-25");
-    expect(out.b).toEqual({ start: "2026-06-30", due: "2026-07-06" });
-    expect(out.c).toEqual({ start: "2026-07-06", due: "2026-07-07" });
-    expect(projectedEndFromSchedule(out)).toBe("2026-07-07");
+    // b 进行中且早已逾期(计划 2026-06-18 起，已耗 > 工期 5)，剩余落到 FLOOR=1
+    expect(out.b).toEqual({ start: "2026-06-30", due: "2026-07-01" });
+    expect(out.c).toEqual({ start: "2026-07-01", due: "2026-07-02" });
+    expect(projectedEndFromSchedule(out)).toBe("2026-07-02");
+  });
+});
+
+describe("forecastSchedule in-progress 缩放", () => {
+  const tasks: SchedTask[] = [{ id: "a", durationDays: 10 }];
+  const today = "2026-06-29"; // 周一
+  it("in_progress 半程 → 剩余约减半（不再按全工期）", () => {
+    const states: ForecastTaskState[] = [{ id: "a", status: "in_progress", startDate: "2026-06-22", dueDate: null }];
+    const due = forecastSchedule(tasks, states, today)["a"].due;
+    const fullDue = forecastSchedule(tasks, [{ id: "a", status: "todo", startDate: "2026-06-22" }], today)["a"].due;
+    expect(due < fullDue).toBe(true);
+  });
+  it("逾期未完 → 落到 FLOOR(今天+1工作日)", () => {
+    const states: ForecastTaskState[] = [{ id: "a", durationDays: 2, status: "in_progress", startDate: "2026-06-01" }];
+    const due = forecastSchedule([{ id: "a", durationDays: 2 }], states, today)["a"].due;
+    expect(due).toBe(addWorkingDays(today, 1));
+  });
+  it("todo 未开工 → 全工期不变", () => {
+    const before = forecastSchedule(tasks, [{ id: "a", status: "todo" }], today)["a"].due;
+    expect(before).toBe(addWorkingDays(today, 10));
+  });
+  it("done → 锚 completedAt 不变", () => {
+    const due = forecastSchedule(tasks, [{ id: "a", status: "done", completedAtISO: "2026-06-20" }], today)["a"].due;
+    expect(due).toBe("2026-06-20");
   });
 });
 

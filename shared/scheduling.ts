@@ -7,6 +7,8 @@ export type SchedTask = {
   lagDays?: number;      // start 前额外缓冲（缺省 0，按工作日计算）
 };
 export type Schedule = Record<string, { start: string; due: string }>;
+
+const FORECAST_FLOOR = 1; // 进行中任务剩余工期下限（工作日）
 export type ForecastTaskState = {
   id: string;
   startDate?: string | null;
@@ -218,9 +220,22 @@ export function forecastSchedule(
 
     const deps = (t.dependsOn ?? []).filter((d) => ids.has(d));
     const depDue = maxISO(deps.map((d) => sched[d]?.due));
-    const base = maxISO([anchor, state?.startDate, depDue]) ?? anchor;
-    const start = addWorkingDays(base, t.lagDays ?? 0, cal);
-    sched[id] = { start, due: addWorkingDays(start, Math.max(0, t.durationDays ?? 1), cal) };
+    const duration = Math.max(0, t.durationDays ?? 1);
+    const started = state?.status === "in_progress";
+
+    if (started) {
+      // 进行中：从今天起算「剩余」= 工期 − 已耗(计划起始→今天，半开区间)，下限 FLOOR
+      const plannedStart = state?.startDate && isISODate(state.startDate) ? state.startDate : null;
+      const elapsed = plannedStart ? workingDaysBetween(plannedStart, todayISO, cal) : 0;
+      const remaining = Math.max(FORECAST_FLOOR, duration - elapsed);
+      const start = maxISO([todayISO, depDue]) ?? todayISO;
+      sched[id] = { start, due: addWorkingDays(start, remaining, cal) };
+    } else {
+      // 未开工(todo)：维持全工期，从 anchor/计划起始/前置较晚者起算
+      const base = maxISO([anchor, state?.startDate, depDue]) ?? anchor;
+      const start = addWorkingDays(base, t.lagDays ?? 0, cal);
+      sched[id] = { start, due: addWorkingDays(start, duration, cal) };
+    }
   }
 
   return sched;
