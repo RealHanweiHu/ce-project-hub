@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   generateSchedule, rescheduleFrom, flattenPhases, addDays, addWorkingDays,
   forecastSchedule, projectedEndFromSchedule, isISODate,
-  isWorkingDay, nextWorkingDay, type CalendarExceptions,
+  isWorkingDay, nextWorkingDay, workingDaysBetween, type CalendarExceptions,
 } from "@shared/scheduling";
 import { generateCalendarSchedule, planWorkingCalendarMigration } from "@shared/schedule-migration";
 import { scheduleForCategory, SCHEDULE_GRAPH } from "@shared/schedule-graph";
@@ -204,6 +204,26 @@ describe("flattenPhases", () => {
     expect(c.lagDays).toBe(3);
     const b = flat.find((t) => t.id === "b")!;
     expect(b.lagDays).toBe(0); // 本阶段内前置，非入口
+  });
+});
+
+describe("workingDaysBetween [from, to)", () => {
+  it("from==to → 0（今天等于计划开始，刚开工）", () => {
+    expect(workingDaysBetween("2026-06-22", "2026-06-22")).toBe(0);
+  });
+  it("from>to → 0（clamp，不返回负数）", () => {
+    expect(workingDaysBetween("2026-06-25", "2026-06-22")).toBe(0);
+  });
+  it("跨一个完整周一~六 = 6", () => {
+    expect(workingDaysBetween("2026-06-22", "2026-06-29")).toBe(6);
+  });
+  it("与 addWorkingDays 互逆：workingDaysBetween(s, addWorkingDays(s, n)) == n", () => {
+    const s = "2026-06-20";
+    expect(workingDaysBetween(s, addWorkingDays(s, 5))).toBe(5);
+  });
+  it("尊重 cal：假日不计入", () => {
+    const cal = { holidays: new Set(["2026-06-23"]), makeupWorkdays: new Set<string>() };
+    expect(workingDaysBetween("2026-06-22", "2026-06-24", cal)).toBe(1);
   });
 });
 

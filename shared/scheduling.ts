@@ -74,6 +74,19 @@ export function addWorkingDays(iso: string, n: number, cal?: CalendarExceptions)
   return out;
 }
 
+/** 半开区间 [fromISO, toISO) 内的工作日数；与 addWorkingDays「起点不计增量」互逆。from>=to → 0。 */
+export function workingDaysBetween(fromISO: string, toISO: string, cal?: CalendarExceptions): number {
+  if (!isISODate(fromISO) || !isISODate(toISO)) return 0;
+  if (fromISO >= toISO) return 0;
+  let count = 0;
+  let cur = fromISO;
+  while (cur < toISO) {
+    if (isWorkingDay(cur, cal)) count += 1;
+    cur = addDays(cur, 1);
+  }
+  return count;
+}
+
 /** 拓扑序；有环返回 null */
 function topoOrder(tasks: SchedTask[]): string[] | null {
   const ids = new Set(tasks.map((t) => t.id));
