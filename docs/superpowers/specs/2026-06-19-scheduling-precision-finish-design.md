@@ -48,7 +48,11 @@ export function isWorkingDay(iso: string, cal?: CalendarExceptions): boolean {
 
 优先级：调休上班 > 法定假 > 默认（周一~六）。
 
-把可选 `cal` 参数顺着穿透：`nextWorkingDay`、`addWorkingDays`、`computeStart`(内部)、`generateSchedule`、`rescheduleFrom`、`forecastSchedule`、`flattenPhases`，以及 `shared/schedule-graph.ts` 的 `buildSchedTasks`/`criticalPathTasks`/`scheduleForCategory`。所有签名以 `cal?` 结尾，不传即现状行为。
+把可选 `cal` 参数顺着穿透**仅做日期计算的函数**：`nextWorkingDay`、`addWorkingDays`、`workingDaysBetween`(新增)、`computeStart`(内部)、`generateSchedule`、`rescheduleFrom`、`forecastSchedule`，以及 `shared/schedule-graph.ts` 的 `scheduleForCategory`(经 `generateSchedule`)。所有签名以 `cal?` 结尾，不传即现状行为。
+
+**明确不穿透**：
+- `criticalPathTasks(category)`、`flattenPhases`、`buildSchedTasks` 不做日期计算，不加 `cal`。
+- 尤其 `criticalPathTasks` 按**整数工作日**算最长链，节假日对所有任务等量平移、不改变「哪条链最长」（holiday-invariant）；且前端 `TaskGanttView` 直接 `criticalPathTasks(project.category)` 调用、无日历数据可传。本期保持现状，日期感知的关键路径另案再议。
 
 ### B. Schema 变更（drizzle generate 迁移）
 
@@ -69,8 +73,9 @@ export const calendarExceptions = pgTable("calendar_exceptions", {
 ### C. 服务层 `server/db.ts`
 
 - `getCalendarExceptions(): Promise<CalendarExceptions>`：一次性 load 全表，按 type 分桶成两个 Set。
-- 排期/预测入口（`applyProjectSchedule`、`rescheduleProjectFromTask`、`scheduleForCategory` 调用处、`getPortfolio`/`getMyTasks` 里算 `forecastProjectEnd` 的地方）先取 `cal` 再传入引擎。
-- 单次请求内可复用同一 `cal`（避免 N 次全表查）。
+- **预测入口（单点）**：`forecastProjectEnd`(db.ts:423，内部 `forecastSchedule`)是唯一适配器，被 `getPortfolio`(db.ts:569) **和** `getPortfolioHealthForDigest`(db.ts:697) 复用。给 `forecastProjectEnd` 加 `cal` 参数，两个聚合调用各自取 `cal` 后传入——**digest（自动 RAG 推送）和总览同源同口径**，不漏。`getMyTasks` 只返回任务列表、不算预测，不涉及。
+- **写库入口**：`applyProjectSchedule`、`rescheduleProjectFromTask`、`scheduleForCategory` 调用处先取 `cal` 再传入。
+- 单次请求内复用同一 `cal`（避免 N 次全表查）；`getPortfolio`/`digest` 在循环外取一次。
 
 ### D. admin CRUD（最小）
 
@@ -92,7 +97,7 @@ const FORECAST_FLOOR = 1; // 工作日
 // done: 锚 completedAt（现状）
 ```
 
-- 需新增 `workingDaysBetween(fromISO, toISO, cal?)` 工具（纯函数）。
+- 需新增 `workingDaysBetween(fromISO, toISO, cal?)` 工具（纯函数）：**半开区间 `[fromISO, toISO)`**，即数 from（含）到 to（不含）之间的工作日数，与 `addWorkingDays(start, n)`「起点当天不计增量」语义互逆。`from === to` → 0；`from > to` → 0（clamp，不返回负数）。这样 `elapsed = workingDaysBetween(plannedStart, today)`：今天==计划开始 → elapsed 0 → 剩余=全工期（合理，刚开工）；避免闭区间 off-by-one。
 - 逾期未完（elapsed ≥ duration）→ remaining = FLOOR = 1，projectedEnd ≈ 今天+1；RAG 的 `overdueTasks` 维度单独兜底报警，不漏。
 - `today` 由调用方传入（上海时区 `todayInShanghaiISO()`），引擎不读时钟。
 
@@ -105,8 +110,8 @@ db.getCalendarExceptions() → CalendarExceptions {holidays, makeupWorkdays}
                                  │
         ┌────────────────────────┼─────────────────────────┐
         ▼                        ▼                          ▼
-applyProjectSchedule       forecastSchedule(on-read)   criticalPathTasks
-(写库:新建/手动)            (getPortfolio/getMyTasks)    (Gantt 高亮)
+applyProjectSchedule       forecastProjectEnd(on-read)  (criticalPathTasks
+(写库:新建/手动)            (getPortfolio + digest)       不注入 cal,现状)
         │                        │
    计划基线日期              projectedEnd → RAG/slip
 ```
@@ -133,6 +138,13 @@ applyProjectSchedule       forecastSchedule(on-read)   criticalPathTasks
 - 逾期未完 → 落到 FLOOR=1。
 - todo / 未开工 → 全工期不变。
 - done → 锚 completedAt 不变。
+- **digest 与 getPortfolio 同 `cal` 同口径**（portfolio-health.test.ts：种一个假日后两路 projectedEnd 一致）。
+
+`workingDaysBetween` 边界（scheduling.test.ts）：
+- 今天 == 计划开始 → 0（剩余=全工期）。
+- 今天是休息日（周日/法定假）→ 不计入。
+- 今天正好是原 dueDate → elapsed == 工期 → 剩余落到 FLOOR。
+- 今天 < 计划开始（clamp）→ 0，不返回负数。
 
 admin：list/upsert/remove 权限（非 admin 拒绝）、upsert 幂等。
 
