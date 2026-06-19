@@ -1,4 +1,5 @@
-import { describe, it, expect, afterAll, beforeAll } from "vitest";
+import { describe, it, expect, afterAll, beforeAll, afterEach } from "vitest";
+import { adminRouter } from "./routers/admin";
 import { getCalendar, getCalendarExceptions, getDb } from "./db";
 import { projects, projectPhases, projectGateReviews, projectTasks, calendarExceptions } from "../drizzle/schema";
 import { eq } from "drizzle-orm";
@@ -81,5 +82,54 @@ describe("getCalendarExceptions", () => {
     expect(cal.holidays.has(HOLIDAY_DATE)).toBe(true);
     expect(cal.makeupWorkdays.has(MAKEUP_DATE)).toBe(true);
     expect(cal.holidays.has(MAKEUP_DATE)).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// admin.calendarExceptions CRUD (TDD)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const makeCtx = (id: number, role = "user") => ({
+  user: {
+    id,
+    role,
+    name: "x",
+    email: "x",
+    canCreateProject: false,
+    mobile: null,
+    dingtalkUserId: null,
+    dingtalkCorpUserId: null,
+    passwordHash: null,
+    username: null,
+  },
+});
+
+describe("admin.calendarExceptions", () => {
+  const TEST_DATE = "2026-10-01";
+
+  afterEach(async () => {
+    // 清理测试数据，避免污染
+    const db = await getDb();
+    if (!db) return;
+    await db.delete(calendarExceptions).where(eq(calendarExceptions.date, TEST_DATE));
+  });
+
+  it("非 admin upsert 被拒", async () => {
+    const caller = adminRouter.createCaller(makeCtx(9, "user") as any);
+    await expect(
+      caller.calendarExceptions.upsert({ date: TEST_DATE, type: "holiday", name: "国庆" })
+    ).rejects.toThrow();
+  });
+
+  it("admin upsert 幂等、list 可见、remove 生效", async () => {
+    const caller = adminRouter.createCaller(makeCtx(1, "admin") as any);
+    await caller.calendarExceptions.upsert({ date: TEST_DATE, type: "holiday", name: "国庆" });
+    await caller.calendarExceptions.upsert({ date: TEST_DATE, type: "holiday", name: "国庆节" });
+    const list = await caller.calendarExceptions.list();
+    expect(list.filter((e) => e.date === TEST_DATE)).toHaveLength(1);
+    expect(list.find((e) => e.date === TEST_DATE)?.name).toBe("国庆节");
+    await caller.calendarExceptions.remove({ date: TEST_DATE });
+    const after = await caller.calendarExceptions.list();
+    expect(after.find((e) => e.date === TEST_DATE)).toBeUndefined();
   });
 });

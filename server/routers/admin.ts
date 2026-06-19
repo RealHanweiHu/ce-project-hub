@@ -2,7 +2,7 @@ import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { getDb } from "../db";
-import { users, projectMembers, projects } from "../../drizzle/schema";
+import { users, projectMembers, projects, calendarExceptions as calendarExceptionsTable } from "../../drizzle/schema";
 import { eq, desc, and, notInArray, or, like } from "drizzle-orm";
 
 /** Middleware: only system admins can call these procedures */
@@ -123,6 +123,37 @@ export const adminRouter = router({
         .where(eq(users.id, input.userId));
       return { success: true };
     }),
+
+  /** Admin CRUD for global calendar exceptions (holidays / makeup workdays) */
+  calendarExceptions: router({
+    list: adminProcedure.query(async () => {
+      const db = await getDb();
+      if (!db) return [];
+      return db.select().from(calendarExceptionsTable).orderBy(calendarExceptionsTable.date);
+    }),
+    upsert: adminProcedure
+      .input(z.object({
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        type: z.enum(["holiday", "makeup_workday"]),
+        name: z.string().max(128).default(""),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB 不可用" });
+        await db.insert(calendarExceptionsTable)
+          .values({ date: input.date, type: input.type, name: input.name, createdBy: ctx.user.id })
+          .onConflictDoUpdate({ target: calendarExceptionsTable.date, set: { type: input.type, name: input.name } });
+        return { ok: true };
+      }),
+    remove: adminProcedure
+      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB 不可用" });
+        await db.delete(calendarExceptionsTable).where(eq(calendarExceptionsTable.date, input.date));
+        return { ok: true };
+      }),
+  }),
 
   /** Promote or demote a user's system role (admin only) */
   setUserRole: adminProcedure
