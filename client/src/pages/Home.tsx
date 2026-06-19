@@ -218,14 +218,12 @@ function ProjectDetailWrapper({
             const oldMeta = oldPhaseData?.taskDetails?.[taskId];
             const metaChanged =
               details.assigneeUserId !== (oldMeta?.assigneeUserId ?? null) ||
-              details.dueDate !== (oldMeta?.dueDate ?? null) ||
               details.taskPriority !== (oldMeta?.taskPriority ?? 'medium');
             if (metaChanged) {
               ops.push(
                 setTaskMetaMutation.mutateAsync({
                   projectId, phaseId, taskId,
                   assigneeUserId: details.assigneeUserId ?? null,
-                  dueDate: details.dueDate ?? null,
                   priority: (details.taskPriority as any) ?? undefined,
                 })
               );
