@@ -1179,7 +1179,10 @@ function TaskDetail({
           onClose={() => setPendingReschedule(null)}
           onDone={() => {
             setPendingReschedule(null);
-            utils.projects.get.invalidate({ id: projectId });
+            void utils.tasks.list.invalidate({ projectId });
+            void utils.projects.get.invalidate({ id: projectId });
+            void utils.projects.list.invalidate();
+            void utils.projects.portfolio.invalidate();
           }}
         />
       )}

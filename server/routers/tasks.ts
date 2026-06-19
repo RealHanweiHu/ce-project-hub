@@ -130,7 +130,7 @@ export const tasksRouter = router({
       phaseId: z.string(),
       taskId: z.string(),
       assigneeUserId: z.number().nullable().optional(),
-      dueDate: z.string().nullable().optional(),   // YYYY-MM-DD
+      dueDate: isoDateInput.nullable().optional(),
       status: z.enum(TASK_STATUSES).optional(),
       priority: z.enum(TASK_PRIORITIES).optional(),
     }))

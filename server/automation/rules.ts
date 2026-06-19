@@ -97,7 +97,14 @@ const gatePrereqConfigSchema = z.object({
   pushGroup: z.boolean().default(false),
 });
 
-const delayImpactConfigSchema = z.object({});
+const delayImpactConfigSchema = z.object({
+  minDeltaDays: z.number().int().min(0).default(0),
+  notifyGateImpacts: z.boolean().default(true),
+  notifyTargetBreach: z.boolean().default(true),
+  onlyNewTargetBreach: z.boolean().default(false),
+  cadenceHours: z.number().int().min(1).default(24),
+  pushGroup: z.boolean().default(false),
+});
 
 export type OverdueConfig = z.infer<typeof overdueConfigSchema>;
 export type HighSeverityIssueConfig = z.infer<typeof highSeverityIssueConfigSchema>;
@@ -215,7 +222,7 @@ export const AUTOMATION_RULES = [
     defaultConfig: delayImpactConfigSchema.parse({}),
     configSchema: delayImpactConfigSchema,
     recipientRoles: ["pm"],
-    matches: (event, _config) => event.action === "task.rescheduled" && !!event.impact?.hasImpact,
+    matches: (event, config) => matchesDelayImpact(event, config as DelayImpactConfig),
     buildMessage: (event, _cfg, ctx) => buildDelayImpactMessage(event, ctx),
   },
 ] as const satisfies readonly BuiltInAutomationRule[];
@@ -332,6 +339,18 @@ function matchesStatusChange(event: AutomationEvent, config: StatusChangeConfig)
 
 function matchesMpReleaseBroadcast(event: AutomationEvent): boolean {
   return event.action === "mp.release" && event.entityType === "mp_release";
+}
+
+function matchesDelayImpact(event: AutomationEvent, config: DelayImpactConfig): boolean {
+  if (event.action !== "task.rescheduled" || !event.impact?.hasImpact) return false;
+  const impact = event.impact;
+  const magnitude = Math.max(impact.maxDeltaDays, impact.targetBreach?.slipDays ?? 0);
+  if (magnitude < config.minDeltaDays) return false;
+  const gateHit = config.notifyGateImpacts && impact.gateImpacts.length > 0;
+  const targetHit = config.notifyTargetBreach &&
+    !!impact.targetBreach &&
+    (!config.onlyNewTargetBreach || impact.targetBreach.newlyBreaches);
+  return gateHit || targetHit;
 }
 
 function buildOverdueMessage(

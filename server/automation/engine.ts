@@ -71,8 +71,10 @@ export async function runAutomation(event: AutomationEvent, deps: DispatchDeps =
       if (!rule.matches(event, config)) continue;
 
       const entityId = entityIdForRun(event);
-      if (rule.triggerType === "scheduled" && entityId) {
-        const cadenceHours = getCadenceHours(config);
+      const cadenceHours = rule.triggerType === "scheduled"
+        ? getCadenceHours(config)
+        : getEventCadenceHours(config);
+      if (cadenceHours !== null && entityId) {
         const since = new Date(Date.now() - cadenceHours * 60 * 60 * 1000);
         if (await hasRecentAutomationFire({ ruleKey: rule.key, entityId, since })) {
           await writeRun(rule, event, "skipped", [], `dedup within ${cadenceHours}h`);
@@ -247,6 +249,12 @@ function entityIdForRun(event: AutomationEvent): string | null {
 function getCadenceHours(config: AutomationRuleConfig): number {
   const value = (config as { cadenceHours?: unknown }).cadenceHours;
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 24;
+}
+
+function getEventCadenceHours(config: AutomationRuleConfig): number | null {
+  if (!Object.prototype.hasOwnProperty.call(config as Record<string, unknown>, "cadenceHours")) return null;
+  const value = (config as { cadenceHours?: unknown }).cadenceHours;
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }
 
 function numberField(record: Record<string, unknown> | null | undefined, key: string): number | null {

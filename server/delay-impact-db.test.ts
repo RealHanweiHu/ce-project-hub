@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { getDb, createProjectWithSeed, computeProjectDelayImpact } from "./db";
 import { projects, projectTasks } from "../drizzle/schema";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 const PRJ = `di-db-${Date.now()}`;
 
@@ -45,7 +45,7 @@ describe("computeProjectDelayImpact", () => {
     const head = scheduled[0];
     const victim = scheduled[scheduled.length - 1].taskId;
     await db!.update(projectTasks).set({ status: "skipped" }).where(eq(projectTasks.projectId, PRJ));
-    await db!.update(projectTasks).set({ status: "todo" }).where(eq(projectTasks.taskId, head.taskId));
+    await db!.update(projectTasks).set({ status: "todo" }).where(and(eq(projectTasks.projectId, PRJ), eq(projectTasks.taskId, head.taskId)));
     const { addWorkingDays } = await import("@shared/scheduling");
     const impact = await computeProjectDelayImpact(PRJ, head.taskId, head.startDate!, addWorkingDays(head.dueDate!, 15));
     expect(impact!.shifted.map((s) => s.taskId)).not.toContain(victim);
@@ -76,6 +76,42 @@ describe("rescheduleProjectFromTask 返回 impact + 冲击 emit", () => {
     expect(typeof res.count).toBe("number");
     expect(res.impact).not.toBeNull();
     if (res.impact?.hasImpact) expect(events).toContain("task.rescheduled");
+
+    await db!.delete(projectTasks).where(eq(projectTasks.projectId, P));
+    await db!.delete(projects).where(eq(projects.id, P));
+  });
+
+  it("被裁 skipped 任务不被实际落库重排改日期", async () => {
+    const P = `di-skip-${Date.now()}`;
+    await createProjectWithSeed(
+      { id: P, name: "延期skip", projectNumber: "DI3", category: "npd", risk: "low", currentPhase: "concept", progress: 0, createdBy: 1, pmUserId: 1, startDate: "2026-06-01" } as any,
+      "npd", 1,
+    );
+    const { applyProjectSchedule } = await import("./db");
+    await applyProjectSchedule(P);
+    const db = await getDb();
+    const rows = await db!.select({ taskId: projectTasks.taskId, startDate: projectTasks.startDate, dueDate: projectTasks.dueDate })
+      .from(projectTasks).where(eq(projectTasks.projectId, P));
+    const scheduled = rows
+      .filter((r) => r.startDate && r.dueDate)
+      .sort((a, b) => a.dueDate!.localeCompare(b.dueDate!));
+    const head = scheduled[0];
+    const victim = scheduled[scheduled.length - 1];
+    await db!.update(projectTasks)
+      .set({ status: "skipped" })
+      .where(and(eq(projectTasks.projectId, P), eq(projectTasks.taskId, victim.taskId)));
+
+    const { addWorkingDays } = await import("@shared/scheduling");
+    const res = await rescheduleProjectFromTask(P, head.taskId, head.startDate!, addWorkingDays(head.dueDate!, 30), {
+      emit: async () => {},
+    });
+    expect(res.impact?.shifted.map((s) => s.taskId)).not.toContain(victim.taskId);
+
+    const [after] = await db!.select({ startDate: projectTasks.startDate, dueDate: projectTasks.dueDate })
+      .from(projectTasks)
+      .where(and(eq(projectTasks.projectId, P), eq(projectTasks.taskId, victim.taskId)))
+      .limit(1);
+    expect(after).toEqual({ startDate: victim.startDate, dueDate: victim.dueDate });
 
     await db!.delete(projectTasks).where(eq(projectTasks.projectId, P));
     await db!.delete(projects).where(eq(projects.id, P));

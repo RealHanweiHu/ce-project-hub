@@ -58,6 +58,7 @@ afterAll(async () => {
   await updateAutomationRuleRow({ ruleKey: "high_severity_issue", enabled: true, config: { severities: ["P0", "P1"], pushGroup: true } });
   await updateAutomationRuleRow({ ruleKey: "overdue_reminder", enabled: true, config: { graceDays: 0, cadenceHours: 24, scope: "both", notifyRoles: ["assignee", "pm"], pushGroup: false } });
   await updateAutomationRuleRow({ ruleKey: "status_change_notify", enabled: false, config: { transitions: { issue: ["resolved", "closed"], task: [], gate: ["approved", "rejected"] }, pushGroup: false } });
+  await updateAutomationRuleRow({ ruleKey: "delay_impact_notify", enabled: true, config: { minDeltaDays: 0, notifyGateImpacts: true, notifyTargetBreach: true, onlyNewTargetBreach: false, cadenceHours: 24, pushGroup: false } });
   await cleanup();
 });
 beforeEach(async () => {
@@ -67,6 +68,7 @@ beforeEach(async () => {
   await updateAutomationRuleRow({ ruleKey: "high_severity_issue", enabled: true, config: { severities: ["P0", "P1"], pushGroup: true } });
   await updateAutomationRuleRow({ ruleKey: "overdue_reminder", enabled: true, config: { graceDays: 0, cadenceHours: 24, scope: "both", notifyRoles: ["assignee", "pm"], pushGroup: false } });
   await updateAutomationRuleRow({ ruleKey: "status_change_notify", enabled: false, config: {} });
+  await updateAutomationRuleRow({ ruleKey: "delay_impact_notify", enabled: true, config: { minDeltaDays: 0, notifyGateImpacts: true, notifyTargetBreach: true, onlyNewTargetBreach: false, cadenceHours: 24, pushGroup: false } });
 });
 
 describe("automation engine integration", () => {
@@ -143,6 +145,34 @@ describe("automation engine integration", () => {
     const runs = await listAutomationRuns({ projectId: PROJECT_ID });
     expect(runs.some((r) => r.ruleKey === "overdue_reminder" && r.status === "fired")).toBe(true);
     expect(runs.some((r) => r.ruleKey === "overdue_reminder" && r.status === "skipped")).toBe(true);
+  });
+
+  it("dedups delay impact event notifications within configured cadence", async () => {
+    const delayEvent = {
+      action: "task.rescheduled" as const,
+      projectId: PROJECT_ID,
+      entityType: "task" as const,
+      entityId: "c1",
+      impact: {
+        changedTaskId: "c1",
+        shifted: [{ taskId: "c6", oldDue: "2026-06-10", newDue: "2026-06-13", deltaDays: 3 }],
+        gateImpacts: [{ taskId: "c6", gateName: "概念评审", oldDue: "2026-06-10", newDue: "2026-06-13", deltaDays: 3 }],
+        targetBreach: null,
+        maxDeltaDays: 3,
+        hasImpact: true,
+      },
+    };
+    const first = makeDeps();
+    await runAutomation(delayEvent, first.deps);
+    expect(first.notes.some((n) => n.userId === pmId && n.title === "延期影响提醒")).toBe(true);
+
+    const second = makeDeps();
+    await runAutomation(delayEvent, second.deps);
+    expect(second.notes.length).toBe(0);
+
+    const runs = await listAutomationRuns({ projectId: PROJECT_ID });
+    expect(runs.some((r) => r.ruleKey === "delay_impact_notify" && r.status === "fired")).toBe(true);
+    expect(runs.some((r) => r.ruleKey === "delay_impact_notify" && r.status === "skipped")).toBe(true);
   });
 
   it("does not fire a disabled rule", async () => {
