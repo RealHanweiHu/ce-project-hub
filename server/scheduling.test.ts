@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   generateSchedule, rescheduleFrom, flattenPhases, addDays, addWorkingDays,
   forecastSchedule, projectedEndFromSchedule, isISODate,
-  isWorkingDay, nextWorkingDay, workingDaysBetween, type CalendarExceptions,
+  isWorkingDay, nextWorkingDay, workingDaysBetween, type CalendarExceptions, type SchedTask,
 } from "@shared/scheduling";
 import { generateCalendarSchedule, planWorkingCalendarMigration } from "@shared/schedule-migration";
 import { scheduleForCategory, SCHEDULE_GRAPH } from "@shared/schedule-graph";
@@ -224,6 +224,20 @@ describe("workingDaysBetween [from, to)", () => {
   it("尊重 cal：假日不计入", () => {
     const cal = { holidays: new Set(["2026-06-23"]), makeupWorkdays: new Set<string>() };
     expect(workingDaysBetween("2026-06-22", "2026-06-24", cal)).toBe(1);
+  });
+});
+
+describe("generateSchedule with cal", () => {
+  const tasks: SchedTask[] = [{ id: "a", durationDays: 2 }, { id: "b", durationDays: 2, dependsOn: ["a"] }];
+  it("假日把整链向后顺延", () => {
+    const cal = { holidays: new Set(["2026-06-23"]), makeupWorkdays: new Set<string>() };
+    const plain = generateSchedule(tasks, "2026-06-22");
+    const withHol = generateSchedule(tasks, "2026-06-22", cal);
+    expect(withHol["b"].due > plain["b"].due).toBe(true);
+  });
+  it("不传 cal 与现状一致", () => {
+    const s = generateSchedule(tasks, "2026-06-22");
+    expect(s["a"].start).toBe("2026-06-22");
   });
 });
 

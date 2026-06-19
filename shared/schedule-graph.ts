@@ -1,7 +1,7 @@
 // IPD 消费电子(锂电充气泵/车载吸尘器等)自动排期依赖图。
 // 格式：taskId -> [工期(工厂工作日), ...前置任务id]。无前置=阶段入口（依赖上一阶段 gate 由下方手动接上）。
 // 工期为首版经验值，可随时调（纯数据，不改逻辑）。
-import { generateSchedule, type SchedTask, type Schedule } from "./scheduling";
+import { generateSchedule, type SchedTask, type Schedule, type CalendarExceptions } from "./scheduling";
 import { getPhasesForCategory } from "./sop-templates";
 
 type G = Record<string, [number, ...string[]]>;
@@ -59,8 +59,8 @@ export function buildSchedTasks(phases: Array<{ bufferDays?: number; tasks: Arra
 }
 
 /** 按 category + 开始日生成整套任务起止日（taskId -> {start, due}） */
-export function scheduleForCategory(category: string | undefined, startDate: string): Schedule {
-  return generateSchedule(buildSchedTasks(getPhasesForCategory(category)), startDate);
+export function scheduleForCategory(category: string | undefined, startDate: string, cal?: CalendarExceptions): Schedule {
+  return generateSchedule(buildSchedTasks(getPhasesForCategory(category)), startDate, cal);
 }
 
 /**

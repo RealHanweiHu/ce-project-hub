@@ -113,23 +113,23 @@ function topoOrder(tasks: SchedTask[]): string[] | null {
   return order.length === tasks.length ? order : null;
 }
 
-function computeStart(t: SchedTask, sched: Schedule, startDate: string, idsInScope: Set<string>): string {
+function computeStart(t: SchedTask, sched: Schedule, startDate: string, idsInScope: Set<string>, cal?: CalendarExceptions): string {
   const deps = (t.dependsOn ?? []).filter((d) => idsInScope.has(d));
   const dues = deps.map((d) => sched[d]?.due).filter((x): x is string => !!x);
   let start = dues.length ? dues.reduce((a, b) => (b > a ? b : a)) : startDate; // ISO 字典序=时间序
-  return addWorkingDays(start, t.lagDays ?? 0);
+  return addWorkingDays(start, t.lagDays ?? 0, cal);
 }
 
 /** 从 startDate 正向生成整套任务起止日 */
-export function generateSchedule(tasks: SchedTask[], startDate: string): Schedule {
+export function generateSchedule(tasks: SchedTask[], startDate: string, cal?: CalendarExceptions): Schedule {
   const byId = new Map(tasks.map((t) => [t.id, t]));
   const ids = new Set(tasks.map((t) => t.id));
   const order = topoOrder(tasks) ?? tasks.map((t) => t.id); // 有环则按给定序尽力而为
   const sched: Schedule = {};
   for (const id of order) {
     const t = byId.get(id)!;
-    const start = computeStart(t, sched, startDate, ids);
-    sched[id] = { start, due: addWorkingDays(start, Math.max(0, t.durationDays ?? 1)) };
+    const start = computeStart(t, sched, startDate, ids, cal);
+    sched[id] = { start, due: addWorkingDays(start, Math.max(0, t.durationDays ?? 1), cal) };
   }
   return sched;
 }
@@ -139,7 +139,8 @@ export function rescheduleFrom(
   tasks: SchedTask[],
   current: Schedule,
   changedTaskId: string,
-  newDates: { start: string; due: string }
+  newDates: { start: string; due: string },
+  cal?: CalendarExceptions
 ): Schedule {
   const byId = new Map(tasks.map((t) => [t.id, t]));
   const ids = new Set(tasks.map((t) => t.id));
@@ -162,8 +163,8 @@ export function rescheduleFrom(
   const order = (topoOrder(tasks) ?? tasks.map((t) => t.id)).filter((id) => affected.has(id));
   for (const id of order) {
     const t = byId.get(id)!;
-    const start = computeStart(t, sched, newDates.start, ids);
-    sched[id] = { start, due: addWorkingDays(start, Math.max(0, t.durationDays ?? 1)) };
+    const start = computeStart(t, sched, newDates.start, ids, cal);
+    sched[id] = { start, due: addWorkingDays(start, Math.max(0, t.durationDays ?? 1), cal) };
   }
   return sched;
 }
