@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   generateSchedule, rescheduleFrom, flattenPhases, addDays, addWorkingDays,
   forecastSchedule, projectedEndFromSchedule, isISODate,
+  isWorkingDay, nextWorkingDay, type CalendarExceptions,
 } from "@shared/scheduling";
 import { generateCalendarSchedule, planWorkingCalendarMigration } from "@shared/schedule-migration";
 import { scheduleForCategory, SCHEDULE_GRAPH } from "@shared/schedule-graph";
@@ -203,5 +204,27 @@ describe("flattenPhases", () => {
     expect(c.lagDays).toBe(3);
     const b = flat.find((t) => t.id === "b")!;
     expect(b.lagDays).toBe(0); // 本阶段内前置，非入口
+  });
+});
+
+describe("calendar exceptions", () => {
+  const cal: CalendarExceptions = {
+    holidays: new Set(["2026-02-17"]),
+    makeupWorkdays: new Set(["2026-02-15"]),
+  };
+  it("法定假在周一~六也算休息", () => {
+    expect(isWorkingDay("2026-02-17")).toBe(true);
+    expect(isWorkingDay("2026-02-17", cal)).toBe(false);
+  });
+  it("调休周日算工作日", () => {
+    expect(isWorkingDay("2026-02-15")).toBe(false);
+    expect(isWorkingDay("2026-02-15", cal)).toBe(true);
+  });
+  it("addWorkingDays 跳过假日", () => {
+    expect(addWorkingDays("2026-02-16", 1, cal)).toBe("2026-02-18");
+    expect(addWorkingDays("2026-02-16", 1)).toBe("2026-02-17");
+  });
+  it("不传 cal 时行为与现状一致", () => {
+    expect(nextWorkingDay("2026-06-21")).toBe("2026-06-22");
   });
 });

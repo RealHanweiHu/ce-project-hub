@@ -36,32 +36,40 @@ export function addDays(iso: string, n: number): string {
   return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
 }
 
+/** 全局日历例外（YYYY-MM-DD 集合）。holidays=法定假(休)，makeupWorkdays=调休上班(工)。 */
+export type CalendarExceptions = {
+  holidays: Set<string>;
+  makeupWorkdays: Set<string>;
+};
+
 /**
  * 工厂工作日历：周一至周六为工作日，周日休息。
- * 法定节假日尚未接入独立假日表，排期入口需要向用户明示这一点。
+ * 可选 cal 叠加法定假/调休；不传则仅按周末口径（与历史一致）。
+ * 优先级：调休上班 > 法定假 > 周一~六默认。
  */
-export function isWorkingDay(iso: string): boolean {
+export function isWorkingDay(iso: string, cal?: CalendarExceptions): boolean {
   if (!isISODate(iso)) return false;
-  const day = new Date(`${iso}T00:00:00Z`).getUTCDay();
-  return day !== 0;
+  if (cal?.makeupWorkdays.has(iso)) return true;
+  if (cal?.holidays.has(iso)) return false;
+  return new Date(`${iso}T00:00:00Z`).getUTCDay() !== 0;
 }
 
-export function nextWorkingDay(iso: string): string {
+export function nextWorkingDay(iso: string, cal?: CalendarExceptions): string {
   if (!isISODate(iso)) throw new Error(`Invalid ISO date: ${iso}`);
   let out = iso;
-  while (!isWorkingDay(out)) out = addDays(out, 1);
+  while (!isWorkingDay(out, cal)) out = addDays(out, 1);
   return out;
 }
 
-/** ISO 日期加 n 个工厂工作日；起点若落在周日，先顺延到下一个工作日。 */
-export function addWorkingDays(iso: string, n: number): string {
+/** ISO 日期加 n 个工厂工作日；起点若落在休息日，先顺延到下一个工作日。 */
+export function addWorkingDays(iso: string, n: number, cal?: CalendarExceptions): string {
   if (!Number.isFinite(n)) throw new Error(`Invalid working day delta: ${n}`);
-  let out = nextWorkingDay(iso);
+  let out = nextWorkingDay(iso, cal);
   const step = n >= 0 ? 1 : -1;
   let remaining = Math.abs(Math.trunc(n));
   while (remaining > 0) {
     out = addDays(out, step);
-    if (isWorkingDay(out)) remaining -= 1;
+    if (isWorkingDay(out, cal)) remaining -= 1;
   }
   return out;
 }
