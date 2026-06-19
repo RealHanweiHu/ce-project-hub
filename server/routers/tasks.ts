@@ -13,6 +13,7 @@ import {
   createActivityLog,
   applyProjectSchedule,
   rescheduleProjectFromTask,
+  computeProjectDelayImpact,
   setTaskDeliverable,
 } from "../db";
 import { ROLE_PERMISSIONS } from "./members";
@@ -228,6 +229,22 @@ export const tasksRouter = router({
       }
       const count = await rescheduleProjectFromTask(input.projectId, input.taskId, input.startDate, input.dueDate);
       return { success: true, count } as const;
+    }),
+
+  /** 改期前预览：dry-run 算延期影响，不落库（需 canEditTasks） */
+  delayImpact: protectedProcedure
+    .input(z.object({
+      projectId: z.string(),
+      taskId: z.string(),
+      startDate: isoDateInput,
+      dueDate: isoDateInput,
+    }))
+    .query(async ({ ctx, input }) => {
+      const role = await getEffectiveRole(input.projectId, ctx.user.id);
+      if (!role || !ROLE_PERMISSIONS[role].canEditTasks) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "没有调整排期的权限" });
+      }
+      return computeProjectDelayImpact(input.projectId, input.taskId, input.startDate, input.dueDate);
     }),
 
   /**
