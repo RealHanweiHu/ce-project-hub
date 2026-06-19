@@ -434,7 +434,8 @@ function forecastProjectEnd(
     dueDate: string | null;
     completedAt: Date | null;
   }>,
-  todayISO: string
+  todayISO: string,
+  cal?: CalendarExceptions
 ): string | null {
   if (rows.length === 0) return null;
   const hasScheduleSignal = !!project.startDate || rows.some((row) => row.startDate || row.dueDate || row.completedAt);
@@ -450,7 +451,7 @@ function forecastProjectEnd(
     status: row.status,
     completedAtISO: row.completedAt ? todayInShanghaiISO(row.completedAt) : null,
   }));
-  return projectedEndFromSchedule(forecastSchedule(schedTasks, states, todayISO, project.startDate));
+  return projectedEndFromSchedule(forecastSchedule(schedTasks, states, todayISO, project.startDate, cal));
 }
 
 function computePortfolioHealth(input: {
@@ -537,6 +538,7 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
     roles.add(row.role);
     roleMap.set(row.projectId, roles);
   }
+  const cal = await getCalendarExceptions();
 
   return Promise.all(Array.from(projById.values()).map(async (p) => {
     const t = taskMap.get(p.id);
@@ -570,7 +572,7 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
     const releaseGate = await getReleaseGateStatus(p);
     const releaseHardBlockers = releaseGate.dimensions.filter((d) => !d.ok && d.dimension !== "review_conditions").length;
     const progressBehind = progressBehindPct(t?.plannedItems ?? 0, t?.dueItems ?? 0, t?.donePlannedItems ?? 0);
-    const projectedEnd = forecastProjectEnd(p, projectTaskRows, todayISO);
+    const projectedEnd = forecastProjectEnd(p, projectTaskRows, todayISO, cal);
     const health = computePortfolioHealth({
       projectedEnd,
       targetDate: p.targetDate,
@@ -693,12 +695,13 @@ export async function getPortfolioHealthForDigest(todayISO: string): Promise<Por
     gateByProject.set(p.id, level);
   }));
 
+  const cal = await getCalendarExceptions();
   return projRows.map((p) => {
     const t = taskMap.get(p.id);
     const i = issueMap.get(p.id);
     const gateNotReady = gateByProject.get(p.id) ?? null;
     const progressBehind = progressBehindPct(t?.plannedItems ?? 0, t?.dueItems ?? 0, t?.donePlannedItems ?? 0);
-    const projectedEnd = forecastProjectEnd(p, taskRowsByProject.get(p.id) ?? [], todayISO);
+    const projectedEnd = forecastProjectEnd(p, taskRowsByProject.get(p.id) ?? [], todayISO, cal);
     const health = computePortfolioHealth({
       projectedEnd,
       targetDate: p.targetDate,
@@ -2026,7 +2029,8 @@ export async function applyProjectSchedule(projectId: string): Promise<number> {
   if (!db) return 0;
   const project = await getProjectById(projectId);
   if (!project?.startDate) return 0;
-  const schedule = scheduleForCategory(project.category, project.startDate);
+  const cal = await getCalendarExceptions();
+  const schedule = scheduleForCategory(project.category, project.startDate, cal);
   let n = 0;
   for (const [taskId, d] of Object.entries(schedule)) {
     await db.update(projectTasks)
@@ -2055,7 +2059,8 @@ export async function rescheduleProjectFromTask(
     .from(projectTasks).where(eq(projectTasks.projectId, projectId));
   const current: Schedule = {};
   for (const r of rows) if (r.startDate && r.dueDate) current[r.taskId] = { start: r.startDate, due: r.dueDate };
-  const next = rescheduleFrom(schedTasks, current, taskId, { start, due });
+  const cal = await getCalendarExceptions();
+  const next = rescheduleFrom(schedTasks, current, taskId, { start, due }, cal);
   let n = 0;
   for (const [id, d] of Object.entries(next)) {
     if (current[id]?.start === d.start && current[id]?.due === d.due) continue;

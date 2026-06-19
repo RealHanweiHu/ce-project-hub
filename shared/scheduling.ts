@@ -196,7 +196,8 @@ export function forecastSchedule(
   tasks: SchedTask[],
   states: ForecastTaskState[],
   todayISO: string,
-  projectStartDate?: string | null
+  projectStartDate?: string | null,
+  cal?: CalendarExceptions
 ): Schedule {
   const byId = new Map(tasks.map((t) => [t.id, t]));
   const stateById = new Map(states.map((s) => [s.id, s]));
@@ -218,8 +219,8 @@ export function forecastSchedule(
     const deps = (t.dependsOn ?? []).filter((d) => ids.has(d));
     const depDue = maxISO(deps.map((d) => sched[d]?.due));
     const base = maxISO([anchor, state?.startDate, depDue]) ?? anchor;
-    const start = addWorkingDays(base, t.lagDays ?? 0);
-    sched[id] = { start, due: addWorkingDays(start, Math.max(0, t.durationDays ?? 1)) };
+    const start = addWorkingDays(base, t.lagDays ?? 0, cal);
+    sched[id] = { start, due: addWorkingDays(start, Math.max(0, t.durationDays ?? 1), cal) };
   }
 
   return sched;
