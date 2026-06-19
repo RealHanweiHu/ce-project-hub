@@ -174,3 +174,62 @@ describe("MP Release 正常发布（approved 普通路径）", () => {
     await expect(releaseProject({ projectId: PRJ2, actor: ACTOR })).rejects.toThrow(/已发布/);
   });
 });
+
+const PID3 = "rel_test_product3";
+const PRJ3 = "rel_test_project3";
+
+async function cleanup3() {
+  const db = await getDb(); if (!db) return;
+  const { sql } = await import("drizzle-orm");
+  await db.execute(sql`DELETE FROM mp_releases WHERE "productId" = ${PID3}`);
+  await db.execute(sql`DELETE FROM product_revisions WHERE "productId" = ${PID3}`);
+  await db.execute(sql`DELETE FROM project_changelog WHERE "projectId" = ${PRJ3}`);
+  await db.execute(sql`DELETE FROM project_deliverable_reviews WHERE "projectId" = ${PRJ3}`);
+  await db.execute(sql`DELETE FROM project_files WHERE "projectId" = ${PRJ3}`);
+  await db.execute(sql`DELETE FROM project_gate_reviews WHERE "projectId" = ${PRJ3}`);
+  await db.execute(sql`DELETE FROM project_tasks WHERE "projectId" = ${PRJ3}`);
+  await db.execute(sql`DELETE FROM project_phases WHERE "projectId" = ${PRJ3}`);
+  await db.execute(sql`DELETE FROM projects WHERE id = ${PRJ3}`);
+  await db.execute(sql`DELETE FROM products WHERE id = ${PID3}`);
+}
+
+describe("MP Release 变更盖章", () => {
+  beforeAll(async () => {
+    await cleanup3();
+    await createProduct({ id: PID3, name: "测试泵3", type: "finished", category: "充气泵", createdBy: 1 });
+    await createProjectWithSeed(
+      { id: PRJ3, name: "测试NPD3", projectNumber: "T3", category: "npd", risk: "low", currentPhase: "concept", progress: 0, createdBy: 1, pmUserId: 2 } as any,
+      "npd", 1,
+    );
+    await setProjectProduct(PRJ3, PID3);
+    const db = await getDb(); const { sql } = await import("drizzle-orm");
+    await db!.execute(sql`INSERT INTO project_changelog ("projectId",number,type,title,status,"createdDate") VALUES
+      (${PRJ3},'ECN-002','ecn','改结构','implemented','2026-06-05'),
+      (${PRJ3},'ECN-001','ecn','改电芯','approved','2026-06-01'),
+      (${PRJ3},'ECR-009','spec','待议','proposed','2026-06-03'),
+      (${PRJ3},'ECR-010','cost','驳回','rejected','2026-06-04')`);
+    await addGate("approved", 1, undefined, PRJ3);
+    await completeDeliverables(PRJ3);
+  });
+  afterAll(cleanup3);
+
+  it("发布后 implemented+approved 被盖章，proposed/rejected 仍为 null", async () => {
+    await releaseProject({ projectId: PRJ3, actor: ACTOR });
+    const revId = (await listProductRevisions(PID3))[0].id;
+    const db = await getDb(); const { sql } = await import("drizzle-orm");
+    const r = await db!.execute(sql`SELECT number, "revisionId" FROM project_changelog WHERE "projectId"=${PRJ3} ORDER BY number`);
+    const byNum = Object.fromEntries((r.rows as any[]).map((x) => [x.number, x.revisionId]));
+    expect(byNum["ECN-001"]).toBe(revId);
+    expect(byNum["ECN-002"]).toBe(revId);
+    expect(byNum["ECR-009"]).toBeNull();
+    expect(byNum["ECR-010"]).toBeNull();
+  });
+
+  it("mpReleases.snapshotChangelog = 盖章条目，按 createdDate→number→id 排序", async () => {
+    const db = await getDb(); const { sql } = await import("drizzle-orm");
+    const r = await db!.execute(sql`SELECT "snapshotChangelog" FROM mp_releases WHERE "projectId"=${PRJ3}`);
+    const snap = (r.rows[0] as any).snapshotChangelog as any[];
+    expect(snap.map((e) => e.number)).toEqual(["ECN-001", "ECN-002"]);
+    expect(snap[0].title).toBe("改电芯");
+  });
+});

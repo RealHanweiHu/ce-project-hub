@@ -28,6 +28,7 @@ import {
   projectDeliverableReviews,
   type TaskStatus, type TaskPriority, type GateDecision,
 } from "../drizzle/schema";
+import { buildRevisionChangelogSnapshot, REVISION_CHANGE_STATUSES, type RevisionChangeEntry } from "../shared/changelog-snapshot";
 import { ENV } from './_core/env';
 import { getSopPhasesForCategory } from "./sop-data";
 import { getPhasesForCategory, getReleaseGatePhase } from "../shared/sop-templates";
@@ -2603,9 +2604,20 @@ export async function releaseProject(input: {
 
     const frozenBom = await freezeBomToRevision(input.projectId, rev.id, tx);
 
+    // 盖章：把本项目 implemented+approved 的变更并入新版本，并由返回行生成快照(集合天然一致)
+    const stampedChanges = await tx.update(projectChangelog)
+      .set({ revisionId: rev.id })
+      .where(and(
+        eq(projectChangelog.projectId, input.projectId),
+        inArray(projectChangelog.status, [...REVISION_CHANGE_STATUSES]),
+      ))
+      .returning();
+    const snapshotChangelog = buildRevisionChangelogSnapshot(stampedChanges as any);
+
     await tx.insert(mpReleases).values({
       productId, revisionId: rev.id, projectId: input.projectId,
       snapshotBom: frozenBom as unknown[],
+      snapshotChangelog: snapshotChangelog as unknown[],
       openIssues: open as unknown[], notes: input.notes ?? null,
       releasedBy: input.actor.id,
       overridden,
