@@ -249,6 +249,20 @@ export type ProjectCalendarEvent = typeof projectCalendarEvents.$inferSelect;
 export type InsertProjectCalendarEvent = typeof projectCalendarEvents.$inferInsert;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Calendar Exceptions（全局工作日历例外：法定假 / 调休上班）
+// ─────────────────────────────────────────────────────────────────────────────
+export const calendarExceptions = pgTable("calendar_exceptions", {
+  date: date("date", { mode: "string" }).primaryKey(),
+  type: varchar("type", { length: 16 }).notNull(),
+  name: varchar("name", { length: 128 }).notNull().default(""),
+  createdBy: integer("createdBy"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type CalendarExceptionRow = typeof calendarExceptions.$inferSelect;
+export type InsertCalendarException = typeof calendarExceptions.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Process tailoring and deliverable overrides
 // ─────────────────────────────────────────────────────────────────────────────
 

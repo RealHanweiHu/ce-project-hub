@@ -169,6 +169,13 @@
       "when": 1781832192969,
       "tag": "0023_famous_shaman",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1781841737236,
+      "tag": "0024_chief_microchip",
+      "breakpoints": true
     }
   ]
 }
