@@ -1179,8 +1179,6 @@ function TaskDetail({
           onClose={() => setPendingReschedule(null)}
           onDone={() => {
             setPendingReschedule(null);
-            onUpdate({ ...taskDetails, dueDate: pendingReschedule.newDue });
-            // 级联后下游日期已落库，刷新项目数据让其它任务的 due/start 同步
             utils.projects.get.invalidate({ id: projectId });
           }}
         />
