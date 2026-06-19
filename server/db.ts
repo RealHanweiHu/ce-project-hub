@@ -53,6 +53,7 @@ import {
   type RagLevel,
 } from "../shared/health";
 import type { MetricGate, MetricIssue, MetricPhase, MetricTask } from "../shared/metrics";
+import { computeDelayImpact, type DelayImpact } from "../shared/delay-impact";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -2059,6 +2060,39 @@ export async function rescheduleProjectFromTask(
   }
   if (n > 0) await refreshProjectTaskStatuses(projectId);
   return n;
+}
+
+export async function computeProjectDelayImpact(
+  projectId: string, taskId: string, start: string, due: string
+): Promise<DelayImpact | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const project = await getProjectById(projectId);
+  if (!project) return null;
+
+  const rows = await db
+    .select({ taskId: projectTasks.taskId, startDate: projectTasks.startDate, dueDate: projectTasks.dueDate, status: projectTasks.status })
+    .from(projectTasks).where(eq(projectTasks.projectId, projectId));
+
+  const effectiveIds = new Set(rows.filter((r) => r.status !== "skipped").map((r) => r.taskId));
+  if (!effectiveIds.has(taskId)) return null;
+
+  const current: Schedule = {};
+  for (const r of rows) {
+    if (effectiveIds.has(r.taskId) && r.startDate && r.dueDate) current[r.taskId] = { start: r.startDate, due: r.dueDate };
+  }
+
+  const phases = getPhasesForCategory(project.category);
+  const schedTasks = buildSchedTasks(phases).filter((t) => effectiveIds.has(t.id));
+  const gateTaskIds = new Set(phases.map((p) => p.gateTaskId).filter((id) => effectiveIds.has(id)));
+  const gateNames: Record<string, string> = {};
+  for (const p of phases) if (effectiveIds.has(p.gateTaskId)) gateNames[p.gateTaskId] = p.gate;
+
+  return computeDelayImpact({
+    schedTasks, current, changedTaskId: taskId,
+    newDates: { start, due }, gateTaskIds, gateNames,
+    targetDate: project.targetDate ?? null,
+  });
 }
 
 export type TaskWithContext = ProjectTask & {
