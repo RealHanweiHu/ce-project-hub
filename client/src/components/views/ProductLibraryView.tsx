@@ -230,7 +230,7 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
             <p className="text-sm text-stone-400 py-6 text-center">还没有版本。项目「量产发布」后会在这里出现 Rev A。</p>
           ) : (
             <div className="space-y-0">
-              {(revisions as { id: number; revisionLabel: string; status: string; releasedAt: string | null; createdByProjectId: string | null }[]).map((r, i) => (
+              {(revisions as { id: number; revisionLabel: string; status: string; releasedAt: string | null; createdByProjectId: string | null; snapshotChangelog?: { number: string; type: string; title: string; reason: string | null }[] }[]).map((r, i) => (
                 <div key={r.id} className="flex items-start gap-3 pb-4 relative">
                   <div className="flex flex-col items-center">
                     <div className="w-2.5 h-2.5 rounded-full bg-amber-500 mt-1.5 shrink-0" />
@@ -248,6 +248,28 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
                       {r.releasedAt ? new Date(r.releasedAt).toLocaleString('zh-CN') : '—'}
                       {r.createdByProjectId ? ` · 来源项目 ${r.createdByProjectId}` : ''}
                     </div>
+                    {r.status === 'released' && (
+                      <details className="mt-1.5">
+                        <summary className="text-[11px] text-stone-500 cursor-pointer select-none hover:text-stone-700">
+                          本版本变更（{r.snapshotChangelog?.length ?? 0}）
+                        </summary>
+                        {(r.snapshotChangelog?.length ?? 0) === 0 ? (
+                          <p className="text-[11px] text-stone-400 mt-1 pl-2">无登记变更</p>
+                        ) : (
+                          <ul className="mt-1 pl-2 space-y-1">
+                            {r.snapshotChangelog!.map((c, ci) => (
+                              <li key={ci} className="text-[11px] text-stone-600 flex gap-1.5">
+                                <span className="font-mono px-1 bg-stone-100 text-stone-500 shrink-0">{c.type}</span>
+                                <span className="min-w-0">
+                                  <span className="text-stone-800">{c.title}</span>
+                                  {c.reason ? <span className="text-stone-400"> — {c.reason}</span> : null}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </details>
+                    )}
                   </div>
                 </div>
               ))}
