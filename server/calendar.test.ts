@@ -1,6 +1,6 @@
 import { describe, it, expect, afterAll, beforeAll } from "vitest";
-import { getCalendar, getDb } from "./db";
-import { projects, projectPhases, projectGateReviews, projectTasks } from "../drizzle/schema";
+import { getCalendar, getCalendarExceptions, getDb } from "./db";
+import { projects, projectPhases, projectGateReviews, projectTasks, calendarExceptions } from "../drizzle/schema";
 import { eq } from "drizzle-orm";
 
 const OWNER = 778001;
@@ -53,5 +53,33 @@ describe("getCalendar", () => {
   it("总览全员可见：非成员用户也能看到该项目的里程碑事件", async () => {
     const events = await getCalendar(999999, "2026-07-01", "2026-07-31");
     expect(events.filter((e) => e.projectId === PROJ).length).toBeGreaterThan(0);
+  });
+});
+
+describe("getCalendarExceptions", () => {
+  const HOLIDAY_DATE = "2026-02-17";
+  const MAKEUP_DATE = "2026-02-15";
+
+  beforeAll(async () => {
+    const db = await getDb();
+    if (!db) throw new Error("no db");
+    await db.insert(calendarExceptions).values([
+      { date: HOLIDAY_DATE, type: "holiday", name: "测试节假日", createdBy: OWNER },
+      { date: MAKEUP_DATE, type: "makeup_workday", name: "测试补班日", createdBy: OWNER },
+    ]);
+  });
+
+  afterAll(async () => {
+    const db = await getDb();
+    if (!db) return;
+    await db.delete(calendarExceptions).where(eq(calendarExceptions.date, HOLIDAY_DATE));
+    await db.delete(calendarExceptions).where(eq(calendarExceptions.date, MAKEUP_DATE));
+  });
+
+  it("getCalendarExceptions 按 type 分桶成两个 Set", async () => {
+    const cal = await getCalendarExceptions();
+    expect(cal.holidays.has(HOLIDAY_DATE)).toBe(true);
+    expect(cal.makeupWorkdays.has(MAKEUP_DATE)).toBe(true);
+    expect(cal.holidays.has(MAKEUP_DATE)).toBe(false);
   });
 });

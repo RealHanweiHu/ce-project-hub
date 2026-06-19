@@ -26,6 +26,7 @@ import {
   projectTailoring, ProjectTailoring, InsertProjectTailoring, TailoringTarget,
   projectDeliverableOverrides, ProjectDeliverableOverride,
   projectDeliverableReviews,
+  calendarExceptions,
   type TaskStatus, type TaskPriority, type GateDecision,
 } from "../drizzle/schema";
 import { buildRevisionChangelogSnapshot, REVISION_CHANGE_STATUSES, type RevisionChangeEntry } from "../shared/changelog-snapshot";
@@ -42,6 +43,7 @@ import {
   rescheduleFrom,
   type ForecastTaskState,
   type Schedule,
+  type CalendarExceptions,
 } from "../shared/scheduling";
 import {
   computeAutoRisk,
@@ -3136,4 +3138,20 @@ export async function getCalendar(userId: number, fromDate: string, toDate: stri
   }
 
   return events.sort((a, b) => a.date.localeCompare(b.date) || (a.startTime ?? "").localeCompare(b.startTime ?? ""));
+}
+
+/** 全局节假日例外 → 引擎输入。无 DB 时返回空集(退回仅周末口径)。 */
+export async function getCalendarExceptions(): Promise<CalendarExceptions> {
+  const db = await getDb();
+  if (!db) return { holidays: new Set(), makeupWorkdays: new Set() };
+  const rows = await db
+    .select({ date: calendarExceptions.date, type: calendarExceptions.type })
+    .from(calendarExceptions);
+  const holidays = new Set<string>();
+  const makeupWorkdays = new Set<string>();
+  for (const r of rows) {
+    if (r.type === "makeup_workday") makeupWorkdays.add(r.date);
+    else holidays.add(r.date);
+  }
+  return { holidays, makeupWorkdays };
 }
