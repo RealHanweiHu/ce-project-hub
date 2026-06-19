@@ -232,4 +232,9 @@ describe("MP Release 变更盖章", () => {
     expect(snap.map((e) => e.number)).toEqual(["ECN-001", "ECN-002"]);
     expect(snap[0].title).toBe("改电芯");
   });
+
+  it("listProductRevisions 带出该版本的 snapshotChangelog", async () => {
+    const rev = (await listProductRevisions(PID3))[0] as any;
+    expect(rev.snapshotChangelog.map((e: any) => e.number)).toEqual(["ECN-001", "ECN-002"]);
+  });
 });

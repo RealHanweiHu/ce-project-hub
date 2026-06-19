@@ -2267,12 +2267,21 @@ export async function createProductRevision(r: InsertProductRevision): Promise<n
   return res[0].id;
 }
 
-export async function listProductRevisions(productId: string): Promise<ProductRevision[]> {
+export async function listProductRevisions(productId: string): Promise<Array<ProductRevision & { snapshotChangelog: RevisionChangeEntry[] }>> {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(productRevisions)
+  const rows = await db.select({
+    rev: productRevisions,
+    snapshotChangelog: mpReleases.snapshotChangelog,
+  })
+    .from(productRevisions)
+    .leftJoin(mpReleases, eq(mpReleases.revisionId, productRevisions.id))
     .where(eq(productRevisions.productId, productId))
     .orderBy(productRevisions.id);
+  return rows.map((r) => ({
+    ...r.rev,
+    snapshotChangelog: ((r.snapshotChangelog as RevisionChangeEntry[] | null) ?? []),
+  }));
 }
 
 // ── OEM 客户变体（PLM 侧登记，不开项目） ──────────────────────────────────────
