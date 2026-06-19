@@ -51,3 +51,33 @@ describe("computeProjectDelayImpact", () => {
     expect(impact!.shifted.map((s) => s.taskId)).not.toContain(victim);
   });
 });
+
+import { rescheduleProjectFromTask } from "./db";
+
+describe("rescheduleProjectFromTask 返回 impact + 冲击 emit", () => {
+  it("返回 {count, impact}，冲击时 emit task.rescheduled", async () => {
+    const P = `di-emit-${Date.now()}`;
+    await createProjectWithSeed(
+      { id: P, name: "延期emit", projectNumber: "DI2", category: "npd", risk: "low", currentPhase: "concept", progress: 0, createdBy: 1, pmUserId: 1, startDate: "2026-06-01" } as any,
+      "npd", 1,
+    );
+    const { applyProjectSchedule } = await import("./db");
+    await applyProjectSchedule(P);
+    const db = await getDb();
+    const rows = await db!.select({ taskId: projectTasks.taskId, startDate: projectTasks.startDate, dueDate: projectTasks.dueDate })
+      .from(projectTasks).where(eq(projectTasks.projectId, P));
+    const head = rows.find((r) => r.startDate && r.dueDate)!;
+    const { addWorkingDays } = await import("@shared/scheduling");
+
+    const events: string[] = [];
+    const res = await rescheduleProjectFromTask(P, head.taskId, head.startDate!, addWorkingDays(head.dueDate!, 30), {
+      emit: async (e: any) => { events.push(e.action); },
+    });
+    expect(typeof res.count).toBe("number");
+    expect(res.impact).not.toBeNull();
+    if (res.impact?.hasImpact) expect(events).toContain("task.rescheduled");
+
+    await db!.delete(projectTasks).where(eq(projectTasks.projectId, P));
+    await db!.delete(projects).where(eq(projects.id, P));
+  });
+});

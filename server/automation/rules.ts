@@ -21,6 +21,7 @@ export type AutomationEvent = {
     | "issue.update"
     | "issue.close"
     | "task.update_meta"
+    | "task.rescheduled"
     | "gate.create"
     | "gate.update"
     | "mp.release";
@@ -31,6 +32,7 @@ export type AutomationEvent = {
   after?: Record<string, unknown> | null;
   actorId?: number | null;
   now?: Date | string;
+  impact?: import("../../shared/delay-impact").DelayImpact;
 };
 
 export type RecipientRole = "assignee" | "reporter" | "pm" | "manager" | "owner" | "group";

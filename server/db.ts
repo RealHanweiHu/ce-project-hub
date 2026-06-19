@@ -54,6 +54,7 @@ import {
 } from "../shared/health";
 import type { MetricGate, MetricIssue, MetricPhase, MetricTask } from "../shared/metrics";
 import { computeDelayImpact, type DelayImpact } from "../shared/delay-impact";
+import { emitAutomationEvent } from "./automation/events";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -2037,12 +2038,15 @@ export async function applyProjectSchedule(projectId: string): Promise<number> {
 
 /** 改某任务起止后，只向后联动重排其传递后继；返回受影响并更新的任务数。 */
 export async function rescheduleProjectFromTask(
-  projectId: string, taskId: string, start: string, due: string
-): Promise<number> {
+  projectId: string, taskId: string, start: string, due: string,
+  deps: { emit?: (e: any) => Promise<void> } = {}
+): Promise<{ count: number; impact: DelayImpact | null }> {
   const db = await getDb();
-  if (!db) return 0;
+  if (!db) return { count: 0, impact: null };
+  const impact = await computeProjectDelayImpact(projectId, taskId, start, due);
+
   const project = await getProjectById(projectId);
-  if (!project) return 0;
+  if (!project) return { count: 0, impact };
   const schedTasks = buildSchedTasks(getPhasesForCategory(project.category));
   const rows = await db
     .select({ taskId: projectTasks.taskId, startDate: projectTasks.startDate, dueDate: projectTasks.dueDate })
@@ -2059,7 +2063,18 @@ export async function rescheduleProjectFromTask(
     n += 1;
   }
   if (n > 0) await refreshProjectTaskStatuses(projectId);
-  return n;
+
+  if (impact?.hasImpact) {
+    const emit = deps.emit ?? emitAutomationEvent;
+    await emit({
+      action: "task.rescheduled",
+      entityType: "task",
+      entityId: taskId,
+      projectId,
+      impact,
+    } as any);
+  }
+  return { count: n, impact };
 }
 
 export async function computeProjectDelayImpact(

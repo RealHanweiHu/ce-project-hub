@@ -227,8 +227,8 @@ export const tasksRouter = router({
       if (!role || !ROLE_PERMISSIONS[role].canEditTasks) {
         throw new TRPCError({ code: "FORBIDDEN", message: "没有调整排期的权限" });
       }
-      const count = await rescheduleProjectFromTask(input.projectId, input.taskId, input.startDate, input.dueDate);
-      return { success: true, count } as const;
+      const { count, impact } = await rescheduleProjectFromTask(input.projectId, input.taskId, input.startDate, input.dueDate);
+      return { success: true, count, impact } as const;
     }),
 
   /** 改期前预览：dry-run 算延期影响，不落库（需 canEditTasks） */
