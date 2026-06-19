@@ -682,6 +682,8 @@ export const projectChangelog = pgTable(
     creatorId: integer("creatorId"),
     /** 溯源：变更挂在产品上（永久），projectId 为来源项目（可空） */
     productId: varchar("productId", { length: 32 }),
+    /** 发布时盖章：本变更并入的产出版本(应用层关联，不加 DB FK；见 idxRevision) */
+    revisionId: integer("revisionId"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
   },
@@ -692,6 +694,8 @@ export const projectChangelog = pgTable(
       table.type,
       table.status
     ),
+    /** 反查：某版本并入了哪些变更 */
+    idxRevision: index("idx_changelog_revision").on(table.revisionId),
   })
 );
 
@@ -926,6 +930,8 @@ export const mpReleases = pgTable("mp_releases", {
   snapshotBom: jsonb("snapshotBom").$type<unknown[]>().default([]),
   /** 冻结的受控文档快照（第四刀填充） */
   snapshotDocs: jsonb("snapshotDocs").$type<unknown[]>().default([]),
+  /** 发布快照：本版本并入的变更说明(不可变)；条目形状见 shared RevisionChangeEntry */
+  snapshotChangelog: jsonb("snapshotChangelog").$type<unknown[]>().default([]),
   /** 发布时未关闭问题清单 */
   openIssues: jsonb("openIssues").$type<unknown[]>().default([]),
   /** 关键规格 */

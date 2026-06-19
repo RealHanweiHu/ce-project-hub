@@ -162,6 +162,13 @@
       "when": 1781718292061,
       "tag": "0022_hard_riptide",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1781832192969,
+      "tag": "0023_famous_shaman",
+      "breakpoints": true
     }
   ]
 }
