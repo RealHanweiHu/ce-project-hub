@@ -120,6 +120,10 @@ export const changelogRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "只有记录创建者或有管理权限的角色可以删除" });
       }
 
+      if (record.revisionId != null) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "已并入发布版本的变更记录不可删除" });
+      }
+
       await deleteProjectChangeRecord(input.id);
       await createActivityLog({
         projectId: input.projectId,
