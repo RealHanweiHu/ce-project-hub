@@ -8,6 +8,7 @@ export const AUTOMATION_RULE_KEYS = [
   "task_blocked_notify",
   "gate_prereq_incomplete",
   "mp_release_broadcast",
+  "delay_impact_notify",
 ] as const;
 
 export type AutomationRuleKey = (typeof AUTOMATION_RULE_KEYS)[number];
@@ -96,6 +97,8 @@ const gatePrereqConfigSchema = z.object({
   pushGroup: z.boolean().default(false),
 });
 
+const delayImpactConfigSchema = z.object({});
+
 export type OverdueConfig = z.infer<typeof overdueConfigSchema>;
 export type HighSeverityIssueConfig = z.infer<typeof highSeverityIssueConfigSchema>;
 export type StatusChangeConfig = z.infer<typeof statusChangeConfigSchema>;
@@ -103,6 +106,7 @@ export type MpReleaseConfig = z.infer<typeof mpReleaseConfigSchema>;
 export type DueSoonConfig = z.infer<typeof dueSoonConfigSchema>;
 export type TaskBlockedConfig = z.infer<typeof taskBlockedConfigSchema>;
 export type GatePrereqConfig = z.infer<typeof gatePrereqConfigSchema>;
+export type DelayImpactConfig = z.infer<typeof delayImpactConfigSchema>;
 export type AutomationRuleConfig =
   | OverdueConfig
   | HighSeverityIssueConfig
@@ -110,7 +114,8 @@ export type AutomationRuleConfig =
   | MpReleaseConfig
   | DueSoonConfig
   | TaskBlockedConfig
-  | GatePrereqConfig;
+  | GatePrereqConfig
+  | DelayImpactConfig;
 
 export type BuiltInAutomationRule = {
   key: AutomationRuleKey;
@@ -201,6 +206,17 @@ export const AUTOMATION_RULES = [
     recipientRoles: ["pm", "manager", "owner", "group"],
     matches: matchesMpReleaseBroadcast,
     buildMessage: (event, _config, ctx) => buildMpReleaseMessage(event, ctx),
+  },
+  {
+    key: "delay_impact_notify",
+    label: "延期影响通知",
+    triggerType: "event",
+    defaultEnabled: true,
+    defaultConfig: delayImpactConfigSchema.parse({}),
+    configSchema: delayImpactConfigSchema,
+    recipientRoles: ["pm"],
+    matches: (event, _config) => event.action === "task.rescheduled" && !!event.impact?.hasImpact,
+    buildMessage: (event, _cfg, ctx) => buildDelayImpactMessage(event, ctx),
   },
 ] as const satisfies readonly BuiltInAutomationRule[];
 
@@ -409,6 +425,21 @@ function buildTaskBlockedMessage(event: AutomationEvent, ctx: AutomationMessageC
   const project = ctx.projectName ? `「${ctx.projectName}」` : "项目";
   const messageTitle = "任务被阻塞";
   const text = `${project}任务「${title}」已被标记为阻塞，请协调处理。`;
+  return { title: messageTitle, text, markdown: `#### ${messageTitle}\n${text}` };
+}
+
+function buildDelayImpactMessage(event: AutomationEvent, ctx: AutomationMessageContext): AutomationMessage {
+  const impact = event.impact;
+  const project = ctx.projectName ? `「${ctx.projectName}」` : "项目";
+  const taskId = String(event.entityId ?? "任务");
+  const gateLine = (impact?.gateImpacts ?? []).map((g) => `${g.gateName ?? g.taskId} 滑 ${g.deltaDays} 天`).join("；");
+  const tb = impact?.targetBreach;
+  const targetLine = tb
+    ? `目标日 ${tb.targetDate} 预计${tb.newlyBreaches ? "突破" : "再恶化"}至 ${tb.newProjectedEnd}（晚 ${tb.slipDays} 天）`
+    : "";
+  const parts = [gateLine, targetLine].filter(Boolean).join("；");
+  const messageTitle = "延期影响提醒";
+  const text = `${project}任务「${taskId}」改期 → ${parts || `顺延 ${impact?.shifted.length ?? 0} 个下游`}。`;
   return { title: messageTitle, text, markdown: `#### ${messageTitle}\n${text}` };
 }
 

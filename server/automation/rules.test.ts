@@ -11,6 +11,7 @@ describe("built-in automation rule matching", () => {
       "high_severity_issue",
       "status_change_notify",
       "mp_release_broadcast",
+      "delay_impact_notify",
     ]);
   });
 
