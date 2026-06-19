@@ -107,6 +107,13 @@ export default function AdminPanel() {
     onError: (err) => toast.error(err.message),
   });
 
+  const { data: calExceptions, refetch: refetchCal } = trpc.admin.calendarExceptions.list.useQuery(undefined, {
+    enabled: isAuthenticated && user?.role === 'admin',
+  });
+  const upsertCal = trpc.admin.calendarExceptions.upsert.useMutation({ onSuccess: () => { void refetchCal(); } });
+  const removeCal = trpc.admin.calendarExceptions.remove.useMutation({ onSuccess: () => { void refetchCal(); } });
+  const [calForm, setCalForm] = useState({ date: '', type: 'holiday' as 'holiday' | 'makeup_workday', name: '' });
+
   const filteredUsers = (users as UserRow[] | undefined)?.filter((u) => {
     const q = search.toLowerCase();
     return (
@@ -345,6 +352,68 @@ export default function AdminPanel() {
               </tbody>
             </table>
           )}
+        </div>
+
+        {/* Calendar Exceptions Table */}
+        <div className="bg-white border border-stone-200 p-4">
+          <h2 className="font-serif text-base text-stone-900 mb-1">工作日历例外（节假日 / 调休）</h2>
+          <p className="text-xs text-stone-500 mb-3">默认周一~六工作、周日休息。此处登记法定假（休）与调休上班日（工）。</p>
+          <div className="flex gap-2 mb-3 items-end flex-wrap">
+            <input
+              type="date"
+              value={calForm.date}
+              onChange={(e) => setCalForm({ ...calForm, date: e.target.value })}
+              className="border border-stone-300 rounded px-2 py-1 text-sm"
+            />
+            <select
+              value={calForm.type}
+              onChange={(e) => setCalForm({ ...calForm, type: e.target.value as 'holiday' | 'makeup_workday' })}
+              className="border border-stone-300 rounded px-2 py-1 text-sm"
+            >
+              <option value="holiday">法定假（休）</option>
+              <option value="makeup_workday">调休上班（工）</option>
+            </select>
+            <input
+              placeholder="名称"
+              value={calForm.name}
+              onChange={(e) => setCalForm({ ...calForm, name: e.target.value })}
+              className="border border-stone-300 rounded px-2 py-1 text-sm"
+            />
+            <button
+              disabled={!calForm.date || upsertCal.isPending}
+              onClick={() => upsertCal.mutate(calForm)}
+              className="bg-stone-900 text-white text-sm rounded px-3 py-1 disabled:opacity-40"
+            >
+              添加/更新
+            </button>
+          </div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-stone-500 border-b border-stone-200">
+                <th className="py-1">日期</th>
+                <th>类型</th>
+                <th>名称</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {(calExceptions ?? []).map((row) => (
+                <tr key={row.date} className="border-b border-stone-100">
+                  <td className="py-1 font-mono">{row.date}</td>
+                  <td>{row.type === 'holiday' ? '法定假' : '调休上班'}</td>
+                  <td>{row.name}</td>
+                  <td className="text-right">
+                    <button
+                      onClick={() => removeCal.mutate({ date: row.date })}
+                      className="text-rose-600 text-xs"
+                    >
+                      删除
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
 
         {/* Role Reference Table */}
