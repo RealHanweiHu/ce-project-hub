@@ -11,7 +11,7 @@
 设计依据：`docs/superpowers/specs/2026-06-21-deliverable-type-version-design.md`（已按 6 点 review 补严）。
 约定：测试 `node scripts/test.mjs`；类型 `pnpm check`；直接在 `main`，每个 commit 只 stage 本任务文件（never `git add -A`）。
 
-> **执行状态（2026-06-21）**：Task1 ✅ `386a972`、Task2 ✅ `bda139d`（迁移因与并行会话串号，已解耦重 gen 为 `0029_amusing_yellowjacket`）、Task3 ✅ `fac2d1c`（db.ts 用 `git apply --cached` 单独 stage 我的 hunk）。**Task4-5 暂停**——前端文件（data.ts/useProjectData/ProjectDetailView）被「风险生命周期」并行会话实时编辑，待其提交/暂停后再续；改动与 riskOverride 不重叠，按下文步骤正常做即可。
+> **执行状态（2026-06-21）✅ 全部完成**：Task1 `386a972`、Task2 `bda139d`（迁移因与并行会话串号，已解耦重 gen 为 `0029_amusing_yellowjacket`）、Task3 `fac2d1c`、Task4 `bbddece`、Task5 `1680a9f`。其中 db.ts / data.ts / useProjectData / ProjectDetailView 都被并行会话（风险生命周期）占用，全部用 `git apply --cached` 单独 stage 我的 hunk，未卷入他人未提交工作。验证：tsc 干净；浏览器实测——上传控件 10 类下拉+版本框渲染、e2e 上传回显规范化值（`  V1.0-verify  `→`V1.0-verify` trim 生效）、FilesPanel 总览徽标显示、readOnly 隐藏控件。
 
 ---
 
