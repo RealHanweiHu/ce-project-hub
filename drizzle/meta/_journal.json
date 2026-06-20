@@ -176,6 +176,34 @@
       "when": 1781841737236,
       "tag": "0024_chief_microchip",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1781867770018,
+      "tag": "0025_product_definition_baseline",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1781868428291,
+      "tag": "0026_product_definition_changes",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1781869197939,
+      "tag": "0027_product_definition_snapshots",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1781870490128,
+      "tag": "0028_project_definition_handoff_snapshot",
+      "breakpoints": true
     }
   ]
 }

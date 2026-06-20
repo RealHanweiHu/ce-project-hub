@@ -11,11 +11,13 @@ import {
   getBlockedTasks,
   getProjectsByUser,
   createActivityLog,
-  applyProjectSchedule,
-  rescheduleProjectFromTask,
-  computeProjectDelayImpact,
   setTaskDeliverable,
 } from "../db";
+import {
+  applyProjectSchedule,
+  computeProjectDelayImpact,
+  rescheduleProjectFromTask,
+} from "../services/schedule-service";
 import { ROLE_PERMISSIONS } from "./members";
 import { TASK_STATUSES, TASK_PRIORITIES } from "../../drizzle/schema";
 import { emitAutomationEvent } from "../automation/events";

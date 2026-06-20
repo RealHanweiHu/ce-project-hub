@@ -4,6 +4,7 @@ import {
   getProjectsByUser,
   getProjectsByMember,
   getProjectById,
+  getProductById,
   createProjectWithSeed,
   updateProject,
   deleteProject,
@@ -12,11 +13,18 @@ import {
   getMeetingParticipants,
   ensureProjectMember,
   assignTasksByRole,
+  getProjectTasks,
+  upsertProjectTask,
   updateProjectMeetingConfig,
   updateProjectDingtalkEvent,
   setUserDingtalkId,
-  applyProjectSchedule,
+  getProductDefinitionByProductId,
+  confirmProductDefinition,
+  getLatestProductDefinitionSnapshot,
+  getProductDefinitionSnapshotById,
+  listProductDefinitionChanges,
 } from "../db";
+import { applyProjectSchedule } from "../services/schedule-service";
 import { TRPCError } from "@trpc/server";
 import { ROLE_PERMISSIONS } from "./members";
 import { syncProjectMeeting } from "../_core/meetingSync";
@@ -94,6 +102,150 @@ const projectInputSchema = z.object({
   customFields: z.record(z.string(), z.unknown()).optional(),
 });
 
+async function requireConfirmedProductDefinitionSnapshot(productId: string, actorId: number) {
+  const definition = await getProductDefinitionByProductId(productId);
+  if (!definition || definition.status !== "confirmed") {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "产品定义尚未确认。请先在产品库完成 PRD/规格/商业目标并确认后再进入 NPD 开发。",
+    });
+  }
+  let snapshot = await getLatestProductDefinitionSnapshot(productId);
+  if (!snapshot) {
+    await confirmProductDefinition(productId, actorId);
+    snapshot = await getLatestProductDefinitionSnapshot(productId);
+  }
+  if (!snapshot) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "未能生成产品定义快照。请重新确认产品定义后再创建项目。",
+    });
+  }
+  return snapshot;
+}
+
+const HANDOFF_ROLE_LABELS: Record<string, string> = {
+  rd_mech: "结构 / ID",
+  rd_hw: "电子 / 硬件",
+  rd_sw: "软件",
+  qa: "品质 / 测试",
+  scm: "采购 / 供应链",
+  cert: "认证",
+  battery_safety: "电池安全",
+  pe: "工艺 / PE",
+  mfg: "制造",
+  sales: "销售 / 客户",
+  pm: "产品 / 项目",
+  other: "未分配",
+};
+
+function inferHandoffRole(...parts: Array<string | null | undefined>): string {
+  const text = parts.filter(Boolean).join(" ").toLowerCase();
+  if (/结构|机械|外壳|id|mech|mechanical|housing/.test(text)) return "rd_mech";
+  if (/电子|硬件|电控|pcba|pcb|motor|hardware|\bhw\b/.test(text)) return "rd_hw";
+  if (/软件|固件|app|firmware|software|\bsw\b/.test(text)) return "rd_sw";
+  if (/电池|锂电|battery|bms/.test(text)) return "battery_safety";
+  if (/品质|质量|测试|验证|可靠性|qa|qc|test|reliability/.test(text)) return "qa";
+  if (/采购|供应|供应链|供应商|bom|成本|scm|supplier|sourcing|cost/.test(text)) return "scm";
+  if (/认证|安规|法规|ce|fcc|etl|ul|rohs|reach|cert/.test(text)) return "cert";
+  if (/工艺|pe|制程|夹具|治具|process/.test(text)) return "pe";
+  if (/制造|生产|装配|量产|mfg|manufactur/.test(text)) return "mfg";
+  if (/客户|销售|市场|渠道|sales|customer|market/.test(text)) return "sales";
+  if (/产品|项目|pm|prd|定位|卖点/.test(text)) return "pm";
+  return "other";
+}
+
+function buildHandoffRoleBuckets(
+  snapshot: Awaited<ReturnType<typeof getLatestProductDefinitionSnapshot>> | undefined,
+  changes: Awaited<ReturnType<typeof listProductDefinitionChanges>>,
+) {
+  const buckets = new Map<string, {
+    role: string;
+    label: string;
+    specs: Array<{ label: string; target: string; tolerance?: string; verification?: string; ownerRole?: string }>;
+    changes: Array<{ id: number; title: string; area: string; status: string; costImpact: string | null; scheduleImpact: string | null }>;
+  }>();
+  const ensure = (role: string) => {
+    if (!buckets.has(role)) {
+      buckets.set(role, {
+        role,
+        label: HANDOFF_ROLE_LABELS[role] ?? role,
+        specs: [],
+        changes: [],
+      });
+    }
+    return buckets.get(role)!;
+  };
+
+  for (const spec of snapshot?.snapshot.specs ?? []) {
+    const role = inferHandoffRole(spec.ownerRole, spec.label, spec.verification, spec.target);
+    ensure(role).specs.push({
+      label: spec.label,
+      target: spec.target,
+      tolerance: spec.tolerance,
+      verification: spec.verification,
+      ownerRole: spec.ownerRole,
+    });
+  }
+
+  for (const change of changes) {
+    const scopes = change.impactScope?.length ? change.impactScope : [];
+    const role = inferHandoffRole(...scopes, change.area, change.title, change.reason ?? undefined);
+    ensure(role).changes.push({
+      id: change.id,
+      title: change.title,
+      area: change.area,
+      status: change.status,
+      costImpact: change.costImpact ?? null,
+      scheduleImpact: change.scheduleImpact ?? null,
+    });
+  }
+
+  return Array.from(buckets.values())
+    .map((bucket) => ({ ...bucket, itemCount: bucket.specs.length + bucket.changes.length }))
+    .filter((bucket) => bucket.itemCount > 0)
+    .sort((a, b) => b.itemCount - a.itemCount || a.label.localeCompare(b.label, "zh-CN"));
+}
+
+function getHandoffTaskPhaseId(category: string, role: string): string {
+  const phases = getPhasesForCategory(category);
+  const planning = phases.find((phase) => phase.id === "planning")?.id ?? phases[1]?.id ?? phases[0]?.id ?? "planning";
+  const design = phases.find((phase) => phase.id === "design")?.id ?? phases[2]?.id ?? planning;
+  return ["rd_hw", "rd_sw", "rd_mech", "qa", "pe", "mfg", "battery_safety"].includes(role)
+    ? design
+    : planning;
+}
+
+function buildHandoffTaskInstructions(input: {
+  productName: string;
+  snapshotVersion: number;
+  bucket: ReturnType<typeof buildHandoffRoleBuckets>[number];
+}) {
+  const lines = [
+    `# 产品定义交接 - ${input.bucket.label}`,
+    "",
+    `来源：${input.productName} · PRD v${input.snapshotVersion}`,
+    `输入项：${input.bucket.specs.length} 条规格，${input.bucket.changes.length} 条变更影响`,
+    "",
+  ];
+  if (input.bucket.specs.length > 0) {
+    lines.push("规格输入：");
+    for (const spec of input.bucket.specs) {
+      lines.push(`- ${spec.label}: ${spec.target}${spec.tolerance ? `（${spec.tolerance}）` : ""}${spec.verification ? `；验证：${spec.verification}` : ""}`);
+    }
+    lines.push("");
+  }
+  if (input.bucket.changes.length > 0) {
+    lines.push("变更影响：");
+    for (const change of input.bucket.changes) {
+      lines.push(`- [${change.status}] ${change.title}${change.costImpact ? `；成本：${change.costImpact}` : ""}${change.scheduleImpact ? `；进度：${change.scheduleImpact}` : ""}`);
+    }
+    lines.push("");
+  }
+  lines.push("请确认本角色是否已理解并承接以上产品定义输入；如有不可达、成本超标或验证风险，请登记 Issue 或产品定义变更。");
+  return lines.join("\n");
+}
+
 export const projectsRouter = router({
   /** 跨项目组合看板：用户可见项目 + 健康度聚合 */
   portfolio: protectedProcedure.query(async ({ ctx }) => {
@@ -139,6 +291,119 @@ export const projectsRouter = router({
       return health ? { ...row, risk: health.risk } : row;
     }),
 
+  productHandoff: protectedProcedure
+    .input(z.object({ projectId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+      const role = await getEffectiveRole(input.projectId, ctx.user.id);
+      if (!role || !ROLE_PERMISSIONS[role].canView) throw new TRPCError({ code: "FORBIDDEN" });
+      if (!project.productId) {
+        return { product: null, snapshot: null, snapshotSource: "none" as const, changes: [], roleBuckets: [] };
+      }
+
+      const product = await getProductById(project.productId);
+      const lockedSnapshot = project.productDefinitionSnapshotId
+        ? await getProductDefinitionSnapshotById(project.productDefinitionSnapshotId)
+        : undefined;
+      const snapshot = lockedSnapshot?.productId === project.productId
+        ? lockedSnapshot
+        : await getLatestProductDefinitionSnapshot(project.productId);
+      const changes = await listProductDefinitionChanges(project.productId);
+      const roleBuckets = buildHandoffRoleBuckets(snapshot, changes);
+      return {
+        product: product ? {
+          id: product.id,
+          productNumber: product.productNumber,
+          name: product.name,
+          category: product.category,
+          targetMarkets: product.targetMarkets,
+        } : { id: project.productId, productNumber: "", name: project.productId, category: "", targetMarkets: [] },
+        snapshot,
+        snapshotSource: lockedSnapshot?.productId === project.productId ? "locked" as const : "latest" as const,
+        changes,
+        roleBuckets,
+      };
+    }),
+
+  generateHandoffTasks: protectedProcedure
+    .input(z.object({ projectId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+      const role = await getEffectiveRole(input.projectId, ctx.user.id);
+      if (!role || !ROLE_PERMISSIONS[role].canEditProjectInfo) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "仅 Owner/管理层/PM 可生成产品定义交接任务" });
+      }
+      if (!project.productId) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "项目未关联产品，无法生成产品定义交接任务" });
+      }
+
+      const product = await getProductById(project.productId);
+      const lockedSnapshot = project.productDefinitionSnapshotId
+        ? await getProductDefinitionSnapshotById(project.productDefinitionSnapshotId)
+        : undefined;
+      const snapshot = lockedSnapshot?.productId === project.productId
+        ? lockedSnapshot
+        : await getLatestProductDefinitionSnapshot(project.productId);
+      if (!snapshot) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "项目缺少已确认 PRD 快照，无法生成交接任务" });
+      }
+
+      const changes = await listProductDefinitionChanges(project.productId);
+      const roleBuckets = buildHandoffRoleBuckets(snapshot, changes);
+      if (roleBuckets.length === 0) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "没有可生成任务的角色交接输入" });
+      }
+
+      const existingTasks = await getProjectTasks(project.id);
+      const existingKeys = new Set(existingTasks.map((task) => `${task.phaseId}:${task.taskId}`));
+      const members = await getProjectMembers(project.id);
+      const roleToUser = new Map<string, number>();
+      for (const member of members) {
+        if (!roleToUser.has(member.role)) roleToUser.set(member.role, member.userId);
+      }
+
+      let created = 0;
+      let updated = 0;
+      let assigned = 0;
+      const generated: Array<{ phaseId: string; taskId: string; role: string; label: string }> = [];
+
+      for (const bucket of roleBuckets) {
+        const phaseId = getHandoffTaskPhaseId(project.category, bucket.role);
+        const taskId = `pd_${bucket.role}`.slice(0, 32);
+        const assigneeUserId = roleToUser.get(bucket.role) ?? null;
+        const visibleRoles = Array.from(new Set([bucket.role, "pm", "manager", "owner"]));
+        await upsertProjectTask(project.id, phaseId, taskId, {
+          instructions: buildHandoffTaskInstructions({
+            productName: product?.name ?? project.productId,
+            snapshotVersion: snapshot.versionNumber,
+            bucket,
+          }),
+          visibleRoles,
+          assigneeUserId,
+          priority: bucket.changes.some((change) => change.status === "approved" || change.status === "implemented") ? "high" : "medium",
+          status: "todo",
+          updatedBy: ctx.user.id,
+        });
+        if (existingKeys.has(`${phaseId}:${taskId}`)) updated += 1;
+        else created += 1;
+        if (assigneeUserId) assigned += 1;
+        generated.push({ phaseId, taskId, role: bucket.role, label: bucket.label });
+      }
+
+      await createActivityLog({
+        projectId: project.id,
+        userId: ctx.user.id,
+        action: "project.generate_handoff_tasks",
+        entityType: "project",
+        entityId: project.id,
+        meta: { created, updated, assigned, generated },
+      });
+
+      return { success: true, created, updated, assigned, generated };
+    }),
+
   /** Create a new project (requires canCreateProject or admin role) */
   create: protectedProcedure
     .input(projectInputSchema)
@@ -151,6 +416,9 @@ export const projectsRouter = router({
           message: '您没有创建项目的权限。请联系管理员授权。',
         });
       }
+      const handoffSnapshot = input.category === "npd" && input.productId
+        ? await requireConfirmedProductDefinitionSnapshot(input.productId, ctx.user.id)
+        : null;
       await createProjectWithSeed({
         id: input.id,
         name: input.name,
@@ -158,6 +426,7 @@ export const projectsRouter = router({
         category: input.category,
         pmUserId: input.pmUserId ?? null,
         productId: input.productId ?? null,
+        productDefinitionSnapshotId: handoffSnapshot?.id ?? null,
         description: input.description ?? null,
         customer: input.customer ?? null,
         background: input.background ?? null,
@@ -226,12 +495,23 @@ export const projectsRouter = router({
       const role = await getEffectiveRole(input.id, ctx.user.id);
       if (!role || !ROLE_PERMISSIONS[role].canEditProjectInfo) throw new TRPCError({ code: "FORBIDDEN" });
 
+      let productDefinitionSnapshotId = existing.productDefinitionSnapshotId ?? null;
+      if (input.category === "npd" && input.productId) {
+        if (input.productId !== existing.productId || !existing.productDefinitionSnapshotId) {
+          const snapshot = await requireConfirmedProductDefinitionSnapshot(input.productId, ctx.user.id);
+          productDefinitionSnapshotId = snapshot.id;
+        }
+      } else if (!input.productId) {
+        productDefinitionSnapshotId = null;
+      }
+
       await updateProject(input.id, {
         name: input.name,
         projectNumber: input.projectNumber,
         category: input.category,
         pmUserId: input.pmUserId ?? null,
         productId: input.productId ?? null,
+        productDefinitionSnapshotId,
         description: input.description ?? null,
         customer: input.customer ?? null,
         background: input.background ?? null,

@@ -3,7 +3,7 @@ import { useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { PHASE_MAP } from "@/lib/data";
-import { TaskListView, type TaskRow } from "../TaskListView";
+import { TaskListView, resolveTaskName, type TaskRow, type TaskFocus } from "../TaskListView";
 import type { TaskStatus, TaskPriority } from "@shared/const";
 import { isProjectedOverdue, type RagLevel } from "@shared/health";
 import {
@@ -27,7 +27,7 @@ function scoreRow(row: PortfolioTableRow): ScoredRow {
   return { row, level: row.ragLevel, reasons: row.ragReasons };
 }
 
-export function PerspectivePanel({ lens, rows, onSelectProject }: { lens: Lens; rows: PortfolioTableRow[]; onSelectProject: (id: string) => void }) {
+export function PerspectivePanel({ lens, rows, onSelectProject }: { lens: Lens; rows: PortfolioTableRow[]; onSelectProject: (id: string, focus?: TaskFocus) => void }) {
   const { user } = useAuth();
   const { data: workbench, isLoading: workbenchLoading, refetch: refetchWorkbench } = trpc.workbench.mine.useQuery();
   const scored = useMemo(() => rows.map(scoreRow), [rows]);
@@ -283,6 +283,8 @@ type WorkbenchData = {
 type QueueItem = {
   key: string;
   projectId: string;
+  phaseId?: string;
+  taskId?: string;
   title: string;
   detail: string;
   tag: string;
@@ -292,7 +294,7 @@ type QueueItem = {
 };
 
 function RoleWorkbench({ workbench, isLoading, onRefetch, onSelectProject }: {
-  workbench?: WorkbenchData; isLoading: boolean; onRefetch: () => void; onSelectProject: (id: string) => void;
+  workbench?: WorkbenchData; isLoading: boolean; onRefetch: () => void; onSelectProject: (id: string, focus?: TaskFocus) => void;
 }) {
   const tasks = workbench?.tasks ?? [];
   const reviews = workbench?.reviews ?? [];
@@ -333,7 +335,9 @@ function buildWorkbenchQueue(tasks: MyTaskApiRow[], reviews: WorkbenchReview[], 
   const taskItems = tasks.map((task) => ({
     key: `task-${task.id}`,
     projectId: task.projectId,
-    title: task.taskId,
+    phaseId: task.phaseId,
+    taskId: task.taskId,
+    title: resolveTaskName(task.taskId, task.phaseId, task.projectCategory),
     detail: `${task.projectName} · ${task.dueDate ? `截止 ${task.dueDate}` : "未设截止日"}`,
     tag: task.priority === "critical" ? "P0任务" : task.priority === "high" ? "P1任务" : "我的任务",
     tone: task.status === "blocked" ? "rose" : task.priority === "critical" || task.priority === "high" ? "amber" : "stone",
@@ -385,12 +389,12 @@ function dueScore(dueDate: string) {
   return 0;
 }
 
-function QueueRows({ items, onSelectProject }: { items: QueueItem[]; onSelectProject: (id: string) => void }) {
+function QueueRows({ items, onSelectProject }: { items: QueueItem[]; onSelectProject: (id: string, focus?: TaskFocus) => void }) {
   if (items.length === 0) return <div className="text-sm text-stone-400">暂无需要你处理的事项。</div>;
   return (
     <div className="divide-y divide-stone-100">
       {items.map((item) => (
-        <button key={item.key} onClick={() => onSelectProject(item.projectId)} className="w-full text-left py-2.5 hover:bg-stone-50/70 -mx-2 px-2 transition-colors">
+        <button key={item.key} onClick={() => onSelectProject(item.projectId, item.phaseId && item.taskId ? { phaseId: item.phaseId, taskId: item.taskId } : undefined)} className="w-full text-left py-2.5 hover:bg-stone-50/70 -mx-2 px-2 transition-colors">
           <div className="flex items-start gap-3">
             <span className={`mt-0.5 ${item.tone === "rose" ? "text-rose-500" : item.tone === "amber" ? "text-amber-500" : "text-stone-400"}`}>{item.icon}</span>
             <div className="min-w-0 flex-1">

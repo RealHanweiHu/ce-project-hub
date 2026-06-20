@@ -14,6 +14,9 @@ import {
   activityLogs, InsertActivityLog, ActivityLog,
   platforms, InsertPlatform,
   products, InsertProduct, ProductRow,
+  productDefinitions, ProductDefinition, InsertProductDefinition,
+  productDefinitionSnapshots, ProductDefinitionSnapshot, ProductDefinitionSnapshotPayload,
+  productDefinitionChanges, ProductDefinitionChange, InsertProductDefinitionChange,
   productRevisions, InsertProductRevision, ProductRevision,
   mpReleases, InsertMpRelease,
   customerVariants, CustomerVariant, InsertCustomerVariant,
@@ -36,13 +39,11 @@ import { getPhasesForCategory, getReleaseGatePhase } from "../shared/sop-templat
 import { computeDownstreamImpact, type DownstreamImpactRow, type VariantStatus } from "../shared/oem-variant";
 import { computeGateReadiness, type GateReadiness } from "../shared/gate-readiness";
 import { getDeliverableLibrary, getEffectiveProcess, type EffectiveProcess } from "../shared/effective-process";
-import { scheduleForCategory, buildSchedTasks } from "../shared/schedule-graph";
+import { buildSchedTasks } from "../shared/schedule-graph";
 import {
   forecastSchedule,
   projectedEndFromSchedule,
-  rescheduleFrom,
   type ForecastTaskState,
-  type Schedule,
   type CalendarExceptions,
 } from "../shared/scheduling";
 import {
@@ -55,8 +56,6 @@ import {
   type RagLevel,
 } from "../shared/health";
 import type { MetricGate, MetricIssue, MetricPhase, MetricTask } from "../shared/metrics";
-import { computeDelayImpact, type DelayImpact } from "../shared/delay-impact";
-import { emitAutomationEvent } from "./automation/events";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -437,13 +436,14 @@ function forecastProjectEnd(
   todayISO: string,
   cal?: CalendarExceptions
 ): string | null {
-  if (rows.length === 0) return null;
-  const hasScheduleSignal = !!project.startDate || rows.some((row) => row.startDate || row.dueDate || row.completedAt);
+  const effectiveRows = rows.filter((row) => row.status !== "skipped");
+  if (effectiveRows.length === 0) return null;
+  const hasScheduleSignal = !!project.startDate || effectiveRows.some((row) => row.startDate || row.dueDate || row.completedAt);
   if (!hasScheduleSignal) return null;
-  const rowIds = new Set(rows.map((row) => row.taskId));
+  const rowIds = new Set(effectiveRows.map((row) => row.taskId));
   const schedTasks = buildSchedTasks(getPhasesForCategory(project.category)).filter((task) => rowIds.has(task.id));
-  if (schedTasks.length === 0) return maxISODate(rows.map((row) => row.dueDate));
-  const states: ForecastTaskState[] = rows.map((row) => ({
+  if (schedTasks.length === 0) return maxISODate(effectiveRows.map((row) => row.dueDate));
+  const states: ForecastTaskState[] = effectiveRows.map((row) => ({
     id: row.taskId,
     startDate: row.startDate,
     dueDate: row.dueDate,
@@ -940,7 +940,18 @@ export async function upsertProjectTask(
   projectId: string,
   phaseId: string,
   taskId: string,
-  patch: { completed?: boolean; instructions?: string | null; visibleRoles?: string[]; status?: TaskStatus; completedAt?: Date | null; updatedBy?: number | null; dueDate?: string | null }
+  patch: {
+    completed?: boolean;
+    instructions?: string | null;
+    visibleRoles?: string[];
+    assigneeUserId?: number | null;
+    status?: TaskStatus;
+    priority?: TaskPriority;
+    completedAt?: Date | null;
+    updatedBy?: number | null;
+    dueDate?: string | null;
+    startDate?: string | null;
+  }
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -2021,134 +2032,6 @@ export async function assignTasksByRole(
   return out;
 }
 
-// ── 自动排期：生成 / 联动重排 ─────────────────────────────────────────────────
-
-/** 按项目 category + 开始日重生成整套任务起止日，写回 project_tasks。返回写入任务数。 */
-export async function applyProjectSchedule(projectId: string): Promise<number> {
-  const db = await getDb();
-  if (!db) return 0;
-  const project = await getProjectById(projectId);
-  if (!project?.startDate) return 0;
-  const cal = await getCalendarExceptions();
-  const schedule = scheduleForCategory(project.category, project.startDate, cal);
-  let n = 0;
-  for (const [taskId, d] of Object.entries(schedule)) {
-    await db.update(projectTasks)
-      .set({ startDate: d.start, dueDate: d.due })
-      .where(and(eq(projectTasks.projectId, projectId), eq(projectTasks.taskId, taskId)));
-    n += 1;
-  }
-  if (n > 0) await refreshProjectTaskStatuses(projectId);
-  return n;
-}
-
-type EffectiveScheduleContext = {
-  schedTasks: ReturnType<typeof buildSchedTasks>;
-  current: Schedule;
-  effectiveIds: Set<string>;
-  gateTaskIds: Set<string>;
-  gateNames: Record<string, string>;
-  targetDate: string | null;
-  cal: CalendarExceptions;
-};
-
-async function loadEffectiveScheduleContext(projectId: string): Promise<EffectiveScheduleContext | null> {
-  const db = await getDb();
-  if (!db) return null;
-  const project = await getProjectById(projectId);
-  if (!project) return null;
-
-  const rows = await db
-    .select({ taskId: projectTasks.taskId, startDate: projectTasks.startDate, dueDate: projectTasks.dueDate, status: projectTasks.status })
-    .from(projectTasks)
-    .where(eq(projectTasks.projectId, projectId));
-
-  const effectiveIds = new Set(rows.filter((r) => r.status !== "skipped").map((r) => r.taskId));
-  const current: Schedule = {};
-  for (const r of rows) {
-    if (effectiveIds.has(r.taskId) && r.startDate && r.dueDate) {
-      current[r.taskId] = { start: r.startDate, due: r.dueDate };
-    }
-  }
-
-  const phases = getPhasesForCategory(project.category);
-  const schedTasks = buildSchedTasks(phases).filter((t) => effectiveIds.has(t.id));
-  const gateTaskIds = new Set(phases.map((p) => p.gateTaskId).filter((id) => effectiveIds.has(id)));
-  const gateNames: Record<string, string> = {};
-  for (const p of phases) if (effectiveIds.has(p.gateTaskId)) gateNames[p.gateTaskId] = p.gate;
-
-  return {
-    schedTasks,
-    current,
-    effectiveIds,
-    gateTaskIds,
-    gateNames,
-    targetDate: project.targetDate ?? null,
-    cal: await getCalendarExceptions(),
-  };
-}
-
-/** 改某任务起止后，只向后联动重排其传递后继；返回受影响并更新的任务数。 */
-export async function rescheduleProjectFromTask(
-  projectId: string, taskId: string, start: string, due: string,
-  deps: { emit?: (e: any) => Promise<void> } = {}
-): Promise<{ count: number; impact: DelayImpact | null }> {
-  const db = await getDb();
-  if (!db) return { count: 0, impact: null };
-  const ctx = await loadEffectiveScheduleContext(projectId);
-  if (!ctx || !ctx.effectiveIds.has(taskId)) return { count: 0, impact: null };
-
-  const impact = computeDelayImpact({
-    schedTasks: ctx.schedTasks,
-    current: ctx.current,
-    changedTaskId: taskId,
-    newDates: { start, due },
-    gateTaskIds: ctx.gateTaskIds,
-    gateNames: ctx.gateNames,
-    targetDate: ctx.targetDate,
-    cal: ctx.cal,
-  });
-  const next = rescheduleFrom(ctx.schedTasks, ctx.current, taskId, { start, due }, ctx.cal);
-  let n = 0;
-  for (const [id, d] of Object.entries(next)) {
-    if (ctx.current[id]?.start === d.start && ctx.current[id]?.due === d.due) continue;
-    await db.update(projectTasks)
-      .set({ startDate: d.start, dueDate: d.due })
-      .where(and(eq(projectTasks.projectId, projectId), eq(projectTasks.taskId, id)));
-    n += 1;
-  }
-  if (n > 0) await refreshProjectTaskStatuses(projectId);
-
-  if (impact?.hasImpact) {
-    const emit = deps.emit ?? emitAutomationEvent;
-    await emit({
-      action: "task.rescheduled",
-      entityType: "task",
-      entityId: taskId,
-      projectId,
-      impact,
-    } as any);
-  }
-  return { count: n, impact };
-}
-
-export async function computeProjectDelayImpact(
-  projectId: string, taskId: string, start: string, due: string
-): Promise<DelayImpact | null> {
-  const ctx = await loadEffectiveScheduleContext(projectId);
-  if (!ctx || !ctx.effectiveIds.has(taskId)) return null;
-  return computeDelayImpact({
-    schedTasks: ctx.schedTasks,
-    current: ctx.current,
-    changedTaskId: taskId,
-    newDates: { start, due },
-    gateTaskIds: ctx.gateTaskIds,
-    gateNames: ctx.gateNames,
-    targetDate: ctx.targetDate,
-    cal: ctx.cal,
-  });
-}
-
 export type TaskWithContext = ProjectTask & {
   projectName: string;
   projectNumber: string;
@@ -2346,6 +2229,235 @@ export async function listProductsByCategory(category?: string): Promise<Product
     return db.select().from(products).where(eq(products.category, category)).orderBy(desc(products.updatedAt));
   }
   return db.select().from(products).orderBy(desc(products.updatedAt));
+}
+
+type ProductDefinitionPatch = Partial<Omit<
+  InsertProductDefinition,
+  "id" | "productId" | "createdBy" | "createdAt" | "updatedAt" | "status" | "confirmedBy" | "confirmedAt"
+>>;
+
+function withoutUndefined<T extends Record<string, unknown>>(patch: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(patch).filter(([, value]) => value !== undefined)
+  ) as Partial<T>;
+}
+
+export async function getProductDefinitionByProductId(productId: string): Promise<ProductDefinition | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(productDefinitions).where(eq(productDefinitions.productId, productId)).limit(1);
+  return rows[0];
+}
+
+export async function listProductDefinitionStatuses(): Promise<Array<{
+  productId: string;
+  status: ProductDefinition["status"];
+  confirmedAt: Date | null;
+}>> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    productId: productDefinitions.productId,
+    status: productDefinitions.status,
+    confirmedAt: productDefinitions.confirmedAt,
+  }).from(productDefinitions);
+}
+
+function toProductDefinitionSnapshotPayload(definition: ProductDefinition): ProductDefinitionSnapshotPayload {
+  return {
+    title: definition.title,
+    opportunityName: definition.opportunityName,
+    opportunitySource: definition.opportunitySource,
+    targetCustomers: definition.targetCustomers,
+    targetMarkets: definition.targetMarkets,
+    applicationScenarios: definition.applicationScenarios,
+    competitors: definition.competitors,
+    priceBand: definition.priceBand,
+    positioning: definition.positioning,
+    sellingPoints: definition.sellingPoints,
+    differentiationStrategy: definition.differentiationStrategy,
+    prdSummary: definition.prdSummary,
+    specs: definition.specs,
+    targetCost: definition.targetCost,
+    targetPrice: definition.targetPrice,
+    targetGrossMargin: definition.targetGrossMargin,
+    skuPlan: definition.skuPlan,
+  };
+}
+
+export async function listProductDefinitionSnapshots(productId: string): Promise<ProductDefinitionSnapshot[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select()
+    .from(productDefinitionSnapshots)
+    .where(eq(productDefinitionSnapshots.productId, productId))
+    .orderBy(desc(productDefinitionSnapshots.versionNumber));
+}
+
+export async function getLatestProductDefinitionSnapshot(productId: string): Promise<ProductDefinitionSnapshot | undefined> {
+  const snapshots = await listProductDefinitionSnapshots(productId);
+  return snapshots[0];
+}
+
+export async function getProductDefinitionSnapshotById(id: number): Promise<ProductDefinitionSnapshot | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(productDefinitionSnapshots).where(eq(productDefinitionSnapshots.id, id)).limit(1);
+  return rows[0];
+}
+
+async function createProductDefinitionSnapshot(definition: ProductDefinition, actorId: number): Promise<ProductDefinitionSnapshot> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const latest = await db.select({ versionNumber: productDefinitionSnapshots.versionNumber })
+    .from(productDefinitionSnapshots)
+    .where(eq(productDefinitionSnapshots.productId, definition.productId))
+    .orderBy(desc(productDefinitionSnapshots.versionNumber))
+    .limit(1);
+  const confirmedAt = definition.confirmedAt ?? new Date();
+  const rows = await db.insert(productDefinitionSnapshots)
+    .values({
+      productId: definition.productId,
+      definitionId: definition.id,
+      versionNumber: (latest[0]?.versionNumber ?? 0) + 1,
+      title: definition.title,
+      snapshot: toProductDefinitionSnapshotPayload(definition),
+      confirmedBy: actorId,
+      confirmedAt,
+    })
+    .returning();
+  return rows[0];
+}
+
+export async function upsertProductDefinition(
+  productId: string,
+  actorId: number,
+  patch: ProductDefinitionPatch,
+): Promise<ProductDefinition> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const existing = await getProductDefinitionByProductId(productId);
+  const clean = withoutUndefined(patch);
+  if (existing) {
+    const rows = await db.update(productDefinitions)
+      .set({
+        ...clean,
+        status: "draft",
+        confirmedBy: null,
+        confirmedAt: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(productDefinitions.productId, productId))
+      .returning();
+    return rows[0];
+  }
+  const rows = await db.insert(productDefinitions)
+    .values({ productId, createdBy: actorId, ...clean })
+    .returning();
+  return rows[0];
+}
+
+export async function confirmProductDefinition(productId: string, actorId: number): Promise<ProductDefinition> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const existing = await getProductDefinitionByProductId(productId);
+  if (!existing) throw new Error("产品定义不存在");
+  if (existing.status === "confirmed") {
+    const snapshots = await listProductDefinitionSnapshots(productId);
+    if (snapshots.length === 0) {
+      await createProductDefinitionSnapshot(existing, actorId);
+    }
+    return existing;
+  }
+  const rows = await db.update(productDefinitions)
+    .set({
+      status: "confirmed",
+      confirmedBy: actorId,
+      confirmedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(eq(productDefinitions.productId, productId))
+    .returning();
+  await createProductDefinitionSnapshot(rows[0], actorId);
+  return rows[0];
+}
+
+type ProductDefinitionChangePatch = Partial<Omit<
+  InsertProductDefinitionChange,
+  "id" | "productId" | "createdBy" | "createdAt" | "updatedAt" | "approvedBy" | "approvedAt"
+>>;
+
+export async function listProductDefinitionChanges(productId: string): Promise<ProductDefinitionChange[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select()
+    .from(productDefinitionChanges)
+    .where(eq(productDefinitionChanges.productId, productId))
+    .orderBy(desc(productDefinitionChanges.createdAt));
+}
+
+export async function getProductDefinitionChangeById(id: number): Promise<ProductDefinitionChange | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(productDefinitionChanges).where(eq(productDefinitionChanges.id, id)).limit(1);
+  return rows[0];
+}
+
+export async function createProductDefinitionChange(
+  record: Omit<InsertProductDefinitionChange, "id" | "createdAt" | "updatedAt" | "approvedBy" | "approvedAt">
+): Promise<ProductDefinitionChange> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const rows = await db.insert(productDefinitionChanges).values(record).returning();
+  return rows[0];
+}
+
+export async function updateProductDefinitionChange(
+  id: number,
+  actorId: number,
+  patch: ProductDefinitionChangePatch,
+): Promise<ProductDefinitionChange | undefined> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const existing = await getProductDefinitionChangeById(id);
+  if (!existing) return undefined;
+  const clean = withoutUndefined(patch);
+  const shouldStampApproval = clean.status === "approved" && existing.status !== "approved";
+  const shouldClearApproval = clean.status && clean.status !== "approved";
+  const rows = await db.update(productDefinitionChanges)
+    .set({
+      ...clean,
+      approvedBy: shouldStampApproval ? actorId : shouldClearApproval ? null : existing.approvedBy,
+      approvedAt: shouldStampApproval ? new Date() : shouldClearApproval ? null : existing.approvedAt,
+      updatedAt: new Date(),
+    })
+    .where(eq(productDefinitionChanges.id, id))
+    .returning();
+  return rows[0];
+}
+
+export type ProductDefinitionDeviationReport = {
+  baselineStatus: ProductDefinition["status"] | "missing";
+  confirmedAt: Date | null;
+  deviated: boolean;
+  approvedDeviationCount: number;
+  pendingChangeCount: number;
+  items: ProductDefinitionChange[];
+};
+
+export async function getProductDefinitionDeviation(productId: string): Promise<ProductDefinitionDeviationReport> {
+  const definition = await getProductDefinitionByProductId(productId);
+  const changes = await listProductDefinitionChanges(productId);
+  const approvedItems = changes.filter((change) => change.status === "approved" || change.status === "implemented");
+  const pendingItems = changes.filter((change) => change.status === "proposed");
+  return {
+    baselineStatus: definition?.status ?? "missing",
+    confirmedAt: definition?.confirmedAt ?? null,
+    deviated: definition?.status === "confirmed" && approvedItems.length > 0,
+    approvedDeviationCount: approvedItems.length,
+    pendingChangeCount: pendingItems.length,
+    items: approvedItems,
+  };
 }
 
 export async function createProductRevision(r: InsertProductRevision): Promise<number> {

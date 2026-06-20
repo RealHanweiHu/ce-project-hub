@@ -28,6 +28,9 @@ export interface TaskRow {
   completed: boolean;
 }
 
+/** Deep-link target: open a project at a specific phase with a task detail expanded. */
+export type TaskFocus = { phaseId: string; taskId: string };
+
 interface TaskListViewProps {
   tasks: TaskRow[];
   isLoading: boolean;
@@ -35,7 +38,7 @@ interface TaskListViewProps {
   emptyTitle: string;
   emptyDesc: string;
   onRefetch: () => void;
-  onNavigateToProject?: (projectId: string) => void;
+  onNavigateToProject?: (projectId: string, focus?: TaskFocus) => void;
   /** Show assignee column (for overdue/blocked views where PM needs to see who owns it) */
   showAssignee?: boolean;
   /** Show overdue indicator */
@@ -61,7 +64,7 @@ const PRIORITY_CONFIG: Record<TaskPriority, { label: string; color: string; dot:
 
 // ─── Helper: resolve task display name from SOP template ─────────────────────
 
-function resolveTaskName(taskId: string, phaseId: string, category: string): string {
+export function resolveTaskName(taskId: string, phaseId: string, category: string): string {
   try {
     const phases = getPhasesForCategory(category);
     const phase = phases.find((p) => p.id === phaseId);
@@ -163,9 +166,10 @@ export function TaskListView({
         return (
           <div
             key={task.id}
+            onClick={onNavigateToProject ? () => onNavigateToProject(task.projectId, { phaseId: task.phaseId, taskId: task.taskId }) : undefined}
             className={`grid grid-cols-[1fr_auto_auto_auto_auto] gap-2 px-3 py-3 items-center border-b border-stone-100 hover:bg-stone-50/70 transition-colors group ${
-              overdue ? 'bg-red-50/30' : ''
-            }`}
+              onNavigateToProject ? 'cursor-pointer' : ''
+            } ${overdue ? 'bg-red-50/30' : ''}`}
           >
             {/* Task name + project context */}
             <div className="min-w-0">
@@ -213,9 +217,9 @@ export function TaskListView({
             <div className="w-6 flex justify-center">
               {onNavigateToProject && (
                 <button
-                  onClick={() => onNavigateToProject(task.projectId)}
+                  onClick={(e) => { e.stopPropagation(); onNavigateToProject(task.projectId, { phaseId: task.phaseId, taskId: task.taskId }); }}
                   className="opacity-0 group-hover:opacity-100 transition-opacity text-stone-400 hover:text-amber-600"
-                  title={`打开项目 ${task.projectName}`}
+                  title={`打开任务 ${taskName}`}
                 >
                   <ChevronRight size={14} />
                 </button>

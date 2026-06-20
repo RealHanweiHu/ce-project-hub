@@ -8,8 +8,9 @@ import { useLocation } from 'wouter';
 import {
   LayoutDashboard, FolderKanban, BookOpen, Save, CheckCircle2,
   ChevronRight, Menu, X, Cpu, Search, LogIn, Loader2, Cloud, Shield, KeyRound,
-  LogOut, Package, Inbox, CalendarDays,
+  LogOut, Package, Inbox, CalendarDays, ListChecks,
 } from 'lucide-react';
+import type { TaskFocus } from '@/components/views/TaskListView';
 import { nanoid } from 'nanoid';
 import {
   Project, normalizeProject, Issue, GateReview, ChangeRecord, PhaseData,
@@ -23,10 +24,13 @@ import { getQueryKey } from '@trpc/react-query';
 import { useProjectData } from '@/hooks/useProjectData';
 import { NotificationBell } from '@/components/NotificationBell';
 
-type View = 'overview' | 'projects' | 'calendar' | 'products' | 'requirements' | 'sop';
+type View = 'overview' | 'mytasks' | 'projects' | 'calendar' | 'products' | 'requirements' | 'sop';
 
 const OverviewPage = lazy(() =>
   import('@/components/views/overview/OverviewPage').then((module) => ({ default: module.OverviewPage }))
+);
+const MyTasksView = lazy(() =>
+  import('@/components/views/MyTasksView').then((module) => ({ default: module.MyTasksView }))
 );
 const ProjectListView = lazy(() =>
   import('@/components/views/ProjectListView').then((module) => ({ default: module.ProjectListView }))
@@ -93,6 +97,7 @@ function projectToApiInput(p: Project) {
 // Helper: convert API row (new schema) back to lightweight Project shape for list views
 function rowToProject(row: {
   id: string; name: string; projectNumber: string; category: string;
+  productId?: string | null; productDefinitionSnapshotId?: number | null;
   pmUserId?: number | null; risk: string; currentPhase: string; progress: number;
   startDate: string | null; targetDate: string | null;
 }): Project {
@@ -103,6 +108,8 @@ function rowToProject(row: {
     category: (row.category as 'npd' | 'eco' | 'idr' | 'jdm' | 'obt') || 'npd',
     pm: '',
     pmUserId: row.pmUserId ?? null,
+    productId: row.productId ?? null,
+    productDefinitionSnapshotId: row.productDefinitionSnapshotId ?? null,
     risk: (row.risk as 'low' | 'medium' | 'high') || 'low',
     currentPhase: row.currentPhase || 'concept',
     startDate: row.startDate || '',
@@ -116,10 +123,12 @@ function rowToProject(row: {
 // Loads full relational data for the selected project and handles all writes.
 function ProjectDetailWrapper({
   projectId,
+  focus,
   onBack,
   onSaveStatus,
 }: {
   projectId: string;
+  focus?: TaskFocus | null;
   onBack: () => void;
   onSaveStatus: (status: 'saved' | 'saving' | 'error', at?: Date) => void;
 }) {
@@ -470,6 +479,8 @@ function ProjectDetailWrapper({
       project={project}
       onUpdate={handleUpdate}
       onBack={onBack}
+      initialPhaseId={focus?.phaseId}
+      initialTaskId={focus?.taskId}
     />
   );
 }
@@ -484,6 +495,7 @@ export default function Home() {
 
   const [view, setView] = useState<View>('overview');
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [pendingFocus, setPendingFocus] = useState<TaskFocus | null>(null);
   const [kickoffProject, setKickoffProject] = useState<{ id: string; name: string; category: string; pmUserId: number | null; startDate: string | null } | null>(null);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
@@ -498,6 +510,16 @@ export default function Home() {
   );
 
   const projects: Project[] = projectRows.map(rowToProject);
+
+  // 首屏落点：非 admin、非任何项目 PM 的执行者(如结构工程师)默认进「我的任务」。
+  const { data: portfolioRows } = trpc.projects.portfolio.useQuery(undefined, { enabled: !!user });
+  const landingAppliedRef = useRef(false);
+  useEffect(() => {
+    if (landingAppliedRef.current || !user || portfolioRows === undefined) return;
+    landingAppliedRef.current = true;
+    const isPM = (portfolioRows as Array<{ pmUserId: number | null }>).some((r) => r.pmUserId === user.id);
+    if (!isAdmin && !isPM) setView('mytasks');
+  }, [user, portfolioRows, isAdmin]);
 
   const createMutation = trpc.projects.create.useMutation();
   const deleteMutation = trpc.projects.delete.useMutation();
@@ -520,6 +542,7 @@ export default function Home() {
   const handleSearchNavigate = useCallback((result: { type: string; projectId?: string }) => {
     if (result.projectId) {
       setSelectedProjectId(result.projectId);
+      setPendingFocus(null);
       setView('projects');
     } else if (result.type === 'sop') {
       setView('sop');
@@ -532,8 +555,9 @@ export default function Home() {
     ? projects.find((p) => p.id === selectedProjectId) || null
     : null;
 
-  const handleSelectProject = (id: string) => {
+  const handleSelectProject = (id: string, focus?: TaskFocus) => {
     setSelectedProjectId(id);
+    setPendingFocus(focus ?? null);
     setView('projects');
     setSidebarOpen(false);
   };
@@ -604,6 +628,7 @@ export default function Home() {
 
   // ── Navigation ───────────────────────────────────────────────────────────
   const navItems = [
+    { id: 'mytasks' as View, label: '我的任务', labelEn: 'My Tasks', icon: ListChecks },
     { id: 'overview' as View, label: '总览', labelEn: 'Overview', icon: LayoutDashboard },
     { id: 'projects' as View, label: '项目管理', labelEn: 'Projects', icon: FolderKanban },
     { id: 'calendar' as View, label: '日历', labelEn: 'Calendar', icon: CalendarDays },
@@ -613,12 +638,13 @@ export default function Home() {
 
   const handleNavClick = (v: View) => {
     setView(v);
-    if (v !== 'projects') setSelectedProjectId(null);
+    if (v !== 'projects') { setSelectedProjectId(null); setPendingFocus(null); }
     setSidebarOpen(false);
   };
 
   const viewLabels: Record<View, string> = {
     overview: 'Overview',
+    mytasks: 'My Tasks',
     projects: 'Projects',
     calendar: 'Calendar',
     products: 'Products',
@@ -921,6 +947,9 @@ export default function Home() {
               {view === 'overview' && (
                 <OverviewPage onSelectProject={handleSelectProject} />
               )}
+              {view === 'mytasks' && (
+                <MyTasksView onSelectProject={handleSelectProject} />
+              )}
               {view === 'projects' && !selectedProjectId && (
                 <ProjectListView
                   projects={projects}
@@ -933,7 +962,9 @@ export default function Home() {
               )}
               {view === 'projects' && selectedProjectId && (
                 <ProjectDetailWrapper
+                  key={`${selectedProjectId}:${pendingFocus?.taskId ?? ''}`}
                   projectId={selectedProjectId}
+                  focus={pendingFocus}
                   onBack={() => setSelectedProjectId(null)}
                   onSaveStatus={handleSaveStatus}
                 />

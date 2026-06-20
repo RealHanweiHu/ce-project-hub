@@ -151,6 +151,8 @@ export interface Project {
   pmUserId?: number | null;
   /** 关联产品(产品库 id) */
   productId?: string | null;
+  /** 创建/更新项目时锁定的产品定义快照 */
+  productDefinitionSnapshotId?: number | null;
   /** 立项基础信息 */
   description?: string | null;
   customer?: string | null;

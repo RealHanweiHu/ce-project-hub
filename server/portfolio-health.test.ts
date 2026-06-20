@@ -13,15 +13,18 @@ const TODAY = "2026-06-16";
 const CAL_PROJ = `pf-cal-${Date.now()}`;
 const CAL_HOLIDAY = "2026-06-25"; // 落在某未完成任务工期内
 const CAL_TODAY = "2026-06-16";
+const SKIP_PROJ = `pf-skip-${Date.now()}`;
 
 afterAll(async () => {
   const db = await getDb();
   if (!db) return;
   await db.delete(projectTasks).where(eq(projectTasks.projectId, PROJ));
   await db.delete(projectTasks).where(eq(projectTasks.projectId, CAL_PROJ));
+  await db.delete(projectTasks).where(eq(projectTasks.projectId, SKIP_PROJ));
   await db.delete(automationRuns).where(eq(automationRuns.ruleKey, "health_digest_test"));
   await db.delete(projects).where(eq(projects.id, PROJ));
   await db.delete(projects).where(eq(projects.id, CAL_PROJ));
+  await db.delete(projects).where(eq(projects.id, SKIP_PROJ));
   await db.delete(calendarExceptions).where(eq(calendarExceptions.date, CAL_HOLIDAY));
 });
 
@@ -99,6 +102,25 @@ describe("getPortfolioHealthForDigest", () => {
     const pNoHol = portfolioNoHol.find((x) => x.id === CAL_PROJ)!;
     expect(pNoHol.projectedEnd).not.toBeNull();
     expect(withHoliday > pNoHol.projectedEnd!).toBe(true);
+  });
+
+  it("projectedEnd 排除 skipped / 裁剪任务，避免远期无效任务拖长预测", async () => {
+    const db = await getDb();
+    if (!db) return;
+    await db.insert(projects).values({
+      id: SKIP_PROJ, name: "裁剪预测测试", projectNumber: SKIP_PROJ, category: "npd",
+      risk: "low", currentPhase: "concept", archived: false, createdBy: 1, startDate: "2026-06-01",
+    }).onConflictDoNothing();
+    await upsertProjectTask(SKIP_PROJ, "concept", "c1", { startDate: "2026-06-01", dueDate: "2026-06-06", status: "done" });
+    await upsertProjectTask(SKIP_PROJ, "concept", "c2", { startDate: "2026-06-06", dueDate: "2026-06-12", status: "in_progress" });
+    await upsertProjectTask(SKIP_PROJ, "concept", "c6", { startDate: "2099-01-01", dueDate: "2099-01-10", status: "skipped" });
+
+    const rows = await getPortfolioHealthForDigest("2026-06-10");
+    const row = rows.find((r) => r.id === SKIP_PROJ);
+    expect(row).toBeDefined();
+    expect(row!.plannedEnd).toBe("2099-01-10");
+    expect(row!.projectedEnd).not.toBeNull();
+    expect(row!.projectedEnd! < "2099-01-01").toBe(true);
   });
 
   it("hasAutomationRunForEntity 任意状态都算", async () => {

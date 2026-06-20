@@ -12,6 +12,7 @@ export function AutomationSettings() {
   // drafts 只存"用户改过"的草稿；未改的 textarea 直接回退到规则当前 config（避免用 effect 同步导致死循环）
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const draftFor = (ruleKey: string, config: unknown) => drafts[ruleKey] ?? JSON.stringify(config, null, 2);
+  const configFor = (rule: (typeof rules)[number]) => rule.effectiveConfig ?? rule.config;
 
   const updateRule = trpc.automation.updateRule.useMutation({
     onSuccess: async () => {
@@ -45,47 +46,51 @@ export function AutomationSettings() {
         <div className="p-6 text-sm text-stone-400 font-mono">加载中...</div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-px bg-stone-200">
-          {rules.map((rule) => (
-            <div key={rule.key} className="bg-white p-4 space-y-3">
-              <div className="flex items-start gap-3">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-stone-900">{rule.label}</span>
-                    <Badge variant={rule.enabled ? 'default' : 'outline'} className="text-[10px]">
-                      {rule.enabled ? '启用' : '关闭'}
-                    </Badge>
+          {rules.map((rule) => {
+            const config = configFor(rule);
+            return (
+              <div key={rule.key} className="bg-white p-4 space-y-3">
+                <div className="flex items-start gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-stone-900">{rule.label}</span>
+                      <Badge variant={rule.enabled ? 'default' : 'outline'} className="text-[10px]">
+                        {rule.enabled ? '启用' : '关闭'}
+                      </Badge>
+                    </div>
+                    <p className="text-[10px] font-mono uppercase tracking-wider text-stone-400 mt-0.5">
+                      {rule.key} · {rule.triggerType}
+                    </p>
                   </div>
-                  <p className="text-[10px] font-mono uppercase tracking-wider text-stone-400 mt-0.5">
-                    {rule.key} · {rule.triggerType}
-                  </p>
+                  <button
+                    onClick={() => updateRule.mutate({ ruleKey: rule.key, enabled: !rule.enabled })}
+                    className={`w-10 h-5 rounded-full p-0.5 transition-colors ${rule.enabled ? 'bg-emerald-500' : 'bg-stone-300'}`}
+                    title={rule.enabled ? '关闭规则' : '启用规则'}
+                  >
+                    <span className={`block w-4 h-4 rounded-full bg-white transition-transform ${rule.enabled ? 'translate-x-5' : ''}`} />
+                  </button>
                 </div>
-                <button
-                  onClick={() => updateRule.mutate({ ruleKey: rule.key, enabled: !rule.enabled })}
-                  className={`w-10 h-5 rounded-full p-0.5 transition-colors ${rule.enabled ? 'bg-emerald-500' : 'bg-stone-300'}`}
-                  title={rule.enabled ? '关闭规则' : '启用规则'}
-                >
-                  <span className={`block w-4 h-4 rounded-full bg-white transition-transform ${rule.enabled ? 'translate-x-5' : ''}`} />
-                </button>
-              </div>
 
-              <textarea
-                value={draftFor(rule.key, rule.config)}
-                onChange={(e) => setDrafts((prev) => ({ ...prev, [rule.key]: e.target.value }))}
-                className="w-full min-h-[132px] border border-stone-200 bg-stone-50 p-2 text-xs font-mono text-stone-700 outline-none focus:border-stone-400"
-                spellCheck={false}
-              />
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-8 gap-1.5 text-xs"
-                disabled={updateRule.isPending}
-                onClick={() => saveConfig(rule.key, rule.config)}
-              >
-                <Save size={12} />
-                保存配置
-              </Button>
-            </div>
-          ))}
+                <div className="text-[10px] font-mono uppercase tracking-wider text-stone-400">有效配置 JSON</div>
+                <textarea
+                  value={draftFor(rule.key, config)}
+                  onChange={(e) => setDrafts((prev) => ({ ...prev, [rule.key]: e.target.value }))}
+                  className="w-full min-h-[132px] border border-stone-200 bg-stone-50 p-2 text-xs font-mono text-stone-700 outline-none focus:border-stone-400"
+                  spellCheck={false}
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1.5 text-xs"
+                  disabled={updateRule.isPending}
+                  onClick={() => saveConfig(rule.key, config)}
+                >
+                  <Save size={12} />
+                  保存配置
+                </Button>
+              </div>
+            );
+          })}
         </div>
       )}
 

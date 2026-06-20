@@ -21,13 +21,15 @@ export const automationRouter = router({
 
     const builtIn = AUTOMATION_RULES.map((rule) => {
       const row = rowByKey.get(rule.key);
+      const effectiveConfig = parseAutomationRuleConfig(rule.key, row?.config ?? rule.defaultConfig) as Record<string, unknown>;
       return {
         key: rule.key as string,
         label: rule.label,
         triggerType: rule.triggerType as string,
         defaultEnabled: rule.defaultEnabled,
         enabled: row?.enabled ?? rule.defaultEnabled,
-        config: parseAutomationRuleConfig(rule.key, row?.config ?? rule.defaultConfig) as Record<string, unknown>,
+        config: effectiveConfig,
+        effectiveConfig,
         recipientRoles: rule.recipientRoles as readonly string[],
         updatedAt: row?.updatedAt ?? null,
         updatedBy: row?.updatedBy ?? null,
@@ -35,13 +37,15 @@ export const automationRouter = router({
     });
     const digest = DIGEST_RULES.map((rule) => {
       const row = rowByKey.get(rule.key);
+      const effectiveConfig = parseDigestRuleConfig(rule.key, row?.config ?? rule.defaultConfig) as Record<string, unknown>;
       return {
         key: rule.key as string,
         label: rule.label,
         triggerType: rule.triggerType as string,
         defaultEnabled: rule.defaultEnabled,
         enabled: row?.enabled ?? rule.defaultEnabled,
-        config: parseDigestRuleConfig(rule.key, row?.config ?? rule.defaultConfig) as Record<string, unknown>,
+        config: effectiveConfig,
+        effectiveConfig,
         recipientRoles: [] as readonly string[],
         updatedAt: row?.updatedAt ?? null,
         updatedBy: row?.updatedBy ?? null,

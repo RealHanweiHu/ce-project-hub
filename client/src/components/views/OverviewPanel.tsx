@@ -24,10 +24,50 @@ const SECTIONS: Array<{ key: SectionKey; label: string; icon: React.ComponentTyp
   { key: 'fields', label: '自定义字段', icon: ListChecks },
 ];
 
+type ProductHandoff = {
+  product: { id: string; productNumber: string; name: string; category: string; targetMarkets: string[] | null } | null;
+  snapshot: {
+    id: number;
+    versionNumber: number;
+    title: string;
+    snapshot: {
+      prdSummary?: string | null;
+      specs?: Array<{ label: string; target: string; tolerance?: string; verification?: string; ownerRole?: string }>;
+      skuPlan?: Array<{ name: string; code?: string; targetMarket?: string; price?: string; differences?: string }>;
+      competitors?: Array<{ brand?: string; model?: string; price?: string; channel?: string; notes?: string }>;
+      targetCost?: string;
+      targetPrice?: string;
+      targetGrossMargin?: string;
+    };
+    confirmedAt: string | Date;
+  } | null;
+  snapshotSource: 'none' | 'locked' | 'latest';
+  changes: Array<{ id: number; title: string; area: string; status: string; costImpact?: string | null; scheduleImpact?: string | null }>;
+  roleBuckets: Array<{
+    role: string;
+    label: string;
+    itemCount: number;
+    specs: Array<{ label: string; target: string; tolerance?: string; verification?: string; ownerRole?: string }>;
+    changes: Array<{ id: number; title: string; area: string; status: string; costImpact?: string | null; scheduleImpact?: string | null }>;
+  }>;
+};
+
+const HANDOFF_CHANGE_STATUS: Record<string, string> = {
+  proposed: '提议中',
+  approved: '已批准',
+  rejected: '已拒绝',
+  implemented: '已实施',
+  cancelled: '已取消',
+};
+
 export function OverviewPanel({ project, onUpdate, canEdit, canManageMembers, isAdmin }: { project: Project; onUpdate: (p: Project) => void; canEdit: boolean; canManageMembers: boolean; isAdmin: boolean }) {
   const { data: members = [] } = trpc.members.list.useQuery({ projectId: project.id });
   const { data: users = [] } = trpc.admin.listUsersForSelect.useQuery(undefined, { staleTime: 60_000 });
   const { data: productList = [] } = trpc.products.list.useQuery(undefined, { staleTime: 60_000 });
+  const { data: productHandoff, isLoading: productHandoffLoading } = trpc.projects.productHandoff.useQuery(
+    { projectId: project.id },
+    { staleTime: 60_000 },
+  );
   const linkedProduct = project.productId ? (productList as Array<{ id: string; name: string }>).find((p) => p.id === project.productId) : null;
   const utils = trpc.useUtils();
 
@@ -103,6 +143,15 @@ export function OverviewPanel({ project, onUpdate, canEdit, canManageMembers, is
       <div className="flex-1 min-w-0 space-y-6">
         {section === 'info' && (
           <>
+            <ProductDefinitionHandoffPanel
+              projectId={project.id}
+              handoff={productHandoff as ProductHandoff | undefined}
+              isLoading={productHandoffLoading}
+              linkedProductId={project.productId ?? null}
+              lockedSnapshotId={project.productDefinitionSnapshotId ?? null}
+              canGenerate={canEdit}
+            />
+
             {catConfig && (
               <div className={`ce-panel flex items-start gap-4 border ${catConfig.borderColor} ${catConfig.color} p-4 shadow-none`}>
                 <span className="text-3xl leading-none">{catConfig.icon}</span>
@@ -237,6 +286,197 @@ export function OverviewPanel({ project, onUpdate, canEdit, canManageMembers, is
           onClose={() => setKickoffOpen(false)}
         />
       )}
+    </div>
+  );
+}
+
+function ProductDefinitionHandoffPanel({
+  projectId, handoff, isLoading, linkedProductId, lockedSnapshotId, canGenerate,
+}: {
+  projectId: string;
+  handoff?: ProductHandoff;
+  isLoading: boolean;
+  linkedProductId: string | null;
+  lockedSnapshotId: number | null;
+  canGenerate: boolean;
+}) {
+  const utils = trpc.useUtils();
+  const generateTasks = trpc.projects.generateHandoffTasks.useMutation({
+    onSuccess: async (result) => {
+      toast.success(`已生成产品定义交接任务：新增 ${result.created}，更新 ${result.updated}${result.assigned ? `，已分配 ${result.assigned}` : ''}`);
+      await Promise.all([
+        utils.projects.productHandoff.invalidate({ projectId }),
+        utils.tasks.list.invalidate({ projectId }),
+        utils.projects.get.invalidate({ id: projectId }),
+      ]);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  if (isLoading) {
+    return (
+      <div className="ce-panel p-4 flex items-center gap-2 text-sm text-stone-400">
+        <Loader2 size={14} className="animate-spin" />加载产品定义交接…
+      </div>
+    );
+  }
+
+  if (!linkedProductId || !handoff?.product) {
+    return (
+      <div className="ce-panel p-4 border-dashed border-stone-300 bg-stone-50/50">
+        <div className="flex items-center gap-2 text-sm text-stone-700">
+          <Boxes size={15} className="text-stone-400" />未关联产品，暂无产品定义交接输入
+        </div>
+      </div>
+    );
+  }
+
+  const snapshot = handoff.snapshot;
+  const approvedChanges = handoff.changes.filter((change) => change.status === 'approved' || change.status === 'implemented');
+  const pendingChanges = handoff.changes.filter((change) => change.status === 'proposed');
+
+  if (!snapshot) {
+    return (
+      <div className="ce-panel p-4 border-amber-200 bg-amber-50/60">
+        <div className="flex items-center gap-2 text-sm font-medium text-amber-800">
+          <AlertTriangle size={15} />关联产品缺少已确认 PRD 快照
+        </div>
+        <p className="text-xs text-amber-700 mt-1">请回产品库确认产品定义后，再作为项目开发输入。</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="ce-panel p-4 space-y-4 border-emerald-200 bg-emerald-50/30">
+      <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <FileText size={15} className="text-emerald-600" />
+            <h3 className="text-sm font-semibold text-stone-900">产品定义交接</h3>
+            <span className="text-[10px] font-mono px-1.5 py-0.5 bg-stone-900 text-white">PRD v{snapshot.versionNumber}</span>
+            <span className={`text-[10px] font-mono px-1.5 py-0.5 border ${
+              handoff.snapshotSource === 'locked'
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                : 'bg-amber-50 text-amber-700 border-amber-200'
+            }`}>
+              {handoff.snapshotSource === 'locked' && lockedSnapshotId ? '项目锁定快照' : '最新快照回退'}
+            </span>
+          </div>
+          <div className="text-xs text-stone-500 mt-1">
+            {handoff.product.name}
+            {handoff.product.productNumber ? ` · ${handoff.product.productNumber}` : ''}
+            {handoff.product.category ? ` · ${handoff.product.category}` : ''}
+            {' · '}
+            {new Date(snapshot.confirmedAt).toLocaleString('zh-CN')}
+          </div>
+        </div>
+        <div className="flex items-start gap-3">
+          <div className="grid grid-cols-3 gap-px bg-stone-200 text-xs min-w-[220px]">
+            <div className="bg-white px-2 py-1.5"><div className="text-stone-400 font-mono">SPEC</div><div>{snapshot.snapshot.specs?.length ?? 0}</div></div>
+            <div className="bg-white px-2 py-1.5"><div className="text-stone-400 font-mono">SKU</div><div>{snapshot.snapshot.skuPlan?.length ?? 0}</div></div>
+            <div className="bg-white px-2 py-1.5"><div className="text-stone-400 font-mono">CHANGE</div><div>{approvedChanges.length}/{pendingChanges.length}</div></div>
+          </div>
+          {canGenerate && (
+            <button
+              type="button"
+              onClick={() => generateTasks.mutate({ projectId })}
+              disabled={generateTasks.isPending || handoff.roleBuckets.length === 0}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs bg-stone-900 text-white hover:bg-stone-700 disabled:opacity-50 transition-colors"
+              title="按角色交接清单生成 P1/P2 执行任务"
+            >
+              {generateTasks.isPending ? <Loader2 size={13} className="animate-spin" /> : <Rocket size={13} />}
+              生成任务
+            </button>
+          )}
+        </div>
+      </div>
+
+      {snapshot.snapshot.prdSummary ? (
+        <p className="text-sm text-stone-700 leading-relaxed whitespace-pre-wrap">{snapshot.snapshot.prdSummary}</p>
+      ) : null}
+
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+        <div className="bg-white border border-stone-200 p-3">
+          <div className="text-[10px] font-mono uppercase tracking-wider text-stone-400 mb-2">商业目标</div>
+          <div className="space-y-1 text-xs text-stone-700">
+            <div>目标成本：{snapshot.snapshot.targetCost || '—'}</div>
+            <div>目标售价：{snapshot.snapshot.targetPrice || '—'}</div>
+            <div>毛利要求：{snapshot.snapshot.targetGrossMargin || '—'}</div>
+          </div>
+        </div>
+        <div className="bg-white border border-stone-200 p-3">
+          <div className="text-[10px] font-mono uppercase tracking-wider text-stone-400 mb-2">目标规格</div>
+          <div className="space-y-1.5">
+            {(snapshot.snapshot.specs ?? []).slice(0, 4).map((spec, index) => (
+              <div key={`${spec.label}-${index}`} className="text-xs text-stone-700">
+                <span className="text-stone-900">{spec.label}</span>
+                <span className="text-stone-400"> · </span>
+                {spec.target}
+              </div>
+            ))}
+            {(snapshot.snapshot.specs?.length ?? 0) === 0 ? <div className="text-xs text-stone-400">—</div> : null}
+          </div>
+        </div>
+        <div className="bg-white border border-stone-200 p-3">
+          <div className="text-[10px] font-mono uppercase tracking-wider text-stone-400 mb-2">变更影响</div>
+          <div className="space-y-1.5">
+            {handoff.changes.slice(0, 4).map((change) => (
+              <div key={change.id} className="text-xs text-stone-700">
+                <span className="text-stone-900">{change.title}</span>
+                <span className="text-stone-400"> · </span>
+                {HANDOFF_CHANGE_STATUS[change.status] ?? change.status}
+              </div>
+            ))}
+            {handoff.changes.length === 0 ? <div className="text-xs text-stone-400">暂无产品定义变更</div> : null}
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div className="text-[10px] font-mono uppercase tracking-wider text-stone-400 mb-2">角色交接清单</div>
+        {handoff.roleBuckets.length === 0 ? (
+          <div className="bg-white border border-stone-200 p-3 text-xs text-stone-400">
+            暂无按角色归属的规格或变更。可在产品定义规格里填写责任角色，例如“结构 / 电子 / 采购 / 品质”。
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            {handoff.roleBuckets.map((bucket) => (
+              <div key={bucket.role} className="bg-white border border-stone-200 p-3">
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <div className="flex items-center gap-2">
+                    <UserCheck size={14} className="text-stone-400" />
+                    <span className="text-sm font-medium text-stone-900">{bucket.label}</span>
+                  </div>
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 bg-stone-100 text-stone-500">
+                    {bucket.itemCount} 项输入
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {bucket.specs.slice(0, 4).map((spec, index) => (
+                    <div key={`spec-${bucket.role}-${index}`} className="text-xs text-stone-700">
+                      <span className="text-[10px] font-mono text-emerald-700 bg-emerald-50 border border-emerald-100 px-1 py-0.5 mr-1.5">SPEC</span>
+                      <span className="text-stone-900">{spec.label}</span>
+                      <span className="text-stone-400"> · </span>
+                      {spec.target}
+                      {spec.verification ? <span className="text-stone-400"> · {spec.verification}</span> : null}
+                    </div>
+                  ))}
+                  {bucket.changes.slice(0, 4).map((change) => (
+                    <div key={`change-${change.id}`} className="text-xs text-stone-700">
+                      <span className="text-[10px] font-mono text-amber-700 bg-amber-50 border border-amber-100 px-1 py-0.5 mr-1.5">CHANGE</span>
+                      <span className="text-stone-900">{change.title}</span>
+                      <span className="text-stone-400"> · </span>
+                      {HANDOFF_CHANGE_STATUS[change.status] ?? change.status}
+                      {change.costImpact ? <span className="text-stone-400"> · {change.costImpact}</span> : null}
+                      {change.scheduleImpact ? <span className="text-stone-400"> · {change.scheduleImpact}</span> : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

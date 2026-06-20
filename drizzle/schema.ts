@@ -15,6 +15,74 @@ import {
 } from "drizzle-orm/pg-core";
 import type { VariantDelta } from "../shared/oem-variant";
 
+export type ProductDefinitionCompetitor = {
+  brand?: string;
+  model?: string;
+  price?: string;
+  channel?: string;
+  strengths?: string;
+  weaknesses?: string;
+  notes?: string;
+};
+
+export type ProductDefinitionSpec = {
+  key: string;
+  label: string;
+  target: string;
+  tolerance?: string;
+  verification?: string;
+  ownerRole?: string;
+};
+
+export type ProductDefinitionSku = {
+  name: string;
+  code?: string;
+  targetMarket?: string;
+  price?: string;
+  differences?: string;
+  customerName?: string;
+};
+
+export type ProductDefinitionSnapshotPayload = {
+  title: string;
+  opportunityName: string;
+  opportunitySource: string;
+  targetCustomers: string | null;
+  targetMarkets: string[];
+  applicationScenarios: string | null;
+  competitors: ProductDefinitionCompetitor[];
+  priceBand: string;
+  positioning: string | null;
+  sellingPoints: string[];
+  differentiationStrategy: string | null;
+  prdSummary: string | null;
+  specs: ProductDefinitionSpec[];
+  targetCost: string;
+  targetPrice: string;
+  targetGrossMargin: string;
+  skuPlan: ProductDefinitionSku[];
+};
+
+export const PRODUCT_DEFINITION_CHANGE_AREAS = [
+  "market",
+  "customer",
+  "scenario",
+  "competitor",
+  "positioning",
+  "selling_point",
+  "spec",
+  "cost",
+  "price",
+  "margin",
+  "sku",
+  "certification",
+  "packaging",
+  "schedule",
+  "other",
+] as const;
+
+export type ProductDefinitionChangeArea = (typeof PRODUCT_DEFINITION_CHANGE_AREAS)[number];
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Users
 // ─────────────────────────────────────────────────────────────────────────────
@@ -93,6 +161,8 @@ export const projects = pgTable("projects", {
   orgId: integer("orgId"),
   /** 派生自哪个产品（PLM 脊梁）。现有项目为空。 */
   productId: varchar("productId", { length: 32 }),
+  /** NPD 创建时锁定的产品定义快照，用于项目交接与后续追溯 */
+  productDefinitionSnapshotId: integer("productDefinitionSnapshotId"),
   /** 派生起点版本（量产后项目指向当前 Rev） */
   baseRevisionId: integer("baseRevisionId"),
   /** 发布时回填的产出版本 */
@@ -904,6 +974,118 @@ export const products = pgTable("products", {
 });
 export type ProductRow = typeof products.$inferSelect;
 export type InsertProduct = typeof products.$inferInsert;
+
+export const PRODUCT_DEFINITION_STATUSES = ["draft", "confirmed"] as const;
+export type ProductDefinitionStatus = (typeof PRODUCT_DEFINITION_STATUSES)[number];
+export const productDefinitionStatusEnum = pgEnum(
+  "product_definition_status",
+  PRODUCT_DEFINITION_STATUSES
+);
+export const productDefinitionChangeAreaEnum = pgEnum(
+  "product_definition_change_area",
+  PRODUCT_DEFINITION_CHANGE_AREAS
+);
+
+/** 产品定义基线：PM 在项目开发前冻结的市场机会、PRD、规格、商业目标和 SKU 口径。 */
+export const productDefinitions = pgTable(
+  "product_definitions",
+  {
+    id: serial("id").primaryKey(),
+    productId: varchar("productId", { length: 32 }).notNull(),
+    title: varchar("title", { length: 256 }).notNull().default(""),
+    opportunityName: varchar("opportunityName", { length: 256 }).notNull().default(""),
+    opportunitySource: varchar("opportunitySource", { length: 128 }).notNull().default(""),
+    targetCustomers: text("targetCustomers"),
+    targetMarkets: jsonb("targetMarkets").$type<string[]>().notNull().default([]),
+    applicationScenarios: text("applicationScenarios"),
+    competitors: jsonb("competitors").$type<ProductDefinitionCompetitor[]>().notNull().default([]),
+    priceBand: varchar("priceBand", { length: 128 }).notNull().default(""),
+    positioning: text("positioning"),
+    sellingPoints: jsonb("sellingPoints").$type<string[]>().notNull().default([]),
+    differentiationStrategy: text("differentiationStrategy"),
+    prdSummary: text("prdSummary"),
+    specs: jsonb("specs").$type<ProductDefinitionSpec[]>().notNull().default([]),
+    targetCost: varchar("targetCost", { length: 64 }).notNull().default(""),
+    targetPrice: varchar("targetPrice", { length: 64 }).notNull().default(""),
+    targetGrossMargin: varchar("targetGrossMargin", { length: 64 }).notNull().default(""),
+    skuPlan: jsonb("skuPlan").$type<ProductDefinitionSku[]>().notNull().default([]),
+    status: productDefinitionStatusEnum("status").notNull().default("draft"),
+    confirmedBy: integer("confirmedBy"),
+    confirmedAt: timestamp("confirmedAt"),
+    createdBy: integer("createdBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    uniqProductDefinition: uniqueIndex("uniq_product_definition_product").on(table.productId),
+    idxDefinitionStatus: index("idx_product_definition_status").on(table.status),
+  })
+);
+export type ProductDefinition = typeof productDefinitions.$inferSelect;
+export type InsertProductDefinition = typeof productDefinitions.$inferInsert;
+
+/** 产品定义确认快照：每次 Gate 确认后生成不可变 PRD 版本，用于开发输入追溯。 */
+export const productDefinitionSnapshots = pgTable(
+  "product_definition_snapshots",
+  {
+    id: serial("id").primaryKey(),
+    productId: varchar("productId", { length: 32 }).notNull(),
+    definitionId: integer("definitionId").notNull(),
+    versionNumber: integer("versionNumber").notNull(),
+    title: varchar("title", { length: 256 }).notNull().default(""),
+    snapshot: jsonb("snapshot").$type<ProductDefinitionSnapshotPayload>().notNull(),
+    confirmedBy: integer("confirmedBy").notNull(),
+    confirmedAt: timestamp("confirmedAt").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    uniqProductDefinitionSnapshotVersion: uniqueIndex("uniq_product_definition_snapshot_version").on(
+      table.productId,
+      table.versionNumber
+    ),
+    idxProductDefinitionSnapshotProduct: index("idx_product_definition_snapshots_product").on(table.productId),
+  })
+);
+export type ProductDefinitionSnapshot = typeof productDefinitionSnapshots.$inferSelect;
+export type InsertProductDefinitionSnapshot = typeof productDefinitionSnapshots.$inferInsert;
+
+/** 产品定义变更：记录开发中相对已确认产品定义的删减、优化、客户新增要求和偏离。 */
+export const productDefinitionChanges = pgTable(
+  "product_definition_changes",
+  {
+    id: serial("id").primaryKey(),
+    productId: varchar("productId", { length: 32 }).notNull(),
+    /** 来源项目：变更来自某个 NPD / ECO 项目时填写 */
+    sourceProjectId: varchar("sourceProjectId", { length: 32 }),
+    area: productDefinitionChangeAreaEnum("area").notNull().default("other"),
+    title: varchar("title", { length: 512 }).notNull(),
+    description: text("description"),
+    reason: text("reason"),
+    requestedByCustomer: varchar("requestedByCustomer", { length: 256 }),
+    baselineValue: text("baselineValue"),
+    requestedValue: text("requestedValue"),
+    impactScope: jsonb("impactScope").$type<string[]>().notNull().default([]),
+    costImpact: varchar("costImpact", { length: 128 }),
+    priceImpact: varchar("priceImpact", { length: 128 }),
+    scheduleImpact: varchar("scheduleImpact", { length: 128 }),
+    status: changeStatusEnum("status").notNull().default("proposed"),
+    decisionNotes: text("decisionNotes"),
+    createdBy: integer("createdBy").notNull(),
+    approvedBy: integer("approvedBy"),
+    approvedAt: timestamp("approvedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    idxProductStatus: index("idx_product_definition_changes_product_status").on(
+      table.productId,
+      table.status
+    ),
+    idxSourceProject: index("idx_product_definition_changes_source_project").on(table.sourceProjectId),
+  })
+);
+export type ProductDefinitionChange = typeof productDefinitionChanges.$inferSelect;
+export type InsertProductDefinitionChange = typeof productDefinitionChanges.$inferInsert;
 
 /** 产品版本 = 冻结版本（PLM 轴）；版本链由项目串起 */
 export const productRevisions = pgTable(

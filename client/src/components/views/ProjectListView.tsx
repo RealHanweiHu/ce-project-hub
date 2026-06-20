@@ -82,7 +82,11 @@ export function ProjectListView({
   const { data: userList, isLoading: usersLoading, isError: usersError } = trpc.admin.listUsersForSelect.useQuery();
   const utils = trpc.useUtils();
   const { data: productList = [] } = trpc.products.list.useQuery(undefined);
+  const { data: definitionStatuses = [] } = trpc.products.definitionStatuses.useQuery();
   const products = productList as Array<{ id: string; name: string; productNumber: string }>;
+  const definitionStatusByProduct = new Map(
+    (definitionStatuses as Array<{ productId: string; status: 'draft' | 'confirmed' }>).map((row) => [row.productId, row.status])
+  );
   const createProductMutation = trpc.products.create.useMutation({
     onSuccess: () => utils.products.list.invalidate(),
   });
@@ -115,6 +119,16 @@ export function ProjectListView({
     if (!form.name.trim()) return;
     const phases = getPhasesForCategory(selectedCategory);
     const firstPhaseId = phases[0]?.id || 'concept';
+    if (selectedCategory === 'npd') {
+      if (!form.productId) {
+        alert('NPD 项目需要先在产品库建立并确认产品定义，再关联进入开发。');
+        return;
+      }
+      if (definitionStatusByProduct.get(form.productId) !== 'confirmed') {
+        alert('所选产品定义尚未确认。请先在产品库完成产品定义确认。');
+        return;
+      }
+    }
     // 关联产品:选了已有 → 用它;否则填了新产品名 → 先建档再关联
     let productId: string | null = form.productId || null;
     if (!productId && form.newProductName.trim()) {
@@ -558,17 +572,28 @@ export function ProjectListView({
                   {/* 关联产品:ECO/IDR 改进/翻新已有产品;NPD 可新建产品建档 */}
                   <div>
                     <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">
-                      关联产品 {selectedCategory === 'npd' ? '（全新产品，可新建建档或暂不关联）' : '（改进/翻新的已有产品）'}
+                      关联产品 {selectedCategory === 'npd' ? '（需产品定义已确认）' : '（改进/翻新的已有产品）'}
                     </label>
                     <select
                       value={form.productId}
                       onChange={(e) => setForm({ ...form, productId: e.target.value, newProductName: '' })}
                       className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors bg-white"
                     >
-                      <option value="">{selectedCategory === 'npd' ? '新产品 / 暂不关联' : '选择已有产品…'}</option>
-                      {products.map((p) => <option key={p.id} value={p.id}>{p.name}{p.productNumber ? ` · ${p.productNumber}` : ''}</option>)}
+                      <option value="">{selectedCategory === 'npd' ? '选择定义已确认的产品…' : '选择已有产品…'}</option>
+                      {products.map((p) => {
+                        const status = definitionStatusByProduct.get(p.id);
+                        const suffix = selectedCategory === 'npd'
+                          ? status === 'confirmed' ? ' · 定义已确认' : ' · 定义未确认'
+                          : '';
+                        return <option key={p.id} value={p.id}>{p.name}{p.productNumber ? ` · ${p.productNumber}` : ''}{suffix}</option>;
+                      })}
                     </select>
-                    {!form.productId && (
+                    {selectedCategory === 'npd' && (
+                      <p className="mt-1.5 text-[11px] text-stone-500">
+                        新产品请先到「产品库」新建，并完成产品定义确认 Gate 后再创建 NPD 项目。
+                      </p>
+                    )}
+                    {selectedCategory !== 'npd' && !form.productId && (
                       <input
                         value={form.newProductName}
                         onChange={(e) => setForm({ ...form, newProductName: e.target.value })}

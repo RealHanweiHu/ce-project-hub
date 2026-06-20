@@ -13,7 +13,7 @@ import {
   Project, SOP_PHASES, PHASE_MAP, HEALTH_CONFIG,
   computePhaseProgress, computeOverallProgress, getPhaseStatus,
   isPhaseUnlocked, getBlockingGate, getProjectPhases,
-  TaskDetails, FileAttachment, formatBytes,
+  TaskDetails, FileAttachment, formatBytes, SOPTask, SOPPhase,
 } from '@/lib/data';
 import { CATEGORY_MAP } from '@/lib/sop-templates';
 import { ProgressBar } from '@/components/shared/ProgressBar';
@@ -32,6 +32,7 @@ import { KanbanBoard } from './KanbanBoard';
 import { FilesPanel } from './FilesPanel';
 import { FilePreviewModal, canPreview } from './FilePreviewModal';
 import { MetricsView } from './MetricsView';
+import { RescheduleConfirmDialog } from './RescheduleConfirmDialog';
 import { CommentThread } from '@/components/CommentThread';
 import { useProjectPermission } from '@/hooks/useProjectPermission';
 import { useAuth } from '@/_core/hooks/useAuth';
@@ -46,6 +47,10 @@ interface ProjectDetailViewProps {
   project: Project;
   onUpdate: (project: Project) => void;
   onBack: () => void;
+  /** Deep-link: open at this phase (defaults to currentPhase). */
+  initialPhaseId?: string;
+  /** Deep-link: auto-open this task's detail on mount. */
+  initialTaskId?: string;
 }
 
 type ProjectMainTab = 'overview' | 'metrics' | 'tasks' | 'kanban' | 'requirements' | 'gantt' | 'issues' | 'changelog' | 'bom' | 'files';
@@ -301,6 +306,43 @@ const ROLE_OPTIONS = [
   { value: 'manager', label: '管理层' },
   { value: 'owner',  label: '项目创建者' },
 ] as const;
+
+function isProductDefinitionTask(taskId: string) {
+  return taskId.startsWith('pd_');
+}
+
+function handoffTaskTitle(taskId: string, details?: TaskDetails) {
+  const firstLine = (details?.instructions || '').split('\n').map((line) => line.trim()).find(Boolean);
+  if (firstLine?.startsWith('#')) return firstLine.replace(/^#+\s*/, '');
+  const role = taskId.replace(/^pd_/, '');
+  const label = ROLE_OPTIONS.find((option) => option.value === role)?.label || role;
+  return `产品定义交接 - ${label}`;
+}
+
+function handoffTaskOwner(taskId: string, roles: string[]) {
+  const role = roles.find((item) => !['pm', 'manager', 'owner'].includes(item)) ?? taskId.replace(/^pd_/, '');
+  return ROLE_OPTIONS.find((option) => option.value === role)?.label || role;
+}
+
+function getPhaseWithHandoffTasks(phase: SOPPhase | undefined, phaseData: { taskDetails?: Record<string, TaskDetails> } | undefined, project: Project): SOPPhase | undefined {
+  if (!phase) return phase;
+  const existing = new Set(phase.tasks.map((task) => task.id));
+  const customTasks: SOPTask[] = Object.entries(phaseData?.taskDetails ?? {})
+    .filter(([taskId]) => isProductDefinitionTask(taskId) && !existing.has(taskId))
+    .map(([taskId, details]) => {
+      const roles = project.taskVisibleRoles?.[taskId] ?? [];
+      return {
+        id: taskId,
+        name: handoffTaskTitle(taskId, details),
+        desc: '来自产品定义交接清单，请按已确认 PRD 快照承接本角色规格与变更输入。',
+        owner: handoffTaskOwner(taskId, roles),
+        guide: details.instructions || '',
+        visibleRoles: roles,
+      };
+    });
+  if (customTasks.length === 0) return phase;
+  return { ...phase, tasks: [...phase.tasks, ...customTasks] };
+}
 
 /** Gate 就绪检查：任务/问题本地聚合，交付物只使用服务端审核通过集合。 */
 interface GateReadiness {
@@ -911,61 +953,6 @@ function DeliverablesChecklist({
   );
 }
 
-function RescheduleConfirmDialog({
-  projectId, taskId, startDate, newDue, onClose, onDone,
-}: {
-  projectId: string; taskId: string; startDate: string; newDue: string;
-  onClose: () => void; onDone: () => void;
-}) {
-  const { data: impact, isLoading } = trpc.tasks.delayImpact.useQuery(
-    { projectId, taskId, startDate, dueDate: newDue },
-    { staleTime: 0 },
-  );
-  const reschedule = trpc.tasks.reschedule.useMutation();
-  const confirm = async () => {
-    await reschedule.mutateAsync({ projectId, taskId, startDate, dueDate: newDue });
-    onDone();
-  };
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={onClose}>
-      <div className="bg-white border border-stone-200 w-[440px] max-w-[90vw] p-5" onClick={(e) => e.stopPropagation()}>
-        <div className="font-serif text-base text-stone-900 mb-2">改期影响确认</div>
-        {isLoading ? (
-          <p className="text-xs text-stone-400 py-4">正在计算延期影响…</p>
-        ) : !impact ? (
-          <p className="text-xs text-stone-500 py-4">无法计算影响（任务未排期或项目缺失）。</p>
-        ) : (
-          <div className="space-y-2 text-xs text-stone-700">
-            <p>将顺延 <b>{impact.shifted.length}</b> 个下游任务（最大 {impact.maxDeltaDays} 天）。</p>
-            {impact.gateImpacts.length > 0 && (
-              <div className="text-red-600">
-                <div className="font-medium">Gate 滑期：</div>
-                <ul className="pl-3 list-disc">
-                  {impact.gateImpacts.map((g) => <li key={g.taskId}>{g.gateName ?? g.taskId} 滑 {g.deltaDays} 天</li>)}
-                </ul>
-              </div>
-            )}
-            {impact.targetBreach && (
-              <p className="text-red-600">
-                {impact.targetBreach.newlyBreaches ? "原本可按期，改后" : "目标日已超，本次再"}
-                破 {impact.targetBreach.slipDays} 天（预计 {impact.targetBreach.newProjectedEnd}）。
-              </p>
-            )}
-            {!impact.hasImpact && <p className="text-stone-500">仅顺延下游，不冲击 Gate / 目标日。</p>}
-          </div>
-        )}
-        <div className="flex justify-end gap-2 mt-4">
-          <button onClick={onClose} className="text-xs px-3 py-1.5 border border-stone-200 text-stone-600">取消</button>
-          <button onClick={confirm} disabled={reschedule.isPending}
-            className="text-xs px-3 py-1.5 bg-amber-500 text-white disabled:opacity-50">
-            {reschedule.isPending ? "改期中…" : "确认改期"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function TaskDetail({
   taskId, taskDetails, onUpdate, visibleRoles, onVisibleRolesChange, canEditRoles,
   projectId, phaseId, canEdit = true, compact = false,
@@ -1022,7 +1009,7 @@ function TaskDetail({
   };
 
   // Task meta: users for assignee dropdown
-  const { data: metaUsers = [] } = trpc.admin.listUsersForSelect.useQuery(undefined, { staleTime: 60_000, enabled: !compact });
+  const { data: metaUsers = [] } = trpc.admin.listUsersForSelect.useQuery(undefined, { staleTime: 60_000 });
   const TASK_STATUS_CONFIG: Record<string, { label: string; className: string }> = {
     todo: { label: '待开始', className: 'bg-stone-50 text-stone-600 border-stone-200' },
     in_progress: { label: '进行中', className: 'bg-blue-50 text-blue-700 border-blue-200' },
@@ -1041,8 +1028,39 @@ function TaskDetail({
 
   return (
     <div className="mt-3 border-t border-stone-100 pt-3 space-y-3">
-      {/* Task Meta Row: assignee / due date / status / priority */}
-      {!compact && (
+      {/* Task Meta Row: assignee / due date / status / priority.
+          Execution roles (compact) see these read-only rather than hidden — P0-2. */}
+      {compact ? (
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">负责人</div>
+          <div className="flex h-[30px] items-center border border-stone-200 bg-stone-50 px-2 text-xs text-stone-700">
+            {metaUsers.find((u) => u.id === taskDetails?.assigneeUserId)?.name
+              ?? metaUsers.find((u) => u.id === taskDetails?.assigneeUserId)?.username
+              ?? '— 未指定 —'}
+          </div>
+        </div>
+        <div>
+          <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">截止日期</div>
+          <div className="flex h-[30px] items-center border border-stone-200 bg-stone-50 px-2 text-xs text-stone-700">
+            {taskDetails?.dueDate ?? '— 未排期 —'}
+          </div>
+        </div>
+        <div>
+          <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">状态</div>
+          <div className={`flex h-[30px] items-center justify-between border px-2 text-xs ${taskStatusCfg.className}`}>
+            <span>{taskStatusCfg.label}</span>
+            <span className="text-[10px] font-mono opacity-60">自动</span>
+          </div>
+        </div>
+        <div>
+          <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">优先级</div>
+          <div className="flex h-[30px] items-center border border-stone-200 bg-stone-50 px-2 text-xs text-stone-700">
+            {TASK_PRIORITY_OPTIONS.find((o) => o.value === (taskDetails?.taskPriority ?? 'medium'))?.label ?? '—'}
+          </div>
+        </div>
+      </div>
+      ) : (
       <div className="grid grid-cols-2 gap-2">
         <div>
           <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">负责人</div>
@@ -1230,9 +1248,9 @@ function PmSelector({
   );
 }
 
-export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailViewProps) {
-  const [activePhaseId, setActivePhaseId] = useState(project.currentPhase);
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, initialTaskId }: ProjectDetailViewProps) {
+  const [activePhaseId, setActivePhaseId] = useState(initialPhaseId ?? project.currentPhase);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(initialTaskId ?? null);
   // 任务详情子窗口：Esc 关闭
   useEffect(() => {
     if (!selectedTaskId) return;
@@ -1240,8 +1258,9 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedTaskId]);
-  const [mainTab, setMainTab] = useState<ProjectMainTab>('overview');
-  const roleDefaultAppliedRef = useRef(false);
+  const [mainTab, setMainTab] = useState<ProjectMainTab>(initialTaskId ? 'tasks' : 'overview');
+  // Deep-linked into a task → land on the tasks tab; don't let the role-default override it.
+  const roleDefaultAppliedRef = useRef(!!initialTaskId);
   const [ganttMode, setGanttMode] = useState<'task' | 'phase'>('task');
   const perms = useProjectPermission(project.id);
   const { user: currentUser } = useAuth();
@@ -1298,7 +1317,9 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
 
   const projectPhases = getProjectPhases(project);
   const phaseMap = Object.fromEntries(projectPhases.map((p) => [p.id, p]));
-  const activePhase = phaseMap[activePhaseId] || PHASE_MAP[activePhaseId];
+  const activeBasePhase = phaseMap[activePhaseId] || PHASE_MAP[activePhaseId];
+  const activePhaseData = project.phases[activePhaseId];
+  const activePhase = getPhaseWithHandoffTasks(activeBasePhase, activePhaseData, project);
   const effectiveActivePhase = effectiveProcess?.phases.find((phase) => phase.id === activePhaseId);
   const activeGateDeliverables =
     effectiveActivePhase?.submittedDeliverables ?? activePhase?.gateStandard?.requiredDeliverables ?? [];
@@ -1317,7 +1338,6 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
       PHASE_MAP[fromPhaseId]?.name ?? fromPhaseId,
     ])
   );
-  const activePhaseData = project.phases[activePhaseId];
   const activeProgress = computePhaseProgress(activePhaseData, activePhaseId, activePhase);
   const overallProgress = computeOverallProgress(project);
   const health = HEALTH_CONFIG[project.risk];
@@ -1343,6 +1363,9 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
     ? selectedTaskRoles.map((role) => ROLE_OPTIONS.find((option) => option.value === role)?.label || role).join(' / ')
     : '所有项目成员';
   const compactTaskDetail = isExecutionRole(perms.role) && !selectedTaskIsGate;
+  // P2: 执行角色(如结构工程师)收敛项目详情标签——只保留 总览/任务/问题/BOM/文件,
+  // 隐藏 PM/管理层导向的 度量/看板/需求池/甘特/变更,减少干扰(内容仍按 mainTab 渲染,不影响深链)。
+  const execLens = isExecutionRole(perms.role);
 
   const updateField = (field: keyof Project, value: string) => onUpdate({ ...project, [field]: value });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1358,14 +1381,30 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
       ...activePhaseData,
       tasks: { ...activePhaseData.tasks, [taskId]: !activePhaseData.tasks[taskId] },
     };
+    const becameDone = !activePhaseData.tasks[taskId];
     const newProgress = computePhaseProgress(newProject.phases[activePhaseId], activePhaseId, activePhase);
+    let advancedTo: string | null = null;
     if (newProgress === 100) {
       const idx = projectPhases.findIndex((p) => p.id === activePhaseId);
       if (idx < projectPhases.length - 1 && activePhaseId === project.currentPhase) {
         newProject.currentPhase = projectPhases[idx + 1].id;
+        advancedTo = projectPhases[idx + 1].name;
       }
     }
     onUpdate(newProject);
+    // P1-2: 完成任务后给执行者明确反馈——是否推进阶段 / 还差什么阻塞项。
+    if (becameDone) {
+      if (advancedTo) {
+        toast.success(`本阶段已全部完成，阶段推进至「${advancedTo}」`);
+      } else {
+        const { blockers } = computeGateReadiness(activePhase, newProject.phases[activePhaseId], activeGateDeliverables, serverDelivSatisfiedSet);
+        if (blockers.length > 0) {
+          toast(`任务已完成。本阶段距 Gate 放行还差：${blockers.join('、')}`);
+        } else {
+          toast.success('任务已完成');
+        }
+      }
+    }
   };
 
   const updateTaskDetails = (taskId: string, details: TaskDetails) => {
@@ -1597,6 +1636,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
           <ListChecks size={14} />
           任务清单
         </button>
+        {!execLens && (
         <button
           onClick={() => setMainTab('metrics')}
           className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all whitespace-nowrap ${
@@ -1608,6 +1648,8 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
           <Activity size={14} />
           度量
         </button>
+        )}
+        {!execLens && (
         <button
           onClick={() => setMainTab('kanban')}
           className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all whitespace-nowrap ${
@@ -1619,6 +1661,8 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
           <LayoutGrid size={14} />
           看板
         </button>
+        )}
+        {!execLens && (
         <button
           onClick={() => setMainTab('requirements')}
           className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all whitespace-nowrap ${
@@ -1630,6 +1674,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
           <Inbox size={14} />
           需求池
         </button>
+        )}
         <button
           onClick={() => setMainTab('issues')}
           className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all ${
@@ -1646,6 +1691,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
             </span>
           )}
         </button>
+        {!execLens && (
         <button
           onClick={() => setMainTab('gantt')}
           className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all ${
@@ -1657,6 +1703,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
           <BarChart2 size={14} />
           甘特图
         </button>
+        )}
         <button
           onClick={() => setMainTab('bom')}
           className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all whitespace-nowrap ${
@@ -1679,6 +1726,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
           <FolderOpen size={14} />
           文件
         </button>
+        {!execLens && (
         <button
           onClick={() => setMainTab('changelog')}
           className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all ${
@@ -1695,6 +1743,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
             </span>
           )}
         </button>
+        )}
       </div>
 
       {/* ── Issues Tab ────────────────────────────────────────────────────── */}
@@ -1933,7 +1982,7 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                   const details = activePhaseData?.taskDetails?.[task.id];
                   const hasInstructions = !!(details?.instructions || '').trim();
                   const fileCount = (details?.files || []).length;
-                  const isGateTask = task.id === activePhase.gateTaskId;
+                  const isGateTask = task.id === activePhase?.gateTaskId;
                   const locked = !isCurrentPhaseUnlocked;
                   const selected = selectedTaskId === task.id;
                   // status 为主状态;checked 已由 status 派生(done/skipped),直接显示真实状态
@@ -2078,12 +2127,17 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                     {!isCurrentPhaseUnlocked && (
                       <div className="mt-4 flex items-start gap-2 border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
                         <Lock size={13} className="shrink-0 mt-0.5" />
-                        <span>此阶段被前置 Gate 锁定，当前任务详情仅可查看。</span>
+                        <span>
+                          {blockingGate ? (
+                            <>前置条件未完成：需先通过 <span className="font-mono font-semibold">{blockingGate.phaseName}</span> 的 Gate 评审「{blockingGate.gateTaskName}」。本任务暂仅可查看。</>
+                          ) : (
+                            <>此阶段被前置 Gate 锁定，当前任务详情仅可查看。</>
+                          )}
+                        </span>
                       </div>
                     )}
 
                     <div className="mt-4 border-t border-stone-100 pt-4 space-y-4">
-                      {!compactTaskDetail && (
                       <div>
                         <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-2">
                           <Users size={11} />
@@ -2113,7 +2167,6 @@ export function ProjectDetailView({ project, onUpdate, onBack }: ProjectDetailVi
                           )}
                         </div>
                       </div>
-                      )}
 
                       <div>
                         <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-2">

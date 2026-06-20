@@ -5,7 +5,7 @@ import { Loader2, X } from "lucide-react";
 import type { PortfolioTableRow } from "./PortfolioTable";
 import { PerspectivePanel, type Lens } from "./PerspectivePanel";
 import { PortfolioDashboard } from "./PortfolioDashboard";
-import { TaskListView, type TaskRow } from "../TaskListView";
+import { TaskListView, type TaskRow, type TaskFocus } from "../TaskListView";
 import type { TaskStatus, TaskPriority } from "@shared/const";
 
 const LENS_LABEL: Record<Lens, string> = { exec: "管理层", pm: "PM", mine: "我的" };
@@ -17,7 +17,7 @@ type DrillTask = {
   assigneeUserId: number | null; completed: boolean;
 };
 
-export function OverviewPage({ onSelectProject }: { onSelectProject: (id: string) => void }) {
+export function OverviewPage({ onSelectProject }: { onSelectProject: (id: string, focus?: TaskFocus) => void }) {
   const { user } = useAuth();
   const { data: rows = [], isLoading } = trpc.projects.portfolio.useQuery();
   const portfolio = rows as PortfolioTableRow[];
@@ -92,7 +92,7 @@ export function OverviewPage({ onSelectProject }: { onSelectProject: (id: string
   );
 }
 
-function DrillDown({ kind, onClose, onSelectProject }: { kind: "overdue" | "blocked"; onClose: () => void; onSelectProject: (id: string) => void }) {
+function DrillDown({ kind, onClose, onSelectProject }: { kind: "overdue" | "blocked"; onClose: () => void; onSelectProject: (id: string, focus?: TaskFocus) => void }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
@@ -118,7 +118,7 @@ function DrillDown({ kind, onClose, onSelectProject }: { kind: "overdue" | "bloc
         <div className="ce-table-shell">
           <TaskListView tasks={rows} isLoading={q.isLoading}
             emptyIcon={null} emptyTitle={kind === "overdue" ? "无逾期任务" : "无阻塞任务"} emptyDesc=""
-            onRefetch={() => q.refetch()} onNavigateToProject={(id) => { onSelectProject(id); onClose(); }} showOverdueBadge />
+            onRefetch={() => q.refetch()} onNavigateToProject={(id, focus) => { onSelectProject(id, focus); onClose(); }} showOverdueBadge />
         </div>
       </div>
     </div>

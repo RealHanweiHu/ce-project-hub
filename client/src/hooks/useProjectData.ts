@@ -227,6 +227,7 @@ export function useProjectData(projectId: string | null) {
       pm: '',  // pmName resolved in UI via listUsersForSelect
       pmUserId: projectRow.pmUserId ?? null,
       productId: (projectRow as { productId?: string | null }).productId ?? null,
+      productDefinitionSnapshotId: (projectRow as { productDefinitionSnapshotId?: number | null }).productDefinitionSnapshotId ?? null,
       description: (projectRow as { description?: string | null }).description ?? null,
       customer: (projectRow as { customer?: string | null }).customer ?? null,
       background: (projectRow as { background?: string | null }).background ?? null,

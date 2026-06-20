@@ -1,18 +1,29 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { eq } from "drizzle-orm";
-import { getDb, getProjectById } from "./db";
+import {
+  getDb, getProjectById, createProduct,
+  upsertProductDefinition, confirmProductDefinition, listProductDefinitionSnapshots,
+  getProjectTasks,
+} from "./db";
 import { appRouter } from "./routers";
 import { getEffectiveProjectRole } from "./project-access";
 import {
   activityLogs,
+  productDefinitionSnapshots,
+  productDefinitions,
+  products,
   projectGateReviews,
   projectMembers,
+  projectPhases,
+  projectTasks,
   projects,
 } from "../drizzle/schema";
 import type { TrpcContext } from "./_core/context";
 
 const MANAGER_PROJECT = `role-rank-m-${Date.now()}`;
 const VIEWER_PROJECT = `role-rank-v-${Date.now()}`;
+const HANDOFF_PROJECT = `handoff-${Date.now()}`;
+const HANDOFF_PRODUCT = `handoff-product-${Date.now()}`;
 const OWNER = 980001;
 const MANAGER_PM = 980002;
 const VIEWER_PM = 980003;
@@ -84,6 +95,14 @@ afterAll(async () => {
     await db.delete(projectMembers).where(eq(projectMembers.projectId, projectId));
     await db.delete(projects).where(eq(projects.id, projectId));
   }
+  await db.delete(activityLogs).where(eq(activityLogs.projectId, HANDOFF_PROJECT));
+  await db.delete(projectTasks).where(eq(projectTasks.projectId, HANDOFF_PROJECT));
+  await db.delete(projectPhases).where(eq(projectPhases.projectId, HANDOFF_PROJECT));
+  await db.delete(projectMembers).where(eq(projectMembers.projectId, HANDOFF_PROJECT));
+  await db.delete(projects).where(eq(projects.id, HANDOFF_PROJECT));
+  await db.delete(productDefinitionSnapshots).where(eq(productDefinitionSnapshots.productId, HANDOFF_PRODUCT));
+  await db.delete(productDefinitions).where(eq(productDefinitions.productId, HANDOFF_PRODUCT));
+  await db.delete(products).where(eq(products.id, HANDOFF_PRODUCT));
 });
 
 describe("project access role resolution", () => {
@@ -131,5 +150,60 @@ describe("project create validation", () => {
       progress: 0,
       startDate: "2026-13-99",
     })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("创建 NPD 项目时锁定已确认产品定义快照,并可读取交接输入", async () => {
+    await createProduct({
+      id: HANDOFF_PRODUCT,
+      productNumber: "DG01",
+      name: "DG01 锂电车载充气泵",
+      type: "finished",
+      category: "充气泵",
+      targetMarkets: ["US", "EU"],
+      createdBy: OWNER,
+    });
+    await upsertProductDefinition(HANDOFF_PRODUCT, OWNER, {
+      title: "DG01 产品定义",
+      positioning: "高端精致型便携车载泵",
+      prdSummary: "锁定电池容量、充气速度、压力范围和目标成本。",
+      specs: [{ key: "pressure", label: "压力范围", target: "3-150psi", ownerRole: "结构" }],
+      targetCost: "USD 22",
+      targetPrice: "USD 69",
+      targetGrossMargin: ">=35%",
+      skuPlan: [{ name: "标准版", code: "STD" }],
+    });
+    await confirmProductDefinition(HANDOFF_PRODUCT, OWNER);
+    const [snapshot] = await listProductDefinitionSnapshots(HANDOFF_PRODUCT);
+
+    const caller = appRouter.createCaller(makeCtx(OWNER, true));
+    await caller.projects.create({
+      id: HANDOFF_PROJECT,
+      name: "DG01 NPD",
+      projectNumber: "NPD-DG01",
+      category: "npd",
+      productId: HANDOFF_PRODUCT,
+      risk: "low",
+      currentPhase: "concept",
+      progress: 0,
+    });
+
+    const project = await getProjectById(HANDOFF_PROJECT);
+    expect(project?.productDefinitionSnapshotId).toBe(snapshot.id);
+
+    const handoff = await caller.projects.productHandoff({ projectId: HANDOFF_PROJECT });
+    expect(handoff.snapshotSource).toBe("locked");
+    expect(handoff.product?.id).toBe(HANDOFF_PRODUCT);
+    expect(handoff.snapshot?.versionNumber).toBe(1);
+    expect(handoff.snapshot?.snapshot.specs[0].label).toBe("压力范围");
+    expect(handoff.roleBuckets.some((bucket) =>
+      bucket.role === "rd_mech" && bucket.specs.some((spec) => spec.label === "压力范围")
+    )).toBe(true);
+
+    const generated = await caller.projects.generateHandoffTasks({ projectId: HANDOFF_PROJECT });
+    expect(generated.created).toBeGreaterThan(0);
+    const tasks = await getProjectTasks(HANDOFF_PROJECT, "design");
+    const handoffTask = tasks.find((task) => task.taskId === "pd_rd_mech");
+    expect(handoffTask?.instructions).toContain("产品定义交接 - 结构 / ID");
+    expect(handoffTask?.visibleRoles).toContain("rd_mech");
   });
 });

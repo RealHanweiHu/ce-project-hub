@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { getDb, createProjectWithSeed, computeProjectDelayImpact } from "./db";
+import { getDb, createProjectWithSeed } from "./db";
+import {
+  applyProjectSchedule,
+  computeProjectDelayImpact,
+  rescheduleProjectFromTask,
+} from "./services/schedule-service";
 import { projects, projectTasks } from "../drizzle/schema";
 import { and, eq } from "drizzle-orm";
 
@@ -10,7 +15,6 @@ beforeAll(async () => {
     { id: PRJ, name: "延期DB", projectNumber: "DI1", category: "npd", risk: "low", currentPhase: "concept", progress: 0, createdBy: 1, pmUserId: 1, startDate: "2026-06-01" } as any,
     "npd", 1,
   );
-  const { applyProjectSchedule } = await import("./db");
   await applyProjectSchedule(PRJ);
 });
 
@@ -52,8 +56,6 @@ describe("computeProjectDelayImpact", () => {
   });
 });
 
-import { rescheduleProjectFromTask } from "./db";
-
 describe("rescheduleProjectFromTask 返回 impact + 冲击 emit", () => {
   it("返回 {count, impact}，冲击时 emit task.rescheduled", async () => {
     const P = `di-emit-${Date.now()}`;
@@ -61,7 +63,6 @@ describe("rescheduleProjectFromTask 返回 impact + 冲击 emit", () => {
       { id: P, name: "延期emit", projectNumber: "DI2", category: "npd", risk: "low", currentPhase: "concept", progress: 0, createdBy: 1, pmUserId: 1, startDate: "2026-06-01" } as any,
       "npd", 1,
     );
-    const { applyProjectSchedule } = await import("./db");
     await applyProjectSchedule(P);
     const db = await getDb();
     const rows = await db!.select({ taskId: projectTasks.taskId, startDate: projectTasks.startDate, dueDate: projectTasks.dueDate })
@@ -87,7 +88,6 @@ describe("rescheduleProjectFromTask 返回 impact + 冲击 emit", () => {
       { id: P, name: "延期skip", projectNumber: "DI3", category: "npd", risk: "low", currentPhase: "concept", progress: 0, createdBy: 1, pmUserId: 1, startDate: "2026-06-01" } as any,
       "npd", 1,
     );
-    const { applyProjectSchedule } = await import("./db");
     await applyProjectSchedule(P);
     const db = await getDb();
     const rows = await db!.select({ taskId: projectTasks.taskId, startDate: projectTasks.startDate, dueDate: projectTasks.dueDate })

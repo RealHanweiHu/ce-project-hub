@@ -4,6 +4,11 @@ import { TRPCError } from "@trpc/server";
 import { protectedProcedure, router } from "../_core/trpc";
 import {
   createProduct, getProductById, listProductsByCategory,
+  getProductDefinitionByProductId, listProductDefinitionStatuses,
+  upsertProductDefinition, confirmProductDefinition, listProductDefinitionSnapshots,
+  listProductDefinitionChanges, createProductDefinitionChange,
+  getProductDefinitionChangeById, updateProductDefinitionChange,
+  getProductDefinitionDeviation,
   createPlatform, listProductRevisions,
   setProjectProduct, getOpenP0P1Count, releaseProject, getProjectById,
   getReleaseGateStatus, isReleaseOverrideAuthorized,
@@ -11,8 +16,87 @@ import {
   getDownstreamVariantImpact,
 } from "../db";
 import { VARIANT_DIMENSIONS } from "../../shared/oem-variant";
+import { CHANGE_STATUSES, PRODUCT_DEFINITION_CHANGE_AREAS } from "../../drizzle/schema";
 import { emitAutomationEvent } from "../automation/events";
 import { assertProjectAccess, assertProjectPermission } from "../project-access";
+
+const competitorSchema = z.object({
+  brand: z.string().optional(),
+  model: z.string().optional(),
+  price: z.string().optional(),
+  channel: z.string().optional(),
+  strengths: z.string().optional(),
+  weaknesses: z.string().optional(),
+  notes: z.string().optional(),
+});
+
+const specSchema = z.object({
+  key: z.string().min(1),
+  label: z.string().min(1),
+  target: z.string().min(1),
+  tolerance: z.string().optional(),
+  verification: z.string().optional(),
+  ownerRole: z.string().optional(),
+});
+
+const skuSchema = z.object({
+  name: z.string().min(1),
+  code: z.string().optional(),
+  targetMarket: z.string().optional(),
+  price: z.string().optional(),
+  differences: z.string().optional(),
+  customerName: z.string().optional(),
+});
+
+const productDefinitionPatchSchema = z.object({
+  title: z.string().default(""),
+  opportunityName: z.string().default(""),
+  opportunitySource: z.string().default(""),
+  targetCustomers: z.string().nullable().optional(),
+  targetMarkets: z.array(z.string()).default([]),
+  applicationScenarios: z.string().nullable().optional(),
+  competitors: z.array(competitorSchema).default([]),
+  priceBand: z.string().default(""),
+  positioning: z.string().nullable().optional(),
+  sellingPoints: z.array(z.string()).default([]),
+  differentiationStrategy: z.string().nullable().optional(),
+  prdSummary: z.string().nullable().optional(),
+  specs: z.array(specSchema).default([]),
+  targetCost: z.string().default(""),
+  targetPrice: z.string().default(""),
+  targetGrossMargin: z.string().default(""),
+  skuPlan: z.array(skuSchema).default([]),
+});
+
+const productDefinitionChangeCreateSchema = z.object({
+  productId: z.string(),
+  sourceProjectId: z.string().optional().nullable(),
+  area: z.enum(PRODUCT_DEFINITION_CHANGE_AREAS).default("other"),
+  title: z.string().min(1),
+  description: z.string().optional().nullable(),
+  reason: z.string().optional().nullable(),
+  requestedByCustomer: z.string().optional().nullable(),
+  baselineValue: z.string().optional().nullable(),
+  requestedValue: z.string().optional().nullable(),
+  impactScope: z.array(z.string()).default([]),
+  costImpact: z.string().optional().nullable(),
+  priceImpact: z.string().optional().nullable(),
+  scheduleImpact: z.string().optional().nullable(),
+  status: z.enum(CHANGE_STATUSES).default("proposed"),
+  decisionNotes: z.string().optional().nullable(),
+});
+
+const productDefinitionChangeUpdateSchema = productDefinitionChangeCreateSchema
+  .omit({ productId: true })
+  .partial()
+  .extend({
+    id: z.number(),
+    productId: z.string(),
+  });
+
+function canMaintainProductDefinition(user: { id: number; role: string; canCreateProject?: boolean | null }, product: { createdBy: number }) {
+  return user.role === "admin" || user.canCreateProject === true || product.createdBy === user.id;
+}
 
 export const productsRouter = router({
   list: protectedProcedure
@@ -26,6 +110,117 @@ export const productsRouter = router({
   revisions: protectedProcedure
     .input(z.object({ productId: z.string() }))
     .query(({ input }) => listProductRevisions(input.productId)),
+
+  definition: protectedProcedure
+    .input(z.object({ productId: z.string() }))
+    .query(({ input }) => getProductDefinitionByProductId(input.productId)),
+
+  definitionStatuses: protectedProcedure
+    .query(() => listProductDefinitionStatuses()),
+
+  definitionSnapshots: protectedProcedure
+    .input(z.object({ productId: z.string() }))
+    .query(({ input }) => listProductDefinitionSnapshots(input.productId)),
+
+  saveDefinition: protectedProcedure
+    .input(z.object({
+      productId: z.string(),
+      patch: productDefinitionPatchSchema,
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const product = await getProductById(input.productId);
+      if (!product) throw new TRPCError({ code: "NOT_FOUND", message: "产品不存在" });
+      if (!canMaintainProductDefinition(ctx.user, product)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "没有维护产品定义的权限" });
+      }
+      const definition = await upsertProductDefinition(input.productId, ctx.user.id, {
+        ...input.patch,
+        targetCustomers: input.patch.targetCustomers ?? null,
+        applicationScenarios: input.patch.applicationScenarios ?? null,
+        positioning: input.patch.positioning ?? null,
+        differentiationStrategy: input.patch.differentiationStrategy ?? null,
+        prdSummary: input.patch.prdSummary ?? null,
+      });
+      return definition;
+    }),
+
+  confirmDefinition: protectedProcedure
+    .input(z.object({ productId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const product = await getProductById(input.productId);
+      if (!product) throw new TRPCError({ code: "NOT_FOUND", message: "产品不存在" });
+      if (!canMaintainProductDefinition(ctx.user, product)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "没有确认产品定义的权限" });
+      }
+      const existing = await getProductDefinitionByProductId(input.productId);
+      if (!existing) throw new TRPCError({ code: "BAD_REQUEST", message: "请先保存产品定义" });
+      if (!existing.positioning?.trim() || !existing.prdSummary?.trim() || existing.specs.length === 0) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "定位、PRD 摘要和至少 1 条目标规格是确认产品定义的必填项" });
+      }
+      return confirmProductDefinition(input.productId, ctx.user.id);
+    }),
+
+  definitionChanges: protectedProcedure
+    .input(z.object({ productId: z.string() }))
+    .query(async ({ input }) => listProductDefinitionChanges(input.productId)),
+
+  definitionDeviation: protectedProcedure
+    .input(z.object({ productId: z.string() }))
+    .query(async ({ input }) => getProductDefinitionDeviation(input.productId)),
+
+  createDefinitionChange: protectedProcedure
+    .input(productDefinitionChangeCreateSchema)
+    .mutation(async ({ ctx, input }) => {
+      const product = await getProductById(input.productId);
+      if (!product) throw new TRPCError({ code: "NOT_FOUND", message: "产品不存在" });
+      if (!canMaintainProductDefinition(ctx.user, product)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "没有登记产品定义变更的权限" });
+      }
+      const change = await createProductDefinitionChange({
+        ...input,
+        sourceProjectId: input.sourceProjectId ?? null,
+        description: input.description ?? null,
+        reason: input.reason ?? null,
+        requestedByCustomer: input.requestedByCustomer ?? null,
+        baselineValue: input.baselineValue ?? null,
+        requestedValue: input.requestedValue ?? null,
+        costImpact: input.costImpact ?? null,
+        priceImpact: input.priceImpact ?? null,
+        scheduleImpact: input.scheduleImpact ?? null,
+        decisionNotes: input.decisionNotes ?? null,
+        createdBy: ctx.user.id,
+      });
+      return change;
+    }),
+
+  updateDefinitionChange: protectedProcedure
+    .input(productDefinitionChangeUpdateSchema)
+    .mutation(async ({ ctx, input }) => {
+      const product = await getProductById(input.productId);
+      if (!product) throw new TRPCError({ code: "NOT_FOUND", message: "产品不存在" });
+      if (!canMaintainProductDefinition(ctx.user, product)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "没有更新产品定义变更的权限" });
+      }
+      const existing = await getProductDefinitionChangeById(input.id);
+      if (!existing || existing.productId !== input.productId) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "产品定义变更不存在" });
+      }
+      const { id, productId, ...patch } = input;
+      const change = await updateProductDefinitionChange(id, ctx.user.id, {
+        ...patch,
+        sourceProjectId: patch.sourceProjectId ?? undefined,
+        description: patch.description ?? undefined,
+        reason: patch.reason ?? undefined,
+        requestedByCustomer: patch.requestedByCustomer ?? undefined,
+        baselineValue: patch.baselineValue ?? undefined,
+        requestedValue: patch.requestedValue ?? undefined,
+        costImpact: patch.costImpact ?? undefined,
+        priceImpact: patch.priceImpact ?? undefined,
+        scheduleImpact: patch.scheduleImpact ?? undefined,
+        decisionNotes: patch.decisionNotes ?? undefined,
+      });
+      return change;
+    }),
 
   // ── OEM 客户变体（PLM 侧登记） ──────────────────────────────────────────────
   variantsByCustomer: protectedProcedure

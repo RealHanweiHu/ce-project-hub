@@ -10,6 +10,7 @@ echo "==> 同步代码到 $ECS:$DIR"
 rsync -az --delete \
   --exclude node_modules --exclude .git --exclude dist \
   --exclude .manus-logs --exclude .env \
+  --exclude .playwright-cli --exclude output --exclude task_plan.md \
   ./ "$ECS:$DIR/"
 
 echo "==> 写入生产 .env"
