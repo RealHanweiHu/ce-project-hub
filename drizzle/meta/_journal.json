@@ -204,6 +204,13 @@
       "when": 1781870490128,
       "tag": "0028_project_definition_handoff_snapshot",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1781978459660,
+      "tag": "0029_amusing_yellowjacket",
+      "breakpoints": true
     }
   ]
 }

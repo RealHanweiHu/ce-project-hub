@@ -805,6 +805,10 @@ export const projectFiles = pgTable(
     taskId: varchar("taskId", { length: 32 }),
     /** Optional: associate file with a specific gate deliverable by name (2a). */
     deliverableName: varchar("deliverableName", { length: 256 }),
+    /** 文件格式类别（可空）；取值见 shared/file-types.ts FILE_TYPES */
+    fileType: varchar("fileType", { length: 64 }),
+    /** 版本标签（可空，≤32），如 V1.0 / T1 / Rev.B */
+    fileVersion: varchar("fileVersion", { length: 32 }),
     /** Original file name as uploaded */
     name: varchar("name", { length: 256 }).notNull(),
     mimeType: varchar("mimeType", { length: 128 }).notNull().default("application/octet-stream"),
