@@ -1,6 +1,6 @@
-// OEM 客户变体（PLM 生命轴侧）——可持久化类型 + 纯计算。
-// 变体只在 PLM 侧登记，不开项目；只记录与 base 的差异(delta)，不复制整份 BOM。
-// 两类查询：1) 按客户查全部变体；2) 按母平台查下游引用 SKU 影响清单（平台级 ECO Gate 数据源）。
+// OEM 客户版本（PLM 生命轴侧）——可持久化类型 + 纯计算。
+// Customer Revision 基于 Product Revision 登记差异；SKU 是客户版本下的可销售编号。
+// 两类查询：1) 按客户查全部客户版本；2) 按产品型号查下游 SKU 影响清单（平台级 ECO Gate 数据源）。
 
 /** 变体差异维度 */
 export type VariantDimension =
@@ -36,30 +36,34 @@ export interface VariantDelta {
 
 /** 认证适用性 */
 export interface VariantCertification {
-  /** 是否沿用母平台认证 */
+  /** 是否沿用产品主版本认证 */
   reuseParent: boolean;
   /** 因变更（CMF / 标签 / 铭牌）而受影响、需复核的认证标识 */
   affectedMarks?: string[];
   notes?: string;
 }
 
-/** 下游影响清单的单行结果（平台一改即列出受影响变体） */
+/** 下游影响清单的单行结果（主版本 / BOM Revision 一改即列出受影响客户版本） */
 export interface DownstreamImpactRow {
+  /** 客户版本号（Customer Revision） */
   variantCode: string;
+  /** 可销售 SKU */
   customerSku: string | null;
   customer: string;
   status: VariantStatus;
-  /** 是否沿用母平台认证（false = 该变体认证需独立维护） */
+  /** 是否沿用产品主版本认证（false = 该客户版本认证需独立维护） */
   certReuseParent: boolean;
-  /** 这次 BOM 变更是否命中该变体的差异料 */
+  /** 这次 BOM 变更是否命中该客户版本的差异料 */
   bomTouched: boolean;
-  /** 该变体受影响、需复核的认证标识 */
+  /** 该客户版本受影响、需复核的认证标识 */
   affectedMarks: string[];
 }
 
-/** 用于计算下游影响的最小变体形状（DB 行可直接满足） */
+/** 用于计算下游影响的最小客户版本形状（DB 行可直接满足） */
 export interface ImpactableVariant {
+  /** 客户版本号（Customer Revision） */
   variantCode: string;
+  /** 可销售 SKU */
   customerSku?: string | null;
   customerName: string;
   status: VariantStatus;
@@ -69,9 +73,9 @@ export interface ImpactableVariant {
 }
 
 /**
- * 某母平台的下游引用 SKU 影响清单（纯函数，便于单测）。
- * 用于自有 ECO 的 Gate：平台一改，立即列出受影响的客户变体，
- * 并标出哪些变体的认证 / 物料会被这次变更波及。
+ * 某产品型号的下游 SKU 影响清单（纯函数，便于单测）。
+ * 用于自有 ECO 的 Gate：主版本 / BOM Revision 一改，立即列出受影响的客户版本与 SKU，
+ * 并标出哪些客户版本的认证 / 物料会被这次变更波及。
  */
 export function computeDownstreamImpact(
   variants: ImpactableVariant[],

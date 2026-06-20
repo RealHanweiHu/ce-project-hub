@@ -2560,7 +2560,7 @@ export async function listProductRevisions(productId: string): Promise<Array<Pro
   }));
 }
 
-// ── OEM 客户变体（PLM 侧登记，不开项目） ──────────────────────────────────────
+// ── OEM 客户版本（Customer Revision，PLM 侧登记，不开项目） ───────────────────
 
 export async function createCustomerVariant(v: InsertCustomerVariant): Promise<number> {
   const db = await getDb();
@@ -2569,7 +2569,7 @@ export async function createCustomerVariant(v: InsertCustomerVariant): Promise<n
   return res[0].id;
 }
 
-/** 某客户名下的全部变体（对账 / 改版 / 召回） */
+/** 某客户名下的全部客户版本（对账 / 改版 / 召回） */
 export async function listVariantsByCustomer(customerId: string): Promise<CustomerVariant[]> {
   const db = await getDb();
   if (!db) return [];
@@ -2578,7 +2578,7 @@ export async function listVariantsByCustomer(customerId: string): Promise<Custom
     .orderBy(desc(customerVariants.updatedAt));
 }
 
-/** 某母平台/基础产品的全部变体 */
+/** 某产品型号下的全部客户版本 */
 export async function listVariantsByParentProduct(parentProductId: string): Promise<CustomerVariant[]> {
   const db = await getDb();
   if (!db) return [];
@@ -2588,7 +2588,7 @@ export async function listVariantsByParentProduct(parentProductId: string): Prom
 }
 
 /**
- * 某母平台的下游引用 SKU 影响清单。供自有 ECO Gate：平台一改即列出受影响客户变体，
+ * 某产品型号的下游引用 SKU 影响清单。供自有 ECO Gate：主版本 / BOM Revision 一改即列出受影响客户版本，
  * 并标出认证/物料波及。纯计算复用 shared/oem-variant.computeDownstreamImpact。
  */
 export async function getDownstreamVariantImpact(

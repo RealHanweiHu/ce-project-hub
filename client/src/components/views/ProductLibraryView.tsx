@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 
@@ -162,6 +162,7 @@ type CustomerVariant = {
 
 type VariantForm = {
   variantCode: string;
+  baseRevision: string;
   customerName: string;
   customerSku: string;
   differences: string;
@@ -218,6 +219,7 @@ const emptyChangeForm = {
 
 const emptyVariantForm = (): VariantForm => ({
   variantCode: '',
+  baseRevision: '',
   customerName: '',
   customerSku: '',
   differences: '',
@@ -364,7 +366,7 @@ export function ProductLibraryView() {
         <div>
           <h2 className="font-serif text-2xl text-stone-900">产品库</h2>
           <p className="ce-kicker mt-1">
-            {products.length} PRODUCTS · SKU LIBRARY
+            {products.length} PRODUCT MODELS · REVISION SPINE
           </p>
         </div>
         <Button
@@ -445,6 +447,9 @@ export function ProductLibraryView() {
             <DialogTitle className="font-serif flex items-center gap-2">
               <Package size={16} className="text-amber-500" /> 新建产品型号
             </DialogTitle>
+            <DialogDescription className="sr-only">
+              建立产品型号主数据。项目立项不要求先创建产品型号。
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
@@ -561,7 +566,7 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
 
   const createVariant = trpc.products.createVariant.useMutation({
     onSuccess: async () => {
-      toast.success('SKU 已登记');
+      toast.success('客户版本已登记');
       setVariantForm(emptyVariantForm());
       await utils.products.variantsByProduct.invalidate({ parentProductId: product.id });
     },
@@ -679,7 +684,7 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
   const createCustomerVariant = () => {
     const variantCode = variantForm.variantCode.trim();
     if (!variantCode) {
-      toast.error('请输入 SKU，例如 DG01-US-BLK');
+      toast.error('请输入客户版本号，例如 DG01-CUSTA-R1');
       return;
     }
     const customerName = variantForm.customerName.trim();
@@ -690,7 +695,7 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
       customerId: customerIdFromName(customerName || variantCode),
       customerSku: variantForm.customerSku.trim() || null,
       parentProductId: product.id,
-      baseRevision: '',
+      baseRevision: variantForm.baseRevision.trim(),
       status: variantForm.status,
       deltas: differences.map((item) => ({
         dimension: 'other',
@@ -710,6 +715,9 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
           <DialogTitle className="font-serif flex items-center gap-2">
             <Boxes size={16} className="text-amber-500" /> {product.name} · 产品定义
           </DialogTitle>
+          <DialogDescription className="sr-only">
+            维护产品型号、主版本、客户版本、SKU 与产品定义基线。
+          </DialogDescription>
         </DialogHeader>
         <div className="py-2 space-y-6">
           <CustomerVariantSection
@@ -1158,26 +1166,29 @@ function CustomerVariantSection({
         <div>
           <div className="flex items-center gap-2">
             <Package size={15} className="text-stone-400" />
-            <h3 className="font-serif text-base text-stone-900">SKU / 可销售版本</h3>
+            <h3 className="font-serif text-base text-stone-900">客户版本 / SKU</h3>
           </div>
           <p className="text-xs text-stone-500 mt-1">
-            产品型号 {product.productNumber || product.name} 可以沉淀多个可销售 SKU，例如 DG01-US-BLK / DG01-EU-BLK；客户配件、颜色、Logo、包装等差异记录在 SKU 差异中。
+            产品型号 {product.productNumber || product.name} 下先形成主版本（Product Revision），客户版本基于某个主版本登记差异；SKU 是可销售版本，BOM Revision 由发布版本冻结。
           </p>
         </div>
         <span className="text-[10px] font-mono px-2 py-0.5 border border-stone-200 bg-stone-50 text-stone-500">
-          {variants.length} SKUS
+          {variants.length} CUSTOMER REVISIONS
         </span>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-1 lg:grid-cols-7 gap-3">
         <div className="lg:col-span-1">
-          <Field label="SKU" value={form.variantCode} onChange={(value) => onChange({ variantCode: value })} placeholder="DG01-US-BLK" />
+          <Field label="客户版本号" value={form.variantCode} onChange={(value) => onChange({ variantCode: value })} placeholder="DG01-CUSTA-R1" />
+        </div>
+        <div className="lg:col-span-1">
+          <Field label="基于主版本" value={form.baseRevision} onChange={(value) => onChange({ baseRevision: value })} placeholder="Rev A" />
         </div>
         <div className="lg:col-span-1">
           <Field label="客户名称" value={form.customerName} onChange={(value) => onChange({ customerName: value })} placeholder="客户 A" />
         </div>
         <div className="lg:col-span-1">
-          <Field label="客户料号" value={form.customerSku} onChange={(value) => onChange({ customerSku: value })} placeholder="可选" />
+          <Field label="SKU" value={form.customerSku} onChange={(value) => onChange({ customerSku: value })} placeholder="DG01-US-BLK" />
         </div>
         <label className="block space-y-1.5 lg:col-span-1">
           <span className="text-[10px] font-mono uppercase tracking-widest text-stone-500">状态</span>
@@ -1193,7 +1204,7 @@ function CustomerVariantSection({
           </select>
         </label>
         <div className="lg:col-span-2">
-          <Field label="差异点" value={form.differences} onChange={(value) => onChange({ differences: value })} placeholder="颜色黑色, 客户 logo, 附件包 A" />
+          <Field label="客户差异" value={form.differences} onChange={(value) => onChange({ differences: value })} placeholder="颜色黑色, 客户 logo, 附件包 A" />
         </div>
       </div>
       <div className="flex justify-end">
@@ -1203,14 +1214,14 @@ function CustomerVariantSection({
           className="bg-stone-900 hover:bg-stone-800 text-stone-50 gap-1.5"
         >
           {isCreating ? <Loader2 size={14} className="animate-spin" /> : <PlusCircle size={14} />}
-          登记 SKU
+          登记客户版本
         </Button>
       </div>
 
       {isLoading ? (
-        <div className="flex items-center gap-2 text-sm text-stone-400"><Loader2 size={14} className="animate-spin" />加载 SKU…</div>
+        <div className="flex items-center gap-2 text-sm text-stone-400"><Loader2 size={14} className="animate-spin" />加载客户版本…</div>
       ) : variants.length === 0 ? (
-        <p className="text-sm text-stone-400 py-2">暂无 SKU。</p>
+        <p className="text-sm text-stone-400 py-2">暂无客户版本。</p>
       ) : (
         <div className="space-y-2">
           {variants.map((variant) => (
@@ -1228,8 +1239,8 @@ function CustomerVariantSection({
                   </div>
                   <div className="mt-1 text-[11px] font-mono text-stone-400">
                     {variant.customerName || '未填客户'}
-                    {variant.customerSku ? ` · 客户料号 ${variant.customerSku}` : ''}
-                    {variant.baseRevision ? ` · Base ${variant.baseRevision}` : ''}
+                    {variant.baseRevision ? ` · 主版本 ${variant.baseRevision}` : ' · 主版本未指定'}
+                    {variant.customerSku ? ` · SKU ${variant.customerSku}` : ' · SKU 未填'}
                   </div>
                 </div>
               </div>
@@ -1391,15 +1402,15 @@ function SkuRows({
 }) {
   return (
     <div className="space-y-2">
-      <RowsHeader label="SKU / 版本" onAdd={onAdd} />
+      <RowsHeader label="SKU 计划" onAdd={onAdd} />
       {rows.length === 0 ? (
-        <p className="text-xs text-stone-400 border border-dashed border-stone-300 px-3 py-3 bg-white">暂无 SKU / 版本。</p>
+        <p className="text-xs text-stone-400 border border-dashed border-stone-300 px-3 py-3 bg-white">暂无目标 SKU 计划。</p>
       ) : (
         <div className="space-y-2">
           {rows.map((row, index) => (
             <div key={index} className="grid grid-cols-1 md:grid-cols-[1fr_0.8fr_0.9fr_0.8fr_1.5fr_36px] gap-2">
-              <RowInput value={row.name} onChange={(value) => onUpdate(index, { name: value })} placeholder="版本名" />
-              <RowInput value={row.code} onChange={(value) => onUpdate(index, { code: value })} placeholder="SKU" />
+              <RowInput value={row.name} onChange={(value) => onUpdate(index, { name: value })} placeholder="SKU 名称" />
+              <RowInput value={row.code} onChange={(value) => onUpdate(index, { code: value })} placeholder="SKU 编码" />
               <RowInput value={row.targetMarket} onChange={(value) => onUpdate(index, { targetMarket: value })} placeholder="市场" />
               <RowInput value={row.price} onChange={(value) => onUpdate(index, { price: value })} placeholder="价格" />
               <RowInput value={row.differences} onChange={(value) => onUpdate(index, { differences: value })} placeholder="差异" />

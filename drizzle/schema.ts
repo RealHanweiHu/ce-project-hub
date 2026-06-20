@@ -1087,7 +1087,7 @@ export const productDefinitionChanges = pgTable(
 export type ProductDefinitionChange = typeof productDefinitionChanges.$inferSelect;
 export type InsertProductDefinitionChange = typeof productDefinitionChanges.$inferInsert;
 
-/** 产品版本 = 冻结版本（PLM 轴）；版本链由项目串起 */
+/** 主版本 / Product Revision = 产品型号下的冻结版本（PLM 轴）；版本链由项目串起 */
 export const productRevisions = pgTable(
   "product_revisions",
   {
@@ -1154,21 +1154,21 @@ export type MpRelease = typeof mpReleases.$inferSelect;
 export type InsertMpRelease = typeof mpReleases.$inferInsert;
 
 /**
- * OEM 客户变体 = 同一母平台（已量产基础产品）下，各客户相对 base 的差异登记。
- * 只在 PLM 侧登记、不开项目；只存 delta，不复制整份 BOM。
- * 支撑两类查询：按客户对账 / 按母平台列下游影响（平台级 ECO Gate）。
+ * OEM 客户版本 / Customer Revision = 同一产品型号下，各客户相对 Product Revision 的差异登记。
+ * SKU 是客户版本下可销售的具体版本；只存 delta，不复制整份 BOM。
+ * 支撑两类查询：按客户对账 / 按产品型号列下游 SKU 影响（平台级 ECO Gate）。
  */
 export const customerVariants = pgTable(
   "customer_variants",
   {
     id: serial("id").primaryKey(),
-    /** 内部变体编码 / SKU */
+    /** 客户版本号 / Customer Revision */
     variantCode: varchar("variantCode", { length: 64 }).notNull(),
-    /** 客户料号 */
+    /** SKU / 可销售具体版本 */
     customerSku: varchar("customerSku", { length: 64 }),
-    /** 母平台 / 基础产品 id（软引用 products.id） */
+    /** 产品型号 id（软引用 products.id） */
     parentProductId: varchar("parentProductId", { length: 32 }).notNull(),
-    /** 基于母平台的哪个 revision（Rev 标签） */
+    /** 基于哪个 Product Revision（Rev 标签） */
     baseRevision: varchar("baseRevision", { length: 16 }).notNull().default(""),
     customerId: varchar("customerId", { length: 64 }).notNull().default(""),
     customerName: varchar("customerName", { length: 256 }).notNull().default(""),
@@ -1176,7 +1176,7 @@ export const customerVariants = pgTable(
     status: varchar("status", { length: 16 }).notNull().default("draft"),
     /** 仅记录与 base 的差异 */
     deltas: jsonb("deltas").$type<VariantDelta[]>().notNull().default([]),
-    /** 认证：是否沿用母平台 */
+    /** 认证：是否沿用产品主版本 */
     certReuseParent: boolean("certReuseParent").notNull().default(true),
     /** 受影响、需复核的认证标识 */
     certAffectedMarks: jsonb("certAffectedMarks").$type<string[]>().notNull().default([]),

@@ -113,7 +113,7 @@ export const productsRouter = router({
 
   definition: protectedProcedure
     .input(z.object({ productId: z.string() }))
-    .query(({ input }) => getProductDefinitionByProductId(input.productId)),
+    .query(async ({ input }) => (await getProductDefinitionByProductId(input.productId)) ?? null),
 
   definitionStatuses: protectedProcedure
     .query(() => listProductDefinitionStatuses()),
@@ -222,7 +222,7 @@ export const productsRouter = router({
       return change;
     }),
 
-  // ── OEM 客户变体（PLM 侧登记） ──────────────────────────────────────────────
+  // ── OEM 客户版本 / Customer Revision（PLM 侧登记） ─────────────────────────
   variantsByCustomer: protectedProcedure
     .input(z.object({ customerId: z.string() }))
     .query(({ input }) => listVariantsByCustomer(input.customerId)),
@@ -231,7 +231,7 @@ export const productsRouter = router({
     .input(z.object({ parentProductId: z.string() }))
     .query(({ input }) => listVariantsByParentProduct(input.parentProductId)),
 
-  /** 平台一改即列出受影响客户变体（自有 ECO Gate 数据源） */
+  /** 主版本 / BOM Revision 一改即列出受影响客户版本与 SKU（自有 ECO Gate 数据源） */
   downstreamImpact: protectedProcedure
     .input(z.object({
       parentProductId: z.string(),
@@ -351,7 +351,7 @@ export const productsRouter = router({
       else if (gate.decision === "rejected") blockers.push("前置 Gate 已驳回");
       else if (gate.decision === "conditional") blockers.push("前置 Gate 为有条件通过，需强制发布");
 
-      // 平台/产品变更（ECO）发布时，列出该产品下游客户变体（非阻断，仅提示复核）。
+      // 产品主版本 / BOM Revision 变更发布时，列出下游客户版本与 SKU（非阻断，仅提示复核）。
       const downstreamVariants = project.productId
         ? await getDownstreamVariantImpact(project.productId, { onlyActive: true })
         : [];
