@@ -258,6 +258,15 @@ function customerIdFromName(name: string) {
   return name.trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, "-").replace(/^-|-$/g, "");
 }
 
+function productModelCode(product: ProductRow) {
+  return product.productNumber?.trim() || product.name;
+}
+
+function formatMainRevisionLabel(product: ProductRow, revisionLabel: string) {
+  const modelCode = productModelCode(product);
+  return revisionLabel.includes(modelCode) ? revisionLabel : `${modelCode} ${revisionLabel}`;
+}
+
 function definitionToForm(definition: ProductDefinition | null | undefined, product: ProductRow) {
   if (!definition) {
     return {
@@ -684,7 +693,7 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
   const createCustomerVariant = () => {
     const variantCode = variantForm.variantCode.trim();
     if (!variantCode) {
-      toast.error('请输入客户版本号，例如 DG01-CUSTA-R1');
+      toast.error('请输入客户版本号，例如 DG01 Rev A - Walmart');
       return;
     }
     const customerName = variantForm.customerName.trim();
@@ -1067,7 +1076,7 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
           {isLoading ? (
             <div className="flex justify-center py-6"><Loader2 className="animate-spin text-amber-500" /></div>
           ) : revisions.length === 0 ? (
-            <p className="text-sm text-stone-400 py-6 text-center">还没有版本。项目「量产发布」后会在这里出现 Rev A。</p>
+            <p className="text-sm text-stone-400 py-6 text-center">还没有主版本。项目「量产发布」后会在这里出现 {productModelCode(product)} Rev A。</p>
           ) : (
             <div className="space-y-0">
               {(revisions as { id: number; revisionLabel: string; status: string; releasedAt: string | null; createdByProjectId: string | null; snapshotChangelog?: { number: string; type: string; title: string; reason: string | null }[] }[]).map((r, i) => (
@@ -1078,7 +1087,7 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="font-serif text-base text-stone-900">{r.revisionLabel}</span>
+                      <span className="font-serif text-base text-stone-900">{formatMainRevisionLabel(product, r.revisionLabel)}</span>
                       <span className={`text-[10px] font-mono px-1.5 py-0.5 ${
                         r.status === 'released' ? 'bg-emerald-50 text-emerald-600' :
                         r.status === 'superseded' ? 'bg-stone-100 text-stone-400' : 'bg-amber-50 text-amber-600'
@@ -1169,7 +1178,7 @@ function CustomerVariantSection({
             <h3 className="font-serif text-base text-stone-900">客户版本 / SKU</h3>
           </div>
           <p className="text-xs text-stone-500 mt-1">
-            产品型号 {product.productNumber || product.name} 下先形成主版本（Product Revision），客户版本基于某个主版本登记差异；SKU 是可销售版本，BOM Revision 由发布版本冻结。
+            主版本示例：DG01 Rev A / DG01 Rev B / DG01 Rev C；客户版本示例：DG01 Rev A - Walmart / DG01 Rev A - Academy / DG01 Rev B - Trek。SKU 记录可销售版本，继续往下追溯 BOM Revision。
           </p>
         </div>
         <span className="text-[10px] font-mono px-2 py-0.5 border border-stone-200 bg-stone-50 text-stone-500">
@@ -1179,13 +1188,13 @@ function CustomerVariantSection({
 
       <div className="grid grid-cols-1 lg:grid-cols-7 gap-3">
         <div className="lg:col-span-1">
-          <Field label="客户版本号" value={form.variantCode} onChange={(value) => onChange({ variantCode: value })} placeholder="DG01-CUSTA-R1" />
+          <Field label="客户版本号" value={form.variantCode} onChange={(value) => onChange({ variantCode: value })} placeholder="DG01 Rev A - Walmart" />
         </div>
         <div className="lg:col-span-1">
-          <Field label="基于主版本" value={form.baseRevision} onChange={(value) => onChange({ baseRevision: value })} placeholder="Rev A" />
+          <Field label="基于主版本" value={form.baseRevision} onChange={(value) => onChange({ baseRevision: value })} placeholder="DG01 Rev A" />
         </div>
         <div className="lg:col-span-1">
-          <Field label="客户名称" value={form.customerName} onChange={(value) => onChange({ customerName: value })} placeholder="客户 A" />
+          <Field label="客户名称" value={form.customerName} onChange={(value) => onChange({ customerName: value })} placeholder="Walmart" />
         </div>
         <div className="lg:col-span-1">
           <Field label="SKU" value={form.customerSku} onChange={(value) => onChange({ customerSku: value })} placeholder="DG01-US-BLK" />
