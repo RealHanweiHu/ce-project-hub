@@ -39,6 +39,7 @@ import { useAuth } from '@/_core/hooks/useAuth';
 import { trpc } from '@/lib/trpc';
 import { toast } from 'sonner';
 import { getTaskDeliverables } from '@shared/task-deliverables';
+import { FILE_TYPES } from '@shared/file-types';
 import { Users } from 'lucide-react';
 
 const MAX_FILE_SIZE = 16 * 1024 * 1024;
@@ -173,6 +174,8 @@ function FileUploadArea({
   const [error, setError] = useState('');
   const [uploading, setUploading] = useState(false);
   const [previewFile, setPreviewFile] = useState<FileAttachment | null>(null);
+  const [selectedType, setSelectedType] = useState('');
+  const [version, setVersion] = useState('');
 
   const handleFiles = async (fileList: FileList) => {
     if (readOnly) return;
@@ -190,6 +193,8 @@ function FileUploadArea({
         formData.append('projectId', projectId);
         if (phaseId) formData.append('phaseId', phaseId);
         if (taskId) formData.append('taskId', taskId);
+        formData.append('fileType', selectedType);
+        formData.append('fileVersion', version);
         const resp = await fetch('/api/files/upload', {
           method: 'POST',
           body: formData,
@@ -203,6 +208,7 @@ function FileUploadArea({
         const result = await resp.json() as {
           id: number; name: string; mimeType: string; size: number;
           storageKey: string; storageUrl: string;
+          fileType?: string | null; fileVersion?: string | null;
         };
         newFiles.push({
           id: String(result.id),
@@ -213,6 +219,8 @@ function FileUploadArea({
           dataUrl: '',
           storageUrl: result.storageUrl,
           storageKey: result.storageKey,
+          fileType: result.fileType ?? null,
+          fileVersion: result.fileVersion ?? null,
         });
       } catch (e: any) {
         setError(`上传 "${file.name}" 失败: ${e.message || '网络错误'}`);
@@ -233,6 +241,26 @@ function FileUploadArea({
 
   return (
     <div>
+      {!readOnly && (
+        <div className="flex items-center gap-2 mb-2">
+          <select
+            value={selectedType}
+            onChange={(e) => setSelectedType(e.target.value)}
+            className="text-xs border border-stone-300 bg-white px-2 py-1.5 text-stone-700"
+          >
+            <option value="">未分类</option>
+            {FILE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <input
+            type="text"
+            value={version}
+            onChange={(e) => setVersion(e.target.value)}
+            maxLength={32}
+            placeholder="版本 如 V1.0 / T1 / Rev.B"
+            className="flex-1 text-xs border border-stone-300 bg-white px-2 py-1.5 text-stone-700"
+          />
+        </div>
+      )}
       <div
         onClick={() => !readOnly && inputRef.current?.click()}
         onDragOver={(e) => { e.preventDefault(); if (!readOnly) setDragOver(true); }}
@@ -264,7 +292,11 @@ function FileUploadArea({
                 className={`flex-1 min-w-0 ${previewable ? 'cursor-pointer' : ''}`}
                 onClick={(e) => { if (previewable) { e.stopPropagation(); setPreviewFile(file); } }}
               >
-                <div className={`text-sm text-stone-900 truncate ${previewable ? 'group-hover:text-amber-700' : ''}`}>{file.name}</div>
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className={`text-sm text-stone-900 truncate ${previewable ? 'group-hover:text-amber-700' : ''}`}>{file.name}</span>
+                  {file.fileType && <span className="shrink-0 text-[10px] font-mono px-1.5 py-0.5 rounded bg-stone-100 text-stone-600">{file.fileType}</span>}
+                  {file.fileVersion && <span className="shrink-0 text-[10px] font-mono text-amber-700">{file.fileVersion}</span>}
+                </div>
                 <div className="text-[10px] font-mono text-stone-500">{formatBytes(file.size)}</div>
               </div>
               {previewable && (
