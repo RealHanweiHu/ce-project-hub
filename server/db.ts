@@ -56,6 +56,9 @@ import {
   type RagLevel,
 } from "../shared/health";
 import type { MetricGate, MetricIssue, MetricPhase, MetricTask } from "../shared/metrics";
+import { computeProjectMetrics, type ProjectMetrics } from "../shared/metrics";
+import { rollupPortfolioMetrics, type PortfolioMetricsRollup } from "../shared/portfolio-metrics";
+import { defaultFromISO } from "./metrics-window";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -1358,6 +1361,20 @@ export async function getProjectMetricsData(
     phases,
     totalTaskCount: tasks.length,
   };
+}
+
+/** 组合度量 rollup：逐项目复用单项目度量，装行 + 精确池化聚合。范围=getPortfolio（全部未归档，前端按 lens 收口）。 */
+export async function getPortfolioMetricsData(userId: number): Promise<PortfolioMetricsRollup> {
+  const portfolio = await getPortfolio(userId);
+  const todayISO = todayInShanghaiISO();
+  const input: { projectId: string; name: string; ragLevel: string; metrics: ProjectMetrics }[] = [];
+  for (const p of portfolio) {
+    const raw = await getProjectMetricsData(p.id, "", todayISO);
+    const fromISO = defaultFromISO(p.startDate, raw, todayISO);
+    const metrics = computeProjectMetrics({ ...raw, window: { fromISO, toISO: todayISO } });
+    input.push({ projectId: p.id, name: p.name, ragLevel: p.ragLevel, metrics });
+  }
+  return rollupPortfolioMetrics(input);
 }
 
 /** Create a gate review */
