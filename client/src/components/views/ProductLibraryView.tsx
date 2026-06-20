@@ -155,6 +155,8 @@ type CustomerVariant = {
   customerName: string;
   status: 'draft' | 'active' | 'on_hold' | 'eol' | string;
   deltas: Array<{ dimension: string; baseValue?: string; variantValue: string; note?: string }>;
+  sourceType: string;
+  sourceRefId: string | null;
   customerApproved: boolean;
   approvedDate: string | null;
   introducedAt: string | null;
@@ -165,6 +167,9 @@ type VariantForm = {
   baseRevision: string;
   customerName: string;
   customerSku: string;
+  customerBomRevision: string;
+  changeType: 'eco' | 'ecn';
+  changeRef: string;
   differences: string;
   status: 'draft' | 'active' | 'on_hold' | 'eol';
 };
@@ -222,6 +227,9 @@ const emptyVariantForm = (): VariantForm => ({
   baseRevision: '',
   customerName: '',
   customerSku: '',
+  customerBomRevision: '',
+  changeType: 'eco',
+  changeRef: '',
   differences: '',
   status: 'draft',
 });
@@ -265,6 +273,10 @@ function productModelCode(product: ProductRow) {
 function formatMainRevisionLabel(product: ProductRow, revisionLabel: string) {
   const modelCode = productModelCode(product);
   return revisionLabel.includes(modelCode) ? revisionLabel : `${modelCode} ${revisionLabel}`;
+}
+
+function customerBomRevisionOf(variant: CustomerVariant) {
+  return variant.deltas.find((delta) => delta.note === 'customer_bom_revision')?.variantValue ?? '';
 }
 
 function definitionToForm(definition: ProductDefinition | null | undefined, product: ProductRow) {
@@ -696,6 +708,21 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
       toast.error('请输入客户版本号，例如 DG01 Rev A - Walmart');
       return;
     }
+    const baseRevision = variantForm.baseRevision.trim();
+    if (!baseRevision) {
+      toast.error('客户版本必须基于主产品 Revision，例如 DG01 Rev A');
+      return;
+    }
+    const customerBomRevision = variantForm.customerBomRevision.trim();
+    if (!customerBomRevision) {
+      toast.error('请输入客户 BOM Revision，例如 DG01 Rev A - Walmart BOM Rev 1');
+      return;
+    }
+    const changeRef = variantForm.changeRef.trim();
+    if (!changeRef) {
+      toast.error('客户版本和客户 BOM Revision 必须填写 ECO/ECN 编号');
+      return;
+    }
     const customerName = variantForm.customerName.trim();
     const differences = splitList(variantForm.differences);
     createVariant.mutate({
@@ -704,16 +731,24 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
       customerId: customerIdFromName(customerName || variantCode),
       customerSku: variantForm.customerSku.trim() || null,
       parentProductId: product.id,
-      baseRevision: variantForm.baseRevision.trim(),
+      baseRevision,
       status: variantForm.status,
-      deltas: differences.map((item) => ({
-        dimension: 'other',
-        variantValue: item,
-      })),
+      deltas: [
+        {
+          dimension: 'other',
+          variantValue: customerBomRevision,
+          note: 'customer_bom_revision',
+        },
+        ...differences.map((item) => ({
+          dimension: 'other' as const,
+          variantValue: item,
+        })),
+      ],
       certReuseParent: true,
       certAffectedMarks: [],
       customerApproved: false,
-      sourceType: 'plm_change',
+      sourceType: variantForm.changeType,
+      sourceRefId: changeRef,
     });
   };
 
@@ -1178,7 +1213,7 @@ function CustomerVariantSection({
             <h3 className="font-serif text-base text-stone-900">客户版本 / SKU</h3>
           </div>
           <p className="text-xs text-stone-500 mt-1">
-            主版本示例：DG01 Rev A / DG01 Rev B / DG01 Rev C；客户版本示例：DG01 Rev A - Walmart / DG01 Rev A - Academy / DG01 Rev B - Trek。SKU 记录可销售版本，继续往下追溯 BOM Revision。
+            客户版本不是独立产品，必须基于主产品 Revision；客户 BOM Revision 是标准 BOM 的受控派生。所有客户版本和 BOM 版本变化都必须挂 ECO/ECN 编号留痕。
           </p>
         </div>
         <span className="text-[10px] font-mono px-2 py-0.5 border border-stone-200 bg-stone-50 text-stone-500">
@@ -1186,7 +1221,7 @@ function CustomerVariantSection({
         </span>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-7 gap-3">
+      <div className="grid grid-cols-1 lg:grid-cols-9 gap-3">
         <div className="lg:col-span-1">
           <Field label="客户版本号" value={form.variantCode} onChange={(value) => onChange({ variantCode: value })} placeholder="DG01 Rev A - Walmart" />
         </div>
@@ -1198,6 +1233,23 @@ function CustomerVariantSection({
         </div>
         <div className="lg:col-span-1">
           <Field label="SKU" value={form.customerSku} onChange={(value) => onChange({ customerSku: value })} placeholder="DG01-US-BLK" />
+        </div>
+        <div className="lg:col-span-1">
+          <Field label="客户 BOM Revision" value={form.customerBomRevision} onChange={(value) => onChange({ customerBomRevision: value })} placeholder="Walmart BOM Rev 1" />
+        </div>
+        <label className="block space-y-1.5 lg:col-span-1">
+          <span className="text-[10px] font-mono uppercase tracking-widest text-stone-500">变更类型</span>
+          <select
+            value={form.changeType}
+            onChange={(event) => onChange({ changeType: event.target.value as VariantForm['changeType'] })}
+            className="w-full border border-stone-300 px-3 py-2 text-sm outline-none focus:border-stone-900 bg-white"
+          >
+            <option value="eco">ECO</option>
+            <option value="ecn">ECN</option>
+          </select>
+        </label>
+        <div className="lg:col-span-1">
+          <Field label="ECO/ECN 编号" value={form.changeRef} onChange={(value) => onChange({ changeRef: value })} placeholder="ECO-2026-001" />
         </div>
         <label className="block space-y-1.5 lg:col-span-1">
           <span className="text-[10px] font-mono uppercase tracking-widest text-stone-500">状态</span>
@@ -1250,6 +1302,8 @@ function CustomerVariantSection({
                     {variant.customerName || '未填客户'}
                     {variant.baseRevision ? ` · 主版本 ${variant.baseRevision}` : ' · 主版本未指定'}
                     {variant.customerSku ? ` · SKU ${variant.customerSku}` : ' · SKU 未填'}
+                    {customerBomRevisionOf(variant) ? ` · 客户 BOM ${customerBomRevisionOf(variant)}` : ' · 客户 BOM 未填'}
+                    {variant.sourceRefId ? ` · ${variant.sourceType.toUpperCase()} ${variant.sourceRefId}` : ' · 未关联 ECO/ECN'}
                   </div>
                 </div>
               </div>

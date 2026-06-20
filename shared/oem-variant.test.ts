@@ -10,6 +10,7 @@ const CUSTOMER_REVISIONS: ImpactableVariant[] = [
     deltas: [
       { dimension: "color_cmf", variantValue: "哑光黑", bomImpact: ["HOUSING-TOP", "HOUSING-BTM"] },
       { dimension: "packaging", variantValue: "客户A 彩盒" },
+      { dimension: "other", variantValue: "Walmart BOM Rev 1", note: "customer_bom_revision" },
     ],
     certReuseParent: true,
     certAffectedMarks: [],
@@ -22,6 +23,7 @@ const CUSTOMER_REVISIONS: ImpactableVariant[] = [
     deltas: [
       { dimension: "color_cmf", variantValue: "藏青", bomImpact: ["HOUSING-TOP"] },
       { dimension: "firmware_branding", variantValue: "开机 logo" },
+      { dimension: "other", variantValue: "Academy BOM Rev 1", note: "customer_bom_revision" },
     ],
     certReuseParent: false,
     certAffectedMarks: ["FCC ID"],
@@ -64,6 +66,12 @@ describe("computeDownstreamImpact", () => {
     const b = rows.find((r) => r.variantCode.includes("Academy"))!;
     expect(b.certReuseParent).toBe(false);
     expect(b.affectedMarks).toContain("FCC ID");
+  });
+
+  it("从 delta 透传客户 BOM Revision", () => {
+    const rows = computeDownstreamImpact(CUSTOMER_REVISIONS);
+    const walmart = rows.find((r) => r.variantCode.includes("Walmart"))!;
+    expect(walmart.customerBomRevision).toBe("Walmart BOM Rev 1");
   });
 
   it("onlyActive=false 时包含 EOL 客户版本", () => {

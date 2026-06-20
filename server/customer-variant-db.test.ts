@@ -27,21 +27,30 @@ describe("客户版本 持久化 + 下游 SKU 影响", () => {
       variantCode: "DG01 Rev A - Walmart", customerSku: "DG01-US-BLK",
       parentProductId: PID, baseRevision: "DG01 Rev A",
       customerId: CUST_WALMART, customerName: "Walmart", status: "active",
-      deltas: [{ dimension: "color_cmf", variantValue: "哑光黑", bomImpact: ["HOUSING-TOP", "HOUSING-BTM"] }],
-      certReuseParent: true, certAffectedMarks: [], createdBy: 1,
+      deltas: [
+        { dimension: "other", variantValue: "Walmart BOM Rev 1", note: "customer_bom_revision" },
+        { dimension: "color_cmf", variantValue: "哑光黑", bomImpact: ["HOUSING-TOP", "HOUSING-BTM"] },
+      ],
+      certReuseParent: true, certAffectedMarks: [], sourceType: "eco", sourceRefId: "ECO-2026-001", createdBy: 1,
     });
     await createCustomerVariant({
       variantCode: "DG01 Rev A - Academy", customerSku: "DG01-US-ACADEMY",
       parentProductId: PID, baseRevision: "DG01 Rev A",
       customerId: CUST_ACADEMY, customerName: "Academy", status: "active",
-      deltas: [{ dimension: "color_cmf", variantValue: "藏青", bomImpact: ["HOUSING-TOP"] }],
-      certReuseParent: false, certAffectedMarks: ["FCC ID"], createdBy: 1,
+      deltas: [
+        { dimension: "other", variantValue: "Academy BOM Rev 1", note: "customer_bom_revision" },
+        { dimension: "color_cmf", variantValue: "藏青", bomImpact: ["HOUSING-TOP"] },
+      ],
+      certReuseParent: false, certAffectedMarks: ["FCC ID"], sourceType: "ecn", sourceRefId: "ECN-2026-002", createdBy: 1,
     });
     await createCustomerVariant({
       variantCode: "DG01 Rev B - Trek", parentProductId: PID, baseRevision: "DG01 Rev B",
       customerId: "CV-TREK", customerName: "Trek", status: "eol",
-      deltas: [{ dimension: "color_cmf", variantValue: "红" }],
-      certReuseParent: true, certAffectedMarks: [], createdBy: 1,
+      deltas: [
+        { dimension: "other", variantValue: "Trek BOM Rev 1", note: "customer_bom_revision" },
+        { dimension: "color_cmf", variantValue: "红" },
+      ],
+      certReuseParent: true, certAffectedMarks: [], sourceType: "eco", sourceRefId: "ECO-2026-003", createdBy: 1,
     });
   });
 
@@ -56,7 +65,12 @@ describe("客户版本 持久化 + 下游 SKU 影响", () => {
     const rows = await listVariantsByParentProduct(PID);
     expect(rows).toHaveLength(3);
     const b = rows.find((r) => r.variantCode === "DG01 Rev A - Academy")!;
-    expect(b.deltas[0]?.bomImpact).toEqual(["HOUSING-TOP"]);
+    const colorDelta = b.deltas.find((delta) => delta.dimension === "color_cmf");
+    const customerBomRevision = b.deltas.find((delta) => delta.note === "customer_bom_revision");
+    expect(colorDelta?.bomImpact).toEqual(["HOUSING-TOP"]);
+    expect(customerBomRevision?.variantValue).toBe("Academy BOM Rev 1");
+    expect(b.sourceType).toBe("ecn");
+    expect(b.sourceRefId).toBe("ECN-2026-002");
     expect(b.certReuseParent).toBe(false);
     expect(b.certAffectedMarks).toEqual(["FCC ID"]);
   });
@@ -67,6 +81,7 @@ describe("客户版本 持久化 + 下游 SKU 影响", () => {
     expect(impact).toHaveLength(2);
     expect(impact.every((r) => r.bomTouched)).toBe(true);
     const b = impact.find((r) => r.variantCode === "DG01 Rev A - Academy")!;
+    expect(b.customerBomRevision).toBe("Academy BOM Rev 1");
     expect(b.certReuseParent).toBe(false);
     expect(b.affectedMarks).toContain("FCC ID");
   });
@@ -76,7 +91,8 @@ describe("客户版本 持久化 + 下游 SKU 影响", () => {
     await expect(createCustomerVariant({
       variantCode: "DG01 Rev A - Walmart", parentProductId: PID, baseRevision: "DG01 Rev A",
       customerId: CUST_WALMART, customerName: "Walmart", status: "active",
-      deltas: [], certReuseParent: true, certAffectedMarks: [], createdBy: 1,
+      deltas: [{ dimension: "other", variantValue: "Walmart BOM Rev 2", note: "customer_bom_revision" }],
+      certReuseParent: true, certAffectedMarks: [], sourceType: "eco", sourceRefId: "ECO-2026-004", createdBy: 1,
     })).rejects.toThrow();
   });
 });

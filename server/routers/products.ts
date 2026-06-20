@@ -248,7 +248,7 @@ export const productsRouter = router({
       variantCode: z.string().min(1),
       customerSku: z.string().nullable().optional(),
       parentProductId: z.string().min(1),
-      baseRevision: z.string().default(""),
+      baseRevision: z.string().min(1),
       customerId: z.string().default(""),
       customerName: z.string().default(""),
       status: z.enum(["draft", "active", "on_hold", "eol"]).default("draft"),
@@ -266,11 +266,20 @@ export const productsRouter = router({
       goldenSampleRef: z.string().nullable().optional(),
       customerApproved: z.boolean().default(false),
       approvedDate: z.string().nullable().optional(),
-      sourceType: z.enum(["plm_change", "project"]).default("plm_change"),
-      sourceRefId: z.string().nullable().optional(),
+      sourceType: z.enum(["eco", "ecn"]),
+      sourceRefId: z.string().min(1),
       introducedAt: z.string().nullable().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      const product = await getProductById(input.parentProductId);
+      if (!product) throw new TRPCError({ code: "NOT_FOUND", message: "产品型号不存在" });
+      const hasCustomerBomRevision = input.deltas.some((delta) => delta.note === "customer_bom_revision" && delta.variantValue.trim());
+      if (!hasCustomerBomRevision) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "客户版本必须登记基于标准 BOM 的 Customer BOM Revision，并通过 ECO/ECN 留痕。",
+        });
+      }
       const id = await createCustomerVariant({
         ...input,
         deltas: input.deltas as never,

@@ -1155,8 +1155,8 @@ export type InsertMpRelease = typeof mpReleases.$inferInsert;
 
 /**
  * OEM 客户版本 / Customer Revision = 同一产品型号下，各客户相对 Product Revision 的差异登记。
- * SKU 是客户版本下可销售的具体版本；只存 delta，不复制整份 BOM。
- * 支撑两类查询：按客户对账 / 按产品型号列下游 SKU 影响（平台级 ECO Gate）。
+ * SKU 是客户版本下可销售的具体版本；Customer BOM Revision 基于标准 BOM 受控派生。
+ * 所有客户版本与客户 BOM Revision 变化都应通过 ECO/ECN sourceRefId 留痕，只存 delta，不复制整份 BOM。
  */
 export const customerVariants = pgTable(
   "customer_variants",
@@ -1185,7 +1185,7 @@ export const customerVariants = pgTable(
     goldenSampleRef: varchar("goldenSampleRef", { length: 256 }),
     customerApproved: boolean("customerApproved").notNull().default(false),
     approvedDate: varchar("approvedDate", { length: 32 }),
-    /** 来源追溯：plm_change | project */
+    /** 来源追溯：ECO / ECN 编号，应用层要求 sourceRefId 必填 */
     sourceType: varchar("sourceType", { length: 16 }).notNull().default("plm_change"),
     sourceRefId: varchar("sourceRefId", { length: 64 }),
     introducedAt: varchar("introducedAt", { length: 32 }),

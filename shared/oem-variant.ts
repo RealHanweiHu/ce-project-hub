@@ -1,5 +1,6 @@
 // OEM 客户版本（PLM 生命轴侧）——可持久化类型 + 纯计算。
 // Customer Revision 基于 Product Revision 登记差异；SKU 是客户版本下的可销售编号。
+// Customer BOM Revision 基于标准 BOM 受控派生，所有变化必须通过 ECO/ECN 留痕。
 // 两类查询：1) 按客户查全部客户版本；2) 按产品型号查下游 SKU 影响清单（平台级 ECO Gate 数据源）。
 
 /** 变体差异维度 */
@@ -49,6 +50,8 @@ export interface DownstreamImpactRow {
   variantCode: string;
   /** 可销售 SKU */
   customerSku: string | null;
+  /** 基于标准 BOM 派生的客户 BOM Revision */
+  customerBomRevision: string | null;
   customer: string;
   status: VariantStatus;
   /** 是否沿用产品主版本认证（false = 该客户版本认证需独立维护） */
@@ -85,12 +88,15 @@ export function computeDownstreamImpact(
   return variants
     .filter((v) => (opts?.onlyActive ? v.status === 'active' : true))
     .map((v) => {
+      const customerBomRevision =
+        v.deltas.find((d) => d.note === 'customer_bom_revision')?.variantValue ?? null;
       const bomTouched =
         changed.size > 0 &&
         v.deltas.some((d) => (d.bomImpact ?? []).some((line) => changed.has(line)));
       return {
         variantCode: v.variantCode,
         customerSku: v.customerSku ?? null,
+        customerBomRevision,
         customer: v.customerName,
         status: v.status,
         certReuseParent: v.certReuseParent,
