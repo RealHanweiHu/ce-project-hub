@@ -50,6 +50,8 @@ describe("computeProjectMetrics", () => {
       { weekKey: "2026-W24", count: 2 },
     ]);
     expect(metrics.efficiency.overdueRatePct).toBe(40);
+    expect(metrics.efficiency.dueDatedCount).toBe(5);
+    expect(metrics.efficiency.overdueCount).toBe(2);
   });
 
   it("computes DI, issue distributions, and open-close trend", () => {

@@ -38,6 +38,8 @@ export type ProjectMetrics = {
     leadTimeDaysP85: number | null;
     throughputByWeek: { weekKey: string; count: number }[];
     overdueRatePct: number | null;
+    overdueCount: number;
+    dueDatedCount: number;
     completedCount: number;
     plannedCount: number;
   };
@@ -163,6 +165,8 @@ export function computeProjectMetrics(input: {
       overdueRatePct: dueDatedTasks.length > 0
         ? Math.round(((lateCompletedInWindow + currentOverdue) / dueDatedTasks.length) * 100)
         : null,
+      overdueCount: lateCompletedInWindow + currentOverdue,
+      dueDatedCount: dueDatedTasks.length,
       completedCount: completedInWindow.length,
       plannedCount: totalTaskCount,
     },
