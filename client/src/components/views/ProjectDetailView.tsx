@@ -1008,8 +1008,31 @@ function TaskDetail({
     }
   };
 
-  // Task meta: users for assignee dropdown
+  // Task meta: users for assignee name resolution (covers any historical assignee)
   const { data: metaUsers = [] } = trpc.admin.listUsersForSelect.useQuery(undefined, { staleTime: 60_000 });
+  // Assignee dropdown is scoped to project members (owner included), not the whole org.
+  const { data: projectMembers = [] } = trpc.members.list.useQuery(
+    { projectId },
+    { staleTime: 60_000, enabled: !!projectId },
+  );
+  const assignableUsers = projectMembers.map((m) => ({
+    id: m.userId,
+    name: m.userName || metaUsers.find((u) => u.id === m.userId)?.name || metaUsers.find((u) => u.id === m.userId)?.username || `用户#${m.userId}`,
+  }));
+  // Persist task meta (assignee / dueDate / priority) directly — same reliable path as
+  // deliverables/files. The previous full-project diff route silently dropped these edits.
+  const setMetaMut = trpc.tasks.setMeta.useMutation({
+    onSettled: () => {
+      utils.tasks.list.invalidate({ projectId });
+      utils.projects.get.invalidate({ id: projectId });
+      utils.projects.list.invalidate();
+      utils.projects.portfolio.invalidate();
+    },
+  });
+  const saveMeta = (patch: { assigneeUserId?: number | null; dueDate?: string | null; priority?: string }) => {
+    if (!canEdit || !phaseId) return;
+    setMetaMut.mutate({ projectId, phaseId, taskId, ...(patch as any) });
+  };
   const TASK_STATUS_CONFIG: Record<string, { label: string; className: string }> = {
     todo: { label: '待开始', className: 'bg-stone-50 text-stone-600 border-stone-200' },
     in_progress: { label: '进行中', className: 'bg-blue-50 text-blue-700 border-blue-200' },
@@ -1069,13 +1092,13 @@ function TaskDetail({
             disabled={!canEdit}
             onChange={(e) => {
               const val = e.target.value;
-              onUpdate({ ...taskDetails, assigneeUserId: val === '' ? null : Number(val) });
+              saveMeta({ assigneeUserId: val === '' ? null : Number(val) });
             }}
             className="w-full text-xs text-stone-700 bg-stone-50 border border-stone-200 px-2 py-1 outline-none focus:border-amber-400 transition-colors"
           >
             <option value="">— 未指定 —</option>
-            {metaUsers.map((u) => (
-              <option key={u.id} value={u.id}>{u.name || u.username}</option>
+            {assignableUsers.map((u) => (
+              <option key={u.id} value={u.id}>{u.name}</option>
             ))}
           </select>
         </div>
@@ -1089,7 +1112,7 @@ function TaskDetail({
               const nextDue = e.target.value || null;
               if (!nextDue || nextDue === (taskDetails?.dueDate ?? null)) return;
               if (!taskDetails?.startDate) {
-                onUpdate({ ...taskDetails, dueDate: nextDue }); // 未排期任务：无起点不可级联，仅记录
+                saveMeta({ dueDate: nextDue }); // 未排期任务：无起点不可级联，仅记录
                 return;
               }
               setPendingReschedule({ taskId, startDate: taskDetails.startDate, newDue: nextDue });
@@ -1109,7 +1132,7 @@ function TaskDetail({
           <select
             value={taskDetails?.taskPriority ?? 'medium'}
             disabled={!canEdit}
-            onChange={(e) => onUpdate({ ...taskDetails, taskPriority: e.target.value })}
+            onChange={(e) => saveMeta({ priority: e.target.value })}
             className="w-full text-xs bg-stone-50 border border-stone-200 px-2 py-1 outline-none focus:border-amber-400 transition-colors"
           >
             {TASK_PRIORITY_OPTIONS.map((o) => (
@@ -2388,15 +2411,17 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                 <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-3">阶段备注</div>
                 <textarea
                   value={activePhaseData?.notes || ''}
+                  disabled={!perms.canEditProjectInfo}
                   onChange={(e) => {
+                    if (!perms.canEditProjectInfo) return;
                     const newProject = { ...project };
                     newProject.phases = { ...project.phases };
                     newProject.phases[activePhaseId] = { ...activePhaseData, notes: e.target.value };
                     onUpdate(newProject);
                   }}
                   rows={5}
-                  placeholder="记录阶段备注、决策记录、风险说明..."
-                  className="w-full text-xs text-stone-700 border border-stone-200 focus:border-stone-400 outline-none px-3 py-2 resize-none transition-colors"
+                  placeholder={perms.canEditProjectInfo ? '记录阶段备注、决策记录、风险说明...' : '仅 Owner/管理层/PM 可编辑阶段备注'}
+                  className="w-full text-xs text-stone-700 border border-stone-200 focus:border-stone-400 outline-none px-3 py-2 resize-none transition-colors disabled:cursor-not-allowed disabled:bg-stone-50 disabled:text-stone-400"
                 />
               </div>
 

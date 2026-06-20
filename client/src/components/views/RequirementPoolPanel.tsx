@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
+import { toast } from 'sonner';
 import type { SOPPhase } from '@/lib/data';
 import { trpc } from '@/lib/trpc';
 import {
@@ -290,17 +291,25 @@ export function RequirementPoolPanel({ scope, canEdit = false, canCreate, canMan
 
   const handleSave = async () => {
     const payload = cleanForm(form);
-    if (!payload.title) return;
-    if (editingId) {
-      await updateMutation.mutateAsync({ id: editingId, patch: payload });
-    } else if (scope.kind === 'project') {
-      await createMutation.mutateAsync({ projectId: scope.projectId, ...payload });
-    } else if (scope.kind === 'product') {
-      await createMutation.mutateAsync({ productId: scope.productId, ...payload });
-    } else {
-      await createMutation.mutateAsync({ ...payload });
+    if (!payload.title) {
+      toast.error('请填写需求标题');
+      return;
     }
-    closeForm();
+    try {
+      if (editingId) {
+        await updateMutation.mutateAsync({ id: editingId, patch: payload });
+      } else if (scope.kind === 'project') {
+        await createMutation.mutateAsync({ projectId: scope.projectId, ...payload });
+      } else if (scope.kind === 'product') {
+        await createMutation.mutateAsync({ productId: scope.productId, ...payload });
+      } else {
+        await createMutation.mutateAsync({ ...payload });
+      }
+      toast.success(editingId ? '需求已更新' : '需求已创建');
+      closeForm();
+    } catch (err) {
+      toast.error(`保存失败：${err instanceof Error ? err.message : '请重试'}`);
+    }
   };
 
   const handleQuickStatus = (row: Requirement, status: RequirementStatus) => {

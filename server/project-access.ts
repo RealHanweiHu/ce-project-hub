@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { getProjectById, getProjectMember } from "./db";
+import { getProjectById, getProjectMember, getUserById } from "./db";
 import type { ProjectMemberRole, ProjectRow } from "../drizzle/schema";
 import { ROLE_PERMISSIONS } from "./routers/members";
 
@@ -46,6 +46,12 @@ export async function getEffectiveProjectRole(
   let role: ProjectMemberRole | null = member?.role ?? null;
   if (project.pmUserId === userId) role = pickHigherProjectRole(role, "pm");
   if (project.createdBy === userId) role = pickHigherProjectRole(role, "owner");
+  // System admins can view/manage any project even without explicit membership,
+  // so portfolio drill-in works for managers (mirrors assertProjectAccess admin bypass).
+  if (!role) {
+    const u = await getUserById(userId);
+    if (u?.role === "admin") role = "manager";
+  }
   return role;
 }
 
