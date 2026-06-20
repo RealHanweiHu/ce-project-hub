@@ -5,6 +5,7 @@ import { Loader2, X } from "lucide-react";
 import type { PortfolioTableRow } from "./PortfolioTable";
 import { PerspectivePanel, type Lens } from "./PerspectivePanel";
 import { PortfolioDashboard } from "./PortfolioDashboard";
+import { PortfolioMetricsTable } from "./PortfolioMetricsTable";
 import { TaskListView, type TaskRow, type TaskFocus } from "../TaskListView";
 import type { TaskStatus, TaskPriority } from "@shared/const";
 
@@ -76,6 +77,8 @@ export function OverviewPage({ onSelectProject }: { onSelectProject: (id: string
       {!isWorkbench && (
         <PortfolioDashboard rows={dashboardRows} scopeLabel={scopeLabel} onSelectProject={onSelectProject} onDrill={setDrill} />
       )}
+
+      {activeLens === "exec" && <PortfolioMetricsTable />}
 
       {!isWorkbench && (
         <div className="flex items-center justify-between pt-2">
