@@ -35,6 +35,7 @@ import multer from "multer";
 import type { Express, Request, Response } from "express";
 import { createContext } from "../_core/context";
 import { getEffectiveProjectRoleById as getEffectiveRole } from "../project-access";
+import { normalizeFileType, normalizeFileVersion } from "../../shared/file-types";
 
 // ── Permission helper ─────────────────────────────────────────────────────────
 
@@ -160,11 +161,13 @@ export function registerFileUploadRoute(app: Express) {
           return;
         }
 
-        const { projectId, phaseId, taskId, deliverableName } = req.body as {
+        const { projectId, phaseId, taskId, deliverableName, fileType, fileVersion } = req.body as {
           projectId?: string;
           phaseId?: string;
           taskId?: string;
           deliverableName?: string;
+          fileType?: string;
+          fileVersion?: string;
         };
 
         if (!projectId) {
@@ -204,6 +207,9 @@ export function registerFileUploadRoute(app: Express) {
           file.mimetype
         );
 
+        const normFileType = normalizeFileType(fileType);
+        const normFileVersion = normalizeFileVersion(fileVersion);
+
         // Write metadata to DB (including optional taskId)
         const fileId = await createProjectFile({
           projectId,
@@ -216,6 +222,8 @@ export function registerFileUploadRoute(app: Express) {
           storageKey: key,
           storageUrl,
           uploadedBy: ctx.user.id,
+          fileType: normFileType,
+          fileVersion: normFileVersion,
         });
 
         // Activity log
@@ -242,6 +250,8 @@ export function registerFileUploadRoute(app: Express) {
           storageKey: key,
           storageUrl,
           taskId: taskId || null,
+          fileType: normFileType,
+          fileVersion: normFileVersion,
         });
       } catch (err: any) {
         console.error("[FileUpload] Error:", err);

@@ -33,6 +33,7 @@ import {
   type TaskStatus, type TaskPriority, type GateDecision,
 } from "../drizzle/schema";
 import { buildRevisionChangelogSnapshot, REVISION_CHANGE_STATUSES, type RevisionChangeEntry } from "../shared/changelog-snapshot";
+import { normalizeFileType, normalizeFileVersion } from "../shared/file-types";
 import { ENV } from './_core/env';
 import { getSopPhasesForCategory } from "./sop-data";
 import { getPhasesForCategory, getReleaseGatePhase } from "../shared/sop-templates";
@@ -1463,7 +1464,12 @@ export async function deleteProjectChangeRecord(id: number): Promise<void> {
 export async function createProjectFile(record: Omit<InsertProjectFile, "id" | "createdAt">): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(projectFiles).values(record).returning({ id: projectFiles.id });
+  const normalized = {
+    ...record,
+    fileType: normalizeFileType(record.fileType),
+    fileVersion: normalizeFileVersion(record.fileVersion),
+  };
+  const result = await db.insert(projectFiles).values(normalized).returning({ id: projectFiles.id });
   // 上传新版本后触发交付物重审（若已审核过则回退待审）
   if (record.deliverableName && record.phaseId) {
     const { resetReviewOnReupload } = await import("./deliverable-review-service");
