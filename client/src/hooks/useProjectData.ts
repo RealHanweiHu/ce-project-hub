@@ -116,6 +116,8 @@ export function useProjectData(projectId: string | null) {
             dataUrl: "",
             storageUrl: f.storageUrl,
             storageKey: f.storageKey,
+            fileType: f.fileType ?? null,
+            fileVersion: f.fileVersion ?? null,
           }));
 
         taskDetails[t.taskId] = {

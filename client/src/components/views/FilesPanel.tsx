@@ -9,6 +9,7 @@ import { FileText, Download, Eye, Loader2, FolderOpen } from 'lucide-react';
 type FileRow = {
   id: number; name: string; size: number; mimeType: string;
   storageUrl: string | null; storageKey: string | null;
+  fileType: string | null; fileVersion: string | null;
   phaseId: string | null; taskId: string | null; createdAt: string | Date | null;
 };
 
@@ -39,6 +40,7 @@ export function FilesPanel({ project, role }: { project: Project; role: string }
     id: String(f.id), name: f.name, size: f.size, type: f.mimeType,
     uploadDate: f.createdAt ? new Date(f.createdAt).toISOString() : '',
     dataUrl: '', storageUrl: f.storageUrl ?? undefined, storageKey: f.storageKey ?? undefined,
+    fileType: f.fileType, fileVersion: f.fileVersion,
   });
 
   if (isLoading) return <div className="flex items-center gap-2 text-stone-400 text-sm py-8 justify-center"><Loader2 size={14} className="animate-spin" />加载文件…</div>;
@@ -63,7 +65,11 @@ export function FilesPanel({ project, role }: { project: Project; role: string }
               <div key={f.id} className="flex items-center gap-3 px-3 py-2.5 hover:bg-stone-50/60">
                 <FileText size={15} className="text-stone-400 shrink-0" />
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm text-stone-800 truncate">{f.name}</div>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-sm text-stone-800 truncate">{f.name}</span>
+                    {f.fileType && <span className="shrink-0 text-[10px] font-mono px-1.5 py-0.5 rounded bg-stone-100 text-stone-600">{f.fileType}</span>}
+                    {f.fileVersion && <span className="shrink-0 text-[10px] font-mono text-amber-700">{f.fileVersion}</span>}
+                  </div>
                   <div className="text-[10px] font-mono text-stone-400">
                     {meta ? `${meta.phaseName} · ${meta.taskName}` : '项目级'} · {formatBytes(f.size)}
                     {f.createdAt ? ` · ${new Date(f.createdAt).toLocaleDateString('zh-CN')}` : ''}
