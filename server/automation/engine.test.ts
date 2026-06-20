@@ -1,12 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import {
   getDb, upsertUser, getUserByOpenId, createProjectWithSeed,
-  updateAutomationRuleRow, listAutomationRuns,
+  updateAutomationRuleRow, listAutomationRuns, getAutomationDueTasks, getAutomationDueIssues,
 } from "../db";
 import { runAutomation } from "./engine";
 
 const SUF = "autoeng";
 const PROJECT_ID = `proj_${SUF}`;
+const ARCHIVED_PROJECT_ID = `proj_${SUF}_archived`;
 const PM_OPEN = `pm_${SUF}`;
 const ASG_OPEN = `asg_${SUF}`;
 
@@ -36,9 +37,14 @@ async function cleanup() {
   if (!db) return;
   const { sql } = await import("drizzle-orm");
   await db.execute(sql`DELETE FROM automation_runs WHERE "projectId" = ${PROJECT_ID}`);
+  await db.execute(sql`DELETE FROM automation_runs WHERE "projectId" = ${ARCHIVED_PROJECT_ID}`);
+  await db.execute(sql`DELETE FROM project_issues WHERE "projectId" = ${ARCHIVED_PROJECT_ID}`);
   await db.execute(sql`DELETE FROM project_tasks WHERE "projectId" = ${PROJECT_ID}`);
+  await db.execute(sql`DELETE FROM project_tasks WHERE "projectId" = ${ARCHIVED_PROJECT_ID}`);
   await db.execute(sql`DELETE FROM project_phases WHERE "projectId" = ${PROJECT_ID}`);
+  await db.execute(sql`DELETE FROM project_phases WHERE "projectId" = ${ARCHIVED_PROJECT_ID}`);
   await db.execute(sql`DELETE FROM projects WHERE id = ${PROJECT_ID}`);
+  await db.execute(sql`DELETE FROM projects WHERE id = ${ARCHIVED_PROJECT_ID}`);
 }
 
 beforeAll(async () => {
@@ -72,6 +78,29 @@ beforeEach(async () => {
 });
 
 describe("automation engine integration", () => {
+  it("excludes archived projects from scheduled overdue scans", async () => {
+    const db = await getDb();
+    if (!db) throw new Error("DB not available");
+    const { sql } = await import("drizzle-orm");
+    await db.execute(sql`
+      INSERT INTO projects (id, name, category, "currentPhase", "createdBy", "pmUserId", risk, progress, archived, "projectNumber")
+      VALUES (${ARCHIVED_PROJECT_ID}, '已删除逾期提醒测试', 'npd', 'concept', ${pmId}, ${pmId}, 'low', 0, true, 'ARCH-AUTO')
+    `);
+    await db.execute(sql`
+      INSERT INTO project_tasks ("projectId", "phaseId", "taskId", "dueDate", status, "assigneeUserId")
+      VALUES (${ARCHIVED_PROJECT_ID}, 'concept', 'archived-overdue-task', '2000-01-01', 'in_progress', ${asgId})
+    `);
+    await db.execute(sql`
+      INSERT INTO project_issues ("projectId", "phaseId", title, "targetDate", status, severity, category)
+      VALUES (${ARCHIVED_PROJECT_ID}, 'concept', 'archived overdue issue', '2000-01-01', 'open', 'P2', 'other')
+    `);
+
+    const tasks = await getAutomationDueTasks();
+    const issues = await getAutomationDueIssues();
+    expect(tasks.some((task) => task.projectId === ARCHIVED_PROJECT_ID)).toBe(false);
+    expect(issues.some((issue) => issue.projectId === ARCHIVED_PROJECT_ID)).toBe(false);
+  });
+
   it("dispatches high severity issue to pm + assignee, pushes group, logs a fired run", async () => {
     const { notes, pushes, deps } = makeDeps();
     await runAutomation({

@@ -18,7 +18,11 @@ export function MilestoneCalendar({ onSelectProject }: { onSelectProject: (id: s
   const fromDate = ymd(ym.year, ym.month, 1);
   const toDate = ymd(ym.year, ym.month, daysInMonth);
 
-  const { data: events = [], isLoading } = trpc.projects.calendar.useQuery({ fromDate, toDate });
+  const { data: rawEvents = [], isLoading } = trpc.projects.calendar.useQuery({ fromDate, toDate });
+  const events = useMemo(
+    () => rawEvents.filter((event) => event.type === "phase" || event.type === "gate" || event.type === "target"),
+    [rawEvents],
+  );
 
   const byDay = useMemo(() => {
     const m = new Map<string, typeof events>();

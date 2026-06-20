@@ -18,6 +18,9 @@ beforeAll(async () => {
   await db.insert(projectTasks).values({
     projectId: PROJ, phaseId: "concept", taskId: "c6", dueDate: "2026-07-08", status: "in_progress",
   });
+  await db.insert(projectTasks).values({
+    projectId: PROJ, phaseId: "concept", taskId: "c1", dueDate: "2026-07-06", status: "todo",
+  });
   await db.insert(projectGateReviews).values({
     projectId: PROJ, phaseId: "concept", reviewDate: "2026-07-10", decision: "conditional",
   });
@@ -33,15 +36,17 @@ afterAll(async () => {
 });
 
 describe("getCalendar", () => {
-  it("聚合阶段截止/Gate评审/项目目标日三类里程碑事件", async () => {
+  it("聚合阶段截止/Gate评审/项目目标日和可见任务排期", async () => {
     const events = await getCalendar(OWNER, "2026-07-01", "2026-07-31");
     const mine = events.filter((e) => e.projectId === PROJ);
     const types = mine.map((e) => e.type).sort();
-    expect(types).toEqual(["gate", "gate", "phase", "target"]);
+    expect(types).toEqual(["gate", "gate", "phase", "target", "task"]);
     const phase = mine.find((e) => e.type === "phase");
     expect(phase?.date).toBe("2026-07-05");
     const gateDates = mine.filter((e) => e.type === "gate").map((e) => e.date).sort();
     expect(gateDates).toEqual(["2026-07-08", "2026-07-10"]);
+    const task = mine.find((e) => e.type === "task");
+    expect(task).toMatchObject({ date: "2026-07-06", taskId: "c1", status: "todo" });
     const target = mine.find((e) => e.type === "target");
     expect(target?.date).toBe("2026-07-20");
   });
@@ -53,7 +58,9 @@ describe("getCalendar", () => {
 
   it("总览全员可见：非成员用户也能看到该项目的里程碑事件", async () => {
     const events = await getCalendar(999999, "2026-07-01", "2026-07-31");
-    expect(events.filter((e) => e.projectId === PROJ).length).toBeGreaterThan(0);
+    const mine = events.filter((e) => e.projectId === PROJ);
+    expect(mine.length).toBeGreaterThan(0);
+    expect(mine.some((e) => e.type === "task")).toBe(false);
   });
 });
 

@@ -57,6 +57,12 @@ export async function ensureAutomationRuleDefaults(): Promise<void> {
 
 export async function runAutomation(event: AutomationEvent, deps: DispatchDeps = {}): Promise<void> {
   await ensureAutomationRuleDefaults();
+  const projectId = projectIdForEvent(event);
+  if (projectId && event.action !== "mp.release") {
+    const project = await getProjectById(projectId);
+    if (!project || project.archived) return;
+  }
+
   const rows = await listAutomationRuleRows();
   const rowByKey = new Map(rows.map((row) => [row.ruleKey, row]));
   const eventTrigger = event.action === "scheduled" ? "scheduled" : "event";
@@ -135,7 +141,7 @@ async function resolveRecipients(
   event: AutomationEvent,
   config: AutomationRuleConfig
 ): Promise<ResolvedRecipients> {
-  const projectId = event.projectId ?? stringField(event.after, "projectId") ?? stringField(event.before, "projectId");
+  const projectId = projectIdForEvent(event);
   const project = projectId ? await getProjectById(projectId) : undefined;
   const members = projectId ? await getProjectMembers(projectId) : [];
   const userIds = new Set<number>();
@@ -197,7 +203,7 @@ function resolveMemberByName(
 }
 
 async function buildMessageContext(event: AutomationEvent): Promise<AutomationMessageContext> {
-  const projectId = event.projectId ?? stringField(event.after, "projectId") ?? stringField(event.before, "projectId");
+  const projectId = projectIdForEvent(event);
   const project = projectId ? await getProjectById(projectId) : undefined;
   return {
     projectName: project?.name ?? null,
@@ -244,6 +250,10 @@ function serializeRecipients(recipients: ResolvedRecipients) {
 
 function entityIdForRun(event: AutomationEvent): string | null {
   return event.entityId == null ? null : String(event.entityId);
+}
+
+function projectIdForEvent(event: AutomationEvent): string | null {
+  return event.projectId ?? stringField(event.after, "projectId") ?? stringField(event.before, "projectId");
 }
 
 function getCadenceHours(config: AutomationRuleConfig): number {

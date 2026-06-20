@@ -526,6 +526,9 @@ export default function Home() {
   const invalidateProjects = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: getQueryKey(trpc.projects.list) });
     queryClient.invalidateQueries({ queryKey: getQueryKey(trpc.projects.portfolio) });
+    queryClient.invalidateQueries({ queryKey: getQueryKey(trpc.projects.calendar) });
+    queryClient.invalidateQueries({ queryKey: getQueryKey(trpc.workbench.mine) });
+    queryClient.invalidateQueries({ queryKey: getQueryKey(trpc.automation.listRuns) });
   }, [queryClient]);
   // ── Ctrl+K global shortcut ───────────────────────────────────────────────
   useEffect(() => {
@@ -594,8 +597,15 @@ export default function Home() {
   const handleDeleteProject = async (id: string) => {
     try {
       await deleteMutation.mutateAsync({ id });
+      queryClient.removeQueries({
+        predicate: (query) => JSON.stringify(query.queryKey).includes(id),
+      });
       invalidateProjects();
-      if (selectedProjectId === id) setSelectedProjectId(null);
+      setPendingFocus(null);
+      if (selectedProjectId === id) {
+        setSelectedProjectId(null);
+        setView('projects');
+      }
     } catch {
       setSaveStatus('error');
     }

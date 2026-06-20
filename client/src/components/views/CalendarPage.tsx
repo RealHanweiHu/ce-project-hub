@@ -107,6 +107,29 @@ function statusLabel(status: string) {
   return status;
 }
 
+function calendarEventKey(event: CalendarEvent) {
+  return [
+    event.type,
+    event.projectId,
+    event.phaseId ?? "",
+    event.taskId ?? "",
+    event.date,
+    event.startTime ?? "",
+    event.label,
+  ].join("|");
+}
+
+function mergeCalendarEvents(...groups: CalendarEvent[][]) {
+  const byKey = new Map<string, CalendarEvent>();
+  for (const group of groups) {
+    for (const event of group) {
+      const key = calendarEventKey(event);
+      if (!byKey.has(key)) byKey.set(key, event);
+    }
+  }
+  return Array.from(byKey.values());
+}
+
 export function CalendarPage({ projects, onSelectProject }: { projects: ProjectOption[]; onSelectProject: (id: string) => void }) {
   const now = new Date();
   const [ym, setYm] = useState({ year: now.getFullYear(), month: now.getMonth() });
@@ -167,19 +190,19 @@ export function CalendarPage({ projects, onSelectProject }: { projects: ProjectO
 
   const scopedEvents = useMemo(() => {
     if (activeLens === "manager") {
-      return projectEvents.filter((event) => event.type !== "task");
+      return projectEvents;
     }
     if (activeLens === "pm") {
       const scope = pmProjectIds.size > 0 ? pmProjectIds : creatableProjectIds;
-      return [
-        ...projectEvents.filter((event) => scope.has(event.projectId)),
-        ...taskEvents.filter((event) => scope.has(event.projectId)),
-      ];
+      return mergeCalendarEvents(
+        taskEvents.filter((event) => scope.has(event.projectId)),
+        projectEvents.filter((event) => scope.has(event.projectId)),
+      );
     }
-    return [
-      ...taskEvents,
-      ...projectEvents.filter((event) => roleProjectIds.has(event.projectId) || taskProjectIds.has(event.projectId)),
-    ];
+    return mergeCalendarEvents(
+      taskEvents,
+      projectEvents.filter((event) => roleProjectIds.has(event.projectId) || taskProjectIds.has(event.projectId)),
+    );
   }, [activeLens, creatableProjectIds, pmProjectIds, projectEvents, roleProjectIds, taskEvents, taskProjectIds]);
 
   const filteredEvents = useMemo(
@@ -245,7 +268,7 @@ export function CalendarPage({ projects, onSelectProject }: { projects: ProjectO
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-        <Stat label="我的任务" value={counts.task} tone="stone" />
+        <Stat label="任务截止" value={counts.task} tone="stone" />
         <Stat label="项目日程" value={counts.schedule} tone="emerald" />
         <Stat label="Gate 评审" value={counts.gate} tone="amber" />
         <Stat label="阶段截止" value={counts.phase} tone="blue" />

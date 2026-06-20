@@ -101,11 +101,13 @@ describe("task completion single source of truth", () => {
       { projectId: P_AUTO, phaseId: "concept", taskId: "c1", status: "todo", completed: false },
       { projectId: P_AUTO, phaseId: "concept", taskId: "c2", status: "todo", completed: false },
       { projectId: P_AUTO, phaseId: "concept", taskId: "c3", status: "todo", completed: false },
+      { projectId: P_AUTO, phaseId: "concept", taskId: "c4", status: "todo", completed: false, startDate: "2099-01-01", dueDate: "2099-01-08" },
     ]);
 
     await refreshProjectTaskStatuses(P_AUTO);
     let rows = await getProjectTasks(P_AUTO, "concept");
     expect(rows.find((task) => task.taskId === "c3")?.status).toBe("blocked");
+    expect(rows.find((task) => task.taskId === "c4")?.status).toBe("todo");
 
     await updateTaskMeta(P_AUTO, "concept", "c1", { status: "done", updatedBy: U });
     await updateTaskMeta(P_AUTO, "concept", "c2", { status: "done", updatedBy: U });

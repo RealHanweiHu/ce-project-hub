@@ -32,6 +32,7 @@ import { resolveDingtalkUserId } from "../_core/dingtalk";
 import { upsertWeeklyMeeting } from "../_core/dingtalkCalendar";
 import { notifyUsersViaDingtalk, resolveCorpIdsForUsers } from "../_core/dingtalkMessage";
 import { createGroupChat, sendToGroupChat } from "../_core/dingtalkGroup";
+import { storageDelete } from "../storage";
 import { getProjectMembers } from "../db";
 import { getPhasesForCategory } from "../../shared/sop-templates";
 import { PROJECT_MEMBER_ROLES } from "../../drizzle/schema";
@@ -676,16 +677,20 @@ export const projectsRouter = router({
     }),
 
   /**
-   * Delete (soft-archive) a project.
-   * Allowed for: project owner, project manager role with canDeleteProject,
-   * or system admin (ctx.user.role === 'admin').
-   * Returns the project name so the frontend can show a confirmation message.
+   * Permanently delete an unreleased project and all project-scoped rows.
+   * Released projects are archived for PLM traceability and cannot be hard-deleted.
    */
   delete: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const existing = await getProjectById(input.id);
       if (!existing) throw new TRPCError({ code: "NOT_FOUND" });
+      if (existing.resultRevisionId !== null) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "已发布项目保留在产品版本追溯中，不能永久删除",
+        });
+      }
       // System admins can delete any project regardless of membership
       const isSystemAdmin = ctx.user.role === 'admin';
       if (!isSystemAdmin) {
@@ -697,15 +702,27 @@ export const projectsRouter = router({
           });
         }
       }
-      await deleteProject(input.id);
-      await createActivityLog({
-        projectId: input.id,
-        userId: ctx.user.id,
-        action: "project.delete",
-        entityType: "project",
-        entityId: input.id,
-        meta: { name: existing.name },
-      });
-      return { success: true, projectName: existing.name };
+      let result: Awaited<ReturnType<typeof deleteProject>>;
+      try {
+        result = await deleteProject(input.id);
+      } catch (error) {
+        if (error instanceof Error && /released project/i.test(error.message)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "已发布项目保留在产品版本追溯中，不能永久删除",
+          });
+        }
+        throw error;
+      }
+
+      await Promise.allSettled(result.storageKeys.map(async (storageKey) => {
+        try {
+          await storageDelete(storageKey);
+        } catch (error) {
+          console.warn("[project.delete] storage delete failed (non-fatal):", storageKey, error);
+        }
+      }));
+
+      return { success: true, projectName: existing.name, deletedFiles: result.storageKeys.length };
     }),
 });

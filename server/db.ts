@@ -1,4 +1,4 @@
-import { eq, desc, and, or, isNull, inArray, between, sql as drizzleSql } from "drizzle-orm";
+import { eq, desc, and, or, isNull, inArray, between, getTableColumns, sql as drizzleSql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import {
   InsertUser, users, projects, InsertProject, ProjectRow,
@@ -339,10 +339,98 @@ export async function updateProjectDingtalkEvent(projectId: string, dingtalkEven
   await db.update(projects).set({ dingtalkEventId }).where(eq(projects.id, projectId));
 }
 
-export async function deleteProject(id: string): Promise<void> {
+type DeleteProjectResult = { storageKeys: string[] };
+
+async function deleteProjectRows(projectId: string, options: { allowReleased: boolean }): Promise<DeleteProjectResult> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const [project] = await db
+    .select({ id: projects.id, resultRevisionId: projects.resultRevisionId })
+    .from(projects)
+    .where(eq(projects.id, projectId))
+    .limit(1);
+  if (!project) return { storageKeys: [] };
+
+  const [release] = await db
+    .select({ id: mpReleases.id })
+    .from(mpReleases)
+    .where(eq(mpReleases.projectId, projectId))
+    .limit(1);
+  const projectRevisionRows = await db
+    .select({ id: productRevisions.id })
+    .from(productRevisions)
+    .where(eq(productRevisions.createdByProjectId, projectId));
+
+  if (!options.allowReleased && (project.resultRevisionId !== null || release || projectRevisionRows.length > 0)) {
+    throw new Error("Cannot hard-delete a released project; keep its PLM trace and archive it instead.");
+  }
+
+  const fileRows = await db
+    .select({ storageKey: projectFiles.storageKey })
+    .from(projectFiles)
+    .where(eq(projectFiles.projectId, projectId));
+  const revisionIds = projectRevisionRows.map((row) => row.id);
+
+  await db.transaction(async (tx) => {
+    // Product-level records may outlive the project. Remove dangling project links
+    // instead of deleting product history.
+    await tx.update(productDefinitionChanges)
+      .set({ sourceProjectId: null })
+      .where(eq(productDefinitionChanges.sourceProjectId, projectId));
+    await tx.update(customerVariants)
+      .set({ sourceRefId: null })
+      .where(and(eq(customerVariants.sourceType, "project"), eq(customerVariants.sourceRefId, projectId)));
+
+    if (options.allowReleased) {
+      if (revisionIds.length > 0) {
+        await tx.delete(bomItems).where(inArray(bomItems.revisionId, revisionIds));
+      }
+      await tx.delete(mpReleases).where(eq(mpReleases.projectId, projectId));
+      await tx.delete(productRevisions).where(eq(productRevisions.createdByProjectId, projectId));
+    } else {
+      await tx.update(productRevisions)
+        .set({ createdByProjectId: null })
+        .where(eq(productRevisions.createdByProjectId, projectId));
+    }
+
+    await tx.delete(comments).where(or(
+      eq(comments.projectId, projectId),
+      and(eq(comments.entityType, "project"), eq(comments.entityId, projectId)),
+    ));
+    await tx.delete(notifications).where(and(
+      eq(notifications.entityType, "project"),
+      eq(notifications.entityId, projectId),
+    ));
+    await tx.delete(automationRuns).where(eq(automationRuns.projectId, projectId));
+    await tx.delete(projectCalendarEvents).where(eq(projectCalendarEvents.projectId, projectId));
+    await tx.delete(bomItems).where(eq(bomItems.projectId, projectId));
+    await tx.delete(projectDeliverableOverrides).where(eq(projectDeliverableOverrides.projectId, projectId));
+    await tx.delete(projectTailoring).where(eq(projectTailoring.projectId, projectId));
+    await tx.delete(projectChangelog).where(eq(projectChangelog.projectId, projectId));
+    await tx.delete(projectGateReviews).where(eq(projectGateReviews.projectId, projectId));
+    await tx.delete(projectDeliverableReviews).where(eq(projectDeliverableReviews.projectId, projectId));
+    await tx.delete(projectIssues).where(eq(projectIssues.projectId, projectId));
+    await tx.delete(projectRequirements).where(eq(projectRequirements.projectId, projectId));
+    await tx.delete(projectFiles).where(eq(projectFiles.projectId, projectId));
+    await tx.delete(activityLogs).where(eq(activityLogs.projectId, projectId));
+    await tx.delete(projectTasks).where(eq(projectTasks.projectId, projectId));
+    await tx.delete(projectPhases).where(eq(projectPhases.projectId, projectId));
+    await tx.delete(projectMembers).where(eq(projectMembers.projectId, projectId));
+    await tx.delete(projects).where(eq(projects.id, projectId));
+  });
+
+  return { storageKeys: fileRows.map((row) => row.storageKey) };
+}
+
+export async function archiveProject(id: string): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.update(projects).set({ archived: true }).where(eq(projects.id, id));
+}
+
+export async function deleteProject(id: string): Promise<DeleteProjectResult> {
+  return deleteProjectRows(id, { allowReleased: false });
 }
 
 /** Get projects where user is an explicit member (not creator) */
@@ -1503,6 +1591,8 @@ function automaticTaskStatus(
   if (task.status === "skipped") return "skipped";
   if (task.completed || task.status === "done") return "done";
 
+  if (task.startDate && task.startDate > todayISO) return "todo";
+
   const unresolvedDependency = (dependencies.get(task.taskId) ?? []).some((dependencyId) => {
     const dependency = rowsByTaskId.get(dependencyId);
     if (!dependency) return true;
@@ -1510,7 +1600,6 @@ function automaticTaskStatus(
   });
   if (unresolvedDependency) return "blocked";
 
-  if (task.startDate && task.startDate > todayISO) return "todo";
   if (task.startDate && task.startDate <= todayISO) return "in_progress";
   if (task.assigneeUserId) return "in_progress";
   if (task.dueDate && task.dueDate <= todayISO) return "in_progress";
@@ -2181,24 +2270,11 @@ export async function getBlockedTasks(projectIds?: string[]): Promise<TaskWithCo
 
 // ── Test helpers (not used in production code) ────────────────────────────────
 /**
- * Hard-delete a project and ALL its child records.
- * Only for use in tests — production uses soft-delete (archived=true).
+ * Force-delete a project and ALL its child records, including release artifacts.
+ * Only for use in tests.
  */
 export async function hardDeleteProjectForTest(projectId: string): Promise<void> {
-  const db = await getDb();
-  if (!db) return;
-  // Delete child records first (no FK cascade configured)
-  await db.delete(projectChangelog).where(eq(projectChangelog.projectId, projectId));
-  await db.delete(projectGateReviews).where(eq(projectGateReviews.projectId, projectId));
-  await db.delete(projectDeliverableReviews).where(eq(projectDeliverableReviews.projectId, projectId));
-  await db.delete(projectIssues).where(eq(projectIssues.projectId, projectId));
-  await db.delete(projectRequirements).where(eq(projectRequirements.projectId, projectId));
-  await db.delete(projectFiles).where(eq(projectFiles.projectId, projectId));
-  await db.delete(activityLogs).where(eq(activityLogs.projectId, projectId));
-  await db.delete(projectTasks).where(eq(projectTasks.projectId, projectId));
-  await db.delete(projectPhases).where(eq(projectPhases.projectId, projectId));
-  await db.delete(projectMembers).where(eq(projectMembers.projectId, projectId));
-  await db.delete(projects).where(eq(projects.id, projectId));
+  await deleteProjectRows(projectId, { allowReleased: true });
 }
 
 // ── PLM spine: platforms / products / revisions ───────────────────────────────
@@ -3105,15 +3181,23 @@ export async function listAutomationRuns(input: {
   const db = await getDb();
   if (!db) return [];
   const limit = Math.min(Math.max(input.limit ?? 50, 1), 200);
+  const activeRunScope = or(isNull(automationRuns.projectId), eq(projects.archived, false));
   if (input.projectId) {
     return db
-      .select()
+      .select(getTableColumns(automationRuns))
       .from(automationRuns)
-      .where(eq(automationRuns.projectId, input.projectId))
+      .leftJoin(projects, eq(automationRuns.projectId, projects.id))
+      .where(and(eq(automationRuns.projectId, input.projectId), activeRunScope))
       .orderBy(desc(automationRuns.createdAt))
       .limit(limit);
   }
-  return db.select().from(automationRuns).orderBy(desc(automationRuns.createdAt)).limit(limit);
+  return db
+    .select(getTableColumns(automationRuns))
+    .from(automationRuns)
+    .leftJoin(projects, eq(automationRuns.projectId, projects.id))
+    .where(activeRunScope)
+    .orderBy(desc(automationRuns.createdAt))
+    .limit(limit);
 }
 
 /** 逾期或 14 天内到期的未完成任务（逾期催办 + 截止前提醒 共用此扫描，规则各自精确过滤） */
@@ -3121,9 +3205,11 @@ export async function getAutomationDueTasks(): Promise<ProjectTask[]> {
   const db = await getDb();
   if (!db) return [];
   return db
-    .select()
+    .select(getTableColumns(projectTasks))
     .from(projectTasks)
+    .innerJoin(projects, eq(projectTasks.projectId, projects.id))
     .where(and(
+      eq(projects.archived, false),
       drizzleSql`${projectTasks.dueDate} IS NOT NULL`,
       drizzleSql`${projectTasks.dueDate} <= CURRENT_DATE + INTERVAL '14 days'`,
       drizzleSql`${projectTasks.status} NOT IN ('done','skipped')`
@@ -3135,9 +3221,11 @@ export async function getAutomationDueIssues(): Promise<ProjectIssue[]> {
   const db = await getDb();
   if (!db) return [];
   return db
-    .select()
+    .select(getTableColumns(projectIssues))
     .from(projectIssues)
+    .innerJoin(projects, eq(projectIssues.projectId, projects.id))
     .where(and(
+      eq(projects.archived, false),
       drizzleSql`${projectIssues.targetDate} IS NOT NULL`,
       drizzleSql`${projectIssues.targetDate} <> ''`,
       drizzleSql`${projectIssues.targetDate} <= TO_CHAR(CURRENT_DATE + INTERVAL '14 days', 'YYYY-MM-DD')`,
@@ -3184,18 +3272,22 @@ export async function getAutomationGatePrereqs(): Promise<Array<{
 /** 里程碑日历事件：阶段截止 / Gate 评审 / 项目目标日。 */
 export type CalendarEvent = {
   date: string;          // YYYY-MM-DD
-  type: "phase" | "gate" | "target" | "schedule";
+  type: "task" | "phase" | "gate" | "target" | "schedule";
   projectId: string;
   projectName: string;
   label: string;
   startTime?: string | null;
   durationMin?: number | null;
   dingtalkSyncStatus?: string | null;
+  phaseId?: string | null;
+  taskId?: string | null;
+  status?: TaskStatus | null;
+  priority?: TaskPriority | null;
 };
 
 /**
- * 在 [fromDate, toDate] 时间窗内聚合用户可见项目(owned ∪ member)的里程碑级事件。
- * 仅里程碑：阶段截止日(projectPhases.endDate)、Gate评审(projectGateReviews.reviewDate)、项目目标日(projects.targetDate)。
+ * 在 [fromDate, toDate] 时间窗内聚合日历事件。
+ * 里程碑全员可见；普通任务排期只对 admin、创建者和项目成员可见。
  */
 export async function getCalendar(userId: number, fromDate: string, toDate: string): Promise<CalendarEvent[]> {
   const db = await getDb();
@@ -3207,12 +3299,32 @@ export async function getCalendar(userId: number, fromDate: string, toDate: stri
   const ids = Array.from(projById.keys());
   if (ids.length === 0) return [];
 
+  const [viewer] = await db.select({ role: users.role }).from(users).where(eq(users.id, userId)).limit(1);
+  const taskProjectIds = new Set<string>();
+  if (viewer?.role === "admin") {
+    ids.forEach((id) => taskProjectIds.add(id));
+  } else {
+    for (const p of allProjects) {
+      if (p.createdBy === userId) taskProjectIds.add(p.id);
+    }
+    const memberRows = await db
+      .select({ projectId: projectMembers.projectId })
+      .from(projectMembers)
+      .where(eq(projectMembers.userId, userId));
+    for (const row of memberRows) {
+      if (projById.has(row.projectId)) taskProjectIds.add(row.projectId);
+    }
+  }
+
   const inWindow = (d: string | null): d is string => !!d && d >= fromDate && d <= toDate;
   const events: CalendarEvent[] = [];
 
   // 被裁阶段的截止里程碑不上日历（按项目聚合已批准裁剪的阶段集）
-  const tailoredByProject = new Map<string, Set<string>>();
-  for (const pid of ids) tailoredByProject.set(pid, (await getApprovedTailoringSets(pid)).tailoredPhaseIds);
+  const tailoredByProject = new Map<string, { phaseIds: Set<string>; taskIds: Set<string> }>();
+  for (const pid of ids) {
+    const sets = await getApprovedTailoringSets(pid);
+    tailoredByProject.set(pid, { phaseIds: sets.tailoredPhaseIds, taskIds: sets.tailoredTaskIds });
+  }
 
   for (const p of Array.from(projById.values())) {
     if (inWindow(p.targetDate)) {
@@ -3224,7 +3336,7 @@ export async function getCalendar(userId: number, fromDate: string, toDate: stri
     projectId: projectPhases.projectId, phaseId: projectPhases.phaseId, endDate: projectPhases.endDate,
   }).from(projectPhases).where(and(inArray(projectPhases.projectId, ids), between(projectPhases.endDate, fromDate, toDate)));
   for (const r of phaseRows) {
-    if (tailoredByProject.get(r.projectId)?.has(r.phaseId)) continue;
+    if (tailoredByProject.get(r.projectId)?.phaseIds.has(r.phaseId)) continue;
     const p = projById.get(r.projectId);
     const phase = p ? getPhasesForCategory(p.category).find((item) => item.id === r.phaseId) : null;
     if (p) events.push({ date: r.endDate!, type: "phase", projectId: p.id, projectName: p.name, label: `${phase?.name ?? r.phaseId} 截止` });
@@ -3235,21 +3347,44 @@ export async function getCalendar(userId: number, fromDate: string, toDate: stri
     phaseId: projectTasks.phaseId,
     taskId: projectTasks.taskId,
     dueDate: projectTasks.dueDate,
+    status: projectTasks.status,
+    priority: projectTasks.priority,
   }).from(projectTasks).where(and(
     inArray(projectTasks.projectId, ids),
     between(projectTasks.dueDate, fromDate, toDate),
   ));
   for (const r of taskRows) {
     const p = projById.get(r.projectId);
-    if (!p || tailoredByProject.get(r.projectId)?.has(r.phaseId)) continue;
+    if (!p) continue;
+    const tailored = tailoredByProject.get(r.projectId);
+    if (
+      tailored?.phaseIds.has(r.phaseId) ||
+      tailored?.taskIds.has(r.taskId) ||
+      tailored?.taskIds.has(`${r.phaseId}:${r.taskId}`)
+    ) continue;
     const phase = getPhasesForCategory(p.category).find((item) => item.id === r.phaseId);
-    if (!phase || phase.gateTaskId !== r.taskId) continue;
+    if (phase?.gateTaskId === r.taskId) {
+      events.push({
+        date: r.dueDate!,
+        type: "gate",
+        projectId: p.id,
+        projectName: p.name,
+        label: `${phase.gate || phase.name} 截止`,
+      });
+      continue;
+    }
+    if (!taskProjectIds.has(r.projectId) || r.status === "done" || r.status === "skipped") continue;
+    const task = phase?.tasks.find((item) => item.id === r.taskId);
     events.push({
       date: r.dueDate!,
-      type: "gate",
+      type: "task",
       projectId: p.id,
       projectName: p.name,
-      label: `${phase.gate || phase.name} 截止`,
+      label: task?.name ?? r.taskId,
+      phaseId: r.phaseId,
+      taskId: r.taskId,
+      status: r.status,
+      priority: r.priority,
     });
   }
 
