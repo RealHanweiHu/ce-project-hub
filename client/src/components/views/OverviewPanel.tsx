@@ -325,8 +325,11 @@ function ProductDefinitionHandoffPanel({
     return (
       <div className="ce-panel p-4 border-dashed border-stone-300 bg-stone-50/50">
         <div className="flex items-center gap-2 text-sm text-stone-700">
-          <Boxes size={15} className="text-stone-400" />未关联产品，暂无产品定义交接输入
+          <Boxes size={15} className="text-stone-400" />未关联产品型号
         </div>
+        <p className="mt-1 text-xs text-stone-500">
+          产品定义、规格输入和客户差异先随项目 SOP 推进；项目完成或 SKU 明确后，再沉淀到产品库。
+        </p>
       </div>
     );
   }
@@ -341,7 +344,7 @@ function ProductDefinitionHandoffPanel({
         <div className="flex items-center gap-2 text-sm font-medium text-amber-800">
           <AlertTriangle size={15} />关联产品缺少已确认 PRD 快照
         </div>
-        <p className="text-xs text-amber-700 mt-1">请回产品库确认产品定义后，再作为项目开发输入。</p>
+        <p className="text-xs text-amber-700 mt-1">可继续在项目 SOP 中推进产品定义；需要把产品库定义作为交接输入时，再确认 PRD 快照。</p>
       </div>
     );
   }

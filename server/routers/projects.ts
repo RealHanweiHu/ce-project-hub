@@ -103,26 +103,17 @@ const projectInputSchema = z.object({
   customFields: z.record(z.string(), z.unknown()).optional(),
 });
 
-async function requireConfirmedProductDefinitionSnapshot(productId: string, actorId: number) {
+async function getConfirmedProductDefinitionSnapshotIfAvailable(productId: string, actorId: number) {
   const definition = await getProductDefinitionByProductId(productId);
   if (!definition || definition.status !== "confirmed") {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: "产品定义尚未确认。请先在产品库完成 PRD/规格/商业目标并确认后再进入 NPD 开发。",
-    });
+    return null;
   }
   let snapshot = await getLatestProductDefinitionSnapshot(productId);
   if (!snapshot) {
     await confirmProductDefinition(productId, actorId);
     snapshot = await getLatestProductDefinitionSnapshot(productId);
   }
-  if (!snapshot) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: "未能生成产品定义快照。请重新确认产品定义后再创建项目。",
-    });
-  }
-  return snapshot;
+  return snapshot ?? null;
 }
 
 const HANDOFF_ROLE_LABELS: Record<string, string> = {
@@ -417,8 +408,8 @@ export const projectsRouter = router({
           message: '您没有创建项目的权限。请联系管理员授权。',
         });
       }
-      const handoffSnapshot = input.category === "npd" && input.productId
-        ? await requireConfirmedProductDefinitionSnapshot(input.productId, ctx.user.id)
+      const handoffSnapshot = input.productId
+        ? await getConfirmedProductDefinitionSnapshotIfAvailable(input.productId, ctx.user.id)
         : null;
       await createProjectWithSeed({
         id: input.id,
@@ -497,10 +488,10 @@ export const projectsRouter = router({
       if (!role || !ROLE_PERMISSIONS[role].canEditProjectInfo) throw new TRPCError({ code: "FORBIDDEN" });
 
       let productDefinitionSnapshotId = existing.productDefinitionSnapshotId ?? null;
-      if (input.category === "npd" && input.productId) {
+      if (input.productId) {
         if (input.productId !== existing.productId || !existing.productDefinitionSnapshotId) {
-          const snapshot = await requireConfirmedProductDefinitionSnapshot(input.productId, ctx.user.id);
-          productDefinitionSnapshotId = snapshot.id;
+          const snapshot = await getConfirmedProductDefinitionSnapshotIfAvailable(input.productId, ctx.user.id);
+          productDefinitionSnapshotId = snapshot?.id ?? null;
         }
       } else if (!input.productId) {
         productDefinitionSnapshotId = null;

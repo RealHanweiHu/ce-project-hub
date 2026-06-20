@@ -145,6 +145,29 @@ type ProductDefinitionDeviation = {
   items: ProductDefinitionChange[];
 };
 
+type CustomerVariant = {
+  id: number;
+  variantCode: string;
+  customerSku: string | null;
+  parentProductId: string;
+  baseRevision: string;
+  customerId: string;
+  customerName: string;
+  status: 'draft' | 'active' | 'on_hold' | 'eol' | string;
+  deltas: Array<{ dimension: string; baseValue?: string; variantValue: string; note?: string }>;
+  customerApproved: boolean;
+  approvedDate: string | null;
+  introducedAt: string | null;
+};
+
+type VariantForm = {
+  variantCode: string;
+  customerName: string;
+  customerSku: string;
+  differences: string;
+  status: 'draft' | 'active' | 'on_hold' | 'eol';
+};
+
 const LIFECYCLE_LABELS: Record<string, string> = {
   concept: '概念',
   development: '开发中',
@@ -193,6 +216,14 @@ const emptyChangeForm = {
   impactScope: '',
 };
 
+const emptyVariantForm = (): VariantForm => ({
+  variantCode: '',
+  customerName: '',
+  customerSku: '',
+  differences: '',
+  status: 'draft',
+});
+
 const emptyCompetitor = (): CompetitorDraft => ({ brand: '', model: '', price: '', channel: '', notes: '' });
 const emptySpec = (): SpecDraft => ({ label: '', target: '', tolerance: '', verification: '', ownerRole: '' });
 const emptySku = (): SkuDraft => ({ name: '', code: '', targetMarket: '', price: '', differences: '' });
@@ -219,6 +250,10 @@ const emptyDefinitionForm: ProductDefinitionForm = {
 
 function splitList(value: string) {
   return value.split(/[,，\n]+/).map((item) => item.trim()).filter(Boolean);
+}
+
+function customerIdFromName(name: string) {
+  return name.trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, "-").replace(/^-|-$/g, "");
 }
 
 function definitionToForm(definition: ProductDefinition | null | undefined, product: ProductRow) {
@@ -329,7 +364,7 @@ export function ProductLibraryView() {
         <div>
           <h2 className="font-serif text-2xl text-stone-900">产品库</h2>
           <p className="ce-kicker mt-1">
-            {products.length} PRODUCTS · PRODUCT ASSET LIBRARY
+            {products.length} PRODUCTS · SKU LIBRARY
           </p>
         </div>
         <Button
@@ -347,7 +382,7 @@ export function ProductLibraryView() {
       ) : products.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-48 text-stone-400 gap-2">
           <Package size={28} />
-          <p className="text-sm">还没有产品。点「新建产品」开始建立产品主数据。</p>
+          <p className="text-sm">还没有产品型号。点「新建产品」建立 DG01 这类型号主数据。</p>
         </div>
       ) : (
         <div className="space-y-8">
@@ -360,7 +395,7 @@ export function ProductLibraryView() {
                 {rows.map((p) => (
                   <div key={p.id} onClick={() => setRevProduct(p)} className="ce-card cursor-pointer p-4">
                     <div className="flex items-center justify-between mb-2">
-                      <span className="text-[10px] font-mono text-stone-400">{p.productNumber || '—'}</span>
+                      <span className="text-[10px] font-mono text-stone-400">{p.productNumber ? `型号 ${p.productNumber}` : '未填型号'}</span>
                       <div className="flex items-center gap-1">
                         <span className={`text-[10px] font-mono px-1.5 py-0.5 ${
                           definitionStatusByProduct.get(p.id)?.status === 'confirmed'
@@ -408,18 +443,18 @@ export function ProductLibraryView() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="font-serif flex items-center gap-2">
-              <Package size={16} className="text-amber-500" /> 新建产品
+              <Package size={16} className="text-amber-500" /> 新建产品型号
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
               <Label className="text-sm text-stone-700">产品名称 <span className="text-rose-500">*</span></Label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="例：露营充气泵 X1" autoFocus />
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="例：高端车载泵 DG01" autoFocus />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label className="text-sm text-stone-700">产品号</Label>
-                <Input value={productNumber} onChange={(e) => setProductNumber(e.target.value)} placeholder="CE-PUMP-001" />
+                <Label className="text-sm text-stone-700">产品型号</Label>
+                <Input value={productNumber} onChange={(e) => setProductNumber(e.target.value)} placeholder="DG01" />
               </div>
               <div className="space-y-1.5">
                 <Label className="text-sm text-stone-700">类型</Label>
@@ -470,12 +505,14 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
   const { data: definitionChanges = [], isLoading: changesLoading } = trpc.products.definitionChanges.useQuery({ productId: product.id });
   const { data: deviation } = trpc.products.definitionDeviation.useQuery({ productId: product.id });
   const { data: revisions = [], isLoading } = trpc.products.revisions.useQuery({ productId: product.id });
+  const { data: variants = [], isLoading: variantsLoading } = trpc.products.variantsByProduct.useQuery({ parentProductId: product.id });
   const { data: usedBy = [] } = trpc.bom.whereUsed.useQuery(
     { componentProductId: product.id },
     { enabled: product.type === 'component' },
   );
   const [form, setForm] = useState(() => definitionToForm(null, product));
   const [changeForm, setChangeForm] = useState(emptyChangeForm);
+  const [variantForm, setVariantForm] = useState(() => emptyVariantForm());
 
   useEffect(() => {
     setForm(definitionToForm((definition as ProductDefinition | null | undefined) ?? null, product));
@@ -518,6 +555,15 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
       toast.success('产品定义变更已登记');
       setChangeForm(emptyChangeForm);
       await refreshChanges();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const createVariant = trpc.products.createVariant.useMutation({
+    onSuccess: async () => {
+      toast.success('SKU 已登记');
+      setVariantForm(emptyVariantForm());
+      await utils.products.variantsByProduct.invalidate({ parentProductId: product.id });
     },
     onError: (e) => toast.error(e.message),
   });
@@ -579,6 +625,7 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
   const confirmed = (definition as ProductDefinition | undefined)?.status === 'confirmed';
   const snapshots = definitionSnapshots as ProductDefinitionSnapshot[];
   const changes = definitionChanges as ProductDefinitionChange[];
+  const customerVariants = variants as CustomerVariant[];
   const deviationReport = deviation as ProductDefinitionDeviation | undefined;
 
   const updateCompetitor = (index: number, patch: Partial<CompetitorDraft>) => {
@@ -629,6 +676,33 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
     });
   };
 
+  const createCustomerVariant = () => {
+    const variantCode = variantForm.variantCode.trim();
+    if (!variantCode) {
+      toast.error('请输入 SKU，例如 DG01-US-BLK');
+      return;
+    }
+    const customerName = variantForm.customerName.trim();
+    const differences = splitList(variantForm.differences);
+    createVariant.mutate({
+      variantCode,
+      customerName,
+      customerId: customerIdFromName(customerName || variantCode),
+      customerSku: variantForm.customerSku.trim() || null,
+      parentProductId: product.id,
+      baseRevision: '',
+      status: variantForm.status,
+      deltas: differences.map((item) => ({
+        dimension: 'other',
+        variantValue: item,
+      })),
+      certReuseParent: true,
+      certAffectedMarks: [],
+      customerApproved: false,
+      sourceType: 'plm_change',
+    });
+  };
+
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent className="sm:max-w-4xl max-h-[90vh] overflow-y-auto">
@@ -638,6 +712,16 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
           </DialogTitle>
         </DialogHeader>
         <div className="py-2 space-y-6">
+          <CustomerVariantSection
+            product={product}
+            variants={customerVariants}
+            isLoading={variantsLoading}
+            form={variantForm}
+            onChange={(patch) => setVariantForm((prev) => ({ ...prev, ...patch }))}
+            onCreate={createCustomerVariant}
+            isCreating={createVariant.isPending}
+          />
+
           <div className="border border-stone-200 bg-stone-50/60 p-4 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div>
@@ -650,7 +734,7 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
                   </span>
                 </div>
                 <p className="text-xs text-stone-500 mt-1">
-                  确认后才允许作为 NPD 项目的开发输入。再次保存会回到草稿，需重新确认。
+                  作为 PLM 侧可复用的定义基线；项目立项不依赖这里先确认。再次保存会回到草稿，需重新确认。
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -1041,6 +1125,128 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function CustomerVariantSection({
+  product,
+  variants,
+  isLoading,
+  form,
+  onChange,
+  onCreate,
+  isCreating,
+}: {
+  product: ProductRow;
+  variants: CustomerVariant[];
+  isLoading: boolean;
+  form: VariantForm;
+  onChange: (patch: Partial<VariantForm>) => void;
+  onCreate: () => void;
+  isCreating: boolean;
+}) {
+  const statusLabel: Record<string, string> = {
+    draft: '草稿',
+    active: '有效',
+    on_hold: '暂停',
+    eol: '停用',
+  };
+
+  return (
+    <div className="border border-stone-200 bg-white p-4 space-y-4">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <Package size={15} className="text-stone-400" />
+            <h3 className="font-serif text-base text-stone-900">SKU / 可销售版本</h3>
+          </div>
+          <p className="text-xs text-stone-500 mt-1">
+            产品型号 {product.productNumber || product.name} 可以沉淀多个可销售 SKU，例如 DG01-US-BLK / DG01-EU-BLK；客户配件、颜色、Logo、包装等差异记录在 SKU 差异中。
+          </p>
+        </div>
+        <span className="text-[10px] font-mono px-2 py-0.5 border border-stone-200 bg-stone-50 text-stone-500">
+          {variants.length} SKUS
+        </span>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-6 gap-3">
+        <div className="lg:col-span-1">
+          <Field label="SKU" value={form.variantCode} onChange={(value) => onChange({ variantCode: value })} placeholder="DG01-US-BLK" />
+        </div>
+        <div className="lg:col-span-1">
+          <Field label="客户名称" value={form.customerName} onChange={(value) => onChange({ customerName: value })} placeholder="客户 A" />
+        </div>
+        <div className="lg:col-span-1">
+          <Field label="客户料号" value={form.customerSku} onChange={(value) => onChange({ customerSku: value })} placeholder="可选" />
+        </div>
+        <label className="block space-y-1.5 lg:col-span-1">
+          <span className="text-[10px] font-mono uppercase tracking-widest text-stone-500">状态</span>
+          <select
+            value={form.status}
+            onChange={(event) => onChange({ status: event.target.value as VariantForm['status'] })}
+            className="w-full border border-stone-300 px-3 py-2 text-sm outline-none focus:border-stone-900 bg-white"
+          >
+            <option value="draft">草稿</option>
+            <option value="active">有效</option>
+            <option value="on_hold">暂停</option>
+            <option value="eol">停用</option>
+          </select>
+        </label>
+        <div className="lg:col-span-2">
+          <Field label="差异点" value={form.differences} onChange={(value) => onChange({ differences: value })} placeholder="颜色黑色, 客户 logo, 附件包 A" />
+        </div>
+      </div>
+      <div className="flex justify-end">
+        <Button
+          onClick={onCreate}
+          disabled={isCreating}
+          className="bg-stone-900 hover:bg-stone-800 text-stone-50 gap-1.5"
+        >
+          {isCreating ? <Loader2 size={14} className="animate-spin" /> : <PlusCircle size={14} />}
+          登记 SKU
+        </Button>
+      </div>
+
+      {isLoading ? (
+        <div className="flex items-center gap-2 text-sm text-stone-400"><Loader2 size={14} className="animate-spin" />加载 SKU…</div>
+      ) : variants.length === 0 ? (
+        <p className="text-sm text-stone-400 py-2">暂无 SKU。</p>
+      ) : (
+        <div className="space-y-2">
+          {variants.map((variant) => (
+            <div key={variant.id} className="border border-stone-200 bg-stone-50/40 px-3 py-3">
+              <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-semibold text-stone-900">{variant.variantCode}</span>
+                    <span className="text-[10px] font-mono px-1.5 py-0.5 bg-white text-stone-600 border border-stone-200">
+                      {statusLabel[variant.status] ?? variant.status}
+                    </span>
+                    {variant.customerApproved ? (
+                      <span className="text-[10px] font-mono px-1.5 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-100">客户已确认</span>
+                    ) : null}
+                  </div>
+                  <div className="mt-1 text-[11px] font-mono text-stone-400">
+                    {variant.customerName || '未填客户'}
+                    {variant.customerSku ? ` · 客户料号 ${variant.customerSku}` : ''}
+                    {variant.baseRevision ? ` · Base ${variant.baseRevision}` : ''}
+                  </div>
+                </div>
+              </div>
+              {(variant.deltas?.length ?? 0) > 0 ? (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {variant.deltas.slice(0, 6).map((delta, index) => (
+                    <span key={index} className="text-[11px] px-2 py-0.5 bg-white border border-stone-200 text-stone-600">
+                      {delta.variantValue}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

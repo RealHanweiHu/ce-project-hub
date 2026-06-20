@@ -24,6 +24,9 @@ const MANAGER_PROJECT = `role-rank-m-${Date.now()}`;
 const VIEWER_PROJECT = `role-rank-v-${Date.now()}`;
 const HANDOFF_PROJECT = `handoff-${Date.now()}`;
 const HANDOFF_PRODUCT = `handoff-product-${Date.now()}`;
+const OPTIONAL_PROJECT = `optional-product-${Date.now()}`;
+const DRAFT_PRODUCT_PROJECT = `draft-product-${Date.now()}`;
+const DRAFT_PRODUCT = `draft-product-${Date.now()}`;
 const OWNER = 980001;
 const MANAGER_PM = 980002;
 const VIEWER_PM = 980003;
@@ -103,6 +106,15 @@ afterAll(async () => {
   await db.delete(productDefinitionSnapshots).where(eq(productDefinitionSnapshots.productId, HANDOFF_PRODUCT));
   await db.delete(productDefinitions).where(eq(productDefinitions.productId, HANDOFF_PRODUCT));
   await db.delete(products).where(eq(products.id, HANDOFF_PRODUCT));
+  for (const projectId of [OPTIONAL_PROJECT, DRAFT_PRODUCT_PROJECT]) {
+    await db.delete(activityLogs).where(eq(activityLogs.projectId, projectId));
+    await db.delete(projectTasks).where(eq(projectTasks.projectId, projectId));
+    await db.delete(projectPhases).where(eq(projectPhases.projectId, projectId));
+    await db.delete(projectMembers).where(eq(projectMembers.projectId, projectId));
+    await db.delete(projects).where(eq(projects.id, projectId));
+  }
+  await db.delete(productDefinitions).where(eq(productDefinitions.productId, DRAFT_PRODUCT));
+  await db.delete(products).where(eq(products.id, DRAFT_PRODUCT));
 });
 
 describe("project access role resolution", () => {
@@ -137,6 +149,52 @@ describe("project access role resolution", () => {
 });
 
 describe("project create validation", () => {
+  it("创建 NPD 项目不要求先关联产品库产品", async () => {
+    const caller = appRouter.createCaller(makeCtx(OWNER, true));
+
+    await caller.projects.create({
+      id: OPTIONAL_PROJECT,
+      name: "无产品库前置 NPD",
+      projectNumber: "NPD-NO-PRODUCT",
+      category: "npd",
+      risk: "low",
+      currentPhase: "concept",
+      progress: 0,
+    });
+
+    const project = await getProjectById(OPTIONAL_PROJECT);
+    expect(project?.productId).toBeNull();
+    expect(project?.productDefinitionSnapshotId).toBeNull();
+  });
+
+  it("关联未确认定义的产品型号也不阻断立项,仅不锁定快照", async () => {
+    await createProduct({
+      id: DRAFT_PRODUCT,
+      productNumber: "DG01",
+      name: "高端车载泵 DG01",
+      type: "finished",
+      category: "充气泵",
+      targetMarkets: ["OEM"],
+      createdBy: OWNER,
+    });
+    const caller = appRouter.createCaller(makeCtx(OWNER, true));
+
+    await caller.projects.create({
+      id: DRAFT_PRODUCT_PROJECT,
+      name: "高端车载泵 DG01 开发项目",
+      projectNumber: "NPD-DG01",
+      category: "npd",
+      productId: DRAFT_PRODUCT,
+      risk: "low",
+      currentPhase: "concept",
+      progress: 0,
+    });
+
+    const project = await getProjectById(DRAFT_PRODUCT_PROJECT);
+    expect(project?.productId).toBe(DRAFT_PRODUCT);
+    expect(project?.productDefinitionSnapshotId).toBeNull();
+  });
+
   it("创建项目时拒绝非法开始日期,避免坏日期落库后重排 500", async () => {
     const caller = appRouter.createCaller(makeCtx(OWNER, true));
 
