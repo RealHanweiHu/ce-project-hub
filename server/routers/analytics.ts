@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
-import { getProjectMetricsData } from "../db";
+import { getProjectMetricsData, getPortfolioMetricsData } from "../db";
 import { assertProjectAccess } from "../project-access";
 import { computeProjectMetrics } from "../../shared/metrics";
 import { defaultFromISO, shanghaiTodayISO } from "../metrics-window";
@@ -25,5 +25,11 @@ export const analyticsRouter = router({
         ...raw,
         window: { fromISO, toISO },
       });
+    }),
+
+  // getPortfolio 返回全部未归档项目，本端点不做范围过滤——管理层对比工具，范围由前端只在 exec lens 发起查询收口。
+  portfolioMetrics: protectedProcedure
+    .query(async ({ ctx }) => {
+      return getPortfolioMetricsData(ctx.user.id);
     }),
 });
