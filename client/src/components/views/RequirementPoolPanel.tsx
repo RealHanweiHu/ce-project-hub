@@ -43,6 +43,9 @@ type Requirement = {
   owner: string | null;
   targetPhaseId: string | null;
   linkedTaskId: string | null;
+  businessGoal: string | null;
+  projectGoal: string | null;
+  successMetric: string | null;
   acceptanceCriteria: string | null;
   decisionNote: string | null;
   creatorId: number | null;
@@ -61,6 +64,9 @@ type RequirementForm = {
   owner: string;
   targetPhaseId: string;
   linkedTaskId: string;
+  businessGoal: string;
+  projectGoal: string;
+  successMetric: string;
   acceptanceCriteria: string;
   decisionNote: string;
 };
@@ -126,6 +132,9 @@ const emptyForm = (): RequirementForm => ({
   owner: '',
   targetPhaseId: '',
   linkedTaskId: '',
+  businessGoal: '',
+  projectGoal: '',
+  successMetric: '',
   acceptanceCriteria: '',
   decisionNote: '',
 });
@@ -150,6 +159,17 @@ function PriorityBadge({ priority }: { priority: RequirementPriority }) {
   );
 }
 
+function ChainStep({ label, value }: { label: string; value: string | null | undefined }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[10px] font-mono uppercase tracking-wider text-stone-400 mb-0.5">{label}</div>
+      <div className="text-xs text-stone-700 leading-relaxed line-clamp-3 whitespace-pre-wrap">
+        {value || <span className="text-stone-300">—</span>}
+      </div>
+    </div>
+  );
+}
+
 function toForm(row: Requirement): RequirementForm {
   return {
     title: row.title,
@@ -162,6 +182,9 @@ function toForm(row: Requirement): RequirementForm {
     owner: row.owner || '',
     targetPhaseId: row.targetPhaseId || '',
     linkedTaskId: row.linkedTaskId || '',
+    businessGoal: row.businessGoal || '',
+    projectGoal: row.projectGoal || '',
+    successMetric: row.successMetric || '',
     acceptanceCriteria: row.acceptanceCriteria || '',
     decisionNote: row.decisionNote || '',
   };
@@ -179,6 +202,9 @@ function cleanForm(form: RequirementForm) {
     owner: form.owner.trim() || null,
     targetPhaseId: form.targetPhaseId || null,
     linkedTaskId: form.linkedTaskId || null,
+    businessGoal: form.businessGoal.trim() || null,
+    projectGoal: form.projectGoal.trim() || null,
+    successMetric: form.successMetric.trim() || null,
     acceptanceCriteria: form.acceptanceCriteria.trim() || null,
     decisionNote: form.decisionNote.trim() || null,
   };
@@ -367,6 +393,9 @@ export function RequirementPoolPanel({ scope, canEdit = false, canCreate, canMan
           row.description,
           row.sourceDetail,
           row.owner,
+          row.businessGoal,
+          row.projectGoal,
+          row.successMetric,
           row.acceptanceCriteria,
           row.decisionNote,
         ].some((value) => (value || '').toLowerCase().includes(q));
@@ -517,6 +546,20 @@ export function RequirementPoolPanel({ scope, canEdit = false, canCreate, canMan
             </div>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
               <div>
+                <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">商业目标</label>
+                <textarea value={form.businessGoal} onChange={(e) => set('businessGoal', e.target.value)} rows={3} className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm resize-none" placeholder="目标销量、收入、毛利、客户承诺或战略价值" />
+              </div>
+              <div>
+                <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">项目目标</label>
+                <textarea value={form.projectGoal} onChange={(e) => set('projectGoal', e.target.value)} rows={3} className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm resize-none" placeholder="本项目要解决的问题、交付范围或阶段目标" />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+              <div>
+                <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">成功指标</label>
+                <textarea value={form.successMetric} onChange={(e) => set('successMetric', e.target.value)} rows={3} className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm resize-none" placeholder="可量化 KPI、测试指标或放行标准" />
+              </div>
+              <div>
                 <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">验收标准</label>
                 <textarea value={form.acceptanceCriteria} onChange={(e) => set('acceptanceCriteria', e.target.value)} rows={3} className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm resize-none" placeholder="满足什么条件才算完成" />
               </div>
@@ -593,6 +636,7 @@ export function RequirementPoolPanel({ scope, canEdit = false, canCreate, canMan
             const priority = PRIORITY_OPTIONS.find((p) => p.value === row.priority) || PRIORITY_OPTIONS[2];
             const phase = phases.find((p) => p.id === row.targetPhaseId);
             const task = phase?.tasks.find((t) => t.id === row.linkedTaskId);
+            const hasValueChain = !!(row.businessGoal || row.projectGoal || row.successMetric || row.convertedType);
             return (
               <div key={row.id} className={`ce-card border-l-4 ${priority.border} p-4`}>
                 <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
@@ -620,6 +664,29 @@ export function RequirementPoolPanel({ scope, canEdit = false, canCreate, canMan
                       {task && <span>任务：<span className="font-mono text-stone-700">{task.id}</span></span>}
                       <span>创建：{formatDate(row.createdAt)}</span>
                     </div>
+                    {hasValueChain && (
+                      <div className="mt-3 border border-stone-100 bg-stone-50/70 px-3 py-2">
+                        <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-2">
+                          <Target size={11} />
+                          价值链路
+                        </div>
+                        <div className="grid grid-cols-1 lg:grid-cols-4 gap-2 text-xs">
+                          <ChainStep label="商业目标" value={row.businessGoal} />
+                          <ChainStep label="项目目标" value={row.projectGoal} />
+                          <ChainStep label="需求" value={row.title} />
+                          <ChainStep
+                            label="执行承接"
+                            value={row.convertedType ? `${CONVERT_LABELS[row.convertedType]} ${row.convertedId ?? ''}` : null}
+                          />
+                        </div>
+                        {row.successMetric && (
+                          <div className="mt-2 border-t border-stone-200 pt-2">
+                            <div className="text-[10px] font-mono uppercase tracking-wider text-stone-400 mb-1">成功指标</div>
+                            <div className="text-xs text-stone-700 whitespace-pre-wrap">{row.successMetric}</div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                     {(row.acceptanceCriteria || row.decisionNote) && (
                       <div className="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-2">
                         {row.acceptanceCriteria && (

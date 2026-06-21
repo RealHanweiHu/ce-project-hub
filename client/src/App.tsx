@@ -3,6 +3,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { lazy, Suspense } from "react";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
+import { ServiceRecoveryNotice } from "./components/ServiceRecoveryNotice";
 import { ThemeProvider } from "./contexts/ThemeContext";
 
 const Home = lazy(() => import("./pages/Home"));
@@ -49,6 +50,7 @@ function App() {
       >
         <TooltipProvider>
           <Toaster />
+          <ServiceRecoveryNotice />
           <Router />
         </TooltipProvider>
       </ThemeProvider>

@@ -176,11 +176,10 @@ export function ProjectListView({
           const catConfig = project.category ? CATEGORY_MAP[project.category] : null;
 
           return (
-            <div
+            <article
               key={project.id}
-              className="ce-card group cursor-pointer overflow-hidden"
+              className="ce-card overflow-hidden"
               style={{ borderTopWidth: 3, borderTopColor: phaseObj?.color || '#78716c' }}
-              onClick={() => onSelectProject(project.id)}
             >
               <div className="p-5 border-b border-stone-100">
                 <div className="flex items-start justify-between mb-3">
@@ -193,25 +192,6 @@ export function ProjectListView({
                         {catConfig.badge}
                       </span>
                     )}
-                  </div>
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
-                    <button
-                      onClick={(e) => handleOpenClone(e, project)}
-                      className="text-stone-300 hover:text-amber-500 transition-colors p-0.5"
-                      title="克隆项目"
-                    >
-                      <Copy size={13} />
-                    </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setDeleteConfirm({ id: project.id, name: project.name });
-                      }}
-                      className="text-stone-300 hover:text-rose-500 transition-colors p-0.5"
-                      title="删除项目"
-                    >
-                      <Trash2 size={14} />
-                    </button>
                   </div>
                 </div>
                 <h3 className="font-serif text-lg text-stone-900 leading-tight mb-2">
@@ -256,7 +236,41 @@ export function ProjectListView({
                   <span className="text-[10px] font-mono text-stone-400">{project.targetDate}</span>
                 </div>
               </div>
-            </div>
+              <div className="flex items-center justify-between gap-3 border-t border-stone-100 bg-stone-50/70 px-5 py-3">
+                <div className="flex items-center gap-2">
+                  {canCreateProject && onCloneProject && (
+                    <button
+                      type="button"
+                      onClick={(e) => handleOpenClone(e, project)}
+                      className="ce-control inline-flex items-center gap-1.5 border border-stone-200 bg-white px-2.5 py-1.5 text-[11px] font-mono text-stone-500 transition-colors hover:border-stone-300 hover:text-stone-800"
+                      title="克隆项目"
+                    >
+                      <Copy size={12} />
+                      克隆
+                    </button>
+                  )}
+                  {project.canDeleteProject && (
+                    <button
+                      type="button"
+                      onClick={() => setDeleteConfirm({ id: project.id, name: project.name })}
+                      className="ce-control inline-flex items-center gap-1.5 border border-rose-200 bg-white px-2.5 py-1.5 text-[11px] font-mono text-rose-600 transition-colors hover:bg-rose-50"
+                      title="删除项目"
+                    >
+                      <Trash2 size={12} />
+                      删除
+                    </button>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onSelectProject(project.id)}
+                  className="ce-control inline-flex items-center gap-1.5 bg-stone-900 px-3 py-1.5 text-[11px] font-mono uppercase tracking-wider text-white transition-colors hover:bg-stone-700"
+                >
+                  进入项目
+                  <ChevronRight size={12} />
+                </button>
+              </div>
+            </article>
           );
         })}
 

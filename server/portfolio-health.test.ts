@@ -3,7 +3,7 @@ import {
   getDb, getPortfolio, getPortfolioHealthForDigest, hasAutomationRunForEntity,
   upsertProjectTask, createAutomationRun,
 } from "./db";
-import { projects, projectTasks, automationRuns, calendarExceptions } from "../drizzle/schema";
+import { projects, projectTasks, automationRuns, calendarExceptions, projectRisks } from "../drizzle/schema";
 import { and, eq } from "drizzle-orm";
 
 const PROJ = `pf-health-${Date.now()}`;
@@ -14,6 +14,7 @@ const CAL_PROJ = `pf-cal-${Date.now()}`;
 const CAL_HOLIDAY = "2026-06-25"; // 落在某未完成任务工期内
 const CAL_TODAY = "2026-06-16";
 const SKIP_PROJ = `pf-skip-${Date.now()}`;
+const RISK_PROJ = `pf-risk-${Date.now()}`;
 
 afterAll(async () => {
   const db = await getDb();
@@ -21,10 +22,12 @@ afterAll(async () => {
   await db.delete(projectTasks).where(eq(projectTasks.projectId, PROJ));
   await db.delete(projectTasks).where(eq(projectTasks.projectId, CAL_PROJ));
   await db.delete(projectTasks).where(eq(projectTasks.projectId, SKIP_PROJ));
+  await db.delete(projectRisks).where(eq(projectRisks.projectId, RISK_PROJ));
   await db.delete(automationRuns).where(eq(automationRuns.ruleKey, "health_digest_test"));
   await db.delete(projects).where(eq(projects.id, PROJ));
   await db.delete(projects).where(eq(projects.id, CAL_PROJ));
   await db.delete(projects).where(eq(projects.id, SKIP_PROJ));
+  await db.delete(projects).where(eq(projects.id, RISK_PROJ));
   await db.delete(calendarExceptions).where(eq(calendarExceptions.date, CAL_HOLIDAY));
 });
 
@@ -121,6 +124,33 @@ describe("getPortfolioHealthForDigest", () => {
     expect(row!.plannedEnd).toBe("2099-01-10");
     expect(row!.projectedEnd).not.toBeNull();
     expect(row!.projectedEnd! < "2099-01-01").toBe(true);
+  });
+
+  it("有效高风险项会推高组合健康度", async () => {
+    const db = await getDb();
+    if (!db) return;
+    await db.insert(projects).values({
+      id: RISK_PROJ, name: "风险生命周期测试", projectNumber: RISK_PROJ, category: "npd",
+      risk: "low", riskOverrideRisk: "low", riskOverrideReason: "人工判断可控",
+      currentPhase: "concept", archived: false, createdBy: 1,
+    }).onConflictDoNothing();
+    await db.insert(projectRisks).values({
+      projectId: RISK_PROJ,
+      title: "关键供应商认证存在延期风险",
+      severity: "high",
+      status: "mitigating",
+      creatorId: 1,
+    });
+
+    const rows = await getPortfolioHealthForDigest(TODAY);
+    const row = rows.find((r) => r.id === RISK_PROJ);
+    expect(row).toBeDefined();
+    expect(row!.openRisks).toBe(1);
+    expect(row!.highRisks).toBe(1);
+    expect(row!.risk).toBe("high");
+    expect(row!.ragLevel).toBe("red");
+    expect(row!.ragReasons).toContain("自动信号更高:红灯");
+    expect(row!.ragReasons).toContain("风险项:高");
   });
 
   it("hasAutomationRunForEntity 任意状态都算", async () => {

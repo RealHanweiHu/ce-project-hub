@@ -1,12 +1,11 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { TAILORING_REASONS, type ProjectMemberRole } from "../../drizzle/schema";
+import { TAILORING_REASONS } from "../../drizzle/schema";
 import {
   createActivityLog,
   createProjectTailoringRequest,
   getProjectById,
   getProjectEffectiveProcess,
-  getProjectMember,
   listDeliverableOverrides,
   listProjectTailoring,
   reviewProjectTailoring,
@@ -16,19 +15,12 @@ import {
 import { protectedProcedure, router } from "../_core/trpc";
 import { ROLE_PERMISSIONS } from "./members";
 import { getDeliverableLibrary } from "../../shared/effective-process";
+import { getEffectiveProjectRoleById as getUserProjectRole } from "../project-access";
 
 const tailoringTargetSchema = z.union([
   z.object({ scope: z.literal("phase"), phaseId: z.string().min(1) }),
   z.object({ scope: z.literal("task"), phaseId: z.string().min(1), taskId: z.string().min(1) }),
 ]);
-
-async function getUserProjectRole(projectId: string, userId: number): Promise<ProjectMemberRole | null> {
-  const project = await getProjectById(projectId);
-  if (!project) return null;
-  if (project.createdBy === userId) return "owner";
-  const member = await getProjectMember(projectId, userId);
-  return member?.role ?? null;
-}
 
 async function assertCanView(projectId: string, user: { id: number; role: string }) {
   const project = await getProjectById(projectId);

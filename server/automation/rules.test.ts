@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { AUTOMATION_RULES, isAutomationRuleMatch, parseAutomationRuleConfig, getAutomationRule } from "./rules";
+import {
+  AUTOMATION_RULES,
+  exceptionEscalationRoles,
+  getAutomationRule,
+  isAutomationRuleMatch,
+  parseAutomationRuleConfig,
+} from "./rules";
 
 describe("built-in automation rule matching", () => {
   it("keeps exactly the MVP built-in rule keys", () => {
@@ -12,6 +18,7 @@ describe("built-in automation rule matching", () => {
       "status_change_notify",
       "mp_release_broadcast",
       "delay_impact_notify",
+      "exception_escalation",
     ]);
   });
 
@@ -209,6 +216,29 @@ describe("built-in automation rule matching", () => {
       scope: "issues",
       notifyRoles: ["assignee", "pm"],
     });
+  });
+
+  it("exception_escalation escalates by linger days and include switches", () => {
+    const ev = (days: number) => ({
+      action: "scheduled" as const,
+      entityType: "task" as const,
+      entityId: "p1:design:d1:blocked",
+      after: { status: "blocked", exceptionType: "blocked_task", exceptionAgeDays: days },
+    });
+    const config = { assigneeAfterDays: 2, pmAfterDays: 5, managerAfterDays: 10 };
+
+    expect(isAutomationRuleMatch("exception_escalation", ev(1), config)).toBe(false);
+    expect(isAutomationRuleMatch("exception_escalation", ev(2), config)).toBe(true);
+    expect(exceptionEscalationRoles(ev(2), parseAutomationRuleConfig("exception_escalation", config) as any)).toEqual(["assignee"]);
+    expect(exceptionEscalationRoles(ev(5), parseAutomationRuleConfig("exception_escalation", config) as any)).toEqual(["assignee", "pm"]);
+    expect(exceptionEscalationRoles(ev(10), parseAutomationRuleConfig("exception_escalation", config) as any)).toEqual(["assignee", "pm", "manager"]);
+
+    expect(
+      isAutomationRuleMatch("exception_escalation", ev(10), {
+        ...config,
+        include: { overdueTasks: true, blockedTasks: false, criticalIssues: true, pendingReviews: true },
+      })
+    ).toBe(false);
   });
 });
 

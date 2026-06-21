@@ -1,9 +1,12 @@
 /** 项目健康度等级。绿=正常，黄=需关注，红=需介入。 */
 export type RagLevel = "green" | "amber" | "red";
+export type RiskSignal = "medium" | "high" | null;
 
 /** computeRag 的输入：均来自上层聚合，避免依赖具体数据层类型。 */
 export type RagInput = {
   risk: "low" | "medium" | "high";
+  /** 独立风险生命周期聚合出的当前有效风险。 */
+  riskSignal?: RiskSignal;
   /** 预测完成日：由计划基线 + 实绩进展 on-read 推导，不写回任务 dueDate。 */
   projectedEnd: string | null;
   targetDate: string | null;
@@ -55,6 +58,7 @@ export function computeRag(input: RagInput): RagLevel {
   const behind = input.progressBehindPct;
   if (
     input.risk === "high" ||
+    input.riskSignal === "high" ||
     input.overdueTasks > 0 ||
     input.criticalIssues > 0 ||
     (slip !== null && slip > SLIP_RED) ||
@@ -65,6 +69,7 @@ export function computeRag(input: RagInput): RagLevel {
   }
   if (
     input.risk === "medium" ||
+    input.riskSignal === "medium" ||
     input.blockedTasks > 0 ||
     input.openIssues > 0 ||
     (slip !== null && slip >= SLIP_AMBER) ||
@@ -84,6 +89,8 @@ export function ragReasons(input: RagInput): string[] {
   const reasons: string[] = [];
   if (input.risk === "high") reasons.push("风险:高");
   else if (input.risk === "medium") reasons.push("风险:中");
+  if (input.riskSignal === "high") reasons.push("风险项:高");
+  else if (input.riskSignal === "medium") reasons.push("风险项:中");
   if (input.overdueTasks > 0) reasons.push(`逾期×${input.overdueTasks}`);
   if (input.criticalIssues > 0) reasons.push(`P0/P1×${input.criticalIssues}`);
   if (input.blockedTasks > 0) reasons.push(`阻塞×${input.blockedTasks}`);

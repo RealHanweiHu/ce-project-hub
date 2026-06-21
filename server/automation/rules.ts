@@ -9,11 +9,12 @@ export const AUTOMATION_RULE_KEYS = [
   "gate_prereq_incomplete",
   "mp_release_broadcast",
   "delay_impact_notify",
+  "exception_escalation",
 ] as const;
 
 export type AutomationRuleKey = (typeof AUTOMATION_RULE_KEYS)[number];
 
-export type AutomationEntityType = "task" | "issue" | "gate_review" | "mp_release";
+export type AutomationEntityType = "task" | "issue" | "gate_review" | "mp_release" | "deliverable_review";
 
 export type AutomationEvent = {
   action:
@@ -106,6 +107,25 @@ const delayImpactConfigSchema = z.object({
   pushGroup: z.boolean().default(false),
 });
 
+const exceptionEscalationConfigSchema = z.object({
+  assigneeAfterDays: z.number().int().min(0).default(2),
+  pmAfterDays: z.number().int().min(0).default(5),
+  managerAfterDays: z.number().int().min(0).default(10),
+  cadenceHours: z.number().int().min(1).default(24),
+  include: z.object({
+    overdueTasks: z.boolean().default(true),
+    blockedTasks: z.boolean().default(true),
+    criticalIssues: z.boolean().default(true),
+    pendingReviews: z.boolean().default(true),
+  }).default({
+    overdueTasks: true,
+    blockedTasks: true,
+    criticalIssues: true,
+    pendingReviews: true,
+  }),
+  pushGroup: z.boolean().default(false),
+});
+
 export type OverdueConfig = z.infer<typeof overdueConfigSchema>;
 export type HighSeverityIssueConfig = z.infer<typeof highSeverityIssueConfigSchema>;
 export type StatusChangeConfig = z.infer<typeof statusChangeConfigSchema>;
@@ -114,6 +134,7 @@ export type DueSoonConfig = z.infer<typeof dueSoonConfigSchema>;
 export type TaskBlockedConfig = z.infer<typeof taskBlockedConfigSchema>;
 export type GatePrereqConfig = z.infer<typeof gatePrereqConfigSchema>;
 export type DelayImpactConfig = z.infer<typeof delayImpactConfigSchema>;
+export type ExceptionEscalationConfig = z.infer<typeof exceptionEscalationConfigSchema>;
 export type AutomationRuleConfig =
   | OverdueConfig
   | HighSeverityIssueConfig
@@ -122,7 +143,8 @@ export type AutomationRuleConfig =
   | DueSoonConfig
   | TaskBlockedConfig
   | GatePrereqConfig
-  | DelayImpactConfig;
+  | DelayImpactConfig
+  | ExceptionEscalationConfig;
 
 export type BuiltInAutomationRule = {
   key: AutomationRuleKey;
@@ -224,6 +246,17 @@ export const AUTOMATION_RULES = [
     recipientRoles: ["pm"],
     matches: (event, config) => matchesDelayImpact(event, config as DelayImpactConfig),
     buildMessage: (event, _cfg, ctx) => buildDelayImpactMessage(event, ctx),
+  },
+  {
+    key: "exception_escalation",
+    label: "异常升级",
+    triggerType: "scheduled",
+    defaultEnabled: true,
+    defaultConfig: exceptionEscalationConfigSchema.parse({}),
+    configSchema: exceptionEscalationConfigSchema,
+    recipientRoles: ["assignee", "pm", "manager"],
+    matches: (event, config) => matchesExceptionEscalation(event, config as ExceptionEscalationConfig),
+    buildMessage: (event, config, ctx) => buildExceptionEscalationMessage(event, config as ExceptionEscalationConfig, ctx),
   },
 ] as const satisfies readonly BuiltInAutomationRule[];
 
@@ -353,6 +386,45 @@ function matchesDelayImpact(event: AutomationEvent, config: DelayImpactConfig): 
   return gateHit || targetHit;
 }
 
+export type ExceptionEscalationLevel = "assignee" | "pm" | "manager";
+
+export function exceptionEscalationLevel(
+  event: AutomationEvent,
+  config: ExceptionEscalationConfig,
+): ExceptionEscalationLevel | null {
+  const age = numberValue(event.after?.exceptionAgeDays);
+  if (age === null) return null;
+  if (age >= config.managerAfterDays) return "manager";
+  if (age >= config.pmAfterDays) return "pm";
+  if (age >= config.assigneeAfterDays) return "assignee";
+  return null;
+}
+
+export function exceptionEscalationRoles(
+  event: AutomationEvent,
+  config: ExceptionEscalationConfig,
+): RecipientRole[] {
+  const level = exceptionEscalationLevel(event, config);
+  if (level === "manager") return ["assignee", "pm", "manager"];
+  if (level === "pm") return ["assignee", "pm"];
+  if (level === "assignee") return ["assignee"];
+  return [];
+}
+
+function matchesExceptionEscalation(event: AutomationEvent, config: ExceptionEscalationConfig): boolean {
+  if (event.action !== "scheduled") return false;
+  const type = String(event.after?.exceptionType ?? "");
+  if (type === "overdue_task" && !config.include.overdueTasks) return false;
+  if (type === "blocked_task" && !config.include.blockedTasks) return false;
+  if (type === "critical_issue" && !config.include.criticalIssues) return false;
+  if (type === "pending_review" && !config.include.pendingReviews) return false;
+  if (!["overdue_task", "blocked_task", "critical_issue", "pending_review"].includes(type)) return false;
+  if (event.entityType === "task" && isClosedStatus("task", String(event.after?.status ?? ""))) return false;
+  if (event.entityType === "issue" && isClosedStatus("issue", String(event.after?.status ?? ""))) return false;
+  if (event.entityType === "deliverable_review" && String(event.after?.status ?? "") !== "pending") return false;
+  return exceptionEscalationLevel(event, config) !== null;
+}
+
 function buildOverdueMessage(
   event: AutomationEvent,
   _config: OverdueConfig,
@@ -474,6 +546,30 @@ function buildGatePrereqMessage(event: AutomationEvent, ctx: AutomationMessageCo
   return { title: messageTitle, text, markdown: `#### ${messageTitle}\n${project}评审「${title}」${when}到期，还差以下项不能过会：\n${lines}` };
 }
 
+function buildExceptionEscalationMessage(
+  event: AutomationEvent,
+  config: ExceptionEscalationConfig,
+  ctx: AutomationMessageContext,
+): AutomationMessage {
+  const title = ctx.entityTitle || String(event.after?.title ?? event.after?.taskId ?? event.after?.deliverableName ?? event.entityId ?? "异常");
+  const project = ctx.projectName ? `「${ctx.projectName}」` : "项目";
+  const age = numberValue(event.after?.exceptionAgeDays) ?? 0;
+  const level = exceptionEscalationLevel(event, config);
+  const type = exceptionTypeLabel(String(event.after?.exceptionType ?? ""));
+  const levelText = level === "manager" ? "升级至管理层" : level === "pm" ? "升级至 PM" : "提醒负责人";
+  const messageTitle = `异常${levelText}`;
+  const text = `${project}${type}「${title}」已滞留 ${age} 天，${levelText}处理。`;
+  return { title: messageTitle, text, markdown: `#### ${messageTitle}\n${text}` };
+}
+
+function exceptionTypeLabel(type: string): string {
+  if (type === "overdue_task") return "逾期任务";
+  if (type === "blocked_task") return "阻塞任务";
+  if (type === "critical_issue") return "重大问题";
+  if (type === "pending_review") return "待审交付物";
+  return "异常";
+}
+
 function changedInto(
   before: Record<string, unknown> | null | undefined,
   after: Record<string, unknown> | null | undefined,
@@ -497,6 +593,7 @@ function entityLabel(entityType: AutomationEntityType): string {
   if (entityType === "issue") return "问题";
   if (entityType === "gate_review") return "Gate 评审";
   if (entityType === "mp_release") return "量产发布";
+  if (entityType === "deliverable_review") return "交付物审核";
   return entityType;
 }
 
@@ -521,4 +618,13 @@ function startOfDay(date: Date): Date {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function numberValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
 }

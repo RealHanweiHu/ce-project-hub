@@ -17,6 +17,7 @@ import {
 } from '@/lib/data';
 import { buildPhasesDataForCategory, getPhasesForCategory } from '@/lib/sop-templates';
 import { trpc } from '@/lib/trpc';
+import { toast } from 'sonner';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { getLoginUrl } from '@/const';
 import { useQueryClient } from '@tanstack/react-query';
@@ -25,6 +26,68 @@ import { useProjectData } from '@/hooks/useProjectData';
 import { NotificationBell } from '@/components/NotificationBell';
 
 type View = 'overview' | 'mytasks' | 'projects' | 'calendar' | 'products' | 'requirements' | 'sop';
+
+const VIEW_IDS = new Set<View>(['overview', 'mytasks', 'projects', 'calendar', 'products', 'requirements', 'sop']);
+const PROJECT_DETAIL_TABS = new Set<NonNullable<TaskFocus['tab']>>([
+  'overview', 'metrics', 'tasks', 'kanban', 'requirements', 'gantt', 'issues', 'changelog', 'bom', 'files',
+]);
+
+function readWorkbenchLocation(): { view: View; selectedProjectId: string | null; focus: TaskFocus | null } {
+  if (typeof window === 'undefined') {
+    return { view: 'overview', selectedProjectId: null, focus: null };
+  }
+  const params = new URLSearchParams(window.location.search);
+  const selectedProjectId = params.get('projectId');
+  const phaseId = params.get('phaseId');
+  const taskId = params.get('taskId');
+  const tabParam = params.get('tab') as TaskFocus['tab'] | null;
+  const tab = tabParam && PROJECT_DETAIL_TABS.has(tabParam) ? tabParam : undefined;
+  const viewParam = params.get('view');
+  const view = selectedProjectId
+    ? 'projects'
+    : VIEW_IDS.has(viewParam as View)
+      ? (viewParam as View)
+      : 'overview';
+
+  return {
+    view,
+    selectedProjectId,
+    focus: tab || phaseId || taskId ? { tab, phaseId: phaseId ?? undefined, taskId: taskId ?? undefined } : null,
+  };
+}
+
+function buildWorkbenchUrl(view: View, selectedProjectId: string | null, focus?: TaskFocus | null) {
+  const url = new URL(window.location.href);
+  url.searchParams.delete('view');
+  url.searchParams.delete('projectId');
+  url.searchParams.delete('phaseId');
+  url.searchParams.delete('taskId');
+  url.searchParams.delete('tab');
+
+  if (selectedProjectId) {
+    url.searchParams.set('view', 'projects');
+    url.searchParams.set('projectId', selectedProjectId);
+    if (focus?.tab) {
+      url.searchParams.set('tab', focus.tab);
+    }
+    if (focus?.phaseId && focus.taskId) {
+      url.searchParams.set('phaseId', focus.phaseId);
+      url.searchParams.set('taskId', focus.taskId);
+    }
+  } else if (view !== 'overview') {
+    url.searchParams.set('view', view);
+  }
+
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+function syncWorkbenchUrl(view: View, selectedProjectId: string | null, focus?: TaskFocus | null, mode: 'push' | 'replace' = 'push') {
+  if (typeof window === 'undefined') return;
+  const nextUrl = buildWorkbenchUrl(view, selectedProjectId, focus);
+  const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  if (nextUrl === currentUrl) return;
+  window.history[mode === 'replace' ? 'replaceState' : 'pushState']({}, '', nextUrl);
+}
 
 const OverviewPage = lazy(() =>
   import('@/components/views/overview/OverviewPage').then((module) => ({ default: module.OverviewPage }))
@@ -86,6 +149,8 @@ function projectToApiInput(p: Project) {
     background: p.background ?? null,
     value: p.value ?? null,
     risk: (risk || 'low') as 'low' | 'medium' | 'high',
+    riskOverrideRisk: p.riskOverrideRisk ?? null,
+    riskOverrideReason: p.riskOverrideRisk ? (p.riskOverrideReason ?? '') : null,
     currentPhase: currentPhase || 'concept',
     progress: 0,
     startDate: startDate || null,
@@ -99,6 +164,11 @@ function rowToProject(row: {
   id: string; name: string; projectNumber: string; category: string;
   productId?: string | null; productDefinitionSnapshotId?: number | null;
   pmUserId?: number | null; risk: string; currentPhase: string; progress: number;
+  accessRole?: string | null; canDeleteProject?: boolean; canEditProjectInfo?: boolean;
+  riskOverrideRisk?: 'low' | 'medium' | 'high' | null;
+  riskOverrideReason?: string | null;
+  riskOverrideUpdatedAt?: string | Date | null;
+  riskOverrideUpdatedBy?: number | null;
   startDate: string | null; targetDate: string | null;
 }): Project {
   return normalizeProject({
@@ -108,9 +178,16 @@ function rowToProject(row: {
     category: (row.category as 'npd' | 'eco' | 'idr' | 'jdm' | 'obt') || 'npd',
     pm: '',
     pmUserId: row.pmUserId ?? null,
+    accessRole: row.accessRole ?? null,
+    canDeleteProject: !!row.canDeleteProject,
+    canEditProjectInfo: !!row.canEditProjectInfo,
     productId: row.productId ?? null,
     productDefinitionSnapshotId: row.productDefinitionSnapshotId ?? null,
     risk: (row.risk as 'low' | 'medium' | 'high') || 'low',
+    riskOverrideRisk: row.riskOverrideRisk ?? null,
+    riskOverrideReason: row.riskOverrideReason ?? null,
+    riskOverrideUpdatedAt: row.riskOverrideUpdatedAt ? new Date(row.riskOverrideUpdatedAt).toISOString() : null,
+    riskOverrideUpdatedBy: row.riskOverrideUpdatedBy ?? null,
     currentPhase: row.currentPhase || 'concept',
     startDate: row.startDate || '',
     targetDate: row.targetDate || '',
@@ -191,6 +268,8 @@ function ProjectDetailWrapper({
           (updated.customer ?? '') !== (project.customer ?? '') ||
           (updated.background ?? '') !== (project.background ?? '') ||
           (updated.value ?? '') !== (project.value ?? '') ||
+          (updated.riskOverrideRisk ?? '') !== (project.riskOverrideRisk ?? '') ||
+          (updated.riskOverrideReason ?? '') !== (project.riskOverrideReason ?? '') ||
           JSON.stringify(updated.customFields ?? {}) !== JSON.stringify(project.customFields ?? {});
 
         if (metaChanged) {
@@ -444,6 +523,15 @@ function ProjectDetailWrapper({
       } catch (err) {
         console.error('[handleUpdate] error:', err);
         onSaveStatus('error');
+        // 明确告知用户保存失败（旧版仅侧栏一行小字，窄屏不可见、易误以为已存）。
+        const msg = err instanceof Error ? err.message : String(err);
+        const status = (err as { data?: { httpStatus?: number }; shape?: { data?: { httpStatus?: number } } })?.data?.httpStatus
+          ?? (err as { shape?: { data?: { httpStatus?: number } } })?.shape?.data?.httpStatus;
+        const isAuth = status === 401 || status === 403 || /unauthorized|forbidden|401|403|登录|session|未授权|过期/i.test(msg);
+        toast.error(
+          isAuth ? '登录已过期，请重新登录后重试（你填的内容仍在页面上，未丢失）' : '保存失败，请检查网络后重试（你填的内容仍在页面上，未丢失）',
+          { duration: 8000 },
+        );
       }
     }, 600);
   }, [
@@ -481,6 +569,7 @@ function ProjectDetailWrapper({
       onBack={onBack}
       initialPhaseId={focus?.phaseId}
       initialTaskId={focus?.taskId}
+      initialTab={focus?.tab}
     />
   );
 }
@@ -492,10 +581,11 @@ export default function Home() {
   const isAdmin = (user as (typeof user & { role?: string }) | null)?.role === 'admin';
   const canCreateProject = !!(user as (typeof user & { canCreateProject?: boolean }) | null)?.canCreateProject;
   const queryClient = useQueryClient();
+  const initialLocationRef = useRef(readWorkbenchLocation());
 
-  const [view, setView] = useState<View>('overview');
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
-  const [pendingFocus, setPendingFocus] = useState<TaskFocus | null>(null);
+  const [view, setView] = useState<View>(initialLocationRef.current.view);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(initialLocationRef.current.selectedProjectId);
+  const [pendingFocus, setPendingFocus] = useState<TaskFocus | null>(initialLocationRef.current.focus);
   const [kickoffProject, setKickoffProject] = useState<{ id: string; name: string; category: string; pmUserId: number | null; startDate: string | null } | null>(null);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
@@ -513,13 +603,17 @@ export default function Home() {
 
   // 首屏落点：非 admin、非任何项目 PM 的执行者(如结构工程师)默认进「我的任务」。
   const { data: portfolioRows } = trpc.projects.portfolio.useQuery(undefined, { enabled: !!user });
+  const portfolioProjectCount = portfolioRows?.length ?? projects.length;
   const landingAppliedRef = useRef(false);
   useEffect(() => {
-    if (landingAppliedRef.current || !user || portfolioRows === undefined) return;
+    if (landingAppliedRef.current || !user || portfolioRows === undefined || selectedProjectId || view !== 'overview') return;
     landingAppliedRef.current = true;
     const isPM = (portfolioRows as Array<{ pmUserId: number | null }>).some((r) => r.pmUserId === user.id);
-    if (!isAdmin && !isPM) setView('mytasks');
-  }, [user, portfolioRows, isAdmin]);
+    if (!isAdmin && !isPM) {
+      setView('mytasks');
+      syncWorkbenchUrl('mytasks', null, null, 'replace');
+    }
+  }, [user, portfolioRows, isAdmin, selectedProjectId, view]);
 
   const createMutation = trpc.projects.create.useMutation();
   const deleteMutation = trpc.projects.delete.useMutation();
@@ -542,14 +636,29 @@ export default function Home() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  useEffect(() => {
+    const handlePopState = () => {
+      const next = readWorkbenchLocation();
+      setView(next.view);
+      setSelectedProjectId(next.selectedProjectId);
+      setPendingFocus(next.focus);
+      setSidebarOpen(false);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
   const handleSearchNavigate = useCallback((result: { type: string; projectId?: string }) => {
     if (result.projectId) {
       setSelectedProjectId(result.projectId);
       setPendingFocus(null);
       setView('projects');
+      syncWorkbenchUrl('projects', result.projectId);
     } else if (result.type === 'sop') {
       setView('sop');
       setSelectedProjectId(null);
+      setPendingFocus(null);
+      syncWorkbenchUrl('sop', null);
     }
   }, []);
 
@@ -563,6 +672,7 @@ export default function Home() {
     setPendingFocus(focus ?? null);
     setView('projects');
     setSidebarOpen(false);
+    syncWorkbenchUrl('projects', id, focus ?? null);
   };
 
   const handleSaveStatus = useCallback((status: 'saved' | 'saving' | 'error', at?: Date) => {
@@ -582,6 +692,8 @@ export default function Home() {
       // 立项即引导:跳到新项目并自动打开立项向导(开始日/PM 已预填,补齐各角色 → 派任务+通知)
       setSelectedProjectId(newProject.id);
       setView('projects');
+      setPendingFocus(null);
+      syncWorkbenchUrl('projects', newProject.id);
       setKickoffProject({
         id: newProject.id,
         name: newProject.name,
@@ -605,6 +717,7 @@ export default function Home() {
       if (selectedProjectId === id) {
         setSelectedProjectId(null);
         setView('projects');
+        syncWorkbenchUrl('projects', null, null, 'replace');
       }
     } catch {
       setSaveStatus('error');
@@ -631,6 +744,8 @@ export default function Home() {
       invalidateProjects();
       setSelectedProjectId(cloned.id);
       setView('projects');
+      setPendingFocus(null);
+      syncWorkbenchUrl('projects', cloned.id);
     } catch {
       setSaveStatus('error');
     }
@@ -648,7 +763,15 @@ export default function Home() {
 
   const handleNavClick = (v: View) => {
     setView(v);
-    if (v !== 'projects') { setSelectedProjectId(null); setPendingFocus(null); }
+    if (v !== 'projects') {
+      setSelectedProjectId(null);
+      setPendingFocus(null);
+      syncWorkbenchUrl(v, null);
+    } else if (selectedProjectId) {
+      syncWorkbenchUrl('projects', selectedProjectId, pendingFocus);
+    } else if (!selectedProjectId) {
+      syncWorkbenchUrl('projects', null);
+    }
     setSidebarOpen(false);
   };
 
@@ -820,7 +943,7 @@ export default function Home() {
             </div>
           )}
           <div className="text-[9px] font-mono text-stone-700">
-            {projects.length} PROJECTS · CLOUD DB
+            {portfolioProjectCount} PROJECTS · CLOUD DB
           </div>
           {/* SOP library - secondary entry (moved out of main nav) */}
           <button
@@ -938,7 +1061,7 @@ export default function Home() {
             </div>
 
             <div className="ce-control text-[10px] font-mono text-stone-400 hidden md:block bg-stone-100 px-2 py-1">
-              {projectsLoading ? '...' : `${projects.length} PROJECTS`}
+              {projectsLoading && portfolioRows === undefined ? '...' : `${portfolioProjectCount} PROJECTS`}
             </div>
           </div>
         </header>
@@ -975,7 +1098,11 @@ export default function Home() {
                   key={`${selectedProjectId}:${pendingFocus?.taskId ?? ''}`}
                   projectId={selectedProjectId}
                   focus={pendingFocus}
-                  onBack={() => setSelectedProjectId(null)}
+                  onBack={() => {
+                    setSelectedProjectId(null);
+                    setPendingFocus(null);
+                    syncWorkbenchUrl('projects', null);
+                  }}
                   onSaveStatus={handleSaveStatus}
                 />
               )}

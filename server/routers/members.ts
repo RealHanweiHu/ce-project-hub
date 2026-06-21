@@ -219,9 +219,15 @@ export const ROLE_PERMISSIONS: Record<ProjectMemberRole, {
 async function getUserProjectRole(projectId: string, userId: number): Promise<ProjectMemberRole | null> {
   const project = await getProjectById(projectId);
   if (!project) return null;
-  if (project.createdBy === userId) return "owner";
   const member = await getProjectMember(projectId, userId);
-  return member?.role ?? null;
+  let role: ProjectMemberRole | null = member?.role ?? null;
+  if (project.pmUserId === userId && (!role || role === "viewer")) role = "pm";
+  if (project.createdBy === userId) role = "owner";
+  if (!role) {
+    const user = await getUserById(userId);
+    if (user?.role === "admin") role = "manager";
+  }
+  return role;
 }
 
 export const membersRouter = router({

@@ -151,6 +151,12 @@ export const projects = pgTable("projects", {
   background: text("background"),
   value: text("value"),
   risk: projectRiskEnum("risk").notNull().default("low"),
+  /** PM/Owner/管理层手动覆盖健康度；为空则使用自动健康度 */
+  riskOverrideRisk: projectRiskEnum("riskOverrideRisk"),
+  /** 手动覆盖健康度原因，覆盖时必填 */
+  riskOverrideReason: text("riskOverrideReason"),
+  riskOverrideUpdatedAt: timestamp("riskOverrideUpdatedAt"),
+  riskOverrideUpdatedBy: integer("riskOverrideUpdatedBy"),
   currentPhase: varchar("currentPhase", { length: 32 }).notNull().default("concept"),
   progress: integer("progress").notNull().default(0),
   startDate: varchar("startDate", { length: 32 }),
@@ -486,6 +492,8 @@ export const projectTasks = pgTable(
     startDate: date("startDate", { mode: "string" }),
     /** Task workflow status */
     status: taskStatusEnum("status").notNull().default("todo"),
+    /** Timestamp when workflow status last changed */
+    statusChangedAt: timestamp("statusChangedAt").defaultNow().notNull(),
     /** Task priority */
     priority: taskPriorityEnum("priority").notNull().default("medium"),
     /** Timestamp when task was marked done */
@@ -571,6 +579,56 @@ export type ProjectIssue = typeof projectIssues.$inferSelect;
 export type InsertProjectIssue = typeof projectIssues.$inferInsert;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Risk Lifecycle
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const RISK_ITEM_SEVERITIES = ["low", "medium", "high"] as const;
+export const RISK_ITEM_STATUSES = ["open", "mitigating", "watching", "closed"] as const;
+
+export type RiskItemSeverity = (typeof RISK_ITEM_SEVERITIES)[number];
+export type RiskItemStatus = (typeof RISK_ITEM_STATUSES)[number];
+
+export const riskItemSeverityEnum = pgEnum("risk_item_severity", RISK_ITEM_SEVERITIES);
+export const riskItemStatusEnum = pgEnum("risk_item_status", RISK_ITEM_STATUSES);
+
+/**
+ * project_risks table - lifecycle tracking for project-level risks.
+ * The legacy projects.risk field remains as metadata; portfolio health uses
+ * active risk items as the auditable source of risk signals.
+ */
+export const projectRisks = pgTable(
+  "project_risks",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 }).notNull(),
+    title: varchar("title", { length: 512 }).notNull(),
+    description: text("description"),
+    severity: riskItemSeverityEnum("severity").notNull().default("medium"),
+    status: riskItemStatusEnum("status").notNull().default("open"),
+    /** Responsible person (display name) */
+    owner: varchar("owner", { length: 256 }),
+    mitigationPlan: text("mitigationPlan"),
+    contingencyPlan: text("contingencyPlan"),
+    targetDate: varchar("targetDate", { length: 32 }),
+    closedAt: timestamp("closedAt"),
+    creatorId: integer("creatorId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    idxProjectStatusSeverity: index("idx_project_risks_project_status_severity").on(
+      table.projectId,
+      table.status,
+      table.severity
+    ),
+    idxProjectTargetDate: index("idx_project_risks_project_target").on(table.projectId, table.targetDate),
+  })
+);
+
+export type ProjectRisk = typeof projectRisks.$inferSelect;
+export type InsertProjectRisk = typeof projectRisks.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Requirements Pool
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -638,6 +696,12 @@ export const projectRequirements = pgTable(
     owner: varchar("owner", { length: 256 }),
     targetPhaseId: varchar("targetPhaseId", { length: 32 }),
     linkedTaskId: varchar("linkedTaskId", { length: 32 }),
+    /** 价值链路：需求对应的商业目标，如销量/收入/毛利/客户承诺 */
+    businessGoal: text("businessGoal"),
+    /** 价值链路：需求对应的项目目标，如本项目要解决的问题或交付范围 */
+    projectGoal: text("projectGoal"),
+    /** 价值链路：验收或成功指标，如可量化 KPI / 测试指标 / 放行标准 */
+    successMetric: text("successMetric"),
     acceptanceCriteria: text("acceptanceCriteria"),
     decisionNote: text("decisionNote"),
     creatorId: integer("creatorId"),

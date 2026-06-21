@@ -26,11 +26,27 @@ const redirectToLoginIfUnauthorized = (error: unknown) => {
   window.location.href = getLoginUrl();
 };
 
+const notifyServiceUnavailable = (error: unknown) => {
+  if (typeof window === "undefined") return;
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  window.dispatchEvent(new CustomEvent("cehub:service-unavailable", { detail: { message } }));
+};
+
+const isRecoverableConnectionError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /Failed to fetch|ERR_CONNECTION_REFUSED|NetworkError|Load failed/i.test(message);
+};
+
 queryClient.getQueryCache().subscribe(event => {
   if (event.type === "updated" && event.action.type === "error") {
     const error = event.query.state.error;
     redirectToLoginIfUnauthorized(error);
-    console.error("[API Query Error]", error);
+    if (isRecoverableConnectionError(error)) {
+      notifyServiceUnavailable(error);
+      console.warn("[API Query Recoverable]", error);
+    } else {
+      console.error("[API Query Error]", error);
+    }
   }
 });
 
@@ -38,7 +54,12 @@ queryClient.getMutationCache().subscribe(event => {
   if (event.type === "updated" && event.action.type === "error") {
     const error = event.mutation.state.error;
     redirectToLoginIfUnauthorized(error);
-    console.error("[API Mutation Error]", error);
+    if (isRecoverableConnectionError(error)) {
+      notifyServiceUnavailable(error);
+      console.warn("[API Mutation Recoverable]", error);
+    } else {
+      console.error("[API Mutation Error]", error);
+    }
   }
 });
 
@@ -51,6 +72,9 @@ const trpcClient = trpc.createClient({
         return globalThis.fetch(input, {
           ...(init ?? {}),
           credentials: "include",
+        }).catch((error) => {
+          notifyServiceUnavailable(error);
+          throw error;
         });
       },
     }),

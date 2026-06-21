@@ -50,6 +50,9 @@ const requirementPatchSchema = z.object({
   owner: z.string().optional().nullable(),
   targetPhaseId: z.string().optional().nullable(),
   linkedTaskId: z.string().optional().nullable(),
+  businessGoal: z.string().optional().nullable(),
+  projectGoal: z.string().optional().nullable(),
+  successMetric: z.string().optional().nullable(),
   acceptanceCriteria: z.string().optional().nullable(),
   decisionNote: z.string().optional().nullable(),
 });
@@ -104,6 +107,9 @@ export const requirementsRouter = router({
         owner: z.string().optional().nullable(),
         targetPhaseId: z.string().optional().nullable(),
         linkedTaskId: z.string().optional().nullable(),
+        businessGoal: z.string().optional().nullable(),
+        projectGoal: z.string().optional().nullable(),
+        successMetric: z.string().optional().nullable(),
         acceptanceCriteria: z.string().optional().nullable(),
         decisionNote: z.string().optional().nullable(),
       })
@@ -119,6 +125,8 @@ export const requirementsRouter = router({
         const project = await getProjectById(projectId);
         if (!project) throw new TRPCError({ code: "NOT_FOUND" });
         resolvedProductId = project.productId ?? resolvedProductId;
+        rest.businessGoal = rest.businessGoal ?? project.value ?? null;
+        rest.projectGoal = rest.projectGoal ?? project.description ?? project.background ?? null;
       }
 
       const id = await createProjectRequirement({

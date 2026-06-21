@@ -28,8 +28,12 @@ export interface TaskRow {
   completed: boolean;
 }
 
-/** Deep-link target: open a project at a specific phase with a task detail expanded. */
-export type TaskFocus = { phaseId: string; taskId: string };
+/** Deep-link target: open a project at a specific tab/phase with an optional task detail expanded. */
+export type TaskFocus = {
+  tab?: 'overview' | 'metrics' | 'tasks' | 'kanban' | 'requirements' | 'gantt' | 'issues' | 'changelog' | 'bom' | 'files';
+  phaseId?: string;
+  taskId?: string;
+};
 
 interface TaskListViewProps {
   tasks: TaskRow[];

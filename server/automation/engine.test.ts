@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import {
   getDb, upsertUser, getUserByOpenId, createProjectWithSeed,
   updateAutomationRuleRow, listAutomationRuns, getAutomationDueTasks, getAutomationDueIssues,
+  addProjectMember,
 } from "../db";
 import { runAutomation } from "./engine";
 
@@ -10,9 +11,11 @@ const PROJECT_ID = `proj_${SUF}`;
 const ARCHIVED_PROJECT_ID = `proj_${SUF}_archived`;
 const PM_OPEN = `pm_${SUF}`;
 const ASG_OPEN = `asg_${SUF}`;
+const MGR_OPEN = `mgr_${SUF}`;
 
 let pmId = 0;
 let asgId = 0;
+let mgrId = 0;
 
 // 捕获派发，避免真写通知/真发钉钉
 function makeDeps() {
@@ -38,6 +41,8 @@ async function cleanup() {
   const { sql } = await import("drizzle-orm");
   await db.execute(sql`DELETE FROM automation_runs WHERE "projectId" = ${PROJECT_ID}`);
   await db.execute(sql`DELETE FROM automation_runs WHERE "projectId" = ${ARCHIVED_PROJECT_ID}`);
+  await db.execute(sql`DELETE FROM project_members WHERE "projectId" = ${PROJECT_ID}`);
+  await db.execute(sql`DELETE FROM project_members WHERE "projectId" = ${ARCHIVED_PROJECT_ID}`);
   await db.execute(sql`DELETE FROM project_issues WHERE "projectId" = ${ARCHIVED_PROJECT_ID}`);
   await db.execute(sql`DELETE FROM project_tasks WHERE "projectId" = ${PROJECT_ID}`);
   await db.execute(sql`DELETE FROM project_tasks WHERE "projectId" = ${ARCHIVED_PROJECT_ID}`);
@@ -51,13 +56,16 @@ beforeAll(async () => {
   await cleanup();
   await upsertUser({ openId: PM_OPEN, name: "PM 用户" });
   await upsertUser({ openId: ASG_OPEN, name: "负责人" });
+  await upsertUser({ openId: MGR_OPEN, name: "管理层" });
   pmId = (await getUserByOpenId(PM_OPEN))!.id;
   asgId = (await getUserByOpenId(ASG_OPEN))!.id;
+  mgrId = (await getUserByOpenId(MGR_OPEN))!.id;
   await createProjectWithSeed(
     { id: PROJECT_ID, name: "自动化引擎测试项目", category: "npd", pmUserId: pmId, createdBy: pmId },
     "npd",
     pmId
   );
+  await addProjectMember({ projectId: PROJECT_ID, userId: mgrId, role: "manager", invitedBy: pmId });
 });
 afterAll(async () => {
   // 还原规则到 seed 默认，避免污染共享 DB（如把 high_severity_issue 留成 disabled）
@@ -65,6 +73,7 @@ afterAll(async () => {
   await updateAutomationRuleRow({ ruleKey: "overdue_reminder", enabled: true, config: { graceDays: 0, cadenceHours: 24, scope: "both", notifyRoles: ["assignee", "pm"], pushGroup: false } });
   await updateAutomationRuleRow({ ruleKey: "status_change_notify", enabled: false, config: { transitions: { issue: ["resolved", "closed"], task: [], gate: ["approved", "rejected"] }, pushGroup: false } });
   await updateAutomationRuleRow({ ruleKey: "delay_impact_notify", enabled: true, config: { minDeltaDays: 0, notifyGateImpacts: true, notifyTargetBreach: true, onlyNewTargetBreach: false, cadenceHours: 24, pushGroup: false } });
+  await updateAutomationRuleRow({ ruleKey: "exception_escalation", enabled: true, config: { assigneeAfterDays: 2, pmAfterDays: 5, managerAfterDays: 10, cadenceHours: 24, pushGroup: false } });
   await cleanup();
 });
 beforeEach(async () => {
@@ -75,6 +84,7 @@ beforeEach(async () => {
   await updateAutomationRuleRow({ ruleKey: "overdue_reminder", enabled: true, config: { graceDays: 0, cadenceHours: 24, scope: "both", notifyRoles: ["assignee", "pm"], pushGroup: false } });
   await updateAutomationRuleRow({ ruleKey: "status_change_notify", enabled: false, config: {} });
   await updateAutomationRuleRow({ ruleKey: "delay_impact_notify", enabled: true, config: { minDeltaDays: 0, notifyGateImpacts: true, notifyTargetBreach: true, onlyNewTargetBreach: false, cadenceHours: 24, pushGroup: false } });
+  await updateAutomationRuleRow({ ruleKey: "exception_escalation", enabled: true, config: { assigneeAfterDays: 2, pmAfterDays: 5, managerAfterDays: 10, cadenceHours: 24, pushGroup: false } });
 });
 
 describe("automation engine integration", () => {
@@ -202,6 +212,74 @@ describe("automation engine integration", () => {
     const runs = await listAutomationRuns({ projectId: PROJECT_ID });
     expect(runs.some((r) => r.ruleKey === "delay_impact_notify" && r.status === "fired")).toBe(true);
     expect(runs.some((r) => r.ruleKey === "delay_impact_notify" && r.status === "skipped")).toBe(true);
+  });
+
+  it("escalates lingering exceptions to manager stage and dedups that stage", async () => {
+    const event = {
+      action: "scheduled" as const,
+      projectId: PROJECT_ID,
+      entityType: "task" as const,
+      entityId: `${PROJECT_ID}:concept:c1:blocked`,
+      now: "2026-06-14",
+      after: {
+        status: "blocked",
+        title: "结构开模被阻塞",
+        exceptionType: "blocked_task",
+        exceptionAgeDays: 10,
+        assigneeUserId: asgId,
+      },
+    };
+
+    const first = makeDeps();
+    await runAutomation(event, first.deps);
+    const notified = new Set(first.notes.map((n) => n.userId));
+    expect(notified.has(asgId)).toBe(true);
+    expect(notified.has(pmId)).toBe(true);
+    expect(notified.has(mgrId)).toBe(true);
+    expect(first.notes.every((n) => n.title === "异常升级至管理层")).toBe(true);
+
+    const second = makeDeps();
+    await runAutomation(event, second.deps);
+    expect(second.notes.length).toBe(0);
+
+    const runs = await listAutomationRuns({ projectId: PROJECT_ID });
+    expect(runs.some((r) => r.ruleKey === "exception_escalation" && r.entityId === `${PROJECT_ID}:concept:c1:blocked:manager` && r.status === "fired")).toBe(true);
+    expect(runs.some((r) => r.ruleKey === "exception_escalation" && r.entityId === `${PROJECT_ID}:concept:c1:blocked:manager` && r.status === "skipped")).toBe(true);
+  });
+
+  it("logs exception escalation errors with the leveled entityId", async () => {
+    const event = {
+      action: "scheduled" as const,
+      projectId: PROJECT_ID,
+      entityType: "task" as const,
+      entityId: `${PROJECT_ID}:concept:c1:blocked`,
+      now: "2026-06-14",
+      after: {
+        status: "blocked",
+        title: "结构开模被阻塞",
+        exceptionType: "blocked_task",
+        exceptionAgeDays: 10,
+        assigneeUserId: asgId,
+      },
+    };
+    const deps = makeDeps();
+    deps.deps.notifyDingtalk = async () => {
+      throw new Error("dingtalk failed");
+    };
+
+    await runAutomation(event, deps.deps);
+
+    const runs = await listAutomationRuns({ projectId: PROJECT_ID });
+    expect(runs.some((r) =>
+      r.ruleKey === "exception_escalation" &&
+      r.entityId === `${PROJECT_ID}:concept:c1:blocked:manager` &&
+      r.status === "error"
+    )).toBe(true);
+    expect(runs.some((r) =>
+      r.ruleKey === "exception_escalation" &&
+      r.entityId === `${PROJECT_ID}:concept:c1:blocked` &&
+      r.status === "error"
+    )).toBe(false);
   });
 
   it("does not fire a disabled rule", async () => {

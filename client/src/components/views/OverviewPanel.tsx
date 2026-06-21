@@ -6,18 +6,20 @@ import { CATEGORY_MAP } from '@/lib/sop-templates';
 import { trpc } from '@/lib/trpc';
 import {
   Hash, User, AlertTriangle, CalendarRange, Flag, GaugeCircle, ListChecks, Bug, GitBranch,
-  Users, CalendarClock, RefreshCw, UserCheck, Rocket, FileText, MessagesSquare, CheckCircle2, Loader2, Boxes,
+  Users, CalendarClock, RefreshCw, UserCheck, Rocket, FileText, MessagesSquare, CheckCircle2, Loader2, Boxes, ShieldAlert, Edit3,
 } from 'lucide-react';
 import { MeetingConfigPanel } from './MeetingConfigPanel';
 import { MembersPanel } from './MembersPanel';
 import { CustomFieldsPanel } from './CustomFieldsPanel';
 import { KickoffWizard } from './KickoffWizard';
+import { RisksPanel } from './RisksPanel';
 import { isProjectedOverdue } from '@shared/health';
 import { toast } from 'sonner';
 
-type SectionKey = 'info' | 'team' | 'schedule' | 'dingtalk' | 'fields';
+type SectionKey = 'info' | 'risks' | 'team' | 'schedule' | 'dingtalk' | 'fields';
 const SECTIONS: Array<{ key: SectionKey; label: string; icon: React.ComponentType<{ size?: number }> }> = [
   { key: 'info', label: '基础信息', icon: FileText },
+  { key: 'risks', label: '风险生命周期', icon: ShieldAlert },
   { key: 'team', label: '团队与分工', icon: Users },
   { key: 'schedule', label: '排期与周会', icon: CalendarClock },
   { key: 'dingtalk', label: '钉钉对接群', icon: MessagesSquare },
@@ -60,7 +62,21 @@ const HANDOFF_CHANGE_STATUS: Record<string, string> = {
   cancelled: '已取消',
 };
 
-export function OverviewPanel({ project, onUpdate, canEdit, canManageMembers, isAdmin }: { project: Project; onUpdate: (p: Project) => void; canEdit: boolean; canManageMembers: boolean; isAdmin: boolean }) {
+export function OverviewPanel({
+  project,
+  onUpdate,
+  canEdit,
+  canManageMembers,
+  isAdmin,
+  onOpenRiskOverride,
+}: {
+  project: Project;
+  onUpdate: (p: Project) => void;
+  canEdit: boolean;
+  canManageMembers: boolean;
+  isAdmin: boolean;
+  onOpenRiskOverride?: () => void;
+}) {
   const { data: members = [] } = trpc.members.list.useQuery({ projectId: project.id });
   const { data: users = [] } = trpc.admin.listUsersForSelect.useQuery(undefined, { staleTime: 60_000 });
   const { data: productList = [] } = trpc.products.list.useQuery(undefined, { staleTime: 60_000 });
@@ -172,7 +188,33 @@ export function OverviewPanel({ project, onUpdate, canEdit, canManageMembers, is
                 <InfoCell icon={<Hash size={13} />} label="项目编号" value={project.code || '—'} mono />
                 <InfoCell icon={<User size={13} />} label="项目经理" value={pmName} />
                 <InfoCell icon={<Boxes size={13} />} label="关联产品" value={linkedProduct ? linkedProduct.name : (project.productId ? project.productId : '新产品 / 未关联')} />
-                <InfoCell icon={<AlertTriangle size={13} />} label="项目健康度" value={<span className={health?.color}>{health?.label ?? project.risk}</span>} />
+                <InfoCell icon={<AlertTriangle size={13} />} label="项目健康度" value={
+                  <div className="space-y-1.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`inline-flex items-center gap-1.5 ${health?.color}`}>
+                        <span className={`h-1.5 w-1.5 rounded-full ${health?.dot ?? 'bg-stone-400'}`} />
+                        {health?.label ?? project.risk}
+                      </span>
+                      <span className="text-[10px] font-mono text-stone-400">{project.riskOverrideRisk ? '手动覆盖' : '自动计算'}</span>
+                      {canEdit && onOpenRiskOverride && (
+                        <button
+                          type="button"
+                          onClick={onOpenRiskOverride}
+                          className="ce-control inline-flex items-center gap-1 border border-stone-200 bg-white px-2 py-1 text-[10px] font-mono text-stone-600 transition-colors hover:border-stone-400 hover:text-stone-900"
+                        >
+                          <Edit3 size={10} />
+                          手动覆盖
+                        </button>
+                      )}
+                    </div>
+                    {project.riskOverrideReason && (
+                      <div className="text-[11px] leading-relaxed text-stone-500">原因：{project.riskOverrideReason}</div>
+                    )}
+                    {!canEdit && (
+                      <div className="text-[11px] text-stone-400">仅 Owner / 管理层 / PM 可覆盖</div>
+                    )}
+                  </div>
+                } />
                 <InfoCell icon={<Flag size={13} />} label="当前阶段" value={currentPhaseName} />
                 <InfoCell icon={<CalendarRange size={13} />} label="计划起止" value={`${project.startDate || '—'} ~ ${project.targetDate || '—'}`} mono />
                 <InfoCell icon={<GaugeCircle size={13} />} label="整体进度" value={
@@ -204,6 +246,13 @@ export function OverviewPanel({ project, onUpdate, canEdit, canManageMembers, is
               </div>
             </div>
           </>
+        )}
+
+        {section === 'risks' && (
+          <div>
+            <h3 className="text-[11px] font-mono uppercase tracking-widest text-stone-400 mb-3">风险生命周期</h3>
+            <RisksPanel projectId={project.id} canEdit={canEdit} />
+          </div>
         )}
 
         {section === 'team' && (

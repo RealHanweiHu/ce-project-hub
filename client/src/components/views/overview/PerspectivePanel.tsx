@@ -156,7 +156,7 @@ function PmCockpit({ myRows, tasks, reviews, onSelectProject }: {
   myRows: PortfolioTableRow[];
   tasks: MyTaskApiRow[];
   reviews: WorkbenchReview[];
-  onSelectProject: (id: string) => void;
+  onSelectProject: (id: string, focus?: TaskFocus) => void;
 }) {
   const today = new Date().toISOString().slice(0, 10);
   const todayItems = useMemo(() => buildTodayItems(tasks, myRows, today), [tasks, myRows, today]);
@@ -177,9 +177,9 @@ function PmCockpit({ myRows, tasks, reviews, onSelectProject }: {
           <div className="text-sm text-stone-400">今天没有紧急事项。</div>
         ) : (
           <div className="divide-y divide-stone-100">
-            {todayItems.slice(0, 10).map((item) => (
-              <ActionRow key={item.key} icon={TODAY_ICON[item.kind]} title={item.title} detail={item.detail}
-                tag={item.tag} tone={item.tone} onClick={() => onSelectProject(item.projectId)} />
+              {todayItems.slice(0, 10).map((item) => (
+                <ActionRow key={item.key} icon={TODAY_ICON[item.kind]} title={item.title} detail={item.detail}
+                tag={item.tag} tone={item.tone} onClick={() => onSelectProject(item.projectId, item.kind === 'risk' ? { tab: 'issues' } : undefined)} />
             ))}
           </div>
         )}
@@ -193,7 +193,7 @@ function PmCockpit({ myRows, tasks, reviews, onSelectProject }: {
             <div className="divide-y divide-stone-100">
               {coordItems.slice(0, 10).map((item) => (
                 <ActionRow key={item.key} icon={COORD_ICON[item.kind]} title={item.title} detail={item.detail}
-                  tag={item.tag} tone={item.tone} onClick={() => onSelectProject(item.projectId)} />
+                  tag={item.tag} tone={item.tone} onClick={() => onSelectProject(item.projectId, item.kind === 'issue' ? { tab: 'issues' } : undefined)} />
               ))}
             </div>
           )}
@@ -364,6 +364,7 @@ function buildWorkbenchQueue(tasks: MyTaskApiRow[], reviews: WorkbenchReview[], 
     .map((issue) => ({
       key: `issue-${issue.id}`,
       projectId: issue.projectId,
+      phaseId: issue.phaseId,
       title: issue.title,
       detail: `${issue.projectName} · ${issue.owner ? `责任人 ${issue.owner}` : issue.targetDate ? `目标 ${issue.targetDate}` : "质量关注项"}`,
       tag: issue.status === "resolved" ? "待复测" : `${issue.severity} Issue`,
@@ -394,7 +395,18 @@ function QueueRows({ items, onSelectProject }: { items: QueueItem[]; onSelectPro
   return (
     <div className="divide-y divide-stone-100">
       {items.map((item) => (
-        <button key={item.key} onClick={() => onSelectProject(item.projectId, item.phaseId && item.taskId ? { phaseId: item.phaseId, taskId: item.taskId } : undefined)} className="w-full text-left py-2.5 hover:bg-stone-50/70 -mx-2 px-2 transition-colors">
+        <button
+          key={item.key}
+          onClick={() => onSelectProject(
+            item.projectId,
+            item.phaseId && item.taskId
+              ? { tab: 'tasks', phaseId: item.phaseId, taskId: item.taskId }
+              : item.key.startsWith('issue-')
+                ? { tab: 'issues', phaseId: item.phaseId }
+                : undefined
+          )}
+          className="w-full text-left py-2.5 hover:bg-stone-50/70 -mx-2 px-2 transition-colors"
+        >
           <div className="flex items-start gap-3">
             <span className={`mt-0.5 ${item.tone === "rose" ? "text-rose-500" : item.tone === "amber" ? "text-amber-500" : "text-stone-400"}`}>{item.icon}</span>
             <div className="min-w-0 flex-1">

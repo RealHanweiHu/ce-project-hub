@@ -153,6 +153,9 @@ export interface Project {
   type: string;
   pm: string;
   pmUserId?: number | null;
+  accessRole?: string | null;
+  canDeleteProject?: boolean;
+  canEditProjectInfo?: boolean;
   /** 关联产品(产品库 id) */
   productId?: string | null;
   /** 创建/更新项目时锁定的产品定义快照 */
@@ -168,6 +171,10 @@ export interface Project {
   targetDate: string;
   currentPhase: string;
   risk: 'low' | 'medium' | 'high';
+  riskOverrideRisk?: 'low' | 'medium' | 'high' | null;
+  riskOverrideReason?: string | null;
+  riskOverrideUpdatedAt?: string | null;
+  riskOverrideUpdatedBy?: number | null;
   phases: Record<string, PhaseData>;
   phaseDates?: Record<string, PhaseDate>; // custom per-phase dates
   category?: 'npd' | 'eco' | 'idr' | 'jdm' | 'obt'; // project category determines SOP template

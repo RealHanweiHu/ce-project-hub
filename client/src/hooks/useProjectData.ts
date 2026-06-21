@@ -236,6 +236,12 @@ export function useProjectData(projectId: string | null) {
       value: (projectRow as { value?: string | null }).value ?? null,
       dingtalkChatId: (projectRow as { dingtalkChatId?: string | null }).dingtalkChatId ?? null,
       risk: (projectRow.risk as Project["risk"]) ?? "low",
+      riskOverrideRisk: (projectRow as { riskOverrideRisk?: Project["risk"] | null }).riskOverrideRisk ?? null,
+      riskOverrideReason: (projectRow as { riskOverrideReason?: string | null }).riskOverrideReason ?? null,
+      riskOverrideUpdatedAt: (projectRow as { riskOverrideUpdatedAt?: string | Date | null }).riskOverrideUpdatedAt
+        ? new Date((projectRow as { riskOverrideUpdatedAt?: string | Date }).riskOverrideUpdatedAt!).toISOString()
+        : null,
+      riskOverrideUpdatedBy: (projectRow as { riskOverrideUpdatedBy?: number | null }).riskOverrideUpdatedBy ?? null,
       currentPhase: projectRow.currentPhase ?? 'concept',
       startDate: projectRow.startDate ?? '',
       targetDate: projectRow.targetDate ?? '',

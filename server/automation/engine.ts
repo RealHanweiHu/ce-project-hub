@@ -17,6 +17,8 @@ import {
   AutomationMessageContext,
   AutomationRuleConfig,
   BuiltInAutomationRule,
+  exceptionEscalationLevel,
+  exceptionEscalationRoles,
   parseAutomationRuleConfig,
   RecipientRole,
 } from "./rules";
@@ -72,18 +74,19 @@ export async function runAutomation(event: AutomationEvent, deps: DispatchDeps =
     const row = rowByKey.get(rule.key);
     if (!row?.enabled) continue;
 
+    let entityId: string | null | undefined;
     try {
       const config = parseAutomationRuleConfig(rule.key, row.config ?? {});
       if (!rule.matches(event, config)) continue;
 
-      const entityId = entityIdForRun(event);
+      entityId = entityIdForRuleRun(rule, event, config);
       const cadenceHours = rule.triggerType === "scheduled"
         ? getCadenceHours(config)
         : getEventCadenceHours(config);
       if (cadenceHours !== null && entityId) {
         const since = new Date(Date.now() - cadenceHours * 60 * 60 * 1000);
         if (await hasRecentAutomationFire({ ruleKey: rule.key, entityId, since })) {
-          await writeRun(rule, event, "skipped", [], `dedup within ${cadenceHours}h`);
+          await writeRun(rule, event, "skipped", [], `dedup within ${cadenceHours}h`, entityId);
           continue;
         }
       }
@@ -93,7 +96,7 @@ export async function runAutomation(event: AutomationEvent, deps: DispatchDeps =
       const recipients = await resolveRecipients(rule, event, config);
 
       if (recipients.userIds.length === 0 && !recipients.pushGroup) {
-        await writeRun(rule, event, "skipped", [], "no recipients");
+        await writeRun(rule, event, "skipped", [], "no recipients", entityId);
         continue;
       }
 
@@ -129,9 +132,9 @@ export async function runAutomation(event: AutomationEvent, deps: DispatchDeps =
         }
       }
 
-      await writeRun(rule, event, "fired", serializeRecipients(recipients), message.text);
+      await writeRun(rule, event, "fired", serializeRecipients(recipients), message.text, entityId);
     } catch (error) {
-      await writeRun(rule, event, "error", [], error instanceof Error ? error.message : String(error));
+      await writeRun(rule, event, "error", [], error instanceof Error ? error.message : String(error), entityId);
     }
   }
 }
@@ -147,9 +150,11 @@ async function resolveRecipients(
   const userIds = new Set<number>();
   // 优先用规则 config 里的 notifyRoles（如逾期催办可配通知对象）；没配则回退到规则静态 recipientRoles
   const configuredRoles = (config as { notifyRoles?: RecipientRole[] }).notifyRoles;
-  const effectiveRoles = Array.isArray(configuredRoles) && configuredRoles.length > 0
-    ? configuredRoles
-    : rule.recipientRoles;
+  const effectiveRoles = rule.key === "exception_escalation"
+    ? exceptionEscalationRoles(event, config as Parameters<typeof exceptionEscalationRoles>[1])
+    : Array.isArray(configuredRoles) && configuredRoles.length > 0
+      ? configuredRoles
+      : rule.recipientRoles;
   const roles = effectiveRoles.filter((role) => role !== "group");
 
   for (const role of roles) {
@@ -175,7 +180,11 @@ function resolveRole(
   if (role === "owner") return project?.createdBy ? [project.createdBy] : [];
   if (role === "manager") return members.filter((m) => m.role === "manager").map((m) => m.userId);
   if (role === "assignee") {
-    const assigneeId = numberField(event.after, "assigneeUserId") ?? numberField(event.before, "assigneeUserId");
+    const assigneeId =
+      numberField(event.after, "assigneeUserId") ??
+      numberField(event.before, "assigneeUserId") ??
+      numberField(event.after, "reviewerUserId") ??
+      numberField(event.before, "reviewerUserId");
     if (assigneeId) return [assigneeId];
     return resolveMemberByName(members, stringField(event.after, "owner") ?? stringField(event.before, "owner"));
   }
@@ -211,6 +220,7 @@ async function buildMessageContext(event: AutomationEvent): Promise<AutomationMe
       stringField(event.after, "title") ??
       stringField(event.after, "name") ??
       stringField(event.after, "gateName") ??
+      stringField(event.after, "deliverableName") ??
       stringField(event.after, "taskId") ??
       null,
     productName: stringField(event.after, "productName"),
@@ -223,7 +233,8 @@ async function writeRun(
   event: AutomationEvent,
   status: "fired" | "skipped" | "error",
   recipients: unknown,
-  detail: string
+  detail: string,
+  entityIdOverride?: string | null
 ): Promise<void> {
   try {
     await createAutomationRun({
@@ -231,7 +242,7 @@ async function writeRun(
       projectId: event.projectId ?? null,
       eventType: event.action,
       entityType: event.entityType,
-      entityId: entityIdForRun(event),
+      entityId: entityIdOverride ?? entityIdForRun(event),
       status,
       recipients,
       detail: detail.slice(0, 1000),
@@ -250,6 +261,17 @@ function serializeRecipients(recipients: ResolvedRecipients) {
 
 function entityIdForRun(event: AutomationEvent): string | null {
   return event.entityId == null ? null : String(event.entityId);
+}
+
+function entityIdForRuleRun(
+  rule: BuiltInAutomationRule,
+  event: AutomationEvent,
+  config: AutomationRuleConfig,
+): string | null {
+  const base = entityIdForRun(event);
+  if (!base || rule.key !== "exception_escalation") return base;
+  const level = exceptionEscalationLevel(event, config as Parameters<typeof exceptionEscalationLevel>[1]);
+  return level ? `${base}:${level}` : base;
 }
 
 function projectIdForEvent(event: AutomationEvent): string | null {

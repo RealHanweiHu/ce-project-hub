@@ -211,6 +211,20 @@
       "when": 1781978459660,
       "tag": "0029_amusing_yellowjacket",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1781979109209,
+      "tag": "0030_supreme_slayback",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1782013180405,
+      "tag": "0031_unknown_bishop",
+      "breakpoints": true
     }
   ]
 }

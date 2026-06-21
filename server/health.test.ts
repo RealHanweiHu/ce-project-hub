@@ -25,6 +25,12 @@ describe("computeRag", () => {
   it("medium risk 且无红灯条件 → amber", () => {
     expect(computeRag({ ...base, risk: "medium" })).toBe("amber");
   });
+  it("独立高风险项 → red", () => {
+    expect(computeRag({ ...base, riskSignal: "high" })).toBe("red");
+  });
+  it("独立中风险项 → amber", () => {
+    expect(computeRag({ ...base, riskSignal: "medium" })).toBe("amber");
+  });
   it("有阻塞任务但无红灯 → amber", () => {
     expect(computeRag({ ...base, blockedTasks: 1 })).toBe("amber");
   });
@@ -83,6 +89,7 @@ describe("ragReasons 不短路", () => {
       projectedEnd: "2026-08-10", targetDate: "2026-08-01", progressBehindPct: 15, gateNotReady: "amber",
     });
     expect(r).toContain("风险:高");
+    expect(ragReasons({ ...base, riskSignal: "high" })).toContain("风险项:高");
     expect(r).toContain("逾期×2");
     expect(r).toContain("P0/P1×1");
     expect(r).toContain("预计晚9天");
@@ -101,6 +108,8 @@ describe("computeAutoRisk", () => {
   it("从实际异常信号自动升高风险", () => {
     const { risk: _risk, ...input } = base;
     expect(computeAutoRisk(input)).toBe("low");
+    expect(computeAutoRisk({ ...input, riskSignal: "medium" })).toBe("medium");
+    expect(computeAutoRisk({ ...input, riskSignal: "high" })).toBe("high");
     expect(computeAutoRisk({ ...input, blockedTasks: 1 })).toBe("medium");
     expect(computeAutoRisk({ ...input, criticalIssues: 1 })).toBe("high");
   });

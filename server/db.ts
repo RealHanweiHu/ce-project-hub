@@ -7,6 +7,7 @@ import {
   projectCalendarEvents, ProjectCalendarEvent, InsertProjectCalendarEvent,
   projectTasks, ProjectTask, InsertProjectTask,
   projectIssues, ProjectIssue, InsertProjectIssue,
+  projectRisks, ProjectRisk, InsertProjectRisk,
   projectRequirements, ProjectRequirement, InsertProjectRequirement,
   projectGateReviews, ProjectGateReview, InsertProjectGateReview,
   projectChangelog, ProjectChangeRecord, InsertProjectChangeRecord,
@@ -28,7 +29,7 @@ import {
   customFieldDefs, CustomFieldDef, InsertCustomFieldDef,
   projectTailoring, ProjectTailoring, InsertProjectTailoring, TailoringTarget,
   projectDeliverableOverrides, ProjectDeliverableOverride,
-  projectDeliverableReviews,
+  projectDeliverableReviews, ProjectDeliverableReview,
   calendarExceptions,
   type TaskStatus, type TaskPriority, type GateDecision,
 } from "../drizzle/schema";
@@ -55,6 +56,8 @@ import {
   GATE_AMBER_DAYS,
   ragReasons,
   type RagLevel,
+  type RiskLevel,
+  type RiskSignal,
 } from "../shared/health";
 import type { MetricGate, MetricIssue, MetricPhase, MetricTask } from "../shared/metrics";
 import { computeProjectMetrics, type ProjectMetrics } from "../shared/metrics";
@@ -272,6 +275,17 @@ export async function getProjectsByUser(userId: number): Promise<ProjectRow[]> {
     .orderBy(desc(projects.updatedAt));
 }
 
+/** Admin/list surfaces: all non-archived projects in the workspace. */
+export async function getAllActiveProjects(): Promise<ProjectRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(projects)
+    .where(eq(projects.archived, false))
+    .orderBy(desc(projects.updatedAt));
+}
+
 export async function getProjectById(id: string): Promise<ProjectRow | undefined> {
   const db = await getDb();
   if (!db) return undefined;
@@ -415,6 +429,7 @@ async function deleteProjectRows(projectId: string, options: { allowReleased: bo
     await tx.delete(projectGateReviews).where(eq(projectGateReviews.projectId, projectId));
     await tx.delete(projectDeliverableReviews).where(eq(projectDeliverableReviews.projectId, projectId));
     await tx.delete(projectIssues).where(eq(projectIssues.projectId, projectId));
+    await tx.delete(projectRisks).where(eq(projectRisks.projectId, projectId));
     await tx.delete(projectRequirements).where(eq(projectRequirements.projectId, projectId));
     await tx.delete(projectFiles).where(eq(projectFiles.projectId, projectId));
     await tx.delete(activityLogs).where(eq(activityLogs.projectId, projectId));
@@ -464,6 +479,7 @@ export type PortfolioRow = {
   currentPhase: string; startDate: string | null; targetDate: string | null; pmUserId: number | null; pmName: string | null;
   taskTotal: number; taskDone: number; taskInProgress: number; overdueTasks: number; blockedTasks: number;
   openIssues: number; criticalIssues: number; plannedEnd: string | null; projectedEnd: string | null;
+  openRisks: number; highRisks: number; mediumRisks: number;
   progressBehindPct: number | null;
   unassignedTasks: number;
   memberGap: number;
@@ -515,6 +531,24 @@ function progressBehindPct(plannedItems: number, dueItems: number, donePlannedIt
   return Math.max(0, ((dueItems - donePlannedItems) / plannedItems) * 100);
 }
 
+function riskToRagLevel(risk: RiskLevel): RagLevel {
+  if (risk === "high") return "red";
+  if (risk === "medium") return "amber";
+  return "green";
+}
+
+const RISK_REASON_LABEL: Record<RiskLevel, string> = {
+  low: "绿灯",
+  medium: "黄灯",
+  high: "红灯",
+};
+
+const RISK_RANK: Record<RiskLevel, number> = { low: 0, medium: 1, high: 2 };
+
+function maxRiskLevel(a: RiskLevel, b: RiskLevel): RiskLevel {
+  return RISK_RANK[a] >= RISK_RANK[b] ? a : b;
+}
+
 function forecastProjectEnd(
   project: Pick<ProjectRow, "category" | "startDate">,
   rows: Array<{
@@ -553,16 +587,53 @@ function computePortfolioHealth(input: {
   blockedTasks: number;
   openIssues: number;
   criticalIssues: number;
+  riskSignal: RiskSignal;
   progressBehindPct: number | null;
   gateNotReady: "red" | "amber" | null;
+  overrideRisk?: RiskLevel | null;
+  overrideReason?: string | null;
 }): { ragLevel: RagLevel; risk: "low" | "medium" | "high"; reasons: string[] } {
   const ragInput = { risk: "low" as const, ...input };
+  const autoReasons = ragReasons(ragInput);
+  const autoRisk = computeAutoRisk(input);
+  if (input.overrideRisk) {
+    const reason = input.overrideReason?.trim();
+    const effectiveRisk = maxRiskLevel(input.overrideRisk, autoRisk);
+    const autoIsHigher = RISK_RANK[autoRisk] > RISK_RANK[input.overrideRisk];
+    return {
+      ragLevel: riskToRagLevel(effectiveRisk),
+      risk: effectiveRisk,
+      reasons: [
+        `手动覆盖:${RISK_REASON_LABEL[input.overrideRisk]}${reason ? ` - ${reason}` : ""}`,
+        ...(autoIsHigher ? [`自动信号更高:${RISK_REASON_LABEL[autoRisk]}`] : []),
+        ...autoReasons,
+      ],
+    };
+  }
   const ragLevel = computeRag(ragInput);
   return {
     ragLevel,
-    risk: computeAutoRisk(input),
-    reasons: ragReasons(ragInput),
+    risk: autoRisk,
+    reasons: autoReasons,
   };
+}
+
+function riskSignalFromCounts(highRisks: number, mediumRisks: number): RiskSignal {
+  if (highRisks > 0) return "high";
+  if (mediumRisks > 0) return "medium";
+  return null;
+}
+
+type DbClient = NonNullable<Awaited<ReturnType<typeof getDb>>>;
+
+async function getRiskAggByProjectIds(db: DbClient, projectIds: string[]) {
+  if (projectIds.length === 0) return [];
+  return db.select({
+    projectId: projectRisks.projectId,
+    openRisks: drizzleSql<number>`count(*) filter (where ${projectRisks.status} <> 'closed')::int`,
+    highRisks: drizzleSql<number>`count(*) filter (where ${projectRisks.status} <> 'closed' and ${projectRisks.severity} = 'high')::int`,
+    mediumRisks: drizzleSql<number>`count(*) filter (where ${projectRisks.status} <> 'closed' and ${projectRisks.severity} = 'medium')::int`,
+  }).from(projectRisks).where(inArray(projectRisks.projectId, projectIds)).groupBy(projectRisks.projectId);
 }
 
 /** 跨项目组合看板：用户可见项目 + 每项目健康度聚合(任务/逾期/阻塞/开放问题/预计完成) */
@@ -607,6 +678,8 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
     critical: drizzleSql<number>`count(*) filter (where ${projectIssues.status} in ('open','in_progress') and ${projectIssues.severity} in ('P0','P1'))::int`,
   }).from(projectIssues).where(inArray(projectIssues.projectId, ids)).groupBy(projectIssues.projectId);
 
+  const riskAgg = await getRiskAggByProjectIds(db, ids);
+
   const memberRows = await db.select({
     projectId: projectMembers.projectId,
     role: projectMembers.role,
@@ -624,6 +697,7 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
   }
   const taskByProjectTask = new Map(taskRows.map((t) => [`${t.projectId}:${t.taskId}`, t]));
   const issueMap = new Map(issueAgg.map((i) => [i.projectId, i]));
+  const riskMap = new Map(riskAgg.map((r) => [r.projectId, r]));
   const roleMap = new Map<string, Set<ProjectMemberRole>>();
   for (const row of memberRows) {
     const roles = roleMap.get(row.projectId) ?? new Set<ProjectMemberRole>();
@@ -636,6 +710,10 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
     const t = taskMap.get(p.id);
     const projectTaskRows = taskRowsByProject.get(p.id) ?? [];
     const i = issueMap.get(p.id);
+    const r = riskMap.get(p.id);
+    const openRisks = r?.openRisks ?? 0;
+    const highRisks = r?.highRisks ?? 0;
+    const mediumRisks = r?.mediumRisks ?? 0;
     const roles = new Set(roleMap.get(p.id) ?? []);
     if (p.pmUserId) roles.add("pm");
     const memberGap = PORTFOLIO_REQUIRED_ROLES.filter((role) => !roles.has(role)).length;
@@ -672,8 +750,11 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
       blockedTasks: t?.blocked ?? 0,
       openIssues: i?.open ?? 0,
       criticalIssues: i?.critical ?? 0,
+      riskSignal: riskSignalFromCounts(highRisks, mediumRisks),
       progressBehindPct: progressBehind,
       gateNotReady,
+      overrideRisk: p.riskOverrideRisk,
+      overrideReason: p.riskOverrideReason,
     });
     return {
       id: p.id, name: p.name, projectNumber: p.projectNumber, category: p.category, risk: health.risk,
@@ -685,6 +766,7 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
       pmName: p.pmUserId ? (pmName.get(p.pmUserId) ?? null) : null,
       taskTotal: t?.total ?? 0, taskDone: t?.done ?? 0, taskInProgress: t?.inProgress ?? 0, overdueTasks: t?.overdue ?? 0, blockedTasks: t?.blocked ?? 0,
       openIssues: i?.open ?? 0, criticalIssues: i?.critical ?? 0,
+      openRisks, highRisks, mediumRisks,
       plannedEnd: t?.plannedEnd ?? null,
       projectedEnd,
       progressBehindPct: progressBehind,
@@ -718,6 +800,7 @@ export type PortfolioHealthRow = {
   ragReasons: string[];
   currentPhase: string; targetDate: string | null; pmUserId: number | null; pmName: string | null;
   overdueTasks: number; blockedTasks: number; openIssues: number; criticalIssues: number;
+  openRisks: number; highRisks: number; mediumRisks: number;
   plannedEnd: string | null;
   projectedEnd: string | null;
   plannedItems: number;
@@ -750,6 +833,8 @@ export async function getPortfolioHealthForDigest(todayISO: string): Promise<Por
     critical: drizzleSql<number>`count(*) filter (where ${projectIssues.status} in ('open','in_progress') and ${projectIssues.severity} in ('P0','P1'))::int`,
   }).from(projectIssues).where(inArray(projectIssues.projectId, ids)).groupBy(projectIssues.projectId);
 
+  const riskAgg = await getRiskAggByProjectIds(db, ids);
+
   const taskRows = await db.select({
     projectId: projectTasks.projectId,
     taskId: projectTasks.taskId,
@@ -771,6 +856,7 @@ export async function getPortfolioHealthForDigest(todayISO: string): Promise<Por
     taskRowsByProject.set(row.projectId, list);
   }
   const issueMap = new Map(issueAgg.map((i) => [i.projectId, i]));
+  const riskMap = new Map(riskAgg.map((r) => [r.projectId, r]));
   const gateByProject = new Map<string, "red" | "amber">();
   await Promise.all(projRows.map(async (p) => {
     const phases = getPhasesForCategory(p.category);
@@ -791,6 +877,10 @@ export async function getPortfolioHealthForDigest(todayISO: string): Promise<Por
   return projRows.map((p) => {
     const t = taskMap.get(p.id);
     const i = issueMap.get(p.id);
+    const r = riskMap.get(p.id);
+    const openRisks = r?.openRisks ?? 0;
+    const highRisks = r?.highRisks ?? 0;
+    const mediumRisks = r?.mediumRisks ?? 0;
     const gateNotReady = gateByProject.get(p.id) ?? null;
     const progressBehind = progressBehindPct(t?.plannedItems ?? 0, t?.dueItems ?? 0, t?.donePlannedItems ?? 0);
     const projectedEnd = forecastProjectEnd(p, taskRowsByProject.get(p.id) ?? [], todayISO, cal);
@@ -801,8 +891,11 @@ export async function getPortfolioHealthForDigest(todayISO: string): Promise<Por
       blockedTasks: t?.blocked ?? 0,
       openIssues: i?.open ?? 0,
       criticalIssues: i?.critical ?? 0,
+      riskSignal: riskSignalFromCounts(highRisks, mediumRisks),
       progressBehindPct: progressBehind,
       gateNotReady,
+      overrideRisk: p.riskOverrideRisk,
+      overrideReason: p.riskOverrideReason,
     });
     return {
       id: p.id, name: p.name, projectNumber: p.projectNumber, category: p.category, risk: health.risk,
@@ -812,6 +905,7 @@ export async function getPortfolioHealthForDigest(todayISO: string): Promise<Por
       pmName: p.pmUserId ? (pmName.get(p.pmUserId) ?? null) : null,
       overdueTasks: t?.overdue ?? 0, blockedTasks: t?.blocked ?? 0,
       openIssues: i?.open ?? 0, criticalIssues: i?.critical ?? 0,
+      openRisks, highRisks, mediumRisks,
       plannedEnd: t?.plannedEnd ?? null,
       projectedEnd,
       plannedItems: t?.plannedItems ?? 0, dueItems: t?.dueItems ?? 0, donePlannedItems: t?.donePlannedItems ?? 0,
@@ -1058,7 +1152,7 @@ export async function upsertProjectTask(
       )
     )
     .limit(1);
-  const dbPatch = toDbPatch(patch);
+  const dbPatch = toTaskDbPatch(patch, existing[0] ?? null);
   if (existing.length > 0) {
     await db
       .update(projectTasks)
@@ -1139,6 +1233,53 @@ export async function deleteProjectIssue(id: number): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.delete(projectIssues).where(eq(projectIssues.id, id));
+}
+
+// ── Project Risk helpers ─────────────────────────────────────────────────────
+
+const RISK_ORDER = [
+  drizzleSql`CASE ${projectRisks.status} WHEN 'open' THEN 0 WHEN 'mitigating' THEN 1 WHEN 'watching' THEN 2 ELSE 3 END`,
+  drizzleSql`CASE ${projectRisks.severity} WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END`,
+  desc(projectRisks.createdAt),
+] as const;
+
+export async function getProjectRisks(projectId: string): Promise<ProjectRisk[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(projectRisks)
+    .where(eq(projectRisks.projectId, projectId))
+    .orderBy(...RISK_ORDER);
+}
+
+export async function getProjectRiskById(id: number): Promise<ProjectRisk | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(projectRisks).where(eq(projectRisks.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
+export async function createProjectRisk(risk: InsertProjectRisk): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(projectRisks).values(risk).returning({ id: projectRisks.id });
+  return result[0].id;
+}
+
+export async function updateProjectRisk(
+  id: number,
+  patch: Partial<Omit<InsertProjectRisk, "id" | "projectId" | "createdAt" | "updatedAt">>
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(projectRisks).set(patch).where(eq(projectRisks.id, id));
+}
+
+export async function deleteProjectRisk(id: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(projectRisks).where(eq(projectRisks.id, id));
 }
 
 // ── Project Requirements helpers ─────────────────────────────────────────────
@@ -1400,6 +1541,66 @@ export async function createProjectGateReview(review: InsertProjectGateReview): 
   });
 }
 
+/**
+ * 原子化「Gate 通过/有条件通过/不通过」：记录评审 → (非不通过时)标记 gate task 完成 → (复审当前阶段时)推进 currentPhase。
+ * 关键不变量：先标 gate task done，再推进 currentPhase——任一步失败都不会出现「已推进但 gate task 未完成 → 下一阶段被锁死」的脏态。
+ * 替代旧的"客户端三笔分散写 + 600ms 防抖"路径（会因竞态/取消导致部分持久化）。
+ */
+export async function confirmGateReview(input: {
+  projectId: string;
+  phaseId: string;
+  gateTaskId: string | null;
+  phaseName?: string | null;
+  gateName?: string | null;
+  reviewDate: string;
+  participants?: string | null;
+  decision: GateDecision;
+  conditions?: string | null;
+  notes?: string | null;
+  createdBy: number;
+}): Promise<{ reviewId: number; roundNumber: number; advancedTo: string | null }> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const project = await getProjectById(input.projectId);
+  if (!project) throw new Error("Project not found");
+
+  // 1) 记录评审（内部事务 + 顾问锁，自动算 roundNumber）
+  const reviewId = await createProjectGateReview({
+    projectId: input.projectId,
+    phaseId: input.phaseId,
+    phaseName: input.phaseName ?? "",
+    gateName: input.gateName ?? "",
+    reviewDate: input.reviewDate,
+    participants: input.participants ?? null,
+    decision: input.decision,
+    conditions: input.conditions ?? null,
+    notes: input.notes ?? null,
+    createdBy: input.createdBy,
+  });
+
+  let advancedTo: string | null = null;
+  if (input.decision !== "rejected") {
+    // 2) 先标记 gate task 完成（必须在推进之前）
+    if (input.gateTaskId) {
+      await setTaskCompletion(input.projectId, input.phaseId, input.gateTaskId, true, input.createdBy);
+    }
+    // 3) 仅当复审的是「当前阶段」且存在下一阶段时才推进
+    if (project.currentPhase === input.phaseId) {
+      const phases = getPhasesForCategory(project.category);
+      const idx = phases.findIndex((p) => p.id === input.phaseId);
+      const next = idx >= 0 && idx < phases.length - 1 ? phases[idx + 1] : null;
+      if (next) {
+        await updateProject(input.projectId, { currentPhase: next.id });
+        advancedTo = next.id;
+      }
+    }
+  }
+
+  const reviews = await getProjectGateReviews(input.projectId, input.phaseId);
+  const roundNumber = reviews.find((r) => r.id === reviewId)?.roundNumber ?? 1;
+  return { reviewId, roundNumber, advancedTo };
+}
+
 /** Update a gate review */
 export async function updateProjectGateReview(
   id: number,
@@ -1573,6 +1774,8 @@ export type TaskMetaPatch = {
   status?: TaskStatus;
   priority?: TaskPriority;
   completedAt?: Date | null;
+  /** 派生审计列：状态变化时更新。 */
+  statusChangedAt?: Date;
   /** 派生镜像列，勿手动传；由 status 推导。见 deriveCompletion */
   completed?: boolean;
   updatedBy?: number | null;
@@ -1597,6 +1800,14 @@ function deriveCompletion(patch: TaskMetaPatch): TaskMetaPatch {
 function toDbPatch(patch: TaskMetaPatch) {
   // dueDate column uses mode:'string', so pass the YYYY-MM-DD string directly
   return { ...patch };
+}
+
+function toTaskDbPatch(patch: TaskMetaPatch, current?: Pick<ProjectTask, "status"> | null): TaskMetaPatch {
+  const dbPatch = toDbPatch(deriveCompletion(patch));
+  if (dbPatch.status !== undefined && dbPatch.status !== current?.status) {
+    return { ...dbPatch, statusChangedAt: new Date() };
+  }
+  return dbPatch;
 }
 
 function getTaskDependencyMap(category: string | undefined): Map<string, string[]> {
@@ -1673,13 +1884,15 @@ export async function refreshProjectTaskStatuses(projectId: string, todayISO = t
       (next.status === "done" && !current.completedAt) ||
       (next.status !== "done" && !!current.completedAt);
     if (!shouldUpdate) continue;
+    const updatePatch: Partial<ProjectTask> = {
+      status: next.status,
+      completed: next.completed,
+      completedAt: next.status === "done" ? (current.completedAt ?? next.completedAt ?? new Date()) : null,
+    };
+    if (current.status !== next.status) updatePatch.statusChangedAt = new Date();
     await db
       .update(projectTasks)
-      .set({
-        status: next.status,
-        completed: next.completed,
-        completedAt: next.status === "done" ? (current.completedAt ?? next.completedAt ?? new Date()) : null,
-      })
+      .set(updatePatch)
       .where(eq(projectTasks.id, current.id));
     changed += 1;
   }
@@ -1700,7 +1913,7 @@ export async function updateTaskMeta(
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const existing = await db
-    .select({ id: projectTasks.id })
+    .select({ id: projectTasks.id, status: projectTasks.status })
     .from(projectTasks)
     .where(
       and(
@@ -1710,7 +1923,7 @@ export async function updateTaskMeta(
       )
     )
     .limit(1);
-  const dbPatch = toDbPatch(deriveCompletion(patch));
+  const dbPatch = toTaskDbPatch(patch, existing[0] ?? null);
   if (existing.length > 0) {
     await db
       .update(projectTasks)
@@ -2171,6 +2384,7 @@ export async function getMyTasks(userId: number): Promise<TaskWithContext[]> {
       status: projectTasks.status,
       priority: projectTasks.priority,
       completedAt: projectTasks.completedAt,
+      statusChangedAt: projectTasks.statusChangedAt,
       updatedBy: projectTasks.updatedBy,
       createdAt: projectTasks.createdAt,
       updatedAt: projectTasks.updatedAt,
@@ -2230,6 +2444,7 @@ export async function getOverdueTasks(projectIds?: string[]): Promise<TaskWithCo
       status: projectTasks.status,
       priority: projectTasks.priority,
       completedAt: projectTasks.completedAt,
+      statusChangedAt: projectTasks.statusChangedAt,
       updatedBy: projectTasks.updatedBy,
       createdAt: projectTasks.createdAt,
       updatedAt: projectTasks.updatedAt,
@@ -2274,6 +2489,7 @@ export async function getBlockedTasks(projectIds?: string[]): Promise<TaskWithCo
       status: projectTasks.status,
       priority: projectTasks.priority,
       completedAt: projectTasks.completedAt,
+      statusChangedAt: projectTasks.statusChangedAt,
       updatedBy: projectTasks.updatedBy,
       createdAt: projectTasks.createdAt,
       updatedAt: projectTasks.updatedAt,
@@ -3253,6 +3469,35 @@ export async function getAutomationDueIssues(): Promise<ProjectIssue[]> {
       drizzleSql`${projectIssues.targetDate} <> ''`,
       drizzleSql`${projectIssues.targetDate} <= TO_CHAR(CURRENT_DATE + INTERVAL '14 days', 'YYYY-MM-DD')`,
       drizzleSql`${projectIssues.status} NOT IN ('resolved','closed','wont_fix')`
+    ));
+}
+
+/** 未关闭 P0/P1 问题：异常升级扫描使用，即使未设置 targetDate 也会升级。 */
+export async function getAutomationCriticalIssues(): Promise<ProjectIssue[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select(getTableColumns(projectIssues))
+    .from(projectIssues)
+    .innerJoin(projects, eq(projectIssues.projectId, projects.id))
+    .where(and(
+      eq(projects.archived, false),
+      inArray(projectIssues.severity, ["P0", "P1"] as const),
+      inArray(projectIssues.status, ["open", "in_progress"] as const),
+    ));
+}
+
+/** 待审交付物：异常升级扫描使用。 */
+export async function getAutomationPendingDeliverableReviews(): Promise<ProjectDeliverableReview[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select(getTableColumns(projectDeliverableReviews))
+    .from(projectDeliverableReviews)
+    .innerJoin(projects, eq(projectDeliverableReviews.projectId, projects.id))
+    .where(and(
+      eq(projects.archived, false),
+      eq(projectDeliverableReviews.status, "pending"),
     ));
 }
 

@@ -52,6 +52,8 @@ interface ProjectDetailViewProps {
   initialPhaseId?: string;
   /** Deep-link: auto-open this task's detail on mount. */
   initialTaskId?: string;
+  /** Deep-link: open a specific top-level tab on mount. */
+  initialTab?: ProjectMainTab;
 }
 
 type ProjectMainTab = 'overview' | 'metrics' | 'tasks' | 'kanban' | 'requirements' | 'gantt' | 'issues' | 'changelog' | 'bom' | 'files';
@@ -71,6 +73,12 @@ function isExecutionRole(role?: string | null) {
   return !!role && EXECUTION_ROLES.has(role);
 }
 
+const RISK_OVERRIDE_OPTIONS: Array<{ value: Project['risk']; description: string }> = [
+  { value: 'low', description: '正常推进' },
+  { value: 'medium', description: '需关注' },
+  { value: 'high', description: '需介入' },
+];
+
 function issueStatusLabel(status: string) {
   if (status === 'resolved') return '待复测';
   if (status === 'closed') return '复测通过';
@@ -87,6 +95,36 @@ function categoryForRole(role?: string | null): Issue['category'] {
   if (role === 'qa') return 'reliability';
   if (role === 'cert' || role === 'battery_safety') return 'safety';
   return 'other';
+}
+
+function localDateISO(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+type RelatedIssueDisplay = Issue & { duplicateCount?: number; duplicateIds?: string[] };
+
+function dedupeRelatedIssues(issues: Issue[]): RelatedIssueDisplay[] {
+  const map = new Map<string, RelatedIssueDisplay>();
+  for (const issue of issues) {
+    const key = [
+      issue.relatedTaskId ?? '',
+      issue.title.trim().toLowerCase(),
+      issue.severity,
+      issue.status,
+      issue.category,
+    ].join('|');
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, { ...issue, duplicateCount: 1, duplicateIds: [issue.id] });
+      continue;
+    }
+    existing.duplicateCount = (existing.duplicateCount ?? 1) + 1;
+    existing.duplicateIds = [...(existing.duplicateIds ?? [existing.id]), issue.id];
+  }
+  return Array.from(map.values());
 }
 
 function EditableText({
@@ -1303,7 +1341,7 @@ function PmSelector({
   );
 }
 
-export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, initialTaskId }: ProjectDetailViewProps) {
+export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, initialTaskId, initialTab }: ProjectDetailViewProps) {
   const [activePhaseId, setActivePhaseId] = useState(initialPhaseId ?? project.currentPhase);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(initialTaskId ?? null);
   // 任务详情子窗口：Esc 关闭
@@ -1313,12 +1351,15 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedTaskId]);
-  const [mainTab, setMainTab] = useState<ProjectMainTab>(initialTaskId ? 'tasks' : 'overview');
-  // Deep-linked into a task → land on the tasks tab; don't let the role-default override it.
-  const roleDefaultAppliedRef = useRef(!!initialTaskId);
+  const [mainTab, setMainTab] = useState<ProjectMainTab>(initialTab ?? (initialTaskId ? 'tasks' : 'overview'));
+  // Deep-linked into a task/tab → land there; don't let the role-default override it.
+  const roleDefaultAppliedRef = useRef(!!initialTaskId || !!initialTab);
+  const issueDeepLinkPhaseAppliedRef = useRef(false);
   const [ganttMode, setGanttMode] = useState<'task' | 'phase'>('task');
   const perms = useProjectPermission(project.id);
   const { user: currentUser } = useAuth();
+  const detailUtils = trpc.useUtils();
+  const confirmGateMutation = trpc.gateReviews.confirmAndAdvance.useMutation();
   const { data: effectiveProcess } = trpc.tailoring.effectiveProcess.useQuery(
     { projectId: project.id },
     { staleTime: 5_000 }
@@ -1396,10 +1437,19 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
   const activeProgress = computePhaseProgress(activePhaseData, activePhaseId, activePhase);
   const overallProgress = computeOverallProgress(project);
   const health = HEALTH_CONFIG[project.risk];
+  const riskOverrideActive = !!project.riskOverrideRisk;
+  const riskOverrideReason = project.riskOverrideReason?.trim() ?? '';
+  const [riskOverrideOpen, setRiskOverrideOpen] = useState(false);
+  const [riskOverrideDraft, setRiskOverrideDraft] = useState<Project['risk']>(project.riskOverrideRisk ?? project.risk);
+  const [riskOverrideReasonDraft, setRiskOverrideReasonDraft] = useState(project.riskOverrideReason ?? '');
   const isCurrentPhaseUnlocked = isPhaseUnlocked(project, activePhaseId);
   const blockingGate = getBlockingGate(project, activePhaseId);
   const catConfig = project.category ? CATEGORY_MAP[project.category] : null;
   const visibleActiveTasks = activePhase?.tasks.filter((task) => {
+    // 指派优先于岗位可见性：指派给当前用户的任务无条件可见，
+    // 避免「被指派了任务、工作台能看到、点进项目却被 visibleRoles 过滤隐藏」的死角。
+    const assignee = activePhaseData?.taskDetails?.[task.id]?.assigneeUserId;
+    if (assignee != null && assignee === currentUser?.id) return true;
     const effectiveRoles = project.taskVisibleRoles?.[task.id] ?? (task.visibleRoles || []);
     if (!effectiveRoles || effectiveRoles.length === 0) return true;
     if (perms.role === 'owner') return true;
@@ -1425,6 +1475,37 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
   const updateField = (field: keyof Project, value: string) => onUpdate({ ...project, [field]: value });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const updateFieldAny = (field: keyof Project, value: any) => onUpdate({ ...project, [field]: value });
+  const openRiskOverrideEditor = () => {
+    setRiskOverrideDraft(project.riskOverrideRisk ?? project.risk);
+    setRiskOverrideReasonDraft(project.riskOverrideReason ?? '');
+    setRiskOverrideOpen(true);
+  };
+  const saveRiskOverride = () => {
+    const reason = riskOverrideReasonDraft.trim();
+    if (!reason) {
+      toast.error('请填写手动覆盖原因');
+      return;
+    }
+    onUpdate({
+      ...project,
+      risk: riskOverrideDraft,
+      riskOverrideRisk: riskOverrideDraft,
+      riskOverrideReason: reason,
+    });
+    setRiskOverrideOpen(false);
+    toast.success('健康度已手动覆盖');
+  };
+  const clearRiskOverride = () => {
+    onUpdate({
+      ...project,
+      riskOverrideRisk: null,
+      riskOverrideReason: null,
+      riskOverrideUpdatedAt: null,
+      riskOverrideUpdatedBy: null,
+    });
+    setRiskOverrideOpen(false);
+    toast.success('已恢复自动健康度');
+  };
 
   const toggleTask = (taskId: string) => {
     // Gate lock check: if this phase is locked, disallow toggling
@@ -1483,7 +1564,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
   // Issue List helpers
   const activeIssues: Issue[] = activePhaseData?.issues || [];
   const selectedTaskIssues = selectedTask
-    ? activeIssues.filter((issue) => issue.relatedTaskId === selectedTask.id)
+    ? dedupeRelatedIssues(activeIssues.filter((issue) => issue.relatedTaskId === selectedTask.id))
     : [];
   const openIssueCount = activeIssues.filter((i) => i.status === 'open' || i.status === 'in_progress').length;
   const projectOpenIssueCount = projectPhases.reduce(
@@ -1493,6 +1574,12 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
   const firstOpenIssuePhaseId = projectPhases.find((phase) =>
     (project.phases[phase.id]?.issues ?? []).some((i) => i.status === 'open' || i.status === 'in_progress')
   )?.id;
+
+  useEffect(() => {
+    if (issueDeepLinkPhaseAppliedRef.current || initialTab !== 'issues' || initialPhaseId || !firstOpenIssuePhaseId) return;
+    issueDeepLinkPhaseAppliedRef.current = true;
+    setActivePhaseId(firstOpenIssuePhaseId);
+  }, [firstOpenIssuePhaseId, initialPhaseId, initialTab]);
 
   const updateIssues = (issues: Issue[]) => {
     const newProject = { ...project };
@@ -1513,7 +1600,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
       category: categoryForRole(perms.role),
       owner: selectedTask.owner || '',
       reporter: currentUser?.name || currentUser?.username || '',
-      foundDate: now.toISOString().slice(0, 10),
+      foundDate: localDateISO(now),
       targetDate: '',
       rootCause: '',
       solution: '',
@@ -1539,30 +1626,39 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
     toggleTask(taskId);
   };
 
-  const handleGateReviewConfirm = (review: GateReview) => {
-    // Save review record + mark gate task as done + advance phase
-    const newProject = { ...project };
-    newProject.phases = { ...project.phases };
-    const gateTaskId = activePhase?.gateTaskId || '';
-    const prevReviews = activePhaseData?.gateReviews || [];
-    // Only mark gate task done if decision is approved or conditional
-    const shouldMarkDone = review.decision !== 'rejected';
-    newProject.phases[activePhaseId] = {
-      ...activePhaseData,
-      tasks: shouldMarkDone
-        ? { ...activePhaseData.tasks, [gateTaskId]: true }
-        : activePhaseData.tasks,
-      gateReviews: [...prevReviews, review],
-    };
-    // Advance to next phase if approved/conditional and this was current
-    if (shouldMarkDone) {
-      const idx = projectPhases.findIndex((p) => p.id === activePhaseId);
-      if (idx < projectPhases.length - 1 && activePhaseId === project.currentPhase) {
-        newProject.currentPhase = projectPhases[idx + 1].id;
-      }
-    }
-    onUpdate(newProject);
+  const handleGateReviewConfirm = async (review: GateReview) => {
+    // 原子化：服务端一次完成「记录评审 + 标 gate task done + 推进阶段」，
+    // 避免旧的客户端三笔分散写经 600ms 防抖串起时的部分持久化（→阶段锁死）。
+    const phaseId = activePhaseId;
     setGateReviewPending(null);
+    try {
+      await confirmGateMutation.mutateAsync({
+        projectId: project.id,
+        phaseId,
+        gateTaskId: activePhase?.gateTaskId || null,
+        phaseName: activePhase?.name ?? phaseId,
+        gateName: activePhase?.gate ?? 'Gate 评审',
+        reviewDate: review.reviewDate,
+        participants: review.participants || null,
+        decision: review.decision,
+        conditions: review.conditions || null,
+        notes: review.notes || null,
+      });
+      // 刷新项目详情 + 组合看板（取代旧的乐观本地更新，确保与服务端一致）
+      await Promise.all([
+        detailUtils.projects.get.invalidate({ id: project.id }),
+        detailUtils.tasks.list.invalidate({ projectId: project.id }),
+        detailUtils.gateReviews.list.invalidate({ projectId: project.id }),
+        detailUtils.gateReviews.readiness.invalidate({ projectId: project.id, phaseId }),
+        detailUtils.phases.list.invalidate({ projectId: project.id }),
+        detailUtils.projects.list.invalidate(),
+        detailUtils.projects.portfolio.invalidate(),
+      ]);
+      if (review.decision === 'rejected') toast.error('已记录：本阶段 Gate 未通过，整改后可重新评审');
+      else toast.success(review.decision === 'conditional' ? 'Gate 有条件通过，已推进' : 'Gate 已通过，已推进');
+    } catch (e) {
+      toast.error(`Gate 评审保存失败，请重试${e instanceof Error ? `：${e.message}` : ''}`);
+    }
   };
 
   return (
@@ -1628,9 +1724,32 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                 <EditableText value={project.targetDate} onChange={(v) => updateField('targetDate', v)} className="text-xs font-mono text-stone-700" placeholder="目标日期" />
               </div>
               <div className="flex items-center gap-1.5">
-                <AlertTriangle size={12} className="text-stone-400" />
-                <span className={`text-xs font-medium ${health.color}`}>项目健康度：{health.label}</span>
-                <span className="text-[10px] font-mono text-stone-400">自动</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (perms.canEditProjectInfo) {
+                      openRiskOverrideEditor();
+                    } else {
+                      toast.info('仅 Owner / 管理层 / PM 可手动覆盖健康度');
+                    }
+                  }}
+                  className={`group inline-flex max-w-full items-center gap-1.5 rounded border border-transparent px-1.5 py-1 text-left transition-colors ${
+                    perms.canEditProjectInfo ? 'hover:border-stone-200 hover:bg-stone-50' : 'cursor-help hover:border-stone-200 hover:bg-stone-50'
+                  }`}
+                  title={riskOverrideReason || (perms.canEditProjectInfo ? '点击手动覆盖健康度' : '仅 Owner / 管理层 / PM 可手动覆盖健康度')}
+                >
+                  <AlertTriangle size={12} className="text-stone-400" />
+                  <span className={`text-xs font-medium ${health.color}`}>项目健康度：{health.label}</span>
+                  <span className={`text-[10px] font-mono ${riskOverrideActive ? 'text-stone-700' : 'text-stone-400'}`}>
+                    {riskOverrideActive ? '手动' : '自动'}
+                  </span>
+                  {perms.canEditProjectInfo && <Edit3 size={11} className="text-stone-300 group-hover:text-stone-500" />}
+                </button>
+                {riskOverrideActive && riskOverrideReason && (
+                  <span className="max-w-[220px] truncate text-[11px] text-stone-500" title={riskOverrideReason}>
+                    原因：{riskOverrideReason}
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -1644,6 +1763,74 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
           </div>
         </div>
       </div>
+
+      {riskOverrideOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/40 p-4">
+          <div role="dialog" aria-modal="true" aria-labelledby="risk-override-title" className="w-full max-w-lg rounded-lg border border-stone-200 bg-white shadow-xl">
+            <div className="flex items-start justify-between gap-4 border-b border-stone-100 p-5">
+              <div>
+                <h2 id="risk-override-title" className="font-serif text-xl text-stone-900">手动覆盖健康度</h2>
+                <p className="mt-1 text-xs text-stone-500">当前显示为 {health.label}，保存后工作台和项目列表会使用手动结果。</p>
+              </div>
+              <button type="button" onClick={() => setRiskOverrideOpen(false)} className="rounded p-1 text-stone-400 hover:bg-stone-100 hover:text-stone-700" aria-label="关闭">
+                <X size={16} />
+              </button>
+            </div>
+            <div className="space-y-4 p-5">
+              <div>
+                <div className="mb-2 text-xs font-medium text-stone-700">健康度</div>
+                <div className="grid grid-cols-3 gap-2">
+                  {RISK_OVERRIDE_OPTIONS.map((option) => {
+                    const cfg = HEALTH_CONFIG[option.value];
+                    const active = riskOverrideDraft === option.value;
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => setRiskOverrideDraft(option.value)}
+                        className={`rounded-md border px-3 py-2 text-left transition-colors ${
+                          active ? `${cfg.bg} ${cfg.border}` : 'border-stone-200 hover:bg-stone-50'
+                        }`}
+                      >
+                        <span className={`block text-sm font-semibold ${cfg.color}`}>{cfg.label}</span>
+                        <span className="mt-0.5 block text-[11px] text-stone-500">{option.description}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <label className="block">
+                <span className="mb-2 block text-xs font-medium text-stone-700">覆盖原因 *</span>
+                <textarea
+                  value={riskOverrideReasonDraft}
+                  onChange={(event) => setRiskOverrideReasonDraft(event.target.value)}
+                  placeholder="例如：[TEST] UN38.3 认证延期，DVT 样机放行存在两周风险。"
+                  className="min-h-28 w-full rounded-md border border-stone-200 bg-white px-3 py-2 text-sm text-stone-800 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100"
+                  maxLength={1000}
+                />
+              </label>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-stone-100 p-5">
+              <button
+                type="button"
+                onClick={clearRiskOverride}
+                className="text-xs font-medium text-stone-500 hover:text-stone-900 disabled:cursor-not-allowed disabled:text-stone-300"
+                disabled={!riskOverrideActive}
+              >
+                恢复自动
+              </button>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={() => setRiskOverrideOpen(false)} className="ce-control px-3 py-1.5 text-xs text-stone-600 hover:bg-stone-50">
+                  取消
+                </button>
+                <button type="button" onClick={saveRiskOverride} className="ce-control bg-stone-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-stone-800">
+                  保存覆盖
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <ProjectFocusBand
         phaseName={activePhase?.name ?? activePhaseId}
@@ -1927,6 +2114,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
             canEdit={perms.canEditProjectInfo}
             canManageMembers={perms.canManageMembers}
             isAdmin={currentUser?.role === 'admin'}
+            onOpenRiskOverride={perms.canEditProjectInfo ? openRiskOverrideEditor : undefined}
           />
         </div>
       )}
@@ -2345,6 +2533,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                                 <div className="text-sm text-stone-800 truncate">{issue.title}</div>
                                 <div className="text-[11px] text-stone-500">
                                   {issueStatusLabel(issue.status)}{issue.owner ? ` · ${issue.owner}` : ''}
+                                  {(issue.duplicateCount ?? 1) > 1 ? ` · 重复 ${issue.duplicateCount} 条` : ''}
                                 </div>
                               </div>
                             </div>

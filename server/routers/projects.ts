@@ -1,8 +1,7 @@
 import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import {
-  getProjectsByUser,
-  getProjectsByMember,
+  getAllActiveProjects,
   getProjectById,
   getProductById,
   createProjectWithSeed,
@@ -78,7 +77,8 @@ async function assignAndNotify(
   return { assigned: assignments.length, recipients: byUser.size, notified };
 }
 
-const riskEnum = z.enum(["low", "medium", "high"]).default("low");
+const riskLevelEnum = z.enum(["low", "medium", "high"]);
+const riskEnum = riskLevelEnum.default("low");
 
 const projectInputSchema = z.object({
   id: z.string(),
@@ -99,6 +99,9 @@ const projectInputSchema = z.object({
   customer: z.string().nullable().optional(),
   background: z.string().nullable().optional(),
   value: z.string().nullable().optional(),
+  /** 手动覆盖健康度；null/undefined 表示回到自动 */
+  riskOverrideRisk: riskLevelEnum.nullable().optional(),
+  riskOverrideReason: z.string().trim().max(1000).nullable().optional(),
   /** 自定义字段值 fieldKey -> value */
   customFields: z.record(z.string(), z.unknown()).optional(),
 });
@@ -255,19 +258,19 @@ export const projectsRouter = router({
 
   /** List all projects for the current user (owned + member) */
   list: protectedProcedure.query(async ({ ctx }) => {
-    const [owned, memberOf] = await Promise.all([
-      getProjectsByUser(ctx.user.id),
-      getProjectsByMember(ctx.user.id),
-    ]);
-    const seen = new Set<string>();
-    const all = [...owned, ...memberOf].filter((r) => {
-      if (seen.has(r.id)) return false;
-      seen.add(r.id);
-      return true;
-    });
+    const all = await getAllActiveProjects();
     const portfolio = await getPortfolio(ctx.user.id);
     const autoRiskByProject = new Map(portfolio.map((p) => [p.id, p.risk]));
-    return all.map((row) => ({ ...row, risk: autoRiskByProject.get(row.id) ?? "low" }));
+    return Promise.all(all.map(async (row) => {
+      const role = await getEffectiveRole(row.id, ctx.user.id) ?? "viewer";
+      return {
+        ...row,
+        risk: autoRiskByProject.get(row.id) ?? "low",
+        accessRole: role,
+        canDeleteProject: ctx.user.role === "admin" || ROLE_PERMISSIONS[role].canDeleteProject,
+        canEditProjectInfo: ROLE_PERMISSIONS[role].canEditProjectInfo,
+      };
+    }));
   }),
 
   /** Get a single project by id (owner or member with canView) */
@@ -486,6 +489,16 @@ export const projectsRouter = router({
       if (!existing) throw new TRPCError({ code: "NOT_FOUND" });
       const role = await getEffectiveRole(input.id, ctx.user.id);
       if (!role || !ROLE_PERMISSIONS[role].canEditProjectInfo) throw new TRPCError({ code: "FORBIDDEN" });
+      const hasRiskOverrideRisk = Object.prototype.hasOwnProperty.call(input, "riskOverrideRisk");
+      const hasRiskOverrideReason = Object.prototype.hasOwnProperty.call(input, "riskOverrideReason");
+      const riskOverrideTouched = hasRiskOverrideRisk || hasRiskOverrideReason;
+      const nextRiskOverrideRisk = hasRiskOverrideRisk ? (input.riskOverrideRisk ?? null) : (existing.riskOverrideRisk ?? null);
+      const nextRiskOverrideReason = hasRiskOverrideReason
+        ? (input.riskOverrideReason?.trim() ?? "")
+        : (existing.riskOverrideReason?.trim() ?? "");
+      if (riskOverrideTouched && nextRiskOverrideRisk && !nextRiskOverrideReason) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "手动覆盖健康度时必须填写原因" });
+      }
 
       let productDefinitionSnapshotId = existing.productDefinitionSnapshotId ?? null;
       if (input.productId) {
@@ -512,6 +525,12 @@ export const projectsRouter = router({
         progress: input.progress,
         startDate: input.startDate ?? null,
         targetDate: input.targetDate ?? null,
+        ...(riskOverrideTouched ? {
+          riskOverrideRisk: nextRiskOverrideRisk,
+          riskOverrideReason: nextRiskOverrideRisk ? nextRiskOverrideReason : null,
+          riskOverrideUpdatedAt: nextRiskOverrideRisk ? new Date() : null,
+          riskOverrideUpdatedBy: nextRiskOverrideRisk ? ctx.user.id : null,
+        } : {}),
         ...(input.customFields !== undefined ? { customFields: input.customFields } : {}),
       });
       // PM 变更 → 确保新 PM 是成员(否则换了 PM 后对方看不到项目)

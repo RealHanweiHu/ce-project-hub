@@ -14,16 +14,56 @@ import {
   deleteProjectRequirement,
   getDb,
 } from "./db";
-import { projectRequirements } from "../drizzle/schema";
-import { inArray } from "drizzle-orm";
+import { appRouter } from "./routers";
+import { projectRequirements, projects } from "../drizzle/schema";
+import { eq, inArray } from "drizzle-orm";
+import type { TrpcContext } from "./_core/context";
 
 const SUFFIX = Date.now();
 const PROD = `prod-${SUFFIX}`;
 const PROJ_A = `projA-${SUFFIX}`;
 const PROJ_B = `projB-${SUFFIX}`;
+const VALUE_PROJECT = `value-${SUFFIX}`;
+const OWNER = 880001;
 const ids: number[] = [];
 
+function makeCtx(userId: number): TrpcContext {
+  return {
+    user: {
+      id: userId,
+      openId: `test-user-${userId}`,
+      username: null,
+      passwordHash: null,
+      name: `TestUser${userId}`,
+      email: null,
+      loginMethod: null,
+      role: "user",
+      canCreateProject: false,
+      mobile: null,
+      dingtalkUserId: null,
+      dingtalkCorpUserId: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      lastSignedIn: new Date(),
+    },
+    req: { protocol: "https", headers: {} } as TrpcContext["req"],
+    res: { clearCookie: () => {} } as TrpcContext["res"],
+  };
+}
+
 beforeAll(async () => {
+  const db = await getDb();
+  await db!.insert(projects).values({
+    id: VALUE_PROJECT,
+    name: "价值链路项目",
+    projectNumber: VALUE_PROJECT,
+    category: "npd",
+    risk: "low",
+    currentPhase: "concept",
+    createdBy: OWNER,
+    value: "目标销量 10 万台 / 毛利 >= 35%",
+    description: "验证低噪便携充气泵方案",
+  });
   // 1) 本项目A提出
   ids.push(await createProjectRequirement({ projectId: PROJ_A, productId: PROD, title: "A-raised", creatorId: 1 }));
   // 2) 本产品待承接(无项目)
@@ -37,6 +77,7 @@ beforeAll(async () => {
 afterAll(async () => {
   const db = await getDb();
   if (db && ids.length) await db.delete(projectRequirements).where(inArray(projectRequirements.id, ids));
+  if (db) await db.delete(projects).where(eq(projects.id, VALUE_PROJECT));
 });
 
 const titles = (rows: { title: string }[]) => rows.map((r) => r.title).sort();
@@ -92,5 +133,34 @@ describe("unified requirement pool", () => {
     expect(r?.convertedType).toBe("issue");
     expect(r?.convertedId).toBe(String(issueId));
     await deleteProjectIssue(issueId);
+  });
+
+  it("项目内创建需求继承并维护价值链路字段", async () => {
+    const caller = appRouter.createCaller(makeCtx(OWNER));
+    const result = await caller.requirements.create({
+      projectId: VALUE_PROJECT,
+      title: "低噪模式",
+      successMetric: "1m 距离噪音 <= 58dBA",
+    });
+    ids.push(result.id);
+
+    let row = await getRequirementById(result.id);
+    expect(row?.businessGoal).toBe("目标销量 10 万台 / 毛利 >= 35%");
+    expect(row?.projectGoal).toBe("验证低噪便携充气泵方案");
+    expect(row?.successMetric).toBe("1m 距离噪音 <= 58dBA");
+
+    await caller.requirements.update({
+      id: result.id,
+      patch: {
+        businessGoal: "北美渠道高端款溢价",
+        projectGoal: "完成低噪风道方案收敛",
+        successMetric: "DVT 噪音测试通过",
+      },
+    });
+
+    row = await getRequirementById(result.id);
+    expect(row?.businessGoal).toBe("北美渠道高端款溢价");
+    expect(row?.projectGoal).toBe("完成低噪风道方案收敛");
+    expect(row?.successMetric).toBe("DVT 噪音测试通过");
   });
 });

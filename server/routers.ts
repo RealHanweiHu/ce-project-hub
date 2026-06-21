@@ -12,6 +12,7 @@ import { membersRouter } from "./routers/members";
 import { adminRouter } from "./routers/admin";
 import { tasksRouter } from "./routers/tasks";
 import { issuesRouter } from "./routers/issues";
+import { risksRouter } from "./routers/risks";
 import { gateReviewsRouter } from "./routers/gateReviews";
 import { changelogRouter } from "./routers/changelog";
 import { phasesRouter } from "./routers/phases";
@@ -227,6 +228,7 @@ export const appRouter = router({
   tasks: tasksRouter,
   tailoring: tailoringRouter,
   issues: issuesRouter,
+  risks: risksRouter,
   gateReviews: gateReviewsRouter,
   deliverableReviews: deliverableReviewsRouter,
   changelog: changelogRouter,

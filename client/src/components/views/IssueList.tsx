@@ -31,6 +31,13 @@ interface IssueListProps {
   onRaiseChange?: (issue: Issue) => void;
 }
 
+function localDateISO(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 // ── Empty Issue Form ──────────────────────────────────────────────────────────
 const emptyIssue = (): Omit<Issue, 'id'> => ({
   title: '',
@@ -40,7 +47,7 @@ const emptyIssue = (): Omit<Issue, 'id'> => ({
   category: 'hardware',
   owner: '',
   reporter: '',
-  foundDate: new Date().toISOString().slice(0, 10),
+  foundDate: localDateISO(),
   targetDate: '',
   rootCause: '',
   solution: '',
@@ -115,11 +122,13 @@ function IssueFormModal({
                   const cfg = SEVERITY_CONFIG[s];
                   return (
                     <button
+                      type="button"
                       key={s}
                       onClick={() => set('severity', s)}
-                      className={`flex items-center gap-2 px-2 py-1.5 border text-xs font-mono transition-all ${
+                      aria-pressed={form.severity === s}
+                      className={`flex items-center gap-2 px-2 py-1.5 border-2 text-xs font-mono transition-colors ${
                         form.severity === s
-                          ? `${cfg.bg} ${cfg.border} border-2 ${cfg.color} font-bold`
+                          ? `${cfg.bg} ${cfg.border} ${cfg.color} font-bold shadow-sm`
                           : 'bg-white border-stone-200 text-stone-500 hover:border-stone-300'
                       }`}
                     >
@@ -139,11 +148,13 @@ function IssueFormModal({
                   const cfg = STATUS_CONFIG[s];
                   return (
                     <button
+                      type="button"
                       key={s}
                       onClick={() => set('status', s)}
-                      className={`flex items-center gap-2 px-2 py-1.5 border text-xs transition-all ${
+                      aria-pressed={form.status === s}
+                      className={`flex items-center gap-2 px-2 py-1.5 border-2 text-xs transition-colors ${
                         form.status === s
-                          ? `${cfg.bg} ${cfg.border} border-2 ${cfg.color} font-medium`
+                          ? `${cfg.bg} ${cfg.border} ${cfg.color} font-medium shadow-sm`
                           : 'bg-white border-stone-200 text-stone-500 hover:border-stone-300'
                       }`}
                     >
@@ -160,11 +171,13 @@ function IssueFormModal({
               <div className="flex flex-col gap-1">
                 {(Object.keys(CATEGORY_LABELS) as IssueCategory[]).map((c) => (
                   <button
+                    type="button"
                     key={c}
                     onClick={() => set('category', c)}
-                    className={`px-2 py-1.5 border text-xs text-left transition-all ${
+                    aria-pressed={form.category === c}
+                    className={`px-2 py-1.5 border-2 text-xs text-left transition-colors ${
                       form.category === c
-                        ? 'bg-stone-900 border-stone-900 text-white font-medium'
+                        ? 'bg-stone-900 border-stone-900 text-white font-medium shadow-sm'
                         : 'bg-white border-stone-200 text-stone-500 hover:border-stone-300'
                     }`}
                   >
@@ -271,12 +284,14 @@ function IssueFormModal({
         {/* Footer */}
         <div className="p-5 border-t border-stone-200 flex justify-end gap-3 shrink-0">
           <button
+            type="button"
             onClick={onClose}
             className="px-4 py-2 text-xs font-mono uppercase tracking-wider text-stone-600 border border-stone-300 hover:bg-stone-50 transition-colors"
           >
             取消
           </button>
           <button
+            type="button"
             onClick={() => isValid && onSave(form)}
             disabled={!isValid}
             className={`px-5 py-2 text-xs font-mono uppercase tracking-wider bg-stone-900 text-stone-50 hover:bg-stone-700 transition-colors ${!isValid ? 'opacity-50 cursor-not-allowed' : ''}`}
@@ -346,7 +361,7 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true
   const handleStatusChange = (id: string, status: IssueStatus) => {
     onUpdate(issues.map((i) => {
       if (i.id !== id) return i;
-      const closedDate = (status === 'resolved' || status === 'closed') ? new Date().toISOString().slice(0, 10) : undefined;
+      const closedDate = (status === 'resolved' || status === 'closed') ? localDateISO() : undefined;
       return { ...i, status, closedDate };
     }));
   };
