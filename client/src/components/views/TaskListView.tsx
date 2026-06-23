@@ -51,19 +51,20 @@ interface TaskListViewProps {
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
-const STATUS_CONFIG: Record<TaskStatus, { label: string; color: string }> = {
-  todo:        { label: '待处理',  color: 'bg-stone-100 text-stone-600 border-stone-200' },
-  in_progress: { label: '进行中',  color: 'bg-blue-50 text-blue-700 border-blue-200' },
-  blocked:     { label: '已阻塞',  color: 'bg-red-50 text-red-700 border-red-200' },
-  done:        { label: '已完成',  color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-  skipped:     { label: '已跳过',  color: 'bg-stone-50 text-stone-400 border-stone-200' },
+type Tone = { color: string; bg: string; border: string };
+const STATUS_CONFIG: Record<TaskStatus, { label: string; tone: Tone }> = {
+  todo:        { label: '待处理',  tone: { color: 'var(--secondary-foreground)', bg: 'var(--secondary)', border: 'var(--border)' } },
+  in_progress: { label: '进行中',  tone: { color: 'var(--primary)', bg: 'var(--acc-soft)', border: 'var(--acc-border)' } },
+  blocked:     { label: '已阻塞',  tone: { color: 'var(--destructive)', bg: 'color-mix(in srgb, var(--destructive) 10%, transparent)', border: 'color-mix(in srgb, var(--destructive) 30%, transparent)' } },
+  done:        { label: '已完成',  tone: { color: 'var(--success)', bg: 'color-mix(in srgb, var(--success) 12%, transparent)', border: 'color-mix(in srgb, var(--success) 30%, transparent)' } },
+  skipped:     { label: '已跳过',  tone: { color: 'var(--muted-foreground)', bg: 'var(--secondary)', border: 'var(--border)' } },
 };
 
-const PRIORITY_CONFIG: Record<TaskPriority, { label: string; color: string; dot: string }> = {
-  critical: { label: '紧急', color: 'bg-red-100 text-red-800 border-red-300',    dot: 'bg-red-500' },
-  high:     { label: '高',   color: 'bg-orange-100 text-orange-800 border-orange-300', dot: 'bg-orange-500' },
-  medium:   { label: '中',   color: 'bg-amber-100 text-amber-800 border-amber-300',    dot: 'bg-amber-500' },
-  low:      { label: '低',   color: 'bg-stone-100 text-stone-600 border-stone-200',    dot: 'bg-stone-400' },
+const PRIORITY_CONFIG: Record<TaskPriority, { label: string; tone: Tone; dot: string }> = {
+  critical: { label: '紧急', tone: { color: 'var(--destructive)', bg: 'color-mix(in srgb, var(--destructive) 10%, transparent)', border: 'color-mix(in srgb, var(--destructive) 30%, transparent)' }, dot: 'var(--destructive)' },
+  high:     { label: '高',   tone: { color: 'var(--warning)', bg: 'color-mix(in srgb, var(--warning) 12%, transparent)', border: 'color-mix(in srgb, var(--warning) 30%, transparent)' }, dot: 'var(--warning)' },
+  medium:   { label: '中',   tone: { color: 'var(--primary)', bg: 'var(--acc-soft)', border: 'var(--acc-border)' }, dot: 'var(--primary)' },
+  low:      { label: '低',   tone: { color: 'var(--muted-foreground)', bg: 'var(--secondary)', border: 'var(--border)' }, dot: 'var(--muted-foreground)' },
 };
 
 // ─── Helper: resolve task display name from SOP template ─────────────────────
@@ -100,7 +101,10 @@ function isOverdue(dueDate: string | null): boolean {
 function StatusBadge({ value }: { value: TaskStatus }) {
   const cfg = STATUS_CONFIG[value] ?? STATUS_CONFIG.todo;
   return (
-    <span className={`inline-flex h-6 w-28 items-center justify-center border px-2 text-[11px] font-mono rounded-sm ${cfg.color}`}>
+    <span
+      className="inline-flex h-6 w-28 items-center justify-center rounded-[6px] border px-2 text-[11px] font-medium"
+      style={{ color: cfg.tone.color, background: cfg.tone.bg, borderColor: cfg.tone.border }}
+    >
       {cfg.label}
     </span>
   );
@@ -122,8 +126,8 @@ export function TaskListView({
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <Loader2 size={24} className="animate-spin text-stone-400" />
-        <span className="ml-3 text-sm font-mono text-stone-400 uppercase tracking-widest">Loading...</span>
+        <Loader2 size={24} className="animate-spin text-muted-foreground" />
+        <span className="ml-3 text-sm text-muted-foreground">加载中…</span>
       </div>
     );
   }
@@ -131,15 +135,15 @@ export function TaskListView({
   if (tasks.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center">
-        <div className="w-14 h-14 bg-stone-100 flex items-center justify-center mb-4 text-stone-400">
+        <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-[10px] bg-secondary text-muted-foreground">
           {emptyIcon}
         </div>
-        <h3 className="text-sm font-serif text-stone-700 mb-1">{emptyTitle}</h3>
-        <p className="text-xs font-mono text-stone-400 max-w-xs">{emptyDesc}</p>
+        <h3 className="mb-1 text-sm font-semibold text-foreground">{emptyTitle}</h3>
+        <p className="max-w-xs text-xs text-muted-foreground">{emptyDesc}</p>
         <Button
           variant="outline"
           size="sm"
-          className="mt-4 text-xs font-mono uppercase tracking-wider"
+          className="mt-4 text-xs"
           onClick={onRefetch}
         >
           <RefreshCw size={12} className="mr-1.5" />刷新
@@ -149,10 +153,10 @@ export function TaskListView({
   }
 
   return (
-    <div className="ce-scroll-x">
+    <div className="overflow-x-auto">
       <div className="min-w-[680px]">
       {/* Header */}
-      <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-2 bg-stone-50/80 px-3 py-2 text-[9px] font-mono uppercase tracking-widest text-stone-400 border-b border-stone-200">
+      <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-2 border-b border-border bg-secondary px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
         <span>任务 / 项目</span>
         <span className="w-28 text-center">状态</span>
         <span className="w-16 text-center">优先级</span>
@@ -171,24 +175,25 @@ export function TaskListView({
           <div
             key={task.id}
             onClick={onNavigateToProject ? () => onNavigateToProject(task.projectId, { phaseId: task.phaseId, taskId: task.taskId }) : undefined}
-            className={`grid grid-cols-[1fr_auto_auto_auto_auto] gap-2 px-3 py-3 items-center border-b border-stone-100 hover:bg-stone-50/70 transition-colors group ${
+            className={`group grid grid-cols-[1fr_auto_auto_auto_auto] items-center gap-2 border-b border-border px-3 py-3 transition-colors hover:bg-secondary ${
               onNavigateToProject ? 'cursor-pointer' : ''
-            } ${overdue ? 'bg-red-50/30' : ''}`}
+            }`}
+            style={overdue ? { background: 'color-mix(in srgb, var(--destructive) 5%, transparent)' } : undefined}
           >
             {/* Task name + project context */}
             <div className="min-w-0">
-              <div className="flex items-center gap-1.5 min-w-0">
+              <div className="flex min-w-0 items-center gap-1.5">
                 {overdue && (
-                  <AlertTriangle size={11} className="text-red-500 shrink-0" />
+                  <AlertTriangle size={11} className="shrink-0" style={{ color: 'var(--destructive)' }} />
                 )}
-                <span className="text-xs text-stone-800 font-medium truncate">{taskName}</span>
+                <span className="truncate text-xs font-medium text-foreground">{taskName}</span>
               </div>
-              <div className="flex items-center gap-1.5 mt-0.5">
-                <span className="text-[10px] font-mono text-stone-400 truncate">
+              <div className="mt-0.5 flex items-center gap-1.5">
+                <span className="num truncate text-[10px] text-muted-foreground">
                   {task.projectNumber} · {task.projectName}
                 </span>
-                <span className="text-[9px] font-mono text-stone-300">·</span>
-                <span className="text-[10px] font-mono text-stone-400 truncate">{phaseLabel}</span>
+                <span className="text-[9px] text-muted-foreground/60">·</span>
+                <span className="num truncate text-[10px] text-muted-foreground">{phaseLabel}</span>
               </div>
             </div>
 
@@ -198,31 +203,37 @@ export function TaskListView({
             </div>
 
             {/* Priority badge */}
-            <div className="w-16 flex justify-center">
-              <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono border rounded-sm ${priorityCfg.color}`}>
-                <span className={`w-1.5 h-1.5 rounded-full ${priorityCfg.dot}`} />
+            <div className="flex w-16 justify-center">
+              <span
+                className="inline-flex items-center gap-1 rounded-[6px] border px-1.5 py-0.5 text-[10px] font-medium"
+                style={{ color: priorityCfg.tone.color, background: priorityCfg.tone.bg, borderColor: priorityCfg.tone.border }}
+              >
+                <span className="h-1.5 w-1.5 rounded-full" style={{ background: priorityCfg.dot }} />
                 {priorityCfg.label}
               </span>
             </div>
 
             {/* Due date */}
-            <div className="w-24 flex items-center justify-center gap-1">
+            <div className="flex w-24 items-center justify-center gap-1">
               {task.dueDate ? (
-                <span className={`flex items-center gap-1 text-[10px] font-mono ${overdue ? 'text-red-600 font-semibold' : 'text-stone-500'}`}>
+                <span
+                  className="num flex items-center gap-1 text-[10px]"
+                  style={{ color: overdue ? 'var(--destructive)' : 'var(--muted-foreground)', fontWeight: overdue ? 600 : 400 }}
+                >
                   <Calendar size={10} />
                   {task.dueDate}
                 </span>
               ) : (
-                <span className="text-[10px] font-mono text-stone-300">—</span>
+                <span className="num text-[10px] text-muted-foreground/60">—</span>
               )}
             </div>
 
             {/* Navigate to project */}
-            <div className="w-6 flex justify-center">
+            <div className="flex w-6 justify-center">
               {onNavigateToProject && (
                 <button
                   onClick={(e) => { e.stopPropagation(); onNavigateToProject(task.projectId, { phaseId: task.phaseId, taskId: task.taskId }); }}
-                  className="opacity-0 group-hover:opacity-100 transition-opacity text-stone-400 hover:text-amber-600"
+                  className="text-muted-foreground opacity-0 transition-opacity hover:text-primary group-hover:opacity-100"
                   title={`打开任务 ${taskName}`}
                 >
                   <ChevronRight size={14} />
@@ -234,11 +245,11 @@ export function TaskListView({
       })}
 
       {/* Footer */}
-      <div className="flex items-center justify-between px-3 py-2 text-[10px] font-mono text-stone-400">
-        <span>{tasks.length} 条任务</span>
+      <div className="flex items-center justify-between px-3 py-2 text-[10px] text-muted-foreground">
+        <span className="num">{tasks.length} 条任务</span>
         <button
           onClick={onRefetch}
-          className="flex items-center gap-1 hover:text-stone-600 transition-colors"
+          className="flex items-center gap-1 transition-colors hover:text-foreground"
         >
           <RefreshCw size={10} />刷新
         </button>
