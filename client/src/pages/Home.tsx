@@ -1,13 +1,13 @@
-// Design: Industrial Precision - stone/amber color system
-// Main application with sidebar navigation and view routing
-// Font: Playfair Display (serif) + JetBrains Mono (mono) + Source Sans 3 (body)
-// Colors: stone-900 sidebar, stone-50 background, amber-500 accent
+// Design: Linear style — zinc neutrals + indigo accent
+// Main application with 60px icon rail + 52px topbar + view routing
+// Font: Hanken Grotesk (self-hosted)
+// Colors: #fafafa rail, #ffffff bg, #5e6ad2 indigo accent
 
 import { lazy, Suspense, useState, useEffect, useRef, useCallback } from 'react';
 import { useLocation } from 'wouter';
 import {
-  LayoutDashboard, FolderKanban, BookOpen, Save, CheckCircle2,
-  ChevronRight, Menu, X, Cpu, Search, LogIn, Loader2, Cloud, Shield, KeyRound,
+  LayoutDashboard, FolderKanban, BookOpen,
+  ChevronRight, Menu, X, Cpu, Search, LogIn, Loader2, Shield, KeyRound,
   LogOut, Package, Inbox, CalendarDays, ListChecks,
 } from 'lucide-react';
 import type { TaskFocus } from '@/components/views/TaskListView';
@@ -24,6 +24,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { getQueryKey } from '@trpc/react-query';
 import { useProjectData } from '@/hooks/useProjectData';
 import { NotificationBell } from '@/components/NotificationBell';
+import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
+import { Button } from '@/components/ui/button';
 
 type View = 'overview' | 'mytasks' | 'projects' | 'calendar' | 'products' | 'requirements' | 'sop';
 
@@ -127,8 +129,8 @@ function ViewLoading() {
   return (
     <div className="flex items-center justify-center h-64">
       <div className="flex flex-col items-center gap-3">
-        <Loader2 size={24} className="animate-spin text-amber-500" />
-        <p className="text-sm font-mono text-stone-400 uppercase tracking-widest">加载中...</p>
+        <Loader2 size={24} className="animate-spin text-primary" />
+        <p className="text-sm text-muted-foreground uppercase tracking-widest">加载中...</p>
       </div>
     </div>
   );
@@ -547,8 +549,8 @@ function ProjectDetailWrapper({
     return (
       <div className="flex items-center justify-center h-64">
         <div className="flex flex-col items-center gap-3">
-          <Loader2 size={24} className="animate-spin text-amber-500" />
-          <p className="text-sm font-mono text-stone-400 uppercase tracking-widest">加载项目详情...</p>
+          <Loader2 size={24} className="animate-spin text-primary" />
+          <p className="text-sm text-muted-foreground uppercase tracking-widest">加载项目详情...</p>
         </div>
       </div>
     );
@@ -557,7 +559,7 @@ function ProjectDetailWrapper({
   if (!project) {
     return (
       <div className="flex items-center justify-center h-64">
-        <p className="text-sm font-mono text-stone-400">项目不存在或无权访问</p>
+        <p className="text-sm text-muted-foreground">项目不存在或无权访问</p>
       </div>
     );
   }
@@ -788,13 +790,13 @@ export default function Home() {
   // ── Auth loading / login gate ────────────────────────────────────────────
   if (authLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-stone-50">
+      <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-4">
-          <div className="w-10 h-10 bg-amber-500 flex items-center justify-center">
-            <Cpu size={20} className="text-stone-900" />
+          <div className="w-10 h-10 rounded-[8px] bg-primary text-white flex items-center justify-center">
+            <Cpu size={20} />
           </div>
-          <Loader2 size={20} className="animate-spin text-stone-400" />
-          <p className="text-sm font-mono text-stone-400 uppercase tracking-widest">Loading...</p>
+          <Loader2 size={20} className="animate-spin text-muted-foreground" />
+          <p className="text-sm text-muted-foreground uppercase tracking-widest">Loading...</p>
         </div>
       </div>
     );
@@ -802,29 +804,28 @@ export default function Home() {
 
   if (!user) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-stone-50">
+      <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="text-center space-y-6 max-w-sm px-6">
           <div className="flex justify-center">
-            <div className="w-14 h-14 bg-amber-500 flex items-center justify-center">
-              <Cpu size={26} className="text-stone-900" />
+            <div className="w-14 h-14 rounded-[12px] bg-primary text-white flex items-center justify-center">
+              <Cpu size={26} />
             </div>
           </div>
           <div>
-            <h1 className="font-serif text-2xl text-stone-900 mb-2">CE Project Hub</h1>
-            <p className="text-[11px] font-mono uppercase tracking-widest text-stone-400">
+            <h1 className="text-2xl font-semibold text-foreground mb-2">CE Project Hub</h1>
+            <p className="text-[11px] uppercase tracking-widest text-muted-foreground">
               Consumer Electronics · Product Development
             </p>
           </div>
-          <p className="text-sm text-stone-500">
+          <p className="text-sm text-muted-foreground">
             请登录以访问您的项目数据，支持多人多设备实时同步。
           </p>
-          <a
-            href={getLoginUrl()}
-            className="inline-flex items-center gap-2 bg-amber-500 hover:bg-amber-400 text-stone-900 font-medium px-6 py-3 transition-colors text-sm"
-          >
-            <LogIn size={16} />
-            登录 / 注册
-          </a>
+          <Button asChild>
+            <a href={getLoginUrl()}>
+              <LogIn size={16} />
+              登录 / 注册
+            </a>
+          </Button>
         </div>
       </div>
     );
@@ -832,237 +833,177 @@ export default function Home() {
 
   // ── Main App ─────────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen flex text-stone-900">
+    <div className="min-h-screen flex text-foreground bg-background">
       {/* Mobile Overlay */}
       {sidebarOpen && (
         <div
-          className="fixed inset-0 bg-stone-900/50 z-30 lg:hidden"
+          className="fixed inset-0 bg-foreground/40 z-30 lg:hidden"
           onClick={() => setSidebarOpen(false)}
         />
       )}
 
-      {/* Sidebar */}
+      {/* Sidebar — 60px icon rail */}
       <aside
-        className={`fixed lg:sticky top-0 left-0 h-screen w-64 bg-[#171513] flex flex-col z-40 shrink-0 transition-transform duration-300 shadow-[8px_0_32px_rgba(28,25,23,0.12)] ${
+        className={`fixed lg:sticky top-0 left-0 h-screen w-[60px] bg-sidebar border-r border-border flex flex-col items-center z-40 shrink-0 transition-transform duration-300 ${
           sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
         }`}
       >
         {/* Logo */}
-        <div className="p-4 border-b border-white/10">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-md bg-amber-500 flex items-center justify-center shrink-0 shadow-[0_10px_24px_rgba(245,158,11,0.24)]">
-                <Cpu size={16} className="text-stone-900" />
-              </div>
-              <div>
-                <h1 className="font-serif text-base text-stone-50 leading-tight">CE Project Hub</h1>
-                <p className="text-[9px] font-mono uppercase tracking-widest text-stone-500 mt-0.5">
-                  Product Dev
-                </p>
-              </div>
-            </div>
-            <button
-              onClick={() => setSidebarOpen(false)}
-              className="lg:hidden text-stone-500 hover:text-stone-300 transition-colors"
-            >
-              <X size={16} />
-            </button>
+        <div className="h-[52px] w-full flex items-center justify-center shrink-0">
+          <div className="w-[30px] h-[30px] rounded-[8px] bg-primary text-white flex items-center justify-center shrink-0">
+            <Cpu size={16} />
           </div>
         </div>
 
+        {/* Mobile close */}
+        <button
+          onClick={() => setSidebarOpen(false)}
+          aria-label="关闭菜单"
+          className="lg:hidden absolute top-2 right-1 text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <X size={14} />
+        </button>
+
         {/* Navigation */}
-        <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
-          {navItems.map(({ id, label, labelEn, icon: Icon }) => {
+        <nav className="flex-1 w-full flex flex-col items-center gap-1 py-2 overflow-y-auto">
+          {navItems.map(({ id, label, icon: Icon }) => {
             const isActive = view === id;
             return (
-              <button
-                key={id}
-                onClick={() => handleNavClick(id)}
-                className={`w-full flex items-center gap-3 rounded-md border px-3 py-2.5 text-left transition-all group ${
-                  isActive
-                    ? 'border-amber-400/30 bg-white/[0.07] text-stone-50 shadow-inner'
-                    : 'border-transparent text-stone-400 hover:bg-white/[0.045] hover:text-stone-200'
-                }`}
-              >
-                <Icon size={15} className={isActive ? 'text-amber-400' : 'text-stone-500 group-hover:text-stone-400'} />
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium leading-tight">{label}</div>
-                  <div className="text-[9px] font-mono uppercase tracking-widest text-stone-600 leading-tight mt-0.5">{labelEn}</div>
-                </div>
-                {isActive && <ChevronRight size={13} className="text-amber-400 shrink-0" />}
-              </button>
+              <Tooltip key={id}>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={() => handleNavClick(id)}
+                    aria-label={label}
+                    aria-current={isActive ? 'page' : undefined}
+                    className={`w-[38px] h-[38px] rounded-[9px] flex items-center justify-center transition-colors ${
+                      isActive
+                        ? 'bg-[color:var(--acc-soft)] text-primary'
+                        : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
+                    }`}
+                  >
+                    <Icon size={18} />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="right">{label}</TooltipContent>
+              </Tooltip>
             );
           })}
 
-          {/* Recent Projects */}
-          {view === 'projects' && projects.length > 0 && (
-            <div className="mt-4">
-              <div className="text-[9px] font-mono uppercase tracking-widest text-stone-600 mb-1.5 px-3">
-                最近项目
-              </div>
-              {projects.slice(0, 6).map((p) => (
+          {/* SOP library — secondary entry */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => handleNavClick('sop')}
+                aria-label="SOP 流程库"
+                aria-current={view === 'sop' ? 'page' : undefined}
+                className={`w-[38px] h-[38px] rounded-[9px] flex items-center justify-center transition-colors ${
+                  view === 'sop'
+                    ? 'bg-[color:var(--acc-soft)] text-primary'
+                    : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
+                }`}
+              >
+                <BookOpen size={18} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">SOP 流程库</TooltipContent>
+          </Tooltip>
+
+          {/* Admin link — only visible to admin users */}
+          {isAdmin && (
+            <Tooltip>
+              <TooltipTrigger asChild>
                 <button
-                  key={p.id}
-                  onClick={() => handleSelectProject(p.id)}
-                  className={`w-full text-left px-3 py-1.5 text-xs transition-colors truncate ${
-                    selectedProjectId === p.id
-                      ? 'text-amber-300 bg-white/[0.07] rounded'
-                      : 'text-stone-500 hover:text-stone-300 hover:bg-white/[0.045] rounded'
-                  }`}
+                  onClick={() => navigate('/admin')}
+                  aria-label="系统管理"
+                  className="w-[38px] h-[38px] rounded-[9px] flex items-center justify-center text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
                 >
-                  {p.name}
+                  <Shield size={18} />
                 </button>
-              ))}
-            </div>
+              </TooltipTrigger>
+              <TooltipContent side="right">系统管理</TooltipContent>
+            </Tooltip>
           )}
         </nav>
 
-        {/* Save Status + User */}
-        <div className="p-4 border-t border-white/10 space-y-2">
-          <div className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-wider">
-            {saveStatus === 'saved' ? (
-              <>
-                <CheckCircle2 size={11} className="text-emerald-500 shrink-0" />
-                <span className="text-stone-500">已同步至云端</span>
-              </>
-            ) : saveStatus === 'error' ? (
-              <>
-                <span className="text-[10px] text-rose-400 shrink-0">✕</span>
-                <span className="text-rose-400">同步失败</span>
-              </>
-            ) : (
-              <>
-                <Save size={11} className="text-amber-400 animate-pulse shrink-0" />
-                <span className="text-stone-500">同步中...</span>
-              </>
-            )}
-          </div>
-          {lastSavedAt && saveStatus === 'saved' && (
-            <div className="text-[9px] font-mono text-stone-600">
-              {lastSavedAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-            </div>
-          )}
-          <div className="text-[9px] font-mono text-stone-700">
-            {portfolioProjectCount} PROJECTS · CLOUD DB
-          </div>
-          {/* SOP library - secondary entry (moved out of main nav) */}
-          <button
-            onClick={() => handleNavClick('sop')}
-            className={`w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${view === 'sop' ? 'text-amber-300 bg-white/[0.07]' : 'text-stone-400 hover:text-stone-200 hover:bg-white/[0.045]'}`}
-          >
-            <BookOpen size={12} className="shrink-0" />
-            <div>
-              <div className="text-[10px] font-mono uppercase tracking-wider">SOP 流程库</div>
-              <div className="text-[9px] font-mono text-stone-600">SOP Library</div>
-            </div>
-          </button>
-
-          {/* Admin link - only visible to admin users */}
-          {isAdmin && (
-            <button
-              onClick={() => navigate('/admin')}
-            className="w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-amber-500 hover:text-amber-300 hover:bg-white/[0.045] transition-colors"
-          >
-              <Shield size={12} className="shrink-0" />
-              <div>
-                <div className="text-[10px] font-mono uppercase tracking-wider">系统管理</div>
-                <div className="text-[9px] font-mono text-stone-600">Admin Panel</div>
+        {/* User actions */}
+        <div className="w-full flex flex-col items-center gap-1 py-2 shrink-0">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => setChangePasswordOpen(true)}
+                aria-label="修改密码"
+                className="w-[38px] h-[38px] rounded-[9px] flex items-center justify-center text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+              >
+                <KeyRound size={16} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">修改密码</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => logout()}
+                aria-label="退出登录"
+                className="w-[38px] h-[38px] rounded-[9px] flex items-center justify-center text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+              >
+                <LogOut size={16} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">退出登录</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="w-[28px] h-[28px] rounded-full bg-primary text-white flex items-center justify-center text-[11px] font-medium uppercase shrink-0 mt-1">
+                {(user.name || user.email || 'U').charAt(0)}
               </div>
-            </button>
-          )}
-
-          {/* User info + change password + logout */}
-          <div className="pt-1 flex items-center gap-2 group">
-            <div className="w-6 h-6 rounded bg-amber-600 flex items-center justify-center text-[9px] font-mono text-stone-900 uppercase shrink-0">
-              {(user.name || user.email || 'U').charAt(0)}
-            </div>
-            <span className="text-[10px] text-stone-500 truncate flex-1">{user.name || user.email}</span>
-            <button
-              onClick={() => setChangePasswordOpen(true)}
-              title="修改密码"
-              className="opacity-0 group-hover:opacity-100 transition-opacity text-stone-600 hover:text-amber-400"
-            >
-              <KeyRound size={11} />
-            </button>
-            <button
-              onClick={() => logout()}
-              title="退出登录"
-              aria-label="退出登录"
-              className="text-stone-600 hover:text-rose-400 transition-colors"
-            >
-              <LogOut size={11} />
-            </button>
-          </div>
+            </TooltipTrigger>
+            <TooltipContent side="right">{user.name || user.email}</TooltipContent>
+          </Tooltip>
         </div>
       </aside>
 
       {/* Main Content */}
       <div className="flex-1 min-w-0 flex flex-col">
-        {/* Top Bar */}
-        <header className="sticky top-0 z-20 border-b border-stone-200/80 bg-white/82 px-4 py-3 backdrop-blur-xl lg:px-7 flex items-center gap-4">
+        {/* Top Bar — 52px */}
+        <header className="sticky top-0 z-20 h-[52px] border-b border-border bg-white px-4 lg:px-7 flex items-center gap-4">
           <button
             onClick={() => setSidebarOpen(true)}
-            className="lg:hidden text-stone-500 hover:text-stone-900 transition-colors"
+            aria-label="打开菜单"
+            className="lg:hidden text-muted-foreground hover:text-foreground transition-colors"
           >
             <Menu size={20} />
           </button>
 
           {/* Breadcrumb */}
-          <div className="flex items-center gap-2 text-[11px] font-mono text-stone-400 min-w-0">
-            <span className="uppercase tracking-wider hidden sm:inline">CE Project Hub</span>
-            <ChevronRight size={11} className="hidden sm:inline shrink-0" />
-            <span className="uppercase tracking-wider text-stone-700">
+          <div className="flex items-center gap-2 text-[14px] font-semibold min-w-0">
+            <Cpu size={15} className="text-primary shrink-0 hidden sm:inline" />
+            <span className="text-muted-foreground hidden sm:inline">CE Project Hub</span>
+            <ChevronRight size={13} className="hidden sm:inline shrink-0 text-muted-foreground" />
+            <span className="text-foreground">
               {viewLabels[view]}
             </span>
             {selectedProject && (
               <>
-                <ChevronRight size={11} className="shrink-0" />
-                <span className="text-stone-500 truncate">{selectedProject.name}</span>
+                <ChevronRight size={13} className="shrink-0 text-muted-foreground" />
+                <span className="text-muted-foreground truncate">{selectedProject.name}</span>
               </>
             )}
           </div>
 
-          <div className="ml-auto flex items-center gap-3">
-            <NotificationBell />
-            {/* Search trigger */}
+          <div className="ml-auto flex items-center gap-2">
+            {/* Search box */}
             <button
               onClick={() => setSearchOpen(true)}
-              className="ce-control flex items-center gap-2 border border-stone-200 bg-white px-3 py-1.5 text-stone-400 shadow-sm transition-colors hover:border-stone-400 hover:text-stone-700"
+              className="flex items-center gap-2 w-[230px] h-8 border border-border rounded-[8px] bg-white px-3 text-muted-foreground transition-colors hover:border-foreground/20 focus:outline-none focus:ring-2 focus:ring-ring"
             >
-              <Search size={13} />
-              <span className="text-[11px] font-mono hidden sm:inline">搜索</span>
-              <kbd className="hidden md:flex items-center gap-0.5 text-[9px] font-mono text-stone-300 bg-stone-100 px-1 py-0.5 border border-stone-200">
+              <Search size={14} className="shrink-0" />
+              <span className="text-[13px] flex-1 text-left">搜索项目、任务…</span>
+              <kbd className="hidden md:flex items-center gap-0.5 text-[10px] text-muted-foreground bg-secondary px-1.5 py-0.5 rounded">
                 ⌘K
               </kbd>
             </button>
 
-            {/* Sync status */}
-            <div className="hidden sm:flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider">
-              {saveStatus === 'saving' ? (
-                <span className="flex items-center gap-1.5 text-stone-400">
-                  <Save size={11} className="text-amber-400 animate-pulse" />
-                  <span>同步中...</span>
-                </span>
-              ) : saveStatus === 'error' ? (
-                <span className="flex items-center gap-1.5 text-rose-500">
-                  <span>✕</span><span>同步失败</span>
-                </span>
-              ) : (
-                <span className="flex items-center gap-1.5 text-stone-400">
-                  <Cloud size={11} className="text-emerald-500" />
-                  <span>已同步</span>
-                  {lastSavedAt && (
-                    <span className="text-stone-300 normal-case tracking-normal">
-                      {lastSavedAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                    </span>
-                  )}
-                </span>
-              )}
-            </div>
-
-            <div className="ce-control text-[10px] font-mono text-stone-400 hidden md:block bg-stone-100 px-2 py-1">
-              {projectsLoading && portfolioRows === undefined ? '...' : `${portfolioProjectCount} PROJECTS`}
-            </div>
+            <NotificationBell />
           </div>
         </header>
 
@@ -1071,8 +1012,8 @@ export default function Home() {
           {projectsLoading && view !== 'overview' ? (
             <div className="flex items-center justify-center h-64">
               <div className="flex flex-col items-center gap-3">
-                <Loader2 size={24} className="animate-spin text-amber-500" />
-                <p className="text-sm font-mono text-stone-400 uppercase tracking-widest">加载项目数据...</p>
+                <Loader2 size={24} className="animate-spin text-primary" />
+                <p className="text-sm text-muted-foreground uppercase tracking-widest">加载项目数据...</p>
               </div>
             </div>
           ) : (
