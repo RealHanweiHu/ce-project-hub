@@ -17,10 +17,10 @@ export function KpiStrip({ rows, onDrill }: { rows: PortfolioTableRow[]; onDrill
     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
       <Kpi icon={<Hash size={15} />} label="项目总数" value={total} />
       <Kpi icon={<Activity size={15} />} label="进行中" value={active} />
-      <Kpi icon={<AlertTriangle size={15} />} label="红灯项目" value={redHealth} accent={redHealth > 0 ? "text-rose-600" : undefined} />
-      <Kpi icon={<TrendingUp size={15} />} label="延期率" value={`${delayRate}%`} accent={delayRate > 0 ? "text-amber-600" : undefined} />
-      <Kpi icon={<CalendarClock size={15} />} label="逾期任务" value={overdueTasks} accent={overdueTasks > 0 ? "text-rose-600" : undefined} onClick={() => onDrill("overdue")} />
-      <Kpi icon={<Ban size={15} />} label="阻塞任务" value={blockedTasks} accent={blockedTasks > 0 ? "text-amber-600" : undefined} onClick={() => onDrill("blocked")} />
+      <Kpi icon={<AlertTriangle size={15} />} label="红灯项目" value={redHealth} accent={redHealth > 0 ? "text-[color:var(--destructive)]" : undefined} />
+      <Kpi icon={<TrendingUp size={15} />} label="延期率" value={`${delayRate}%`} accent={delayRate > 0 ? "text-[color:var(--warning)]" : undefined} />
+      <Kpi icon={<CalendarClock size={15} />} label="逾期任务" value={overdueTasks} accent={overdueTasks > 0 ? "text-[color:var(--destructive)]" : undefined} onClick={() => onDrill("overdue")} />
+      <Kpi icon={<Ban size={15} />} label="阻塞任务" value={blockedTasks} accent={blockedTasks > 0 ? "text-[color:var(--warning)]" : undefined} onClick={() => onDrill("blocked")} />
     </div>
   );
 }
@@ -28,12 +28,12 @@ export function KpiStrip({ rows, onDrill }: { rows: PortfolioTableRow[]; onDrill
 function Kpi({ icon, label, value, accent, onClick }: { icon: React.ReactNode; label: string; value: number | string; accent?: string; onClick?: () => void }) {
   const inner = (
     <>
-      <div className="flex items-center gap-1.5 text-stone-400">{icon}<span className="text-[10px] font-mono uppercase tracking-wider">{label}</span>{onClick && <span className="ml-auto text-[9px] font-mono text-stone-300">下钻›</span>}</div>
-      <div className={`mt-1.5 text-2xl font-serif font-semibold ${accent ?? "text-stone-900"}`}>{value}</div>
+      <div className="flex items-center gap-1.5 text-muted-foreground">{icon}<span className="text-[10px] uppercase tracking-wider">{label}</span>{onClick && <span className="ml-auto text-[9px] text-muted-foreground">下钻›</span>}</div>
+      <div className={`mt-1.5 text-2xl font-semibold num ${accent ?? "text-foreground"}`}>{value}</div>
     </>
   );
   if (onClick) {
-    return <button type="button" onClick={onClick} className="ce-card p-4 text-left cursor-pointer hover:border-stone-300 transition-colors">{inner}</button>;
+    return <button type="button" onClick={onClick} className="rounded-[10px] border border-border bg-card p-4 text-left cursor-pointer hover:border-[color:var(--acc-border)] transition-colors">{inner}</button>;
   }
-  return <div className="ce-card p-4">{inner}</div>;
+  return <div className="rounded-[10px] border border-border bg-card p-4">{inner}</div>;
 }

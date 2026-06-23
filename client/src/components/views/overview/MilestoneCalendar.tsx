@@ -3,9 +3,9 @@ import { trpc } from "@/lib/trpc";
 import { Calendar, ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
 
 const TYPE_CLS: Record<string, string> = {
-  phase: "bg-blue-50 text-blue-700 border-blue-200",
-  gate: "bg-amber-50 text-amber-700 border-amber-200",
-  target: "bg-rose-50 text-rose-700 border-rose-200",
+  phase: "bg-secondary text-[color:var(--secondary-foreground)] border-border",
+  gate: "bg-[color:var(--acc-soft)] text-primary border-[color:var(--acc-border)]",
+  target: "bg-[color:var(--destructive)]/10 text-[color:var(--destructive)] border-[color:var(--destructive)]/30",
 };
 const pad = (n: number) => String(n).padStart(2, "0");
 const ymd = (y: number, m: number, d: number) => `${y}-${pad(m + 1)}-${pad(d)}`;
@@ -41,23 +41,23 @@ export function MilestoneCalendar({ onSelectProject }: { onSelectProject: (id: s
   });
 
   return (
-    <div className="ce-panel p-5">
+    <div className="rounded-[11px] border border-border bg-card p-5">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
-          <Calendar size={18} className="text-amber-500" />
-          <h3 className="font-serif text-lg text-stone-900">里程碑 / Gate 日历</h3>
+          <Calendar size={18} className="text-primary" />
+          <h3 className="text-lg text-foreground">里程碑 / Gate 日历</h3>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => shift(-1)} className="text-stone-400 hover:text-stone-700"><ChevronLeft size={16} /></button>
-          <span className="text-sm font-mono text-stone-600">{ym.year}-{pad(ym.month + 1)}</span>
-          <button onClick={() => shift(1)} className="text-stone-400 hover:text-stone-700"><ChevronRight size={16} /></button>
+          <button onClick={() => shift(-1)} className="text-muted-foreground hover:text-foreground"><ChevronLeft size={16} /></button>
+          <span className="text-sm num text-[color:var(--secondary-foreground)]">{ym.year}-{pad(ym.month + 1)}</span>
+          <button onClick={() => shift(1)} className="text-muted-foreground hover:text-foreground"><ChevronRight size={16} /></button>
         </div>
       </div>
       {isLoading ? (
-        <div className="flex items-center gap-2 text-stone-400 py-8 justify-center"><Loader2 size={16} className="animate-spin" />加载日历…</div>
+        <div className="flex items-center gap-2 text-muted-foreground py-8 justify-center"><Loader2 size={16} className="animate-spin" />加载日历…</div>
       ) : (
         <>
-          <div className="grid grid-cols-7 gap-1 mb-1 text-[10px] font-mono text-stone-400 text-center">
+          <div className="grid grid-cols-7 gap-1 mb-1 text-[10px] num text-muted-foreground text-center">
             {["日", "一", "二", "三", "四", "五", "六"].map((d) => <div key={d}>{d}</div>)}
           </div>
           <div className="grid grid-cols-7 gap-1">
@@ -66,8 +66,8 @@ export function MilestoneCalendar({ onSelectProject }: { onSelectProject: (id: s
               const key = ymd(ym.year, ym.month, day);
               const dayEvents = byDay.get(key) ?? [];
               return (
-                <div key={key} className="min-h-[68px] border border-stone-100 rounded p-1">
-                  <div className="text-[10px] font-mono text-stone-400">{day}</div>
+                <div key={key} className="min-h-[68px] border border-border rounded p-1">
+                  <div className="text-[10px] num text-muted-foreground">{day}</div>
                   <div className="space-y-0.5 mt-0.5">
                     {dayEvents.map((e, j) => (
                       <button key={j} onClick={() => onSelectProject(e.projectId)} title={`${e.projectName} · ${e.label}`}

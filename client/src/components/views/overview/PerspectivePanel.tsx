@@ -165,7 +165,7 @@ function PmCockpit({ myRows, tasks, reviews, onSelectProject }: {
   if (myRows.length === 0) {
     return (
       <Panel title="我的项目工作台" icon={<ListChecks size={15} />}>
-        <div className="text-sm text-stone-400">你当前不是任何项目的 PM。</div>
+        <div className="text-sm text-muted-foreground">你当前不是任何项目的 PM。</div>
       </Panel>
     );
   }
@@ -174,9 +174,9 @@ function PmCockpit({ myRows, tasks, reviews, onSelectProject }: {
     <div className="space-y-4">
       <Panel title="TODAY · 今天要做" icon={<CalendarClock size={15} />}>
         {todayItems.length === 0 ? (
-          <div className="text-sm text-stone-400">今天没有紧急事项。</div>
+          <div className="text-sm text-muted-foreground">今天没有紧急事项。</div>
         ) : (
-          <div className="divide-y divide-stone-100">
+          <div className="divide-y divide-border">
               {todayItems.slice(0, 10).map((item) => (
                 <ActionRow key={item.key} icon={TODAY_ICON[item.kind]} title={item.title} detail={item.detail}
                 tag={item.tag} tone={item.tone} onClick={() => onSelectProject(item.projectId, item.kind === 'risk' ? { tab: 'issues' } : undefined)} />
@@ -188,9 +188,9 @@ function PmCockpit({ myRows, tasks, reviews, onSelectProject }: {
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
         <Panel title="待我协调 / 拍板" icon={<Inbox size={15} />}>
           {coordItems.length === 0 ? (
-            <div className="text-sm text-stone-400">暂无待你协调或拍板的事项。</div>
+            <div className="text-sm text-muted-foreground">暂无待你协调或拍板的事项。</div>
           ) : (
-            <div className="divide-y divide-stone-100">
+            <div className="divide-y divide-border">
               {coordItems.slice(0, 10).map((item) => (
                 <ActionRow key={item.key} icon={COORD_ICON[item.kind]} title={item.title} detail={item.detail}
                   tag={item.tag} tone={item.tone} onClick={() => onSelectProject(item.projectId, item.kind === 'issue' ? { tab: 'issues' } : undefined)} />
@@ -200,22 +200,22 @@ function PmCockpit({ myRows, tasks, reviews, onSelectProject }: {
         </Panel>
 
         <Panel title="我负责的项目" icon={<ListChecks size={15} />}>
-          <div className="divide-y divide-stone-100">
+          <div className="divide-y divide-border">
             {myRows.map((r) => {
               const metric = projectHeadlineMetric(r);
               return (
                 <button key={r.id} onClick={() => onSelectProject(r.id)}
-                  className="w-full text-left py-2.5 hover:bg-stone-50/70 -mx-2 px-2 transition-colors">
+                  className="-mx-2 w-full px-2 py-2.5 text-left transition-colors hover:bg-secondary">
                   <div className="flex items-center gap-3">
                     <HealthDot row={r} />
                     <div className="min-w-0 flex-1">
-                      <div className="text-sm font-medium text-stone-800 truncate">{r.name}</div>
-                      <div className="text-[10px] font-mono text-stone-400 truncate">
+                      <div className="truncate text-sm font-medium text-foreground">{r.name}</div>
+                      <div className="num truncate text-[10px] text-muted-foreground">
                         {PHASE_MAP[r.currentPhase]?.name ?? r.currentPhase}
                       </div>
                     </div>
                     {metric && <Tag tone={metric.tone}>{metric.label}</Tag>}
-                    <ChevronRight size={13} className="text-stone-300 shrink-0" />
+                    <ChevronRight size={13} className="shrink-0 text-muted-foreground" />
                   </div>
                 </button>
               );
@@ -232,17 +232,17 @@ function ActionRow({ icon, title, detail, tag, tone, onClick }: {
   tone: "rose" | "amber" | "emerald" | "stone"; onClick: () => void;
 }) {
   return (
-    <button onClick={onClick} className="w-full text-left py-2.5 hover:bg-stone-50/70 -mx-2 px-2 transition-colors">
+    <button onClick={onClick} className="-mx-2 w-full px-2 py-2.5 text-left transition-colors hover:bg-secondary">
       <div className="flex items-start gap-3">
-        <span className={`mt-0.5 ${tone === "rose" ? "text-rose-500" : tone === "amber" ? "text-amber-500" : "text-stone-400"}`}>{icon}</span>
+        <span className="mt-0.5" style={{ color: tone === "rose" ? "var(--destructive)" : tone === "amber" ? "var(--warning)" : "var(--muted-foreground)" }}>{icon}</span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-stone-800 truncate">{title}</span>
+            <span className="truncate text-sm font-medium text-foreground">{title}</span>
             <Tag tone={tone}>{tag}</Tag>
           </div>
-          <div className="text-[11px] text-stone-500 mt-0.5 truncate">{detail}</div>
+          <div className="mt-0.5 truncate text-[11px] text-muted-foreground">{detail}</div>
         </div>
-        <ChevronRight size={13} className="mt-1 text-stone-300 shrink-0" />
+        <ChevronRight size={13} className="mt-1 shrink-0 text-muted-foreground" />
       </div>
     </button>
   );
@@ -310,7 +310,7 @@ function RoleWorkbench({ workbench, isLoading, onRefetch, onSelectProject }: {
   if (isLoading && !workbench) {
     return (
       <Panel title="我的工作台" icon={<Inbox size={15} />}>
-        <div className="text-sm text-stone-400">正在聚合你的任务、审核、质量和提醒...</div>
+        <div className="text-sm text-muted-foreground">正在聚合你的任务、审核、质量和提醒...</div>
       </Panel>
     );
   }
@@ -321,7 +321,7 @@ function RoleWorkbench({ workbench, isLoading, onRefetch, onSelectProject }: {
         <QueueRows items={queue.slice(0, 10)} onSelectProject={onSelectProject} />
       </Panel>
 
-      <div className="ce-table-shell">
+      <div className="overflow-hidden rounded-[10px] border border-border">
         <TaskListView tasks={rows} isLoading={isLoading} emptyIcon={<CheckCircle2 size={24} />}
           emptyTitle="没有待办任务" emptyDesc="当前没有指派给您的未完成任务。"
           onRefetch={onRefetch} onNavigateToProject={onSelectProject} showOverdueBadge />
@@ -391,9 +391,9 @@ function dueScore(dueDate: string) {
 }
 
 function QueueRows({ items, onSelectProject }: { items: QueueItem[]; onSelectProject: (id: string, focus?: TaskFocus) => void }) {
-  if (items.length === 0) return <div className="text-sm text-stone-400">暂无需要你处理的事项。</div>;
+  if (items.length === 0) return <div className="text-sm text-muted-foreground">暂无需要你处理的事项。</div>;
   return (
-    <div className="divide-y divide-stone-100">
+    <div className="divide-y divide-border">
       {items.map((item) => (
         <button
           key={item.key}
@@ -405,18 +405,18 @@ function QueueRows({ items, onSelectProject }: { items: QueueItem[]; onSelectPro
                 ? { tab: 'issues', phaseId: item.phaseId }
                 : undefined
           )}
-          className="w-full text-left py-2.5 hover:bg-stone-50/70 -mx-2 px-2 transition-colors"
+          className="-mx-2 w-full px-2 py-2.5 text-left transition-colors hover:bg-secondary"
         >
           <div className="flex items-start gap-3">
-            <span className={`mt-0.5 ${item.tone === "rose" ? "text-rose-500" : item.tone === "amber" ? "text-amber-500" : "text-stone-400"}`}>{item.icon}</span>
+            <span className="mt-0.5" style={{ color: item.tone === "rose" ? "var(--destructive)" : item.tone === "amber" ? "var(--warning)" : "var(--muted-foreground)" }}>{item.icon}</span>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-stone-800 truncate">{item.title}</span>
+                <span className="truncate text-sm font-medium text-foreground">{item.title}</span>
                 <Tag tone={item.tone}>{item.tag}</Tag>
               </div>
-              <div className="text-[11px] text-stone-500 mt-0.5 truncate">{item.detail}</div>
+              <div className="mt-0.5 truncate text-[11px] text-muted-foreground">{item.detail}</div>
             </div>
-            <ChevronRight size={13} className="mt-1 text-stone-300 shrink-0" />
+            <ChevronRight size={13} className="mt-1 shrink-0 text-muted-foreground" />
           </div>
         </button>
       ))}
@@ -437,19 +437,19 @@ function DecisionRows({
   renderMeta: (row: PortfolioTableRow) => React.ReactNode;
   renderDetail: (row: PortfolioTableRow) => React.ReactNode;
 }) {
-  if (rows.length === 0) return <div className="text-sm text-stone-400">{empty}</div>;
+  if (rows.length === 0) return <div className="text-sm text-muted-foreground">{empty}</div>;
   return (
-    <div className="divide-y divide-stone-100">
+    <div className="divide-y divide-border">
       {rows.map((r) => (
-        <button key={r.id} onClick={() => onSelectProject(r.id)} className="w-full text-left py-2.5 hover:bg-stone-50/70 -mx-2 px-2 transition-colors">
+        <button key={r.id} onClick={() => onSelectProject(r.id)} className="-mx-2 w-full px-2 py-2.5 text-left transition-colors hover:bg-secondary">
           <div className="flex items-start gap-3">
             <HealthDot row={r} />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-stone-800 truncate">{r.name}</span>
-                <ChevronRight size={12} className="text-stone-300 shrink-0" />
+                <span className="truncate text-sm font-medium text-foreground">{r.name}</span>
+                <ChevronRight size={12} className="shrink-0 text-muted-foreground" />
               </div>
-              <div className="text-[11px] text-stone-500 mt-0.5 line-clamp-1">{renderDetail(r)}</div>
+              <div className="mt-0.5 line-clamp-1 text-[11px] text-muted-foreground">{renderDetail(r)}</div>
             </div>
             <div className="flex shrink-0 flex-wrap justify-end gap-1 max-w-[220px]">{renderMeta(r)}</div>
           </div>
@@ -468,21 +468,21 @@ function ScoredRows({
   onSelectProject: (id: string) => void;
   empty?: string;
 }) {
-  if (rows.length === 0) return <div className="text-sm text-stone-400">{empty}</div>;
+  if (rows.length === 0) return <div className="text-sm text-muted-foreground">{empty}</div>;
   return (
-    <div className="divide-y divide-stone-100">
+    <div className="divide-y divide-border">
       {rows.map(({ row, level, reasons }) => (
-        <button key={row.id} onClick={() => onSelectProject(row.id)} className="w-full text-left py-2.5 hover:bg-stone-50/70 -mx-2 px-2 transition-colors">
+        <button key={row.id} onClick={() => onSelectProject(row.id)} className="-mx-2 w-full px-2 py-2.5 text-left transition-colors hover:bg-secondary">
           <div className="flex items-center gap-3">
-            <span className={`w-2 h-2 rounded-full shrink-0 ${level === "red" ? "bg-rose-500" : level === "amber" ? "bg-amber-500" : "bg-emerald-500"}`} />
+            <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: level === "red" ? "var(--destructive)" : level === "amber" ? "var(--warning)" : "var(--success)" }} />
             <div className="min-w-0 flex-1">
-              <div className="text-sm font-medium text-stone-800 truncate">{row.name}</div>
-              <div className="text-[10px] font-mono text-stone-400 truncate">
+              <div className="truncate text-sm font-medium text-foreground">{row.name}</div>
+              <div className="num truncate text-[10px] text-muted-foreground">
                 {reasons.length ? reasons.join(" / ") : "需关注"}
               </div>
             </div>
             {row.pmName && <Tag tone="stone">PM {row.pmName}</Tag>}
-            <ChevronRight size={13} className="text-stone-300 shrink-0" />
+            <ChevronRight size={13} className="shrink-0 text-muted-foreground" />
           </div>
         </button>
       ))}
@@ -492,13 +492,13 @@ function ScoredRows({
 
 function HealthDot({ row }: { row: PortfolioTableRow }) {
   const level = scoreRow(row).level;
-  return <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${level === "red" ? "bg-rose-500" : level === "amber" ? "bg-amber-500" : "bg-emerald-500"}`} />;
+  return <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full" style={{ background: level === "red" ? "var(--destructive)" : level === "amber" ? "var(--warning)" : "var(--success)" }} />;
 }
 
 function Panel({ title, icon, children }: { title: string; icon?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="ce-panel p-4">
-      <h3 className="flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-widest text-stone-400 mb-3">
+    <div className="rounded-[11px] border border-border bg-card p-4">
+      <h3 className="mb-3 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
         {icon}
         {title}
       </h3>
@@ -508,10 +508,10 @@ function Panel({ title, icon, children }: { title: string; icon?: React.ReactNod
 }
 
 function Tag({ tone, children }: { tone: "rose" | "amber" | "emerald" | "stone"; children: React.ReactNode }) {
-  const cls =
-    tone === "rose" ? "bg-rose-50 text-rose-700 border-rose-200" :
-    tone === "amber" ? "bg-amber-50 text-amber-700 border-amber-200" :
-    tone === "emerald" ? "bg-emerald-50 text-emerald-700 border-emerald-200" :
-    "bg-stone-50 text-stone-600 border-stone-200";
-  return <span className={`text-[10px] font-mono px-1.5 py-0.5 border whitespace-nowrap ${cls}`}>{children}</span>;
+  const style: React.CSSProperties =
+    tone === "rose" ? { background: "color-mix(in srgb, var(--destructive) 10%, transparent)", color: "var(--destructive)", borderColor: "color-mix(in srgb, var(--destructive) 30%, transparent)" } :
+    tone === "amber" ? { background: "color-mix(in srgb, var(--warning) 12%, transparent)", color: "var(--warning)", borderColor: "color-mix(in srgb, var(--warning) 30%, transparent)" } :
+    tone === "emerald" ? { background: "color-mix(in srgb, var(--success) 12%, transparent)", color: "var(--success)", borderColor: "color-mix(in srgb, var(--success) 30%, transparent)" } :
+    { background: "var(--secondary)", color: "var(--secondary-foreground)", borderColor: "var(--border)" };
+  return <span className="num whitespace-nowrap rounded-[5px] border px-1.5 py-0.5 text-[10px]" style={style}>{children}</span>;
 }

@@ -65,26 +65,26 @@ export function PortfolioTable({ rows, onSelectProject }: { rows: PortfolioTable
 
   const sortBtn = (key: SortKey, label: string) => (
     <button onClick={() => { sortKey === key ? setSortAsc(!sortAsc) : (setSortKey(key), setSortAsc(true)); }}
-      className={`flex items-center gap-1 hover:text-stone-700 ${sortKey === key ? "text-stone-900" : ""}`}>
+      className={`flex items-center gap-1 hover:text-foreground ${sortKey === key ? "text-foreground" : ""}`}>
       {label}<ArrowUpDown size={10} className="opacity-50" />
     </button>
   );
 
   return (
-    <div className="ce-panel p-0">
-      <div className="flex flex-wrap items-center gap-2 text-xs p-3 border-b border-stone-100">
-        <select value={healthFilter} onChange={(e) => setHealthFilter(e.target.value)} className="ce-control border border-stone-300 bg-white px-2 py-1.5">
+    <div className="rounded-[11px] border border-border bg-card p-0">
+      <div className="flex flex-wrap items-center gap-2 text-xs p-3 border-b border-border">
+        <select value={healthFilter} onChange={(e) => setHealthFilter(e.target.value)} className="rounded-[7px] border border-border bg-card px-2 py-1.5">
           <option value="">全部健康</option><option value="high">红灯</option><option value="medium">黄灯</option><option value="low">绿灯</option>
         </select>
-        <select value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className="ce-control border border-stone-300 bg-white px-2 py-1.5">
+        <select value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className="rounded-[7px] border border-border bg-card px-2 py-1.5">
           <option value="">全部类型</option><option value="npd">新产品开发</option><option value="eco">迭代升级</option><option value="idr">外观翻新</option>
         </select>
-        <span className="text-stone-400">显示 {filtered.length} / {rows.length}</span>
+        <span className="text-muted-foreground">显示 {filtered.length} / {rows.length}</span>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm min-w-[860px]">
           <thead>
-            <tr className="border-b border-stone-100 bg-stone-50 text-[10px] font-mono uppercase tracking-wider text-stone-400">
+            <tr className="border-b border-border bg-secondary text-[10px] num uppercase tracking-wider text-muted-foreground">
               <th className="text-left px-3 py-2.5">{sortBtn("name", "项目")}</th>
               <th className="text-left px-3 py-2.5">类型</th>
               <th className="text-left px-3 py-2.5">当前阶段</th>
@@ -104,30 +104,30 @@ export function PortfolioTable({ rows, onSelectProject }: { rows: PortfolioTable
               const prog = progressOf(r);
               const overdue = isOverdue(r);
               return (
-                <tr key={r.id} onClick={() => onSelectProject(r.id)} className="border-b border-stone-50 hover:bg-stone-50/60 cursor-pointer">
+                <tr key={r.id} onClick={() => onSelectProject(r.id)} className="border-b border-border hover:bg-secondary cursor-pointer">
                   <td className="px-3 py-2.5">
-                    <div className="font-medium text-stone-800">{r.name}</div>
-                    <div className="text-[10px] font-mono text-stone-400">{r.projectNumber || "—"}{r.pmName ? ` · PM ${r.pmName}` : ""}</div>
+                    <div className="font-medium text-foreground">{r.name}</div>
+                    <div className="text-[10px] num text-muted-foreground">{r.projectNumber || "—"}{r.pmName ? ` · PM ${r.pmName}` : ""}</div>
                   </td>
-                  <td className="px-3 py-2.5">{cat ? <span className={`text-[10px] font-mono px-1.5 py-0.5 border ${cat.borderColor} ${cat.color} ${cat.textColor}`}>{cat.badge}</span> : r.category}</td>
-                  <td className="px-3 py-2.5 text-xs text-stone-600">{PHASE_MAP[r.currentPhase]?.name ?? r.currentPhase}</td>
+                  <td className="px-3 py-2.5">{cat ? <span className={`text-[10px] num px-1.5 py-0.5 border ${cat.borderColor} ${cat.color} ${cat.textColor}`}>{cat.badge}</span> : r.category}</td>
+                  <td className="px-3 py-2.5 text-xs text-[color:var(--secondary-foreground)]">{PHASE_MAP[r.currentPhase]?.name ?? r.currentPhase}</td>
                   <td className="px-3 py-2.5">
-                    <div className="flex items-center gap-2"><div className="flex-1 min-w-[60px]"><ProgressBar value={prog} color="bg-stone-800" height="h-1.5" /></div><span className="text-[11px] font-mono text-stone-500">{prog}%</span></div>
-                    <div className="text-[10px] font-mono text-stone-300">{r.taskDone}/{r.taskTotal}</div>
+                    <div className="flex items-center gap-2"><div className="flex-1 min-w-[60px]"><ProgressBar value={prog} color="bg-primary" height="h-1.5" /></div><span className="text-[11px] num text-muted-foreground">{prog}%</span></div>
+                    <div className="text-[10px] num text-muted-foreground">{r.taskDone}/{r.taskTotal}</div>
                   </td>
                   <td className="px-3 py-2.5 text-center"><span className={`text-xs font-medium ${health?.color}`}>{health?.label ?? r.risk}</span></td>
                   <td className="px-3 py-2.5 text-center"><Cell n={r.overdueTasks} tone="rose" /></td>
                   <td className="px-3 py-2.5 text-center"><Cell n={r.blockedTasks} tone="amber" /></td>
                   <td className="px-3 py-2.5 text-center"><Cell n={r.openIssues} tone="rose" /></td>
-                  <td className="px-3 py-2.5 text-xs font-mono">
-                    <span className={overdue ? "text-rose-600" : "text-stone-600"}>{r.projectedEnd || "未排期"}</span>
-                    {overdue && <span className="block text-[9px] text-rose-500">超目标 {r.targetDate}</span>}
+                  <td className="px-3 py-2.5 text-xs num">
+                    <span className={overdue ? "text-[color:var(--destructive)]" : "text-[color:var(--secondary-foreground)]"}>{r.projectedEnd || "未排期"}</span>
+                    {overdue && <span className="block text-[9px] text-[color:var(--destructive)]">超目标 {r.targetDate}</span>}
                   </td>
-                  <td className="px-3 py-2.5 text-stone-300"><ChevronRight size={14} /></td>
+                  <td className="px-3 py-2.5 text-muted-foreground"><ChevronRight size={14} /></td>
                 </tr>
               );
             })}
-            {filtered.length === 0 && <tr><td colSpan={10} className="px-3 py-10 text-center text-stone-400 text-sm">暂无项目</td></tr>}
+            {filtered.length === 0 && <tr><td colSpan={10} className="px-3 py-10 text-center text-muted-foreground text-sm">暂无项目</td></tr>}
           </tbody>
         </table>
       </div>
@@ -136,7 +136,7 @@ export function PortfolioTable({ rows, onSelectProject }: { rows: PortfolioTable
 }
 
 function Cell({ n, tone }: { n: number; tone: "rose" | "amber" }) {
-  if (!n) return <span className="text-stone-300">—</span>;
-  const cls = tone === "rose" ? "bg-rose-50 text-rose-700 border-rose-200" : "bg-amber-50 text-amber-700 border-amber-200";
-  return <span className={`text-[11px] font-mono px-1.5 py-0.5 border ${cls}`}>{n}</span>;
+  if (!n) return <span className="text-muted-foreground">—</span>;
+  const cls = tone === "rose" ? "bg-[color:var(--destructive)]/10 text-[color:var(--destructive)] border-[color:var(--destructive)]/30" : "bg-[color:var(--warning)]/10 text-[color:var(--warning)] border-[color:var(--warning)]/30";
+  return <span className={`text-[11px] num px-1.5 py-0.5 border ${cls}`}>{n}</span>;
 }

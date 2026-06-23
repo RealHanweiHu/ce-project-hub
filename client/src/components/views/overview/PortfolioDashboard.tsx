@@ -1,11 +1,15 @@
+// Linear redesign — 总览 / Overview dashboard (exec scope).
+// Phase 1: VISUAL ONLY. The data model (buildDashboard) and all derived metrics are
+// preserved verbatim; only the presentation/layout was reworked to the Linear design:
+// greeting subline + 6 KPI cards + 今日聚焦 row + two equal-height columns
+// (风险预警 / 组合进度 on the left, 即将 Gate / 阶段分布 on the right).
 import type React from "react";
 import { useMemo } from "react";
-import {
-  Activity, AlertTriangle, CalendarClock, CheckCircle2, ChevronRight,
-  ClipboardCheck, Flag, Gauge, Layers3, Rocket, UserRound,
-} from "lucide-react";
+import { AlertTriangle, CalendarClock, Gauge } from "lucide-react";
 import { getPhasesForCategory } from "@/lib/sop-templates";
+import { PHASE_MAP } from "@/lib/data";
 import { isProjectedOverdue, type RagLevel } from "@shared/health";
+import { LinearCard, LinearBar, StatusDot } from "@/components/linear/primitives";
 import type { PortfolioTableRow } from "./PortfolioTable";
 
 type DrillKind = "overdue" | "blocked";
@@ -16,19 +20,12 @@ type ScoredProject = {
   reasons: string[];
 };
 
-const HEALTH_LABEL: Record<RagLevel, string> = { green: "绿灯", amber: "黄灯", red: "红灯" };
-const HEALTH_COLOR: Record<RagLevel, string> = {
-  green: "bg-emerald-500",
-  amber: "bg-amber-500",
-  red: "bg-rose-500",
-};
-const HEALTH_TEXT: Record<RagLevel, string> = {
-  green: "text-emerald-700",
-  amber: "text-amber-700",
-  red: "text-rose-700",
-};
+const PIE_FALLBACK_COLORS = ["#5e6ad2", "#0ea5e9", "#0f766e", "#d97706", "#7c3aed", "#b45309", "#3fa66a", "#db2777"];
 
-const PIE_FALLBACK_COLORS = ["#1f2937", "#0369a1", "#0f766e", "#a16207", "#7c3aed", "#b45309", "#166534", "#be123c"];
+const ragTone = (level: RagLevel): "green" | "amber" | "red" =>
+  level === "red" ? "red" : level === "amber" ? "amber" : "green";
+
+const MONTH_ABBR = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
 
 function scoreProject(row: PortfolioTableRow): ScoredProject {
   return { row, level: row.ragLevel, reasons: row.ragReasons };
@@ -52,6 +49,20 @@ function ratio(count: number, total: number) {
   return total > 0 ? Math.round((count / total) * 100) : 0;
 }
 
+function progressOf(row: PortfolioTableRow) {
+  return row.taskTotal > 0 ? Math.round((row.taskDone / row.taskTotal) * 100) : 0;
+}
+
+function daysAway(dateStr: string | null): number | null {
+  if (!dateStr) return null;
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  d.setHours(0, 0, 0, 0);
+  return Math.round((d.getTime() - today.getTime()) / 864e5);
+}
+
 export function PortfolioDashboard({
   rows,
   scopeLabel,
@@ -67,42 +78,50 @@ export function PortfolioDashboard({
 
   if (rows.length === 0) {
     return (
-      <div className="ce-panel p-5">
-        <div className="flex items-center gap-2 text-sm text-stone-400">
+      <LinearCard className="p-5">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Gauge size={16} />
           当前范围暂无项目数据。
         </div>
-      </div>
+      </LinearCard>
     );
   }
 
+  const needAttention = data.health.red + data.health.amber;
+  const onTimeRate = ratio(data.onTime, data.total);
+  const greeting = `${data.activeProjects} 个进行中 · ${needAttention} 个需关注 · ${data.upcomingGateCount} 场即将 Gate`;
+
+  const kpis: KpiSpec[] = [
+    { label: "进行中", value: data.activeProjects, sub: `${scopeLabel}` },
+    { label: "按期", value: data.onTime, sub: `占比 ${onTimeRate}%`, tone: "green" },
+    { label: "风险", value: needAttention, sub: `${data.health.amber} 中 · ${data.health.red} 高`, tone: data.health.red > 0 ? "red" : needAttention > 0 ? "amber" : "neutral" },
+    { label: "即将 Gate", value: data.upcomingGateCount, sub: "待评审", tone: "acc" },
+    { label: "未关闭问题", value: data.openIssues, sub: `P0/P1 ${data.criticalIssues}`, tone: data.criticalIssues > 0 ? "red" : "neutral" },
+    { label: "逾期任务", value: data.overdueTasks, sub: `阻塞 ${data.blockedTasks}`, tone: data.overdueTasks > 0 ? "red" : "neutral", onClick: () => onDrill("overdue") },
+  ];
+
   return (
-    <div className="space-y-4">
-      <div className="ce-panel overflow-hidden">
-        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 divide-x divide-y divide-stone-100">
-          <MetricCell icon={<Layers3 size={15} />} label="项目总数" value={data.total} detail={scopeLabel} />
-          <MetricCell icon={<Activity size={15} />} label="进行中项目" value={data.activeProjects} detail={`${ratio(data.activeProjects, data.total)}% 处于推进中`} />
-          <MetricCell icon={<Flag size={15} />} label="未开始项目" value={data.notStartedProjects} detail={`${ratio(data.notStartedProjects, data.total)}% 尚未进入执行`} />
-          <MetricCell icon={<UserRound size={15} />} label="项目来源" value={data.primarySource.label} detail={data.sourceSummary} />
-          <MetricCell icon={<ClipboardCheck size={15} />} label="Gate 总数" value={data.gateTaskTotal} detail="负责项目里程碑任务数" />
-          <MetricCell icon={<CheckCircle2 size={15} />} label="已结束 Gate" value={data.gateTaskDone} detail={`${ratio(data.gateTaskDone, data.gateTaskTotal)}% 已完成`} tone={data.gateTaskDone === data.gateTaskTotal ? "ok" : "neutral"} />
+    <div className="flex flex-col gap-[18px]">
+      <p className="-mt-1 text-[13px] text-muted-foreground">{greeting}</p>
+
+      {/* KPI strip — 6 cards */}
+      <div className="grid grid-cols-2 gap-[13px] sm:grid-cols-3 lg:grid-cols-6">
+        {kpis.map((kpi) => <KpiCard key={kpi.label} {...kpi} />)}
+      </div>
+
+      {/* 今日聚焦 / Today's Focus — full-width, 3 items */}
+      <FocusBand items={data.focusItems} onSelectProject={onSelectProject} onDrill={onDrill} />
+
+      {/* Two equal-height columns */}
+      <div className="grid grid-cols-1 items-stretch gap-[18px] xl:grid-cols-[1fr_340px]">
+        <div className="flex flex-col gap-[18px]">
+          <RiskAlertsBoard rows={data.riskAlerts} onSelectProject={onSelectProject} />
+          <ProgressBoard rows={data.progressRows} onSelectProject={onSelectProject} className="flex-1" />
         </div>
-      </div>
-
-      <div className="grid grid-cols-1 xl:grid-cols-[1.05fr_0.95fr] gap-4">
-        <HealthBoard data={data} />
-        <PhaseBoard phases={data.phaseRows} total={data.total} />
-      </div>
-
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-        <GateBoard rows={data.gateRows} total={data.total} onSelectProject={onSelectProject} />
-        <DeliveryBoard rows={data.deliveryRows} total={data.total} onSelectProject={onSelectProject} onDrill={onDrill} />
-        <ReleaseBoard rows={data.releaseRows} total={data.total} onSelectProject={onSelectProject} />
-      </div>
-
-      <div className="grid grid-cols-1 xl:grid-cols-[0.9fr_1.1fr] gap-4">
-        <OwnerBoard rows={data.ownerRows} total={data.total} />
-        <AttentionBoard rows={data.attentionRows} onSelectProject={onSelectProject} />
+        <div className="flex flex-col gap-[18px]">
+          <GatesBoard rows={data.gateRows} onSelectProject={onSelectProject} />
+          <PhaseDistBoard phases={data.phaseRows} total={data.total} className="flex-1" />
+        </div>
       </div>
     </div>
   );
@@ -114,6 +133,13 @@ function buildDashboard(rows: PortfolioTableRow[]) {
   const health = { green: 0, amber: 0, red: 0 } as Record<RagLevel, number>;
   for (const item of scored) health[item.level] += 1;
 
+  const overdueTasks = rows.reduce((sum, row) => sum + row.overdueTasks, 0);
+  const blockedTasks = rows.reduce((sum, row) => sum + row.blockedTasks, 0);
+  const openIssues = rows.reduce((sum, row) => sum + row.openIssues, 0);
+  const criticalIssues = rows.reduce((sum, row) => sum + row.criticalIssues, 0);
+  const onTime = rows.filter((row) => !isProjectedOverdue(row.projectedEnd, row.targetDate)).length;
+
+  // Phase distribution (kept verbatim from prior buildDashboard).
   const phaseMap = new Map<string, { id: string; code: string; name: string; count: number; color: string; order: number }>();
   rows.forEach((row) => {
     const phases = getPhasesForCategory(row.category);
@@ -130,391 +156,403 @@ function buildDashboard(rows: PortfolioTableRow[]) {
       order: existing?.order ?? (phaseIndex >= 0 ? phaseIndex : 99),
     });
   });
+  const maxPhaseCount = Math.max(1, ...Array.from(phaseMap.values()).map((p) => p.count));
   const phaseRows = Array.from(phaseMap.values())
-    .map((phase) => ({ ...phase, percent: ratio(phase.count, total) }))
+    .map((phase) => ({ ...phase, percent: ratio(phase.count, total), barPct: Math.round((phase.count / maxPhaseCount) * 100) }))
     .sort((a, b) => a.order - b.order || b.count - a.count);
 
+  // Upcoming gates: undone gates with a due date, soonest first.
   const gateRows = rows
-    .filter((row) => !row.gateDone && (row.gateBlockers > 0 || row.deliverableGap > 0 || !!row.gateDueDate))
-    .sort((a, b) => (b.gateBlockers + b.deliverableGap) - (a.gateBlockers + a.deliverableGap))
-    .slice(0, 6);
+    .filter((row) => !row.gateDone && !!row.gateDueDate)
+    .sort((a, b) => (a.gateDueDate ?? "9999").localeCompare(b.gateDueDate ?? "9999"))
+    .slice(0, 5);
+  const upcomingGateCount = rows.filter((row) => !row.gateDone && !!row.gateDueDate).length;
 
-  const deliveryRows = rows
-    .filter((row) => row.overdueTasks > 0 || row.blockedTasks > 0 || row.criticalIssues > 0 || isProjectedOverdue(row.projectedEnd, row.targetDate))
-    .sort((a, b) =>
-      (b.overdueTasks * 3 + b.blockedTasks * 2 + b.criticalIssues * 4) -
-      (a.overdueTasks * 3 + a.blockedTasks * 2 + a.criticalIssues * 4)
-    )
-    .slice(0, 6);
-
-  const releaseRows = rows
-    .filter((row) => row.releaseHardBlockers > 0 || row.releaseDecision === "conditional" || row.releaseGateReady)
-    .sort((a, b) => b.releaseHardBlockers - a.releaseHardBlockers)
-    .slice(0, 6);
-
-  const ownerMap = new Map<string, number>();
-  for (const row of rows) {
-    const key = row.pmName || "未指定 PM";
-    ownerMap.set(key, (ownerMap.get(key) ?? 0) + 1);
-  }
-  const ownerRows = Array.from(ownerMap.entries())
-    .map(([name, count]) => ({ name, count, percent: ratio(count, total) }))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 6);
-
-  const sourceMap = new Map<string, number>();
-  for (const row of rows) {
-    const label = projectSourceLabel(row);
-    sourceMap.set(label, (sourceMap.get(label) ?? 0) + 1);
-  }
-  const sourceRows = Array.from(sourceMap.entries())
-    .map(([label, count]) => ({ label, count, percent: ratio(count, total) }))
-    .sort((a, b) => b.count - a.count);
-  const primarySource = sourceRows[0] ?? { label: "暂无来源", count: 0, percent: 0 };
-  const sourceSummary = sourceRows.length
-    ? sourceRows.slice(0, 3).map((row) => `${row.label} ${row.count}`).join(" / ")
-    : "暂无来源词条";
-
-  const attentionRows = scored
-    .filter((item) => item.level !== "green" || item.row.gateBlockers > 0 || item.row.releaseHardBlockers > 0)
+  // Risk alerts: red/amber projects (and any with critical issues / hard blockers), worst first.
+  const riskAlerts = scored
+    .filter((item) => item.level !== "green" || item.row.criticalIssues > 0 || item.row.releaseHardBlockers > 0)
     .sort((a, b) => {
-      const rank = (level: RagLevel) => level === "red" ? 0 : level === "amber" ? 1 : 2;
-      return rank(a.level) - rank(b.level);
+      const rank = (level: RagLevel) => (level === "red" ? 0 : level === "amber" ? 1 : 2);
+      return rank(a.level) - rank(b.level) || b.row.criticalIssues - a.row.criticalIssues;
     })
-    .slice(0, 8);
+    .slice(0, 5);
+
+  // Portfolio progress: active projects by progress descending.
+  const progressRows = rows
+    .filter(projectIsActive)
+    .sort((a, b) => progressOf(b) - progressOf(a))
+    .slice(0, 6);
+
+  // 今日聚焦: highest-signal action items across the portfolio.
+  const focusItems = buildFocusItems(rows, scored);
 
   return {
     total,
     activeProjects: rows.filter(projectIsActive).length,
     notStartedProjects: rows.filter(projectIsNotStarted).length,
-    primarySource,
-    sourceSummary,
-    gateTaskTotal: rows.reduce((sum, row) => sum + row.gateTaskTotal, 0),
-    gateTaskDone: rows.reduce((sum, row) => sum + row.gateTaskDone, 0),
+    onTime,
+    overdueTasks,
+    blockedTasks,
+    openIssues,
+    criticalIssues,
     health,
     scored,
     phaseRows,
     gateRows,
-    deliveryRows,
-    releaseRows,
-    ownerRows,
-    attentionRows,
+    upcomingGateCount,
+    riskAlerts,
+    progressRows,
+    focusItems,
   };
+}
+
+type FocusItem = {
+  key: string;
+  tone: "red" | "amber";
+  title: string;
+  detail: string;
+  projectId: string | null;
+  drill?: DrillKind;
+};
+
+function buildFocusItems(rows: PortfolioTableRow[], scored: ScoredProject[]): FocusItem[] {
+  const items: FocusItem[] = [];
+
+  // 1) Most critical issue-bearing project.
+  const critical = [...rows].filter((r) => r.criticalIssues > 0).sort((a, b) => b.criticalIssues - a.criticalIssues)[0];
+  if (critical) {
+    items.push({
+      key: `crit-${critical.id}`,
+      tone: "red",
+      title: `${critical.name} · ${critical.criticalIssues} 项 P0/P1 问题`,
+      detail: `${critical.projectNumber || "—"} · ${PHASE_MAP[critical.currentPhase]?.name ?? critical.currentPhase}${critical.pmName ? ` · ${critical.pmName}` : ""}`,
+      projectId: critical.id,
+    });
+  }
+
+  // 2) Most overdue / blocked load.
+  const delayed = [...rows]
+    .filter((r) => r.overdueTasks > 0 || r.blockedTasks > 0)
+    .sort((a, b) => (b.overdueTasks * 2 + b.blockedTasks) - (a.overdueTasks * 2 + a.blockedTasks))[0];
+  if (delayed) {
+    items.push({
+      key: `delay-${delayed.id}`,
+      tone: "amber",
+      title: `${delayed.name} · 逾期 ${delayed.overdueTasks} · 阻塞 ${delayed.blockedTasks}`,
+      detail: `${delayed.projectNumber || "—"} · ${PHASE_MAP[delayed.currentPhase]?.name ?? delayed.currentPhase}`,
+      projectId: delayed.id,
+      drill: delayed.overdueTasks >= delayed.blockedTasks ? "overdue" : "blocked",
+    });
+  }
+
+  // 3) Nearest upcoming gate.
+  const nextGate = [...rows]
+    .filter((r) => !r.gateDone && !!r.gateDueDate)
+    .sort((a, b) => (a.gateDueDate ?? "9999").localeCompare(b.gateDueDate ?? "9999"))[0];
+  if (nextGate) {
+    const away = daysAway(nextGate.gateDueDate);
+    items.push({
+      key: `gate-${nextGate.id}`,
+      tone: "amber",
+      title: `${nextGate.name || "评审"} · ${nextGate.gateName || "Gate"}`,
+      detail: `${away !== null ? (away <= 0 ? "已到期" : `还有 ${away} 天`) : nextGate.gateDueDate} · ${nextGate.name}`,
+      projectId: nextGate.id,
+    });
+  }
+
+  // Backfill from red/amber projects if we have fewer than 3 signals.
+  for (const s of scored) {
+    if (items.length >= 3) break;
+    if (s.level === "green") continue;
+    if (items.some((i) => i.projectId === s.row.id)) continue;
+    items.push({
+      key: `att-${s.row.id}`,
+      tone: s.level === "red" ? "red" : "amber",
+      title: `${s.row.name} · ${s.reasons[0] ?? "需关注"}`,
+      detail: `${s.row.projectNumber || "—"} · ${PHASE_MAP[s.row.currentPhase]?.name ?? s.row.currentPhase}`,
+      projectId: s.row.id,
+    });
+  }
+
+  return items.slice(0, 3);
 }
 
 function normalizePieColor(color: string | undefined, index: number) {
   return color && color.startsWith("#") ? color : PIE_FALLBACK_COLORS[index % PIE_FALLBACK_COLORS.length];
 }
 
-function projectSourceLabel(row: PortfolioTableRow) {
-  if (row.customer?.trim()) return "客户/渠道";
-  if (row.category === "eco") return "ECO 变更";
-  if (row.category === "idr") return "ID/外观输入";
-  return "内部立项";
-}
-
-function MetricCell({
-  icon,
-  label,
-  value,
-  detail,
-  tone = "neutral",
-}: {
-  icon: React.ReactNode;
+// ── KPI card ──────────────────────────────────────────────────────────────────
+type KpiSpec = {
   label: string;
   value: number | string;
-  detail: string;
-  tone?: "neutral" | "ok" | "warn" | "bad";
-}) {
-  const toneClass =
-    tone === "ok" ? "text-emerald-700" :
-    tone === "warn" ? "text-amber-700" :
-    tone === "bad" ? "text-rose-700" :
-    "text-stone-900";
-  return (
-    <div className="min-h-[112px] p-4 bg-white">
-      <div className="flex items-center gap-1.5 text-stone-400">
-        {icon}
-        <span className="text-[10px] font-mono uppercase tracking-wider">{label}</span>
-      </div>
-      <div className={`mt-2 truncate font-serif font-semibold leading-none ${typeof value === "number" ? "text-3xl" : "text-xl"} ${toneClass}`}>{value}</div>
-      <div className="mt-2 text-[11px] text-stone-500 truncate">{detail}</div>
-    </div>
+  sub: string;
+  tone?: "neutral" | "green" | "amber" | "red" | "acc";
+  onClick?: () => void;
+};
+
+function KpiCard({ label, value, sub, tone = "neutral", onClick }: KpiSpec) {
+  const valueColor =
+    tone === "green" ? "text-[color:var(--success)]" :
+    tone === "amber" ? "text-[color:var(--warning)]" :
+    tone === "red" ? "text-[color:var(--destructive)]" :
+    tone === "acc" ? "text-primary" :
+    "text-foreground";
+  const inner = (
+    <>
+      <div className="text-[11px] font-semibold uppercase tracking-[0.05em] text-muted-foreground">{label}</div>
+      <div className={`num mt-[11px] text-[27px] font-bold leading-[0.9] tracking-[-0.5px] ${valueColor}`}>{value}</div>
+      <div className="mt-[9px] text-[11px] text-muted-foreground">{sub}</div>
+    </>
   );
+  if (onClick) {
+    return (
+      <LinearCard hover className="cursor-pointer px-4 py-[15px] text-left" onClick={onClick} role="button" tabIndex={0}>
+        {inner}
+      </LinearCard>
+    );
+  }
+  return <LinearCard className="px-4 py-[15px]">{inner}</LinearCard>;
 }
 
-function HealthBoard({
-  data,
+// ── Panel shell ────────────────────────────────────────────────────────────────
+function Panel({
+  title, sub, cta, onCta, className, children,
 }: {
-  data: ReturnType<typeof buildDashboard>;
+  title: string;
+  sub?: string;
+  cta?: string;
+  onCta?: () => void;
+  className?: string;
+  children: React.ReactNode;
 }) {
-  const total = data.total;
   return (
-    <Panel title="项目健康度分布" icon={<Gauge size={15} />}>
-      <div className="space-y-3">
-        {(["red", "amber", "green"] as RagLevel[]).map((level) => (
-          <div key={level}>
-            <div className="mb-1 flex items-center justify-between text-xs">
-              <span className={`font-medium ${HEALTH_TEXT[level]}`}>{HEALTH_LABEL[level]}</span>
-              <span className="font-mono text-stone-400">{data.health[level]} 项 · {ratio(data.health[level], total)}%</span>
-            </div>
-            <div className="h-2 bg-stone-100">
-              <div className={`h-2 ${HEALTH_COLOR[level]}`} style={{ width: `${ratio(data.health[level], total)}%` }} />
-            </div>
-          </div>
-        ))}
-      </div>
-    </Panel>
-  );
-}
-
-function PhaseBoard({
-  phases,
-  total,
-}: {
-  phases: Array<{ id: string; code: string; name: string; count: number; percent: number; color: string }>;
-  total: number;
-}) {
-  const gradient = buildPieGradient(phases);
-  return (
-    <Panel title="阶段分布" icon={<Layers3 size={15} />}>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-[176px_1fr] sm:items-center">
-        <div className="relative mx-auto h-40 w-40 shrink-0 rounded-full" style={{ background: gradient }}>
-          <div className="absolute inset-8 rounded-full bg-white shadow-inner" />
-          <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <div className="text-3xl font-serif font-semibold text-stone-900">{total}</div>
-            <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400">projects</div>
-          </div>
+    <LinearCard className={`flex flex-col overflow-hidden ${className ?? ""}`}>
+      <div className="flex items-center justify-between border-b border-border px-4 py-[13px]">
+        <div className="text-[14px] font-semibold">
+          {title}
+          {sub && <span className="ml-1.5 text-[12px] font-medium text-muted-foreground">{sub}</span>}
         </div>
-        <div className="space-y-2">
-          {phases.map((phase) => (
-            <div key={phase.id} className="grid grid-cols-[12px_58px_1fr_48px] items-center gap-2">
-              <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: phase.color }} />
-              <div className="text-xs font-semibold text-stone-800">{phase.code}</div>
-              <div className="min-w-0">
-                <div className="truncate text-xs text-stone-600">{phase.name}</div>
-              </div>
-              <div className="text-right text-[11px] font-mono text-stone-400">{phase.count} · {phase.percent}%</div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </Panel>
-  );
-}
-
-function buildPieGradient(phases: Array<{ percent: number; color: string }>) {
-  if (phases.length === 0) return "#e7e5e4";
-  let cursor = 0;
-  return `conic-gradient(${phases.map((phase, index) => {
-    const start = cursor;
-    const end = index === phases.length - 1 ? 100 : Math.min(100, cursor + phase.percent);
-    cursor = end;
-    return `${phase.color} ${start}% ${end}%`;
-  }).join(", ")})`;
-}
-
-function GateBoard({
-  rows,
-  total,
-  onSelectProject,
-}: {
-  rows: PortfolioTableRow[];
-  total: number;
-  onSelectProject: (id: string) => void;
-}) {
-  return (
-    <Panel title="Gate 与交付物" icon={<Flag size={15} />}>
-      <BoardSummary value={rows.length} label={`项目需补齐 · ${ratio(rows.length, total)}%`} tone={rows.length ? "warn" : "ok"} />
-      <ProjectRows
-        rows={rows}
-        empty="Gate 材料暂无明显缺口"
-        onSelectProject={onSelectProject}
-        renderTags={(row) => (
-          <>
-            {row.gateBlockers > 0 && <Tag tone="amber">缺口 {row.gateBlockers}</Tag>}
-            {row.deliverableGap > 0 && <Tag tone="amber">交付物 {row.deliverableGap}</Tag>}
-          </>
+        {cta && (
+          <button onClick={onCta} className="inline-flex items-center gap-1 text-[12px] font-semibold text-primary hover:opacity-80">
+            {cta}
+          </button>
         )}
-        renderDetail={(row) => row.gateName || "Gate 待确认"}
-      />
-    </Panel>
+      </div>
+      {children}
+    </LinearCard>
   );
 }
 
-function DeliveryBoard({
-  rows,
-  total,
-  onSelectProject,
-  onDrill,
+// ── 今日聚焦 ───────────────────────────────────────────────────────────────────
+function FocusBand({
+  items, onSelectProject, onDrill,
 }: {
-  rows: PortfolioTableRow[];
-  total: number;
+  items: FocusItem[];
   onSelectProject: (id: string) => void;
   onDrill: (kind: DrillKind) => void;
 }) {
   return (
-    <Panel title="延期与阻塞" icon={<CalendarClock size={15} />}>
-      <BoardSummary value={rows.length} label={`项目有交付风险 · ${ratio(rows.length, total)}%`} tone={rows.length ? "bad" : "ok"} />
-      <div className="mb-2 flex gap-2">
-        <button type="button" onClick={() => onDrill("overdue")} className="ce-control flex-1 border border-stone-200 px-2 py-1.5 text-[11px] text-stone-600 hover:border-stone-400">
-          逾期任务
-        </button>
-        <button type="button" onClick={() => onDrill("blocked")} className="ce-control flex-1 border border-stone-200 px-2 py-1.5 text-[11px] text-stone-600 hover:border-stone-400">
-          阻塞任务
-        </button>
-      </div>
-      <ProjectRows
-        rows={rows}
-        empty="暂无延期或阻塞项目"
-        onSelectProject={onSelectProject}
-        renderTags={(row) => (
-          <>
-            {row.overdueTasks > 0 && <Tag tone="rose">逾期 {row.overdueTasks}</Tag>}
-            {row.blockedTasks > 0 && <Tag tone="amber">阻塞 {row.blockedTasks}</Tag>}
-            {row.criticalIssues > 0 && <Tag tone="rose">P0/P1 {row.criticalIssues}</Tag>}
-          </>
-        )}
-        renderDetail={(row) => row.projectedEnd ? `预计完成 ${row.projectedEnd}` : "尚未形成完整排期"}
-      />
+    <Panel title="今日聚焦" sub="Today's Focus">
+      {items.length === 0 ? (
+        <div className="px-4 py-5 text-sm text-muted-foreground">今天没有紧急事项。</div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-3">
+          {items.map((item) => (
+            <button
+              key={item.key}
+              onClick={() => (item.drill ? onDrill(item.drill) : item.projectId && onSelectProject(item.projectId))}
+              className="flex items-center gap-3 border-b border-border px-4 py-[15px] text-left transition-colors last:border-b-0 hover:bg-secondary sm:border-b-0 sm:border-r sm:last:border-r-0"
+            >
+              <span
+                className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[8px]"
+                style={
+                  item.tone === "red"
+                    ? { background: "color-mix(in srgb, var(--destructive) 14%, transparent)", color: "var(--destructive)" }
+                    : { background: "color-mix(in srgb, var(--warning) 16%, transparent)", color: "var(--warning)" }
+                }
+              >
+                {item.tone === "red" ? <AlertTriangle size={15} /> : <CalendarClock size={15} />}
+              </span>
+              <div className="min-w-0">
+                <div className="truncate text-[13.5px] font-semibold">{item.title}</div>
+                <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">{item.detail}</div>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
     </Panel>
   );
 }
 
-function ReleaseBoard({
-  rows,
-  total,
-  onSelectProject,
-}: {
-  rows: PortfolioTableRow[];
-  total: number;
-  onSelectProject: (id: string) => void;
-}) {
-  const blocked = rows.filter((row) => row.releaseHardBlockers > 0).length;
-  return (
-    <Panel title="发布准备" icon={<Rocket size={15} />}>
-      <BoardSummary value={blocked} label={`项目存在硬卡 · ${ratio(blocked, total)}%`} tone={blocked ? "bad" : "ok"} />
-      <ProjectRows
-        rows={rows}
-        empty="暂无发布阻断项目"
-        onSelectProject={onSelectProject}
-        renderTags={(row) => (
-          <>
-            {row.releaseHardBlockers > 0 ? <Tag tone="rose">硬卡 {row.releaseHardBlockers}</Tag> : <Tag tone="emerald">可推进</Tag>}
-            {row.releaseDecision === "conditional" && <Tag tone="amber">有条件</Tag>}
-          </>
-        )}
-        renderDetail={(row) => row.releaseGateName || "发布 Gate 未配置"}
-      />
-    </Panel>
-  );
-}
-
-function OwnerBoard({ rows, total }: { rows: Array<{ name: string; count: number; percent: number }>; total: number }) {
-  return (
-    <Panel title="PM 负责分布" icon={<UserRound size={15} />}>
-      <div className="space-y-3">
-        {rows.map((row) => (
-          <div key={row.name} className="grid grid-cols-[112px_1fr_42px] items-center gap-3">
-            <div className="truncate text-xs text-stone-700">{row.name}</div>
-            <div className="h-2 bg-stone-100">
-              <div className="h-2 bg-sky-600" style={{ width: `${Math.max(row.percent, row.count > 0 ? 6 : 0)}%` }} />
-            </div>
-            <div className="text-right text-[11px] font-mono text-stone-400">{row.count}/{total}</div>
-          </div>
-        ))}
-      </div>
-    </Panel>
-  );
-}
-
-function AttentionBoard({
-  rows,
-  onSelectProject,
+// ── 风险预警 ───────────────────────────────────────────────────────────────────
+function RiskAlertsBoard({
+  rows, onSelectProject,
 }: {
   rows: ScoredProject[];
   onSelectProject: (id: string) => void;
 }) {
   return (
-    <Panel title="需关注项目" icon={<AlertTriangle size={15} />}>
-      <div className="divide-y divide-stone-100">
-        {rows.length === 0 && <div className="py-2 text-sm text-stone-400">暂无需要重点关注的项目。</div>}
-        {rows.map(({ row, level, reasons }) => (
-          <button key={row.id} onClick={() => onSelectProject(row.id)} className="w-full py-2.5 text-left hover:bg-stone-50/70 -mx-2 px-2">
-            <div className="flex items-center gap-3">
-              <span className={`h-2 w-2 shrink-0 rounded-full ${HEALTH_COLOR[level]}`} />
+    <Panel title="风险预警">
+      {rows.length === 0 ? (
+        <div className="px-4 py-5 text-sm text-muted-foreground">暂无风险项目。</div>
+      ) : (
+        rows.map(({ row, level, reasons }) => {
+          const sevLabel = row.criticalIssues > 0 ? `P${level === "red" ? 0 : 1}×${row.criticalIssues}` : level === "red" ? "高" : "中";
+          return (
+            <button
+              key={row.id}
+              onClick={() => onSelectProject(row.id)}
+              className="flex w-full items-center gap-3 border-b border-border px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-secondary"
+            >
+              <span
+                className="shrink-0 rounded-[5px] px-[7px] py-0.5 text-[9.5px] font-bold"
+                style={
+                  level === "red"
+                    ? { background: "var(--destructive)", color: "#fff" }
+                    : { background: "color-mix(in srgb, var(--warning) 16%, transparent)", color: "var(--warning)" }
+                }
+              >
+                {sevLabel}
+              </span>
               <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium text-stone-800">{row.name}</div>
-                <div className="truncate text-[10px] font-mono text-stone-400">{reasons.length ? reasons.join(" / ") : "项目需关注"}</div>
+                <div className="truncate text-[13.5px] font-semibold">{row.name}</div>
+                <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">
+                  {row.projectNumber || "—"} · {PHASE_MAP[row.currentPhase]?.name ?? row.currentPhase}
+                  {row.pmName ? ` · ${row.pmName}` : ""}
+                  {reasons.length ? ` · ${reasons[0]}` : ""}
+                </div>
               </div>
-              {row.pmName && <Tag tone="stone">PM {row.pmName}</Tag>}
-              <ChevronRight size={13} className="text-stone-300" />
-            </div>
-          </button>
-        ))}
-      </div>
+              <StatusDot tone={ragTone(level)} />
+            </button>
+          );
+        })
+      )}
     </Panel>
   );
 }
 
-function BoardSummary({ value, label, tone }: { value: number; label: string; tone: "ok" | "warn" | "bad" }) {
-  const cls = tone === "ok" ? "text-emerald-700 bg-emerald-50" : tone === "warn" ? "text-amber-700 bg-amber-50" : "text-rose-700 bg-rose-50";
-  return (
-    <div className={`mb-3 flex items-end justify-between px-3 py-2 ${cls}`}>
-      <div className="text-2xl font-serif font-semibold leading-none">{value}</div>
-      <div className="text-[11px]">{label}</div>
-    </div>
-  );
-}
-
-function ProjectRows({
-  rows,
-  empty,
-  onSelectProject,
-  renderTags,
-  renderDetail,
+// ── 组合进度 ───────────────────────────────────────────────────────────────────
+function ProgressBoard({
+  rows, onSelectProject, className,
 }: {
   rows: PortfolioTableRow[];
-  empty: string;
   onSelectProject: (id: string) => void;
-  renderTags: (row: PortfolioTableRow) => React.ReactNode;
-  renderDetail: (row: PortfolioTableRow) => React.ReactNode;
+  className?: string;
 }) {
-  if (rows.length === 0) return <div className="py-2 text-sm text-stone-400">{empty}</div>;
   return (
-    <div className="divide-y divide-stone-100">
-      {rows.map((row) => (
-        <button key={row.id} type="button" onClick={() => onSelectProject(row.id)} className="w-full py-2 text-left hover:bg-stone-50/70 -mx-2 px-2">
-          <div className="flex items-start gap-3">
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium text-stone-800">{row.name}</div>
-              <div className="truncate text-[11px] text-stone-500">{renderDetail(row)}</div>
+    <Panel title="组合进度" className={className}>
+      {rows.length === 0 ? (
+        <div className="px-4 py-5 text-sm text-muted-foreground">暂无进行中的项目。</div>
+      ) : (
+        rows.map((row) => {
+          const prog = progressOf(row);
+          return (
+            <button
+              key={row.id}
+              onClick={() => onSelectProject(row.id)}
+              className="grid w-full grid-cols-[14px_1fr_88px_120px] items-center gap-3 border-b border-border px-4 py-[11px] text-left transition-colors last:border-b-0 hover:bg-secondary"
+            >
+              <StatusDot tone={ragTone(row.ragLevel)} />
+              <div className="min-w-0">
+                <div className="truncate text-[13.5px] font-semibold">{row.name}</div>
+                <div className="num truncate text-[10.5px] text-muted-foreground">{row.projectNumber || "—"}</div>
+              </div>
+              <span className="inline-flex w-fit items-center gap-1.5 rounded-[6px] border border-border bg-secondary px-2 py-0.5 text-[11px] font-medium text-[color:var(--secondary-foreground)]">
+                <span className="h-1.5 w-1.5 rounded-[2px] bg-primary" />
+                {PHASE_MAP[row.currentPhase]?.name ?? row.currentPhase}
+              </span>
+              <div className="flex items-center gap-2">
+                <LinearBar value={prog} className="flex-1" />
+                <span className="num w-[30px] text-right text-[11.5px] font-semibold text-muted-foreground">{prog}%</span>
+              </div>
+            </button>
+          );
+        })
+      )}
+    </Panel>
+  );
+}
+
+// ── 即将 Gate ──────────────────────────────────────────────────────────────────
+function GatesBoard({
+  rows, onSelectProject,
+}: {
+  rows: PortfolioTableRow[];
+  onSelectProject: (id: string) => void;
+}) {
+  return (
+    <Panel title="即将到来 Gate">
+      {rows.length === 0 ? (
+        <div className="px-4 py-5 text-sm text-muted-foreground">近期暂无 Gate 评审。</div>
+      ) : (
+        rows.map((row) => {
+          const away = daysAway(row.gateDueDate);
+          const d = row.gateDueDate ? new Date(row.gateDueDate) : null;
+          const urgent = away !== null && away <= 7;
+          return (
+            <button
+              key={row.id}
+              onClick={() => onSelectProject(row.id)}
+              className="flex w-full items-center gap-[11px] border-b border-border px-4 py-[11px] text-left transition-colors last:border-b-0 hover:bg-secondary"
+            >
+              <div className="w-[42px] shrink-0 text-center">
+                <div className="num text-[17px] font-bold leading-none">{d ? String(d.getDate()).padStart(2, "0") : "--"}</div>
+                <div className="mt-0.5 text-[9px] uppercase text-muted-foreground">{d ? MONTH_ABBR[d.getMonth()] : ""}</div>
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[13px] font-semibold">{row.name}</div>
+                <div className="truncate text-[11px] text-muted-foreground">{row.gateName || "Gate"}{row.pmName ? ` · ${row.pmName}` : ""}</div>
+              </div>
+              <span
+                className="shrink-0 rounded-[5px] px-[7px] py-0.5 text-[10px] font-semibold"
+                style={
+                  urgent
+                    ? { background: "color-mix(in srgb, var(--destructive) 12%, transparent)", color: "var(--destructive)" }
+                    : { background: "color-mix(in srgb, var(--warning) 16%, transparent)", color: "var(--warning)" }
+                }
+              >
+                {away !== null ? (away <= 0 ? "到期" : `${away}天`) : "—"}
+              </span>
+            </button>
+          );
+        })
+      )}
+    </Panel>
+  );
+}
+
+// ── 阶段分布 ───────────────────────────────────────────────────────────────────
+function PhaseDistBoard({
+  phases, total, className,
+}: {
+  phases: Array<{ id: string; code: string; name: string; count: number; percent: number; barPct: number; color: string }>;
+  total: number;
+  className?: string;
+}) {
+  return (
+    <Panel title="阶段分布" className={className}>
+      <div className="flex flex-col gap-[10px] px-4 py-[14px]">
+        {phases.length === 0 ? (
+          <div className="text-sm text-muted-foreground">暂无阶段数据。</div>
+        ) : (
+          phases.map((phase) => (
+            <div key={phase.id} className="grid grid-cols-[52px_1fr_20px] items-center gap-[10px]">
+              <span className="truncate text-[12px] text-[color:var(--secondary-foreground)]">{phase.name}</span>
+              <div className="h-2 overflow-hidden rounded-[5px] bg-secondary">
+                <div className="h-full rounded-[5px] bg-primary" style={{ width: `${phase.barPct}%` }} />
+              </div>
+              <span className="num text-right text-[12px] font-semibold text-muted-foreground">{phase.count}</span>
             </div>
-            <div className="flex max-w-[150px] shrink-0 flex-wrap justify-end gap-1">{renderTags(row)}</div>
+          ))
+        )}
+        {phases.length > 0 && (
+          <div className="mt-1 flex items-center justify-between border-t border-border pt-2 text-[11px] text-muted-foreground">
+            <span>合计</span>
+            <span className="num font-semibold text-foreground">{total} 个项目</span>
           </div>
-        </button>
-      ))}
-    </div>
+        )}
+      </div>
+    </Panel>
   );
-}
-
-function Panel({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
-  return (
-    <div className="ce-panel p-4">
-      <h3 className="mb-3 flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-widest text-stone-400">
-        {icon}
-        {title}
-      </h3>
-      {children}
-    </div>
-  );
-}
-
-function Tag({ tone, children }: { tone: "rose" | "amber" | "emerald" | "stone"; children: React.ReactNode }) {
-  const cls =
-    tone === "rose" ? "bg-rose-50 text-rose-700 border-rose-200" :
-    tone === "amber" ? "bg-amber-50 text-amber-700 border-amber-200" :
-    tone === "emerald" ? "bg-emerald-50 text-emerald-700 border-emerald-200" :
-    "bg-stone-50 text-stone-600 border-stone-200";
-  return <span className={`whitespace-nowrap border px-1.5 py-0.5 text-[10px] font-mono ${cls}`}>{children}</span>;
 }

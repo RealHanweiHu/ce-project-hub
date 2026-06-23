@@ -2,6 +2,7 @@ import { useMemo, useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Loader2, X } from "lucide-react";
+import { Kicker } from "@/components/linear/primitives";
 import type { PortfolioTableRow } from "./PortfolioTable";
 import { PerspectivePanel, type Lens } from "./PerspectivePanel";
 import { PortfolioDashboard } from "./PortfolioDashboard";
@@ -52,24 +53,25 @@ export function OverviewPage({ onSelectProject }: { onSelectProject: (id: string
     "按项目维度查看健康、阶段、Gate、交付物、发布与延期风险。";
 
   if (isLoading) {
-    return <div className="flex items-center gap-2 text-stone-400 py-12 justify-center"><Loader2 size={16} className="animate-spin" />加载总览…</div>;
+    return <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground"><Loader2 size={16} className="animate-spin" />加载总览…</div>;
   }
 
   return (
-    <div className="ce-page">
-      <div className="ce-page-header flex-col items-start gap-3 sm:flex-row sm:items-center">
+    <div className="flex flex-col gap-5">
+      <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-end">
         <div>
-          <h1 className="font-serif text-xl text-stone-900">{pageTitle}</h1>
-          <p className="mt-1 text-xs text-stone-500">{pageDesc}</p>
+          <Kicker>Portfolio Overview</Kicker>
+          <h1 className="mt-1.5 text-[22px] font-bold tracking-[-0.4px]">{pageTitle}</h1>
+          <p className="mt-1 text-[13px] text-muted-foreground">{pageDesc}</p>
         </div>
         {allowedLenses.length > 1 && (
           <div className="flex items-center gap-2">
-            <span className="text-[11px] font-mono text-stone-400">以</span>
+            <span className="text-[11px] text-muted-foreground">以</span>
             <select value={activeLens} onChange={(e) => setLens(e.target.value as Lens)}
-              className="ce-control border border-stone-300 bg-white px-2 py-1.5 text-sm">
+              className="rounded-[7px] border border-border bg-card px-2.5 py-1.5 text-sm outline-none transition-colors focus:border-[color:var(--acc-border)]">
               {allowedLenses.map((l) => <option key={l} value={l}>{LENS_LABEL[l]}视角</option>)}
             </select>
-            <span className="text-[11px] font-mono text-stone-400">查看</span>
+            <span className="text-[11px] text-muted-foreground">查看</span>
           </div>
         )}
       </div>
@@ -81,9 +83,9 @@ export function OverviewPage({ onSelectProject }: { onSelectProject: (id: string
       {activeLens === "exec" && <PortfolioMetricsTable />}
 
       {!isWorkbench && (
-        <div className="flex items-center justify-between pt-2">
-          <h2 className="text-[11px] font-mono uppercase tracking-widest text-stone-400">需要处理</h2>
-          <span className="text-[11px] text-stone-400">{LENS_LABEL[activeLens]}视角</span>
+        <div className="flex items-center justify-between pt-1">
+          <Kicker>需要处理</Kicker>
+          <span className="text-[11px] text-muted-foreground">{LENS_LABEL[activeLens]}视角</span>
         </div>
       )}
       <div>
@@ -112,13 +114,13 @@ function DrillDown({ kind, onClose, onSelectProject }: { kind: "overdue" | "bloc
     dueDate: t.dueDate ? String(t.dueDate) : null, assigneeUserId: t.assigneeUserId ?? null, completed: t.completed,
   }));
   return (
-    <div className="fixed inset-0 z-40 flex justify-end bg-stone-900/40" onClick={onClose}>
-      <div className="w-full max-w-xl h-full bg-white shadow-xl overflow-auto p-5" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-serif text-lg text-stone-900">{kind === "overdue" ? "逾期任务" : "阻塞任务"}</h3>
-          <button onClick={onClose} aria-label="关闭" className="text-stone-400 hover:text-stone-700"><X size={18} /></button>
+    <div className="fixed inset-0 z-40 flex justify-end bg-foreground/40" onClick={onClose}>
+      <div className="h-full w-full max-w-xl overflow-auto bg-card p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-lg font-bold tracking-[-0.3px]">{kind === "overdue" ? "逾期任务" : "阻塞任务"}</h3>
+          <button onClick={onClose} aria-label="关闭" className="text-muted-foreground hover:text-foreground"><X size={18} /></button>
         </div>
-        <div className="ce-table-shell">
+        <div className="overflow-hidden rounded-[10px] border border-border">
           <TaskListView tasks={rows} isLoading={q.isLoading}
             emptyIcon={null} emptyTitle={kind === "overdue" ? "无逾期任务" : "无阻塞任务"} emptyDesc=""
             onRefetch={() => q.refetch()} onNavigateToProject={(id, focus) => { onSelectProject(id, focus); onClose(); }} showOverdueBadge />
