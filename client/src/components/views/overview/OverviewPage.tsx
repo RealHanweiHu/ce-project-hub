@@ -82,15 +82,12 @@ export function OverviewPage({ onSelectProject }: { onSelectProject: (id: string
 
       {activeLens === "exec" && <PortfolioMetricsTable />}
 
-      {!isWorkbench && (
-        <div className="flex items-center justify-between pt-1">
-          <Kicker>需要处理</Kicker>
-          <span className="text-[11px] text-muted-foreground">{LENS_LABEL[activeLens]}视角</span>
+      {/* 「需要处理」行动队列仅在 pm/mine 工作台视角出现；exec 总览只看大盘，不要这一块 */}
+      {isWorkbench && (
+        <div>
+          <PerspectivePanel lens={activeLens} rows={portfolio} onSelectProject={onSelectProject} />
         </div>
       )}
-      <div>
-        <PerspectivePanel lens={activeLens} rows={portfolio} onSelectProject={onSelectProject} />
-      </div>
 
       {drill && <DrillDown kind={drill} onClose={() => setDrill(null)} onSelectProject={onSelectProject} />}
     </div>
