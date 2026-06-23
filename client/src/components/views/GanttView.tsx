@@ -1,13 +1,12 @@
-// Design: Industrial Precision - stone/amber color system
-// GanttView: editable Gantt chart — double-click any phase bar to edit its dates
-// Changes are immediately propagated via onUpdate → triggers auto-save in Home.tsx
+// Linear redesign — GanttView (per-project editable Gantt chart)
+// Double-click any phase bar to edit its dates; changes propagate via onUpdate → auto-save.
 
 import { useMemo, useRef, useState, useCallback } from 'react';
 import {
   Flag, CalendarDays, ZoomIn, ZoomOut, ChevronLeft, ChevronRight,
   Pencil, Check, X as XIcon, Lock,
 } from 'lucide-react';
-import { Project, SOP_PHASES, PhaseDate, computePhaseProgress, getPhaseStatus, getProjectPhases, SOPPhase } from '@/lib/data';
+import { Project, PhaseDate, computePhaseProgress, getPhaseStatus, getProjectPhases, SOPPhase } from '@/lib/data';
 
 // ── Duration defaults (days) ──────────────────────────────────────────────────
 const PHASE_DAYS: Record<string, number> = {
@@ -70,19 +69,19 @@ function DateEditor({
   const commit = () => { onChange(draft); onClose(); };
   return (
     <div className="flex items-center gap-1.5">
-      <span className="text-[10px] font-mono text-stone-400 uppercase tracking-wider shrink-0">{label}</span>
+      <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">{label}</span>
       <input
         type="date"
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
-        className="text-[11px] font-mono border border-amber-400 bg-amber-50 outline-none px-1.5 py-0.5 text-stone-800 w-32"
+        className="w-32 rounded-[6px] border border-[color:var(--acc-border)] bg-[color:var(--acc-soft)] px-1.5 py-0.5 text-[11px] text-foreground outline-none num"
         autoFocus
         onKeyDown={(e) => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') onClose(); }}
       />
-      <button onClick={commit} className="p-0.5 text-emerald-600 hover:text-emerald-800 transition-colors">
+      <button onClick={commit} className="p-0.5 text-[color:var(--success)] transition-colors hover:opacity-80">
         <Check size={13} />
       </button>
-      <button onClick={onClose} className="p-0.5 text-stone-400 hover:text-stone-700 transition-colors">
+      <button onClick={onClose} className="p-0.5 text-muted-foreground transition-colors hover:text-foreground">
         <XIcon size={13} />
       </button>
     </div>
@@ -250,45 +249,45 @@ export function GanttView({ project, onUpdate, onPhaseClick, readOnly = false }:
   const LABEL_WIDTH = 148;
 
   return (
-    <div className="bg-white border border-stone-200">
+    <div className="rounded-[11px] border border-border bg-card">
       {/* Toolbar */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-stone-200 flex-wrap gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-5 py-3">
         <div className="flex items-center gap-3">
           <div>
-            <span className="text-[10px] font-mono uppercase tracking-widest text-stone-400">甘特图</span>
-            <span className="ml-3 text-[10px] font-mono text-stone-400">
+            <span className="text-[10px] uppercase tracking-wide text-muted-foreground">甘特图</span>
+            <span className="ml-3 text-[10px] text-muted-foreground num">
               {formatDate(totalStart)} → {formatDate(totalEnd)}
             </span>
           </div>
           {!readOnly ? (
-            <div className="flex items-center gap-1.5 bg-amber-50 border border-amber-200 px-2.5 py-1">
-              <Pencil size={10} className="text-amber-600" />
-              <span className="text-[10px] font-mono text-amber-700 uppercase tracking-wider">双击阶段条可编辑日期</span>
+            <div className="flex items-center gap-1.5 rounded-[6px] border border-[color:var(--acc-border)] bg-[color:var(--acc-soft)] px-2.5 py-1">
+              <Pencil size={10} className="text-primary" />
+              <span className="text-[10px] uppercase tracking-wide text-primary">双击阶段条可编辑日期</span>
             </div>
           ) : (
-            <div className="flex items-center gap-1.5 bg-stone-100 border border-stone-200 px-2.5 py-1">
-              <Lock size={10} className="text-stone-400" />
-              <span className="text-[10px] font-mono text-stone-400 uppercase tracking-wider">仅 Owner / 管理层 / PM 可修改阶段日期</span>
+            <div className="flex items-center gap-1.5 rounded-[6px] border border-border bg-secondary px-2.5 py-1">
+              <Lock size={10} className="text-muted-foreground" />
+              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">仅 Owner / 管理层 / PM 可修改阶段日期</span>
             </div>
           )}
         </div>
         <div className="flex items-center gap-1">
-          <button onClick={() => scrollBy(-200)} className="p-1.5 text-stone-400 hover:text-stone-700 hover:bg-stone-100 transition-colors" title="向左滚动">
+          <button onClick={() => scrollBy(-200)} className="rounded-[6px] p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground" title="向左滚动">
             <ChevronLeft size={15} />
           </button>
-          <button onClick={() => scrollBy(200)} className="p-1.5 text-stone-400 hover:text-stone-700 hover:bg-stone-100 transition-colors" title="向右滚动">
+          <button onClick={() => scrollBy(200)} className="rounded-[6px] p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground" title="向右滚动">
             <ChevronRight size={15} />
           </button>
-          <div className="w-px h-4 bg-stone-200 mx-1" />
-          <button onClick={() => setZoom((z) => Math.min(4, +(z * 1.5).toFixed(2)))} className="p-1.5 text-stone-400 hover:text-stone-700 hover:bg-stone-100 transition-colors" title="放大">
+          <div className="mx-1 h-4 w-px bg-border" />
+          <button onClick={() => setZoom((z) => Math.min(4, +(z * 1.5).toFixed(2)))} className="rounded-[6px] p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground" title="放大">
             <ZoomIn size={15} />
           </button>
-          <button onClick={() => setZoom((z) => Math.max(0.3, +(z / 1.5).toFixed(2)))} className="p-1.5 text-stone-400 hover:text-stone-700 hover:bg-stone-100 transition-colors" title="缩小">
+          <button onClick={() => setZoom((z) => Math.max(0.3, +(z / 1.5).toFixed(2)))} className="rounded-[6px] p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground" title="缩小">
             <ZoomOut size={15} />
           </button>
           <button
             onClick={() => { setZoom(1); setTimeout(scrollToToday, 50); }}
-            className="ml-1 px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider text-stone-500 border border-stone-300 hover:bg-stone-50 transition-colors flex items-center gap-1"
+            className="ml-1 flex items-center gap-1 rounded-[6px] border border-border px-2.5 py-1 text-[10px] uppercase tracking-wide text-muted-foreground transition-colors hover:bg-secondary"
           >
             <CalendarDays size={11} />今天
           </button>
@@ -298,23 +297,23 @@ export function GanttView({ project, onUpdate, onPhaseClick, readOnly = false }:
       {/* Chart area */}
       <div className="flex overflow-hidden">
         {/* Fixed label column */}
-        <div className="shrink-0 border-r border-stone-200" style={{ width: LABEL_WIDTH }}>
-          <div className="h-8 border-b border-stone-200 bg-stone-50" />
+        <div className="shrink-0 border-r border-border" style={{ width: LABEL_WIDTH }}>
+          <div className="h-8 border-b border-border bg-secondary" />
           {bars.map(({ phase, status, isCustom }) => (
             <div
               key={phase.id}
               onClick={() => onPhaseClick?.(phase.id)}
-              className={`flex items-center gap-2 px-3 border-b border-stone-100 cursor-pointer hover:bg-stone-50 transition-colors ${
-                status === 'active' ? 'bg-amber-50/40' : ''
+              className={`flex cursor-pointer items-center gap-2 border-b border-border px-3 transition-colors hover:bg-secondary ${
+                status === 'active' ? 'bg-[color:var(--acc-soft)]/60' : ''
               }`}
               style={{ height: ROW_HEIGHT }}
             >
-              <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: phase.color }} />
-              <div className="flex-1 min-w-0">
-                <div className="text-[10px] font-mono uppercase tracking-wider text-stone-400 leading-none">{phase.code}</div>
-                <div className="text-xs font-medium text-stone-700 leading-tight truncate mt-0.5">{phase.nameEn}</div>
+              <div className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: phase.color }} />
+              <div className="min-w-0 flex-1">
+                <div className="text-[10px] uppercase leading-none tracking-wide text-muted-foreground">{phase.code}</div>
+                <div className="mt-0.5 truncate text-xs font-medium leading-tight text-[color:var(--secondary-foreground)]">{phase.nameEn}</div>
                 {isCustom && (
-                  <div className="text-[9px] font-mono text-amber-600 leading-none mt-0.5 uppercase tracking-wider">已自定义</div>
+                  <div className="mt-0.5 text-[9px] uppercase leading-none tracking-wide text-primary">已自定义</div>
                 )}
               </div>
             </div>
@@ -325,15 +324,15 @@ export function GanttView({ project, onUpdate, onPhaseClick, readOnly = false }:
         <div ref={scrollRef} className="flex-1 overflow-x-auto overflow-y-hidden">
           <div style={{ width: Math.max(totalWidth, 400), position: 'relative' }}>
             {/* Month header */}
-            <div className="h-8 border-b border-stone-200 bg-stone-50 relative" style={{ width: Math.max(totalWidth, 400) }}>
+            <div className="relative h-8 border-b border-border bg-secondary" style={{ width: Math.max(totalWidth, 400) }}>
               {monthTicks.map((tick, i) => (
-                <div key={i} className="absolute top-0 h-full flex items-center" style={{ left: tick.offsetPx }}>
-                  <div className="h-full w-px bg-stone-200" />
-                  <span className="text-[10px] font-mono text-stone-400 ml-1.5 whitespace-nowrap">{tick.label}</span>
+                <div key={i} className="absolute top-0 flex h-full items-center" style={{ left: tick.offsetPx }}>
+                  <div className="h-full w-px bg-border" />
+                  <span className="ml-1.5 whitespace-nowrap text-[10px] text-muted-foreground num">{tick.label}</span>
                 </div>
               ))}
               {showToday && (
-                <div className="absolute top-0 h-full w-px bg-amber-400 z-10" style={{ left: todayPx }} />
+                <div className="absolute top-0 z-10 h-full w-px bg-primary" style={{ left: todayPx }} />
               )}
             </div>
 
@@ -346,15 +345,15 @@ export function GanttView({ project, onUpdate, onPhaseClick, readOnly = false }:
               return (
                 <div
                   key={phase.id}
-                  className={`relative border-b border-stone-100 ${status === 'active' ? 'bg-amber-50/20' : 'bg-white'}`}
+                  className={`relative border-b border-border ${status === 'active' ? 'bg-[color:var(--acc-soft)]/30' : 'bg-card'}`}
                   style={{ height: ROW_HEIGHT, width: Math.max(totalWidth, 400) }}
                 >
                   {/* Month grid lines */}
                   {monthTicks.map((tick, i) => (
-                    <div key={i} className="absolute top-0 h-full w-px bg-stone-100" style={{ left: tick.offsetPx }} />
+                    <div key={i} className="absolute top-0 h-full w-px bg-border" style={{ left: tick.offsetPx }} />
                   ))}
                   {showToday && (
-                    <div className="absolute top-0 h-full w-px bg-amber-400/50 z-10" style={{ left: todayPx }} />
+                    <div className="absolute top-0 z-10 h-full w-px bg-primary/50" style={{ left: todayPx }} />
                   )}
 
                   {/* Phase bar */}
@@ -388,27 +387,27 @@ export function GanttView({ project, onUpdate, onPhaseClick, readOnly = false }:
                     />
                     {/* Progress label */}
                     {width > 50 && (
-                      <div className="absolute inset-0 flex items-center px-2 pointer-events-none">
-                        <span className="text-[10px] font-mono text-white font-semibold drop-shadow-sm truncate">
+                      <div className="pointer-events-none absolute inset-0 flex items-center px-2">
+                        <span className="truncate text-[10px] font-semibold text-white drop-shadow-sm num">
                           {progress}%
                         </span>
                       </div>
                     )}
                     {/* Edit hint on hover */}
                     {!readOnly && (
-                      <div className="absolute -top-5 left-0 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap">
-                        <span className="text-[9px] font-mono text-stone-500 bg-white border border-stone-200 px-1.5 py-0.5">
+                      <div className="pointer-events-none absolute -top-5 left-0 whitespace-nowrap opacity-0 transition-opacity group-hover:opacity-100">
+                        <span className="rounded-[5px] border border-border bg-card px-1.5 py-0.5 text-[9px] text-muted-foreground num">
                           {formatDate(startDate)} → {formatDate(endDate)} · 双击编辑
                         </span>
                       </div>
                     )}
                     {/* Gate marker */}
-                    <div className="absolute top-1/2 -translate-y-1/2 -right-0.5 z-20 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <Flag size={12} className="text-stone-700" />
+                    <div className="absolute -right-0.5 top-1/2 z-20 -translate-y-1/2 opacity-0 transition-opacity group-hover:opacity-100">
+                      <Flag size={12} className="text-foreground" />
                     </div>
                     {/* Custom indicator */}
                     {isCustom && (
-                      <div className="absolute -top-1 -right-1 w-2 h-2 bg-amber-400 rounded-full z-20" title="已自定义日期" />
+                      <div className="absolute -right-1 -top-1 z-20 h-2 w-2 rounded-full bg-primary" title="已自定义日期" />
                     )}
                   </div>
                 </div>
@@ -423,10 +422,10 @@ export function GanttView({ project, onUpdate, onPhaseClick, readOnly = false }:
               if (targetDays < 0 || targetDays > totalDays + 30) return null;
               const targetPx = Math.round(targetDays * pxPerDay);
               return (
-                <div className="absolute top-8 bottom-0 z-20 pointer-events-none" style={{ left: targetPx }}>
-                  <div className="w-px h-full" style={{ borderLeft: '2px dashed #f87171' }} />
-                  <div className="absolute top-1 left-1 bg-rose-50 border border-rose-300 px-1.5 py-0.5 whitespace-nowrap">
-                    <span className="text-[9px] font-mono text-rose-600 uppercase tracking-wider">目标</span>
+                <div className="pointer-events-none absolute bottom-0 top-8 z-20" style={{ left: targetPx }}>
+                  <div className="h-full w-px" style={{ borderLeft: '2px dashed var(--destructive)' }} />
+                  <div className="absolute left-1 top-1 whitespace-nowrap rounded-[5px] border border-[color:var(--destructive)]/40 bg-[color:var(--destructive)]/10 px-1.5 py-0.5">
+                    <span className="text-[9px] uppercase tracking-wide text-[color:var(--destructive)]">目标</span>
                   </div>
                 </div>
               );
@@ -443,12 +442,12 @@ export function GanttView({ project, onUpdate, onPhaseClick, readOnly = false }:
         const currentStart = custom?.startDate || toISODate(bar.startDate);
         const currentEnd = custom?.endDate || toISODate(bar.endDate);
         return (
-          <div className="border-t border-amber-200 bg-amber-50/60 px-5 py-3">
-            <div className="flex items-center gap-6 flex-wrap">
+          <div className="border-t border-[color:var(--acc-border)] bg-[color:var(--acc-soft)]/70 px-5 py-3">
+            <div className="flex flex-wrap items-center gap-6">
               <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: bar.phase.color }} />
-                <span className="text-sm font-medium text-stone-900">{bar.phase.name}</span>
-                <span className="text-[10px] font-mono text-stone-400 uppercase tracking-wider">{bar.phase.code}</span>
+                <div className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: bar.phase.color }} />
+                <span className="text-sm font-medium text-foreground">{bar.phase.name}</span>
+                <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{bar.phase.code}</span>
               </div>
               <DateEditor
                 label="开始"
@@ -465,52 +464,52 @@ export function GanttView({ project, onUpdate, onPhaseClick, readOnly = false }:
               {bar.isCustom && (
                 <button
                   onClick={() => clearCustomDates(editingPhase)}
-                  className="text-[10px] font-mono uppercase tracking-wider text-stone-500 hover:text-rose-600 border border-stone-300 hover:border-rose-300 px-2.5 py-1 transition-colors"
+                  className="rounded-[6px] border border-border px-2.5 py-1 text-[10px] uppercase tracking-wide text-muted-foreground transition-colors hover:border-[color:var(--destructive)]/40 hover:text-[color:var(--destructive)]"
                 >
                   重置为默认
                 </button>
               )}
               <button
                 onClick={() => { setEditingPhase(null); setEditingField(null); }}
-                className="ml-auto text-[10px] font-mono uppercase tracking-wider text-stone-500 hover:text-stone-900 border border-stone-300 hover:border-stone-500 px-2.5 py-1 transition-colors flex items-center gap-1"
+                className="ml-auto flex items-center gap-1 rounded-[6px] border border-border px-2.5 py-1 text-[10px] uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
               >
                 <Check size={11} />完成
               </button>
             </div>
-            <div className="mt-2 text-[10px] font-mono text-amber-600">
-              修改将自动保存 · 橙色圆点标记已自定义日期的阶段
+            <div className="mt-2 text-[10px] text-primary">
+              修改将自动保存 · 高亮圆点标记已自定义日期的阶段
             </div>
           </div>
         );
       })()}
 
       {/* Legend */}
-      <div className="flex items-center gap-6 px-5 py-3 border-t border-stone-100 bg-stone-50 flex-wrap">
+      <div className="flex flex-wrap items-center gap-6 border-t border-border bg-secondary px-5 py-3">
         <div className="flex items-center gap-1.5">
-          <div className="w-3 h-3 rounded-sm bg-stone-400 opacity-80" />
-          <span className="text-[10px] font-mono text-stone-500 uppercase tracking-wider">已完成</span>
+          <div className="h-3 w-3 rounded-sm bg-muted-foreground opacity-80" />
+          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">已完成</span>
         </div>
         <div className="flex items-center gap-1.5">
-          <div className="w-3 h-3 rounded-sm bg-amber-500 opacity-80" />
-          <span className="text-[10px] font-mono text-stone-500 uppercase tracking-wider">进行中</span>
+          <div className="h-3 w-3 rounded-sm bg-primary opacity-80" />
+          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">进行中</span>
         </div>
         <div className="flex items-center gap-1.5">
-          <div className="w-3 h-3 rounded-sm bg-stone-200" />
-          <span className="text-[10px] font-mono text-stone-500 uppercase tracking-wider">待开始</span>
+          <div className="h-3 w-3 rounded-sm bg-[color:var(--secondary)]" />
+          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">待开始</span>
         </div>
         <div className="flex items-center gap-1.5">
-          <div className="w-2 h-2 rounded-full bg-amber-400" />
-          <span className="text-[10px] font-mono text-stone-500 uppercase tracking-wider">已自定义日期</span>
+          <div className="h-2 w-2 rounded-full bg-primary" />
+          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">已自定义日期</span>
         </div>
         {showToday && (
           <div className="flex items-center gap-1.5">
-            <div className="w-3 h-px border-t-2 border-amber-400" />
-            <span className="text-[10px] font-mono text-stone-500 uppercase tracking-wider">今天</span>
+            <div className="h-px w-3 border-t-2 border-primary" />
+            <span className="text-[10px] uppercase tracking-wide text-muted-foreground">今天</span>
           </div>
         )}
         <div className="flex items-center gap-1.5">
-          <div className="w-3 h-px border-t-2 border-dashed border-rose-400" />
-          <span className="text-[10px] font-mono text-stone-500 uppercase tracking-wider">目标日期</span>
+          <div className="h-px w-3 border-t-2 border-dashed border-[color:var(--destructive)]" />
+          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">目标日期</span>
         </div>
       </div>
     </div>

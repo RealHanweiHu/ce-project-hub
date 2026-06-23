@@ -1,21 +1,28 @@
-// Design: Industrial Precision - stone/amber color system
-// ProjectListView: project cards with category badges and 3-step new project wizard
+// Linear redesign — 项目组合看板 (portfolio board)
+// Phase 1: VISUAL ONLY. Three view modes (list / kanban / timeline) derived from the
+// existing `projects` data. No drag-and-drop, no WIP limits, no toast-undo, no persisted
+// grouping/collapse state. All existing data wiring + mutations (add / delete / clone)
+// are preserved; only presentation changed.
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { trpc } from '@/lib/trpc';
-import { Plus, Trash2, FolderKanban, ChevronRight, ChevronLeft, Check, Copy, Lock, AlertTriangle } from 'lucide-react';
+import { Plus, Trash2, ChevronRight, ChevronLeft, Check, Copy, Lock, AlertTriangle, Search, Star, LayoutGrid, List as ListIcon, GanttChartSquare, X as XIcon, CalendarDays } from 'lucide-react';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { Sheet, SheetContent } from '@/components/ui/sheet';
 import {
-  Project, SOP_PHASES, PHASE_MAP, HEALTH_CONFIG,
-  computePhaseProgress, computeOverallProgress,
+  Project, PHASE_MAP, HEALTH_CONFIG,
+  computePhaseProgress, computeOverallProgress, getProjectPhases,
 } from '@/lib/data';
 import {
   PROJECT_CATEGORIES, ProjectCategory, getPhasesForCategory, CATEGORY_MAP,
 } from '@/lib/sop-templates';
-import { ProgressBar } from '@/components/shared/ProgressBar';
+import {
+  LinearCard, Kicker, PageHeader, StatusDot, LinearBar, SegToggle, TypeBadge,
+} from '@/components/linear/primitives';
+import { cn } from '@/lib/utils';
 
 interface ProjectListViewProps {
   projects: Project[];
@@ -41,6 +48,58 @@ const PRODUCT_TYPES = [
   '暴力风扇', '胎压计', '机械式打气筒', '组件',
 ];
 
+// ── Kanban stage columns (display-only) ─────────────────────────────────────────
+// The 6 canonical lifecycle stages. Each project's currentPhase is mapped onto one of
+// these stage buckets so projects with category-specific SOP templates still slot in.
+const STAGE_COLUMNS: { id: string; label: string; short: string }[] = [
+  { id: 'concept', label: '概念 Concept', short: '概念' },
+  { id: 'design', label: '设计 Design', short: '设计' },
+  { id: 'evt', label: 'EVT 工程样机', short: 'EVT' },
+  { id: 'dvt', label: 'DVT 设计验证', short: 'DVT' },
+  { id: 'pvt', label: 'PVT 试产', short: 'PVT' },
+  { id: 'mp', label: '量产 MP', short: '量产' },
+];
+const STAGE_IDS = STAGE_COLUMNS.map((s) => s.id);
+const STAGE_SHORT: Record<string, string> = Object.fromEntries(STAGE_COLUMNS.map((s) => [s.id, s.short]));
+
+// Map an arbitrary phase id onto a kanban stage bucket.
+function stageBucket(phaseId: string): string {
+  if (STAGE_IDS.includes(phaseId)) return phaseId;
+  if (phaseId === 'planning') return 'concept';
+  return 'concept';
+}
+
+// Risk → StatusDot tone
+function riskTone(risk: Project['risk']): 'green' | 'amber' | 'red' {
+  return risk === 'high' ? 'red' : risk === 'medium' ? 'amber' : 'green';
+}
+
+// Deterministic avatar color from a name
+const AVATAR_COLORS = ['#5e6ad2', '#3fa66a', '#d97706', '#0ea5e9', '#db2777', '#0891b2'];
+function avatarColor(name: string): string {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return AVATAR_COLORS[h % AVATAR_COLORS.length];
+}
+function initial(name: string): string {
+  return (name || '?').trim().charAt(0) || '?';
+}
+
+type GroupBy = 'none' | 'type' | 'cat' | 'pm';
+type FilterKey = 'ontrack' | 'risk' | 'alert' | 'starred';
+type ViewMode = 'list' | 'kanban' | 'timeline';
+
+function Avatar({ name, size = 22 }: { name: string; size?: number }) {
+  return (
+    <span
+      className="inline-flex shrink-0 items-center justify-center rounded-full font-semibold text-white"
+      style={{ width: size, height: size, background: avatarColor(name), fontSize: size * 0.46 }}
+    >
+      {initial(name)}
+    </span>
+  );
+}
+
 export function ProjectListView({
   projects,
   onSelectProject,
@@ -53,6 +112,15 @@ export function ProjectListView({
   const [cloneSource, setCloneSource] = useState<Project | null>(null);
   const [cloneForm, setCloneForm] = useState({ name: '', code: '', pmUserId: null as number | null, startDate: '', targetDate: '' });
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
+
+  // ── Board presentation state (local only, not persisted) ──
+  const [viewMode, setViewMode] = useState<ViewMode>('kanban');
+  const [groupBy, setGroupBy] = useState<GroupBy>('none');
+  const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null);
+  const [search, setSearch] = useState('');
+  const [collapsedLanes, setCollapsedLanes] = useState<Set<string>>(() => new Set());
+  const [starred, setStarred] = useState<Set<string>>(() => new Set()); // display-only star
+  const [detailId, setDetailId] = useState<string | null>(null);
 
   const handleOpenClone = (e: React.MouseEvent, project: Project) => {
     e.stopPropagation();
@@ -137,202 +205,339 @@ export function ProjectListView({
   const categoryConfig = CATEGORY_MAP[selectedCategory];
   const sopPhases = getPhasesForCategory(selectedCategory);
 
+  // ── Derived per-project presentation model ───────────────────────────────────
+  interface Row {
+    project: Project;
+    stage: string;
+    overall: number;
+    phaseProgress: number;
+    tone: 'green' | 'amber' | 'red';
+    phaseName: string;
+    catId: string;
+    catBadge: string;
+    isStarred: boolean;
+  }
+  const rows: Row[] = useMemo(() => projects.map((project) => {
+    const phases = project.category ? getPhasesForCategory(project.category) : getProjectPhases(project);
+    const phaseObj = phases.find((p) => p.id === project.currentPhase) || PHASE_MAP[project.currentPhase];
+    const catId = project.category || 'npd';
+    const catConfig = CATEGORY_MAP[catId as ProjectCategory];
+    return {
+      project,
+      stage: stageBucket(project.currentPhase),
+      overall: computeOverallProgress(project),
+      phaseProgress: computePhaseProgress(project.phases[project.currentPhase], project.currentPhase),
+      tone: riskTone(project.risk),
+      phaseName: phaseObj?.name || project.currentPhase,
+      catId,
+      catBadge: catConfig?.badge || 'NPD',
+      isStarred: starred.has(project.id),
+    };
+  }), [projects, starred]);
+
+  // ── Filter + search ──────────────────────────────────────────────────────────
+  const matches = (r: Row): boolean => {
+    if (activeFilter === 'ontrack' && r.project.risk !== 'low') return false;
+    if (activeFilter === 'risk' && r.project.risk !== 'medium') return false;
+    if (activeFilter === 'alert' && r.project.risk !== 'high') return false;
+    if (activeFilter === 'starred' && !r.isStarred) return false;
+    const q = search.trim().toLowerCase();
+    if (q) {
+      const hay = `${r.project.name} ${r.project.code} ${r.project.pm} ${r.project.type}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  };
+  const visibleRows = rows.filter(matches);
+
+  // ── Grouping (swimlanes) ───────────────────────────────────────────────────────
+  interface Lane { key: string; label: string; color: string; rows: Row[] }
+  const lanes: Lane[] = useMemo(() => {
+    if (groupBy === 'none') return [];
+    const map = new Map<string, Lane>();
+    const colorFor = (k: string) => avatarColor(k);
+    visibleRows.forEach((r) => {
+      let key: string, label: string;
+      if (groupBy === 'type') { key = r.project.type || '未分类'; label = key; }
+      else if (groupBy === 'cat') { key = r.catId; label = CATEGORY_MAP[r.catId as ProjectCategory]?.name || r.catBadge; }
+      else { key = r.project.pm || '未分配'; label = r.project.pm || '未分配'; }
+      if (!map.has(key)) map.set(key, { key, label, color: colorFor(key), rows: [] });
+      map.get(key)!.rows.push(r);
+    });
+    return Array.from(map.values());
+  }, [visibleRows, groupBy]);
+
+  const toggleLane = (k: string) => setCollapsedLanes((prev) => {
+    const next = new Set(prev);
+    next.has(k) ? next.delete(k) : next.add(k);
+    return next;
+  });
+  const toggleStar = (id: string) => setStarred((prev) => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
+
+  // ── Filter chip definitions with live counts ──
+  const filterChips: { key: FilterKey; label: string; dot: string; count: number }[] = [
+    { key: 'ontrack', label: '按期', dot: 'var(--success)', count: rows.filter((r) => r.project.risk === 'low').length },
+    { key: 'risk', label: '风险', dot: 'var(--warning)', count: rows.filter((r) => r.project.risk === 'medium').length },
+    { key: 'alert', label: '告警', dot: 'var(--destructive)', count: rows.filter((r) => r.project.risk === 'high').length },
+    { key: 'starred', label: '已标星', dot: 'var(--star)', count: rows.filter((r) => r.isStarred).length },
+  ];
+
+  const detailRow = detailId ? rows.find((r) => r.project.id === detailId) ?? null : null;
+
   return (
-    <div className="ce-page">
+    <div className="flex flex-col">
       {/* Header */}
-      <div className="ce-page-header">
-        <div>
-          <h2 className="font-serif text-2xl text-stone-900">项目列表</h2>
-          <p className="ce-kicker mt-0.5">
-            {projects.length} PROJECTS
-          </p>
-        </div>
-        {canCreateProject ? (
-          <button
-            onClick={() => setShowAdd(true)}
-            className="ce-control flex items-center gap-2 px-4 py-2 bg-stone-900 text-stone-50 text-xs font-mono uppercase tracking-wider shadow-sm hover:bg-stone-700 transition-colors"
-          >
-            <Plus size={14} />
-            新建项目
-          </button>
-        ) : (
-          <div className="ce-control flex items-center gap-2 px-3 py-1.5 bg-stone-100 border border-stone-200 text-stone-400 text-[10px] font-mono uppercase tracking-wider cursor-not-allowed" title="仅管理员、管理层和 PM 可创建项目">
-            <Lock size={12} />
-            无创建权限
-          </div>
-        )}
-      </div>
-
-      {/* Project Cards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {projects.map((project) => {
-          const phases = project.category
-            ? getPhasesForCategory(project.category)
-            : SOP_PHASES;
-          const phaseObj = phases.find((p) => p.id === project.currentPhase) || PHASE_MAP[project.currentPhase];
-          const phaseProgress = computePhaseProgress(project.phases[project.currentPhase], project.currentPhase);
-          const overallProgress = computeOverallProgress(project);
-          const health = HEALTH_CONFIG[project.risk];
-          const catConfig = project.category ? CATEGORY_MAP[project.category] : null;
-
-          return (
-            <article
-              key={project.id}
-              className="ce-card overflow-hidden"
-              style={{ borderTopWidth: 3, borderTopColor: phaseObj?.color || '#78716c' }}
+      <PageHeader
+        title="项目组合"
+        sub={<><span className="num">{projects.length}</span> 个项目 · 全生命周期看板</>}
+        actions={
+          canCreateProject ? (
+            <button
+              onClick={() => setShowAdd(true)}
+              className="inline-flex h-[34px] items-center gap-1.5 rounded-[7px] bg-primary px-3 text-[12.5px] font-semibold text-primary-foreground transition-colors hover:opacity-90"
             >
-              <div className="p-5 border-b border-stone-100">
-                <div className="flex items-start justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-mono uppercase tracking-widest text-stone-400">
-                      {project.code}
-                    </span>
-                    {catConfig && (
-                      <span className={`text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 ${catConfig.color} ${catConfig.textColor} border ${catConfig.borderColor}`}>
-                        {catConfig.badge}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <h3 className="font-serif text-lg text-stone-900 leading-tight mb-2">
-                  {project.name}
-                </h3>
-                <div className="flex items-center gap-2 text-xs text-stone-500">
-                  <span>{project.type}</span>
-                  <span>·</span>
-                  <span>PM {project.pm}</span>
-                </div>
-              </div>
-
-              <div className="p-5 space-y-4">
-                {/* Current Phase */}
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400">当前阶段</span>
-                    <span className="text-xs font-mono text-stone-700">{phaseProgress}%</span>
-                  </div>
-                  <div className="flex items-center gap-2 mb-2">
-                    <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: phaseObj?.color || '#78716c' }} />
-                    <span className="text-sm font-medium text-stone-900">{phaseObj?.name}</span>
-                  </div>
-                  <ProgressBar value={phaseProgress} color="bg-amber-500" height="h-1" />
-                </div>
-
-                {/* Overall Progress */}
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400">整体进度</span>
-                    <span className="text-xs font-mono text-stone-700">{overallProgress}%</span>
-                  </div>
-                  <ProgressBar value={overallProgress} color="bg-stone-900" height="h-1" />
-                </div>
-
-                {/* Footer */}
-                <div className="flex items-center justify-between pt-2 border-t border-stone-100">
-                  <div className={`inline-flex items-center gap-1.5 px-2 py-0.5 ${health.bg} ${health.border} border`}>
-                    <div className={`w-1.5 h-1.5 rounded-full ${health.dot}`} />
-                    <span className={`text-xs font-medium ${health.color}`}>{health.label}</span>
-                  </div>
-                  <span className="text-[10px] font-mono text-stone-400">{project.targetDate}</span>
-                </div>
-              </div>
-              <div className="flex items-center justify-between gap-3 border-t border-stone-100 bg-stone-50/70 px-5 py-3">
-                <div className="flex items-center gap-2">
-                  {canCreateProject && onCloneProject && (
-                    <button
-                      type="button"
-                      onClick={(e) => handleOpenClone(e, project)}
-                      className="ce-control inline-flex items-center gap-1.5 border border-stone-200 bg-white px-2.5 py-1.5 text-[11px] font-mono text-stone-500 transition-colors hover:border-stone-300 hover:text-stone-800"
-                      title="克隆项目"
-                    >
-                      <Copy size={12} />
-                      克隆
-                    </button>
-                  )}
-                  {project.canDeleteProject && (
-                    <button
-                      type="button"
-                      onClick={() => setDeleteConfirm({ id: project.id, name: project.name })}
-                      className="ce-control inline-flex items-center gap-1.5 border border-rose-200 bg-white px-2.5 py-1.5 text-[11px] font-mono text-rose-600 transition-colors hover:bg-rose-50"
-                      title="删除项目"
-                    >
-                      <Trash2 size={12} />
-                      删除
-                    </button>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => onSelectProject(project.id)}
-                  className="ce-control inline-flex items-center gap-1.5 bg-stone-900 px-3 py-1.5 text-[11px] font-mono uppercase tracking-wider text-white transition-colors hover:bg-stone-700"
-                >
-                  进入项目
-                  <ChevronRight size={12} />
-                </button>
-              </div>
-            </article>
-          );
-        })}
-
-        {/* Phase Progress Summary */}
-        {projects.length > 0 && (
-          <div className="ce-muted-band border-dashed p-5 flex flex-col justify-center items-center text-center">
-            <FolderKanban size={24} className="text-stone-300 mb-3" />
-            <p className="text-sm font-medium text-stone-500">阶段概览</p>
-            <div className="mt-4 w-full space-y-2">
-              {/* Show all unique current phases across all projects */}
-              {Array.from(new Set(projects.map((p) => p.currentPhase))).map((phaseId) => {
-                const count = projects.filter((p) => p.currentPhase === phaseId).length;
-                const phaseObj = PHASE_MAP[phaseId] || { code: phaseId.toUpperCase(), color: '#78716c' };
-                return (
-                  <div key={phaseId} className="flex items-center gap-2 text-xs">
-                    <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: phaseObj.color }} />
-                    <span className="font-mono text-stone-600 flex-1 text-left">{phaseObj.code}</span>
-                    <span className="font-mono text-stone-900 font-medium">{count}</span>
-                  </div>
-                );
-              })}
+              <Plus size={15} />
+              新建项目
+            </button>
+          ) : (
+            <div className="inline-flex h-[30px] cursor-not-allowed items-center gap-1.5 rounded-[7px] border border-border bg-secondary px-3 text-[11px] font-medium text-muted-foreground" title="仅管理员、管理层和 PM 可创建项目">
+              <Lock size={12} />
+              无创建权限
             </div>
-            {/* Category breakdown */}
-            <div className="mt-4 w-full pt-3 border-t border-stone-200 space-y-1.5">
-              {PROJECT_CATEGORIES.map((cat) => {
-                const count = projects.filter((p) => (p.category || 'npd') === cat.id).length;
-                return count > 0 ? (
-                  <div key={cat.id} className="flex items-center gap-2 text-xs">
-                    <span className={`text-[9px] font-mono px-1 py-0.5 ${cat.color} ${cat.textColor} border ${cat.borderColor}`}>{cat.badge}</span>
-                    <span className="text-stone-500 flex-1 text-left">{cat.name}</span>
-                    <span className="font-mono text-stone-900 font-medium">{count}</span>
-                  </div>
-                ) : null;
-              })}
-            </div>
-          </div>
-        )}
+          )
+        }
+      />
+
+      {/* View toggle + search */}
+      <div className="mb-3 flex flex-wrap items-center gap-3">
+        <SegToggle<ViewMode>
+          value={viewMode}
+          onChange={setViewMode}
+          options={[
+            { value: 'list', label: <><ListIcon size={12} />列表</> },
+            { value: 'kanban', label: <><LayoutGrid size={12} />看板</> },
+            { value: 'timeline', label: <><GanttChartSquare size={12} />时间轴</> },
+          ]}
+        />
+        <div className="flex h-[32px] w-[240px] items-center gap-2 rounded-lg border border-border bg-card px-3 focus-within:border-[color:var(--acc-border)] focus-within:ring-2 focus-within:ring-[color:var(--acc-soft)]">
+          <Search size={14} className="shrink-0 text-muted-foreground" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="搜索项目 / 编号 / 负责人…"
+            className="w-full bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground"
+          />
+        </div>
+        <div className="ml-auto text-[12px] text-muted-foreground num">
+          显示 {visibleRows.length}/{projects.length}
+        </div>
       </div>
+
+      {/* Filter strip: group-by + filter chips */}
+      <div className="mb-4 flex flex-wrap items-center gap-3 border-b border-border pb-4">
+        <div className="flex items-center gap-2">
+          <Kicker>分组</Kicker>
+          <select
+            value={groupBy}
+            onChange={(e) => setGroupBy(e.target.value as GroupBy)}
+            className="cursor-pointer rounded-[7px] border border-transparent bg-secondary px-2.5 py-1 text-[12.5px] font-medium text-foreground outline-none hover:bg-[color:var(--muted)] focus:border-[color:var(--acc-border)]"
+          >
+            <option value="none">无</option>
+            <option value="type">产品线</option>
+            <option value="cat">项目类型</option>
+            <option value="pm">负责人</option>
+          </select>
+        </div>
+        <div className="h-5 w-px bg-border" />
+        <div className="flex flex-wrap items-center gap-2">
+          {filterChips.map((c) => {
+            const on = activeFilter === c.key;
+            return (
+              <button
+                key={c.key}
+                onClick={() => setActiveFilter(on ? null : c.key)}
+                className={cn(
+                  'inline-flex h-[26px] items-center gap-1.5 rounded-[7px] border px-2.5 text-[12px] transition-colors',
+                  on
+                    ? 'border-[color:var(--acc-border)] bg-[color:var(--acc-soft)] text-primary'
+                    : 'border-transparent bg-secondary text-[color:var(--secondary-foreground)] hover:bg-[color:var(--muted)]',
+                )}
+              >
+                {c.key === 'starred'
+                  ? <Star size={11} style={{ fill: 'var(--star)', color: 'var(--star)' }} />
+                  : <span className="h-[7px] w-[7px] rounded-full" style={{ background: c.dot }} />}
+                {c.label}
+                <span className="num text-[11px] opacity-70">{c.count}</span>
+              </button>
+            );
+          })}
+          {(activeFilter || search) && (
+            <button
+              onClick={() => { setActiveFilter(null); setSearch(''); }}
+              className="text-[12px] text-muted-foreground hover:text-primary"
+            >
+              清除
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* ── VIEWS ── */}
+      {visibleRows.length === 0 ? (
+        <LinearCard className="flex flex-col items-center justify-center gap-2 py-16 text-center">
+          <LayoutGrid size={26} className="text-muted-foreground/50" />
+          <p className="text-sm font-medium text-muted-foreground">无匹配的项目</p>
+        </LinearCard>
+      ) : viewMode === 'kanban' ? (
+        <KanbanView
+          stages={STAGE_COLUMNS}
+          groupBy={groupBy}
+          lanes={lanes}
+          rows={visibleRows}
+          collapsedLanes={collapsedLanes}
+          onToggleLane={toggleLane}
+          onToggleStar={toggleStar}
+          onOpen={setDetailId}
+        />
+      ) : viewMode === 'list' ? (
+        <ListView rows={visibleRows} groupBy={groupBy} lanes={lanes} onOpen={setDetailId} />
+      ) : (
+        <TimelineView rows={visibleRows} groupBy={groupBy} lanes={lanes} onOpen={setDetailId} />
+      )}
+
+      {/* ── Detail Drawer ── */}
+      <Sheet open={!!detailRow} onOpenChange={(o) => { if (!o) setDetailId(null); }}>
+        <SheetContent side="right" className="w-[380px] gap-0 overflow-y-auto p-0 sm:max-w-[380px]">
+          {detailRow && (() => {
+            const p = detailRow.project;
+            const phases = p.category ? getPhasesForCategory(p.category) : getProjectPhases(p);
+            const curIdx = phases.findIndex((ph) => ph.id === p.currentPhase);
+            const health = HEALTH_CONFIG[p.risk];
+            const changeLog = (p.changeLog || []).slice(0, 5);
+            return (
+              <div className="flex h-full flex-col">
+                {/* Header */}
+                <div className="border-b border-border px-5 pb-4 pt-5">
+                  <div className="mb-3 flex items-center gap-2.5">
+                    <span className="text-[11.5px] text-muted-foreground num">{p.code}</span>
+                    <TypeBadge type={detailRow.catBadge} />
+                  </div>
+                  <h2 className="text-[21px] font-bold leading-tight tracking-[-0.3px]">{p.name}</h2>
+                  <p className="mt-1 text-[12px] text-muted-foreground">{p.type}</p>
+                </div>
+
+                <div className="flex-1 overflow-y-auto px-5 py-4">
+                  {/* Properties */}
+                  <section className="mb-6">
+                    <Kicker className="mb-3">参数 Properties</Kicker>
+                    <div className="space-y-0">
+                      <PropRow k="当前阶段" v={<span className="inline-flex items-center gap-1.5 rounded-[6px] border border-border bg-secondary px-2 py-0.5 text-[11.5px]"><span className="h-1.5 w-1.5 rounded-full bg-primary" />{detailRow.phaseName}</span>} />
+                      <PropRow k="整体进度" v={<span className="num">{detailRow.overall}%</span>} />
+                      <PropRow k="风险" v={<span className="inline-flex items-center gap-2"><span className="h-2 w-2 rounded-full" style={{ background: detailRow.tone === 'green' ? 'var(--success)' : detailRow.tone === 'amber' ? 'var(--warning)' : 'var(--destructive)' }} />{health.label}</span>} />
+                      <PropRow k="负责人" v={<span className="inline-flex items-center gap-2"><Avatar name={p.pm || '?'} size={20} />{p.pm || '未分配'}</span>} />
+                      <PropRow k="目标日期" v={<span className="num">{p.targetDate || '—'}</span>} />
+                    </div>
+                  </section>
+
+                  {/* Lifecycle stepper */}
+                  <section className="mb-6">
+                    <Kicker className="mb-3">生命周期 Lifecycle</Kicker>
+                    <div className="flex flex-col">
+                      {phases.map((ph, i) => {
+                        const done = i < curIdx, cur = i === curIdx;
+                        return (
+                          <div key={ph.id} className="relative flex h-[34px] items-center gap-3">
+                            {i < phases.length - 1 && (
+                              <span className={cn('absolute left-[5px] top-[17px] h-[34px] w-0.5', done ? 'bg-primary' : 'bg-border')} />
+                            )}
+                            <span className={cn(
+                              'z-[1] h-[11px] w-[11px] shrink-0 rounded-full border-2',
+                              done ? 'border-primary bg-primary'
+                                : cur ? 'border-primary bg-primary shadow-[0_0_0_4px_var(--acc-soft)]'
+                                : 'border-border bg-card',
+                            )} />
+                            <span className={cn('text-[13px]', cur ? 'font-semibold text-primary' : done ? 'text-foreground' : 'text-muted-foreground')}>
+                              {ph.name}
+                            </span>
+                            <span className="ml-auto text-[11px] text-muted-foreground">{cur ? '当前' : done ? '✓' : ''}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </section>
+
+                  {/* Recent changes */}
+                  <section>
+                    <Kicker className="mb-3">最近变更 Activity</Kicker>
+                    {changeLog.length === 0 ? (
+                      <p className="text-[12px] text-muted-foreground">暂无变更记录</p>
+                    ) : (
+                      <div className="flex flex-col">
+                        {changeLog.map((c, i) => (
+                          <div key={i} className="flex gap-2.5 border-b border-border py-2 last:border-none">
+                            <div className="text-[12px] leading-snug text-[color:var(--secondary-foreground)]">
+                              {(c as { summary?: string; description?: string }).summary || (c as { description?: string }).description || '变更'}
+                              <span className="mt-0.5 block text-[10.5px] text-muted-foreground">
+                                {(c as { actor?: string; user?: string }).actor || (c as { user?: string }).user || ''}
+                                {(c as { timestamp?: string; date?: string }).timestamp || (c as { date?: string }).date ? ` · ${(c as { timestamp?: string; date?: string }).timestamp || (c as { date?: string }).date}` : ''}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+                </div>
+
+                {/* Footer: existing navigation action (no new mutation) */}
+                <div className="flex gap-2 border-t border-border px-5 py-3.5">
+                  <button
+                    onClick={() => { onSelectProject(p.id); setDetailId(null); }}
+                    className="inline-flex h-[34px] flex-1 items-center justify-center gap-1.5 rounded-[7px] bg-primary text-[12.5px] font-semibold text-primary-foreground transition-colors hover:opacity-90"
+                  >
+                    进入项目
+                    <ChevronRight size={14} />
+                  </button>
+                  <button
+                    onClick={() => setDetailId(null)}
+                    className="inline-flex h-[34px] items-center rounded-[7px] border border-border bg-card px-3 text-[12.5px] font-medium text-muted-foreground hover:bg-secondary"
+                  >
+                    关闭
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
+        </SheetContent>
+      </Sheet>
 
       {/* ── Clone Project Modal ──────────────────────────────────────────────── */}
       {cloneSource && (
-        <div className="fixed inset-0 bg-stone-900/50 z-50 flex items-center justify-center p-4" onClick={() => setCloneSource(null)}>
-          <div
-            className="bg-white w-full max-w-lg shadow-2xl"
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/40 p-4" onClick={() => setCloneSource(null)}>
+          <LinearCard
+            className="w-full max-w-lg shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
-            <div className="p-6 border-b border-stone-200 flex items-center justify-between">
+            <div className="flex items-center justify-between border-b border-border p-6">
               <div>
-                <h3 className="font-serif text-xl text-stone-900">克隆项目</h3>
-                <p className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mt-0.5">CLONE PROJECT</p>
+                <h3 className="text-xl font-bold tracking-[-0.3px]">克隆项目</h3>
+                <Kicker className="mt-0.5">CLONE PROJECT</Kicker>
               </div>
-              <button onClick={() => setCloneSource(null)} className="text-stone-400 hover:text-stone-600 text-xl leading-none">×</button>
+              <button onClick={() => setCloneSource(null)} className="text-muted-foreground hover:text-foreground"><XIcon size={18} /></button>
             </div>
 
             {/* Source Info */}
-            <div className="px-6 pt-5 pb-3">
-              <div className="flex items-center gap-2 p-3 bg-amber-50 border border-amber-200 mb-5">
-                <Copy size={13} className="text-amber-600 shrink-0" />
+            <div className="px-6 pb-3 pt-5">
+              <div className="mb-5 flex items-center gap-2 rounded-[8px] border border-[color:var(--acc-border)] bg-[color:var(--acc-soft)] p-3">
+                <Copy size={13} className="shrink-0 text-primary" />
                 <div className="min-w-0">
-                  <p className="text-xs font-medium text-amber-900 truncate">基于「{cloneSource.name}」克隆</p>
-                  <p className="text-[10px] font-mono text-amber-600">
+                  <p className="truncate text-xs font-medium text-foreground">基于「{cloneSource.name}」克隆</p>
+                  <p className="text-[10px] text-muted-foreground num">
                     {cloneSource.category ? CATEGORY_MAP[cloneSource.category]?.name : 'NPD'}
                     {' · '}
                     {cloneSource.category ? CATEGORY_MAP[cloneSource.category]?.phaseCount : 7} 个阶段 · 进度将清零
@@ -342,33 +547,33 @@ export function ProjectListView({
 
               <div className="space-y-4">
                 <div>
-                  <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">新项目名称 *</label>
+                  <Kicker className="mb-1.5">新项目名称 *</Kicker>
                   <input
                     type="text"
                     value={cloneForm.name}
                     onChange={(e) => setCloneForm({ ...cloneForm, name: e.target.value })}
-                    className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors"
+                    className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none transition-colors focus:border-[color:var(--acc-border)]"
                     autoFocus
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">项目编号</label>
+                    <Kicker className="mb-1.5">项目编号</Kicker>
                     <input
                       type="text"
                       value={cloneForm.code}
                       onChange={(e) => setCloneForm({ ...cloneForm, code: e.target.value })}
-                      className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors"
+                      className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none transition-colors focus:border-[color:var(--acc-border)]"
                       placeholder={cloneSource.code ? `${cloneSource.code}-2` : 'CE-2026-XXX'}
                     />
                   </div>
                   <div>
-                    <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">项目经理</label>
+                    <Kicker className="mb-1.5">项目经理</Kicker>
                     <select
                       value={cloneForm.pmUserId ?? ''}
                       onChange={(e) => setCloneForm({ ...cloneForm, pmUserId: e.target.value ? Number(e.target.value) : null })}
                       disabled={usersLoading}
-                      className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors bg-white disabled:opacity-50"
+                      className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none transition-colors focus:border-[color:var(--acc-border)] disabled:opacity-50"
                     >
                       {usersLoading && <option value="">加载中...</option>}
                       {usersError && <option value="">加载失败</option>}
@@ -383,21 +588,21 @@ export function ProjectListView({
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">开始日期</label>
+                    <Kicker className="mb-1.5">开始日期</Kicker>
                     <input
                       type="date"
                       value={cloneForm.startDate}
                       onChange={(e) => setCloneForm({ ...cloneForm, startDate: e.target.value })}
-                      className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors"
+                      className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none transition-colors focus:border-[color:var(--acc-border)]"
                     />
                   </div>
                   <div>
-                    <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">目标日期</label>
+                    <Kicker className="mb-1.5">目标日期</Kicker>
                     <input
                       type="date"
                       value={cloneForm.targetDate}
                       onChange={(e) => setCloneForm({ ...cloneForm, targetDate: e.target.value })}
-                      className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors"
+                      className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none transition-colors focus:border-[color:var(--acc-border)]"
                     />
                   </div>
                 </div>
@@ -405,59 +610,61 @@ export function ProjectListView({
             </div>
 
             {/* Footer */}
-            <div className="p-6 border-t border-stone-200 flex items-center justify-between">
+            <div className="flex items-center justify-between border-t border-border p-6">
               <button
                 onClick={() => setCloneSource(null)}
-                className="px-4 py-2 text-xs font-mono uppercase tracking-wider text-stone-600 border border-stone-300 hover:bg-stone-50 transition-colors"
+                className="rounded-[7px] border border-border px-4 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary"
               >
                 取消
               </button>
               <button
                 onClick={handleCloneConfirm}
                 disabled={!cloneForm.name.trim()}
-                className={`flex items-center gap-2 px-5 py-2 text-xs font-mono uppercase tracking-wider bg-amber-500 text-white hover:bg-amber-600 transition-colors ${
-                  !cloneForm.name.trim() ? 'opacity-50 cursor-not-allowed' : ''
-                }`}
+                className={cn(
+                  'flex items-center gap-2 rounded-[7px] bg-primary px-5 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:opacity-90',
+                  !cloneForm.name.trim() && 'cursor-not-allowed opacity-50',
+                )}
               >
                 <Copy size={13} />
                 克隆项目
               </button>
             </div>
-          </div>
+          </LinearCard>
         </div>
       )}
 
       {/* ── New Project Wizard Modal ─────────────────────────────────────────── */}
       {showAdd && (
-        <div className="fixed inset-0 bg-stone-900/50 z-50 flex items-center justify-center p-4" onClick={handleClose}>
-          <div
-            className="bg-white w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl"
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/40 p-4" onClick={handleClose}>
+          <LinearCard
+            className="flex max-h-[90vh] w-full max-w-3xl flex-col shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header */}
-            <div className="p-6 border-b border-stone-200 flex items-center justify-between shrink-0">
+            <div className="flex shrink-0 items-center justify-between border-b border-border p-6">
               <div>
-                <h3 className="font-serif text-xl text-stone-900">新建项目</h3>
-                <p className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mt-0.5">NEW PROJECT</p>
+                <h3 className="text-xl font-bold tracking-[-0.3px]">新建项目</h3>
+                <Kicker className="mt-0.5">NEW PROJECT</Kicker>
               </div>
-              <button onClick={handleClose} className="text-stone-400 hover:text-stone-600 text-xl leading-none">×</button>
+              <button onClick={handleClose} className="text-muted-foreground hover:text-foreground"><XIcon size={18} /></button>
             </div>
 
             {/* Step Indicator */}
-            <div className="flex items-center px-6 py-3 border-b border-stone-100 bg-stone-50 shrink-0">
+            <div className="flex shrink-0 items-center border-b border-border bg-secondary px-6 py-3">
               {([1, 2, 3] as WizardStep[]).map((s, i) => (
                 <div key={s} className="flex items-center">
-                  <div className={`flex items-center gap-2 ${step === s ? 'text-stone-900' : step > s ? 'text-emerald-600' : 'text-stone-400'}`}>
-                    <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-mono font-bold border ${
-                      step === s ? 'bg-stone-900 text-white border-stone-900' :
-                      step > s ? 'bg-emerald-500 text-white border-emerald-500' :
-                      'bg-white text-stone-400 border-stone-300'
-                    }`}>
+                  <div className={cn('flex items-center gap-2', step === s ? 'text-foreground' : step > s ? 'text-[color:var(--success)]' : 'text-muted-foreground')}>
+                    <div className={cn(
+                      'flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-bold',
+                      step === s ? 'border-primary bg-primary text-primary-foreground'
+                        : step > s ? 'border-[color:var(--success)] bg-[color:var(--success)] text-white'
+                        : 'border-border bg-card text-muted-foreground',
+                    )}>
                       {step > s ? <Check size={10} /> : s}
                     </div>
-                    <span className="text-[10px] font-mono uppercase tracking-wider">{STEP_LABELS[s]}</span>
+                    <span className="text-[11px] font-semibold uppercase tracking-wide">{STEP_LABELS[s]}</span>
                   </div>
-                  {i < 2 && <div className="w-8 h-px bg-stone-200 mx-3" />}
+                  {i < 2 && <div className="mx-3 h-px w-8 bg-border" />}
                 </div>
               ))}
             </div>
@@ -465,37 +672,34 @@ export function ProjectListView({
             {/* Modal Body */}
             <div className="flex-1 overflow-y-auto">
 
-              {/* ── Step 1: Category Selection (SKG 式 3 卡片) ── */}
+              {/* ── Step 1: Category Selection ── */}
               {step === 1 && (
-                <div className="p-6 space-y-4">
-                  <p className="text-sm text-stone-600">选择项目类型，系统将自动匹配对应的 SOP 流程模板。</p>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="space-y-4 p-6">
+                  <p className="text-sm text-muted-foreground">选择项目类型，系统将自动匹配对应的 SOP 流程模板。</p>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                     {PROJECT_CATEGORIES.map((cat) => {
                       const active = selectedCategory === cat.id;
                       return (
                         <button
                           key={cat.id}
                           onClick={() => setSelectedCategory(cat.id)}
-                          className={`relative flex flex-col text-left p-4 border-2 transition-all ${
-                            active
-                              ? 'border-stone-900 bg-stone-50'
-                              : 'border-stone-200 hover:border-stone-300 bg-white'
-                          }`}
+                          className={cn(
+                            'relative flex flex-col rounded-[10px] border-2 p-4 text-left transition-all',
+                            active ? 'border-primary bg-[color:var(--acc-soft)]' : 'border-border bg-card hover:border-[color:var(--acc-border)]',
+                          )}
                         >
                           {active && (
-                            <div className="absolute top-2 right-2 w-5 h-5 bg-stone-900 rounded-full flex items-center justify-center">
-                              <Check size={11} className="text-white" />
+                            <div className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full bg-primary">
+                              <Check size={11} className="text-primary-foreground" />
                             </div>
                           )}
                           <span className="text-3xl">{cat.icon}</span>
-                          <span className="font-serif text-base text-stone-900 font-medium mt-3">{cat.name}</span>
-                          <span className={`self-start text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 mt-1.5 ${cat.color} ${cat.textColor} border ${cat.borderColor}`}>
-                            {cat.badge}
-                          </span>
-                          <p className="text-xs text-stone-500 leading-relaxed mt-2 flex-1">{cat.desc}</p>
-                          <div className="mt-3 pt-3 border-t border-stone-100 flex flex-col gap-0.5">
-                            <span className="text-[10px] font-mono text-stone-400">{cat.phaseCount} 个阶段</span>
-                            <span className="text-[10px] font-mono text-stone-400">典型周期 {cat.typicalDuration}</span>
+                          <span className="mt-3 text-base font-semibold text-foreground">{cat.name}</span>
+                          <span className="mt-1.5"><TypeBadge type={cat.badge} /></span>
+                          <p className="mt-2 flex-1 text-xs leading-relaxed text-muted-foreground">{cat.desc}</p>
+                          <div className="mt-3 flex flex-col gap-0.5 border-t border-border pt-3">
+                            <span className="text-[10px] text-muted-foreground num">{cat.phaseCount} 个阶段</span>
+                            <span className="text-[10px] text-muted-foreground">典型周期 {cat.typicalDuration}</span>
                           </div>
                         </button>
                       );
@@ -506,54 +710,53 @@ export function ProjectListView({
 
               {/* ── Step 2: Basic Info ── */}
               {step === 2 && (
-                <div className="p-6 space-y-4">
-                  {/* Category reminder */}
-                  <div className={`flex items-center gap-2 px-3 py-2 ${categoryConfig.color} border ${categoryConfig.borderColor}`}>
+                <div className="space-y-4 p-6">
+                  <div className="flex items-center gap-2 rounded-[8px] border border-[color:var(--acc-border)] bg-[color:var(--acc-soft)] px-3 py-2">
                     <span>{categoryConfig.icon}</span>
-                    <span className={`text-xs font-medium ${categoryConfig.textColor}`}>
+                    <span className="text-xs font-medium text-primary">
                       {categoryConfig.name} · {categoryConfig.phaseCount} 个阶段 · {categoryConfig.typicalDuration}
                     </span>
                   </div>
 
                   <div>
-                    <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">项目名称 *</label>
+                    <Kicker className="mb-1.5">项目名称 *</Kicker>
                     <input
                       type="text"
                       value={form.name}
                       onChange={(e) => setForm({ ...form, name: e.target.value })}
-                      className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors"
+                      className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none transition-colors focus:border-[color:var(--acc-border)]"
                       placeholder="输入项目名称"
                       autoFocus
                     />
                   </div>
                   <div>
-                    <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">项目编号</label>
+                    <Kicker className="mb-1.5">项目编号</Kicker>
                     <input
                       type="text"
                       value={form.code}
                       onChange={(e) => setForm({ ...form, code: e.target.value })}
-                      className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors"
+                      className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none transition-colors focus:border-[color:var(--acc-border)]"
                       placeholder="CE-2026-XXX"
                     />
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">产品类型</label>
+                      <Kicker className="mb-1.5">产品类型</Kicker>
                       <select
                         value={form.type}
                         onChange={(e) => setForm({ ...form, type: e.target.value })}
-                        className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors bg-white"
+                        className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none transition-colors focus:border-[color:var(--acc-border)]"
                       >
                         {PRODUCT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
                       </select>
                     </div>
                     <div>
-                      <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">项目经理</label>
+                      <Kicker className="mb-1.5">项目经理</Kicker>
                       <select
                         value={form.pmUserId ?? ''}
                         onChange={(e) => setForm({ ...form, pmUserId: e.target.value ? Number(e.target.value) : null })}
                         disabled={usersLoading}
-                        className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors bg-white disabled:opacity-50"
+                        className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none transition-colors focus:border-[color:var(--acc-border)] disabled:opacity-50"
                       >
                         {usersLoading && <option value="">加载中...</option>}
                         {usersError && <option value="">加载失败，可手动输入</option>}
@@ -569,15 +772,12 @@ export function ProjectListView({
                       </select>
                     </div>
                   </div>
-                  {/* 关联产品:立项时可选；产品定义和客户差异在项目 SOP 中推进，项目完成或 SKU 明确后再补 PLM。 */}
                   <div>
-                    <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">
-                      关联产品型号（选填）
-                    </label>
+                    <Kicker className="mb-1.5">关联产品型号（选填）</Kicker>
                     <select
                       value={form.productId}
                       onChange={(e) => setForm({ ...form, productId: e.target.value, newProductName: '' })}
-                      className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors bg-white"
+                      className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none transition-colors focus:border-[color:var(--acc-border)]"
                     >
                       <option value="">暂不关联，先按 SOP 完成立项与产品定义…</option>
                       {products.map((p) => (
@@ -585,7 +785,7 @@ export function ProjectListView({
                       ))}
                     </select>
                     {selectedCategory === 'npd' && (
-                      <p className="mt-1.5 text-[11px] text-stone-500">
+                      <p className="mt-1.5 text-[11px] text-muted-foreground">
                         产品定义、客户差异、规格确认属于项目 SOP 输入；不要求先在产品库建档。项目完成或 SKU 明确后，可在产品库沉淀产品型号与可销售版本。
                       </p>
                     )}
@@ -594,27 +794,27 @@ export function ProjectListView({
                         value={form.newProductName}
                         onChange={(e) => setForm({ ...form, newProductName: e.target.value })}
                         placeholder="新产品名称（选填，填写则在产品库建档并关联）"
-                        className="mt-2 w-full px-3 py-2 border border-stone-200 focus:border-stone-900 outline-none text-sm transition-colors"
+                        className="mt-2 w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none transition-colors focus:border-[color:var(--acc-border)]"
                       />
                     )}
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">开始日期</label>
+                      <Kicker className="mb-1.5">开始日期</Kicker>
                       <input
                         type="date"
                         value={form.startDate}
                         onChange={(e) => setForm({ ...form, startDate: e.target.value })}
-                        className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors"
+                        className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none transition-colors focus:border-[color:var(--acc-border)]"
                       />
                     </div>
                     <div>
-                      <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">目标日期</label>
+                      <Kicker className="mb-1.5">目标日期</Kicker>
                       <input
                         type="date"
                         value={form.targetDate}
                         onChange={(e) => setForm({ ...form, targetDate: e.target.value })}
-                        className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors"
+                        className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none transition-colors focus:border-[color:var(--acc-border)]"
                       />
                     </div>
                   </div>
@@ -623,16 +823,14 @@ export function ProjectListView({
 
               {/* ── Step 3: SOP Preview ── */}
               {step === 3 && (
-                <div className="p-6 space-y-4">
-                  <div className="flex items-start gap-3 p-3 bg-stone-50 border border-stone-200">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-0.5">
-                        <span className="font-serif text-base text-stone-900">{form.name || '（未命名）'}</span>
-                        <span className={`text-[9px] font-mono px-1.5 py-0.5 ${categoryConfig.color} ${categoryConfig.textColor} border ${categoryConfig.borderColor}`}>
-                          {categoryConfig.badge}
-                        </span>
+                <div className="space-y-4 p-6">
+                  <div className="flex items-start gap-3 rounded-[8px] border border-border bg-secondary p-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="mb-0.5 flex items-center gap-2">
+                        <span className="text-base font-semibold text-foreground">{form.name || '（未命名）'}</span>
+                        <TypeBadge type={categoryConfig.badge} />
                       </div>
-                      <div className="text-xs text-stone-500 font-mono">
+                      <div className="text-xs text-muted-foreground num">
                         {form.code && <span className="mr-3">{form.code}</span>}
                         {form.pmUserId && <span className="mr-3">PM: {userList?.find(u => u.id === form.pmUserId)?.name || userList?.find(u => u.id === form.pmUserId)?.username || ''}</span>}
                         {form.startDate && <span>{form.startDate} → {form.targetDate || '?'}</span>}
@@ -641,30 +839,28 @@ export function ProjectListView({
                   </div>
 
                   <div>
-                    <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-3">
-                      {categoryConfig.name} SOP 流程 · {sopPhases.length} 个阶段
-                    </div>
+                    <Kicker className="mb-3">{categoryConfig.name} SOP 流程 · {sopPhases.length} 个阶段</Kicker>
                     <div className="space-y-2">
                       {sopPhases.map((phase, idx) => (
-                        <div key={phase.id} className="flex items-start gap-3 p-3 border border-stone-100 bg-white">
+                        <div key={phase.id} className="flex items-start gap-3 rounded-[8px] border border-border bg-card p-3">
                           <div
-                            className="w-6 h-6 rounded-full flex items-center justify-center text-white text-[10px] font-mono font-bold shrink-0 mt-0.5"
+                            className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white num"
                             style={{ backgroundColor: phase.color }}
                           >
                             {idx + 1}
                           </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 mb-0.5">
-                              <span className="text-sm font-medium text-stone-900">{phase.name}</span>
-                              <span className="text-[10px] font-mono text-stone-400">{phase.duration}</span>
+                          <div className="min-w-0 flex-1">
+                            <div className="mb-0.5 flex items-center gap-2">
+                              <span className="text-sm font-medium text-foreground">{phase.name}</span>
+                              <span className="text-[10px] text-muted-foreground">{phase.duration}</span>
                             </div>
-                            <p className="text-xs text-stone-500">{phase.desc}</p>
-                            <div className="flex items-center gap-1 mt-1">
-                              <span className="text-[9px] font-mono text-amber-600 uppercase tracking-wider">
+                            <p className="text-xs text-muted-foreground">{phase.desc}</p>
+                            <div className="mt-1 flex items-center gap-1">
+                              <span className="text-[9px] font-semibold uppercase tracking-wide text-primary">
                                 Gate: {phase.gate}
                               </span>
-                              <span className="text-[9px] text-stone-300">·</span>
-                              <span className="text-[9px] font-mono text-stone-400">
+                              <span className="text-[9px] text-muted-foreground">·</span>
+                              <span className="text-[9px] text-muted-foreground num">
                                 {phase.tasks.length} 个任务
                               </span>
                             </div>
@@ -678,10 +874,10 @@ export function ProjectListView({
             </div>
 
             {/* Modal Footer */}
-            <div className="p-6 border-t border-stone-200 flex items-center justify-between shrink-0">
+            <div className="flex shrink-0 items-center justify-between border-t border-border p-6">
               <button
                 onClick={() => step > 1 ? setStep((step - 1) as WizardStep) : handleClose()}
-                className="flex items-center gap-1.5 px-4 py-2 text-xs font-mono uppercase tracking-wider text-stone-600 border border-stone-300 hover:bg-stone-50 transition-colors"
+                className="flex items-center gap-1.5 rounded-[7px] border border-border px-4 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary"
               >
                 <ChevronLeft size={14} />
                 {step === 1 ? '取消' : '上一步'}
@@ -693,9 +889,10 @@ export function ProjectListView({
                     if (step === 2 && !form.name.trim()) return;
                     setStep((step + 1) as WizardStep);
                   }}
-                  className={`flex items-center gap-1.5 px-4 py-2 text-xs font-mono uppercase tracking-wider bg-stone-900 text-stone-50 hover:bg-stone-700 transition-colors ${
-                    step === 2 && !form.name.trim() ? 'opacity-50 cursor-not-allowed' : ''
-                  }`}
+                  className={cn(
+                    'flex items-center gap-1.5 rounded-[7px] bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:opacity-90',
+                    step === 2 && !form.name.trim() && 'cursor-not-allowed opacity-50',
+                  )}
                 >
                   下一步
                   <ChevronRight size={14} />
@@ -703,14 +900,14 @@ export function ProjectListView({
               ) : (
                 <button
                   onClick={handleCreate}
-                  className="flex items-center gap-1.5 px-5 py-2 text-xs font-mono uppercase tracking-wider bg-stone-900 text-stone-50 hover:bg-stone-700 transition-colors"
+                  className="flex items-center gap-1.5 rounded-[7px] bg-primary px-5 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:opacity-90"
                 >
                   <Check size={14} />
                   创建项目
                 </button>
               )}
             </div>
-          </div>
+          </LinearCard>
         </div>
       )}
 
@@ -718,24 +915,24 @@ export function ProjectListView({
       <AlertDialog open={!!deleteConfirm} onOpenChange={(open) => { if (!open) setDeleteConfirm(null); }}>
         <AlertDialogContent className="max-w-md">
           <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2 text-rose-700">
-              <AlertTriangle size={18} className="text-rose-600" />
+            <AlertDialogTitle className="flex items-center gap-2 text-[color:var(--destructive)]">
+              <AlertTriangle size={18} />
               删除项目
             </AlertDialogTitle>
             <AlertDialogDescription asChild>
-              <div className="space-y-2 text-stone-700">
+              <div className="space-y-2 text-foreground">
                 <p>
-                  您即将删除项目 <span className="font-semibold text-stone-900">「{deleteConfirm?.name}」</span>。
+                  您即将删除项目 <span className="font-semibold">「{deleteConfirm?.name}」</span>。
                 </p>
-                <div className="mt-3 p-3 bg-rose-50 border border-rose-200 rounded text-sm text-rose-800 space-y-1">
+                <div className="mt-3 space-y-1 rounded border border-[color:var(--destructive)]/30 bg-[color:var(--destructive)]/8 p-3 text-sm text-[color:var(--destructive)]">
                   <p className="font-medium">此操作将永久删除：</p>
-                  <ul className="list-disc list-inside space-y-0.5 text-xs">
+                  <ul className="list-inside list-disc space-y-0.5 text-xs">
                     <li>项目所有阶段和任务数据</li>
                     <li>所有问题记录和关门评审</li>
                     <li>所有附件文件（S3 存储）</li>
                     <li>变更日志和操作记录</li>
                   </ul>
-                  <p className="font-medium mt-2">此操作不可撤销。</p>
+                  <p className="mt-2 font-medium">此操作不可撤销。</p>
                 </div>
               </div>
             </AlertDialogDescription>
@@ -749,13 +946,265 @@ export function ProjectListView({
                   setDeleteConfirm(null);
                 }
               }}
-              className="bg-rose-600 hover:bg-rose-700 text-white"
+              className="bg-[color:var(--destructive)] text-white hover:opacity-90"
             >
               确认删除
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
+  );
+
+  // ── Sub-components defined inline so they close over canCreateProject etc. ──
+  function ProjectCard({ row, onOpen, onToggleStar }: { row: Row; onOpen: (id: string) => void; onToggleStar: (id: string) => void }) {
+    const p = row.project;
+    return (
+      <LinearCard hover className="cursor-pointer p-3" onClick={() => onOpen(p.id)}>
+        <div className="flex items-center gap-2">
+          <StatusDot tone={row.tone} />
+          <span className="text-[10.5px] text-muted-foreground num">{p.code}</span>
+          <span className="ml-auto inline-flex h-[18px] items-center rounded-[5px] border border-[color:var(--acc-border)] bg-[color:var(--acc-soft)] px-1.5 text-[9.5px] font-semibold text-primary">
+            {row.catBadge}
+          </span>
+          <button
+            onClick={(e) => { e.stopPropagation(); onToggleStar(p.id); }}
+            className="shrink-0"
+            title="标星"
+          >
+            <Star size={14} style={row.isStarred ? { fill: 'var(--star)', color: 'var(--star)' } : { color: 'var(--muted-foreground)' }} />
+          </button>
+        </div>
+        <div className="mt-2 text-[13.5px] font-semibold leading-tight">{p.name}</div>
+        <div className="mt-2.5 flex items-center gap-2">
+          <LinearBar value={row.overall} className="flex-1" />
+          <span className="text-[11px] font-semibold text-muted-foreground num">{row.overall}%</span>
+        </div>
+        <div className="mt-2.5 flex items-center justify-between border-t border-border pt-2.5">
+          <div className="flex items-center gap-1.5">
+            <Avatar name={p.pm || '?'} size={20} />
+            <span className="text-[11.5px] text-[color:var(--secondary-foreground)]">{p.pm || '未分配'}</span>
+          </div>
+          <span className="flex items-center gap-1 text-[11px] text-muted-foreground num">
+            <CalendarDays size={11} />{p.targetDate || '—'}
+          </span>
+        </div>
+      </LinearCard>
+    );
+  }
+
+  function KanbanView({
+    stages, groupBy, lanes, rows, collapsedLanes, onToggleLane, onToggleStar, onOpen,
+  }: {
+    stages: typeof STAGE_COLUMNS; groupBy: GroupBy; lanes: Lane[]; rows: Row[];
+    collapsedLanes: Set<string>; onToggleLane: (k: string) => void; onToggleStar: (id: string) => void; onOpen: (id: string) => void;
+  }) {
+    const column = (key: string, label: string, items: Row[]) => (
+      <div key={key} className="flex min-w-[208px] flex-1 flex-col rounded-[12px] border border-border bg-[color:var(--secondary)]">
+        <div className="flex items-center gap-2 px-3 pb-2.5 pt-3">
+          <span className="h-2 w-2 rounded-[3px] bg-primary" />
+          <span className="flex-1 text-[12.5px] font-semibold">{label}</span>
+          <span className="rounded-full border border-border bg-card px-2 py-px text-[12px] text-muted-foreground num">{items.length}</span>
+        </div>
+        <div className="flex flex-1 flex-col gap-2.5 px-2.5 pb-2.5">
+          {items.map((r) => <ProjectCard key={r.project.id} row={r} onOpen={onOpen} onToggleStar={onToggleStar} />)}
+        </div>
+      </div>
+    );
+
+    if (groupBy === 'none') {
+      return (
+        <div className="flex gap-3 overflow-x-auto pb-2">
+          {stages.map((s) => column(s.id, s.label, rows.filter((r) => r.stage === s.id)))}
+        </div>
+      );
+    }
+    // Swimlanes: each lane is a row of stage columns
+    return (
+      <div className="flex flex-col gap-3 overflow-x-auto pb-2">
+        {lanes.map((lane) => {
+          const ck = `${groupBy}:${lane.key}`;
+          const collapsed = collapsedLanes.has(ck);
+          return (
+            <div key={lane.key}>
+              <button
+                onClick={() => onToggleLane(ck)}
+                className="mb-2 flex w-full items-center gap-2 text-left"
+              >
+                <ChevronRight size={15} className={cn('text-muted-foreground transition-transform', !collapsed && 'rotate-90')} />
+                <span className="h-4 w-1 rounded-[2px]" style={{ background: lane.color }} />
+                <span className="text-[13.5px] font-semibold">{lane.label}</span>
+                <span className="text-[11px] text-muted-foreground num">{lane.rows.length} 个项目</span>
+              </button>
+              {!collapsed && (
+                <div className="flex gap-3">
+                  {stages.map((s) => column(s.id, s.label, lane.rows.filter((r) => r.stage === s.id)))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  function ListView({ rows, groupBy, lanes, onOpen }: { rows: Row[]; groupBy: GroupBy; lanes: Lane[]; onOpen: (id: string) => void }) {
+    const tableHead = (
+      <div className="grid grid-cols-[18px_1fr_120px_180px_140px_90px] items-center gap-4 border-b border-border px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <span />
+        <span>项目</span>
+        <span>阶段</span>
+        <span>进度</span>
+        <span>负责人</span>
+        <span className="text-right">目标</span>
+      </div>
+    );
+    const rowEl = (r: Row) => (
+      <div
+        key={r.project.id}
+        onClick={() => onOpen(r.project.id)}
+        className="grid cursor-pointer grid-cols-[18px_1fr_120px_180px_140px_90px] items-center gap-4 border-b border-border px-4 py-2.5 transition-colors hover:bg-secondary"
+      >
+        <StatusDot tone={r.tone} />
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="shrink-0 text-[11.5px] text-muted-foreground num">{r.project.code}</span>
+          <span className="truncate text-[14px] font-medium">{r.project.name}</span>
+        </div>
+        <span className="inline-flex w-fit items-center gap-1.5 rounded-[6px] border border-border bg-secondary px-2 py-0.5 text-[11.5px] font-medium text-[color:var(--secondary-foreground)]">
+          <span className="h-1.5 w-1.5 rounded-[2px] bg-primary" />{STAGE_SHORT[r.stage]}
+        </span>
+        <div className="flex items-center gap-2">
+          <LinearBar value={r.overall} className="flex-1" />
+          <span className="w-8 text-right text-[12px] text-muted-foreground num">{r.overall}%</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <Avatar name={r.project.pm || '?'} size={22} />
+          <span className="truncate text-[12.5px] text-[color:var(--secondary-foreground)]">{r.project.pm || '未分配'}</span>
+        </div>
+        <span className="text-right text-[12px] text-muted-foreground num">{r.project.targetDate || '—'}</span>
+      </div>
+    );
+
+    return (
+      <LinearCard className="overflow-hidden">
+        {tableHead}
+        {groupBy === 'none'
+          ? rows.map(rowEl)
+          : lanes.map((lane) => (
+            <div key={lane.key}>
+              <div className="flex items-center gap-2 bg-secondary px-4 py-2">
+                <span className="h-2 w-2 rounded-full" style={{ background: lane.color }} />
+                <span className="text-[12.5px] font-semibold">{lane.label}</span>
+                <span className="text-[12px] text-muted-foreground num">{lane.rows.length}</span>
+              </div>
+              {lane.rows.map(rowEl)}
+            </div>
+          ))}
+      </LinearCard>
+    );
+  }
+
+  function TimelineView({ rows, groupBy, lanes, onOpen }: { rows: Row[]; groupBy: GroupBy; lanes: Lane[]; onOpen: (id: string) => void }) {
+    // Display-only portfolio timeline: each project = a bar spanning start→target across a month axis.
+    const parse = (s: string) => { const d = new Date(s); return isNaN(d.getTime()) ? null : d; };
+    const allDates = rows.flatMap((r) => [parse(r.project.startDate), parse(r.project.targetDate)]).filter(Boolean) as Date[];
+    const now = new Date();
+    const min = allDates.length ? new Date(Math.min(...allDates.map((d) => d.getTime()))) : new Date(now.getFullYear(), 0, 1);
+    const max = allDates.length ? new Date(Math.max(...allDates.map((d) => d.getTime()), now.getTime())) : new Date(now.getFullYear(), 11, 31);
+    // Build month buckets
+    const months: { y: number; m: number }[] = [];
+    const cur = new Date(min.getFullYear(), min.getMonth(), 1);
+    const end = new Date(max.getFullYear(), max.getMonth(), 1);
+    while (cur <= end) { months.push({ y: cur.getFullYear(), m: cur.getMonth() + 1 }); cur.setMonth(cur.getMonth() + 1); }
+    if (months.length === 0) months.push({ y: now.getFullYear(), m: now.getMonth() + 1 });
+    const COLW = 78, LABELW = 220;
+    const trackW = COLW * months.length;
+    const monthIndex = (d: Date) => (d.getFullYear() - months[0].y) * 12 + (d.getMonth() + 1 - months[0].m);
+    const todayPx = (monthIndex(now) + now.getDate() / 30) * COLW;
+
+    const rowEl = (r: Row) => {
+      const s = parse(r.project.startDate), e = parse(r.project.targetDate);
+      const si = s ? monthIndex(s) : 0;
+      const ei = e ? monthIndex(e) : Math.min(months.length - 1, si + 3);
+      const left = Math.max(0, si) * COLW;
+      const width = Math.max(COLW * 0.6, (Math.max(ei, si) - Math.max(0, si) + 1) * COLW);
+      const barColor = r.tone === 'red' ? 'var(--destructive)' : r.tone === 'amber' ? 'var(--warning)' : 'var(--primary)';
+      return (
+        <div key={r.project.id} className="flex border-b border-border">
+          <div
+            onClick={() => onOpen(r.project.id)}
+            className="sticky left-0 z-[2] flex shrink-0 cursor-pointer items-center gap-2.5 border-r border-border bg-card px-3.5 hover:bg-secondary"
+            style={{ width: LABELW, height: 48 }}
+          >
+            <StatusDot tone={r.tone} />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[13px] font-semibold">{r.project.name}</div>
+              <div className="text-[10.5px] text-muted-foreground num">{r.project.code} · {STAGE_SHORT[r.stage]}</div>
+            </div>
+            <Avatar name={r.project.pm || '?'} size={22} />
+          </div>
+          <div
+            onClick={() => onOpen(r.project.id)}
+            className="relative shrink-0 cursor-pointer"
+            style={{ width: trackW, height: 48, backgroundImage: `repeating-linear-gradient(90deg, transparent, transparent ${COLW - 1}px, var(--border) ${COLW - 1}px, var(--border) ${COLW}px)` }}
+          >
+            <div
+              className="absolute flex items-center gap-2 overflow-hidden rounded-[6px] px-2.5 text-[11px] font-semibold text-white"
+              style={{ left, width, top: 11, height: 26, background: barColor }}
+            >
+              <span>{STAGE_SHORT[r.stage]}</span>
+              <span className="opacity-80 num">{r.overall}%</span>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    return (
+      <LinearCard className="overflow-auto">
+        <div className="min-w-min">
+          {/* Axis header */}
+          <div className="sticky top-0 z-[4] flex border-b border-border bg-card">
+            <div className="sticky left-0 z-[6] flex shrink-0 items-center border-r border-border bg-card px-3.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground" style={{ width: LABELW, height: 38 }}>
+              项目 / 排期
+            </div>
+            <div className="flex">
+              {months.map((mm, i) => (
+                <div key={i} className="shrink-0 border-l border-border py-2 text-center text-[11px] text-muted-foreground num" style={{ width: COLW }}>
+                  {mm.m}月{mm.m === 1 ? <span className="block text-[9px] text-muted-foreground">{mm.y}</span> : null}
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="relative">
+            {groupBy === 'none'
+              ? rows.map(rowEl)
+              : lanes.map((lane) => (
+                <div key={lane.key}>
+                  <div className="flex bg-secondary">
+                    <div className="sticky left-0 z-[2] flex shrink-0 items-center gap-2 border-r border-border bg-secondary px-3.5 text-[12px] font-semibold" style={{ width: LABELW, height: 34 }}>
+                      <span className="h-3.5 w-1 rounded-[2px]" style={{ background: lane.color }} />
+                      {lane.label}<span className="text-muted-foreground num">{lane.rows.length}</span>
+                    </div>
+                    <div className="shrink-0" style={{ width: trackW, height: 34 }} />
+                  </div>
+                  {lane.rows.map(rowEl)}
+                </div>
+              ))}
+            {/* Today line */}
+            <div className="pointer-events-none absolute bottom-0 top-0 z-[3] w-0.5 bg-primary" style={{ left: LABELW + todayPx }} />
+          </div>
+        </div>
+      </LinearCard>
+    );
+  }
+}
+
+function PropRow({ k, v }: { k: string; v: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between border-b border-border py-1.5 last:border-none">
+      <span className="text-[12.5px] text-muted-foreground">{k}</span>
+      <span className="flex items-center gap-1.5 text-[13px] font-medium">{v}</span>
     </div>
   );
 }
