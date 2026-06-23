@@ -991,6 +991,31 @@ export default function Home() {
           </div>
 
           <div className="ml-auto flex items-center gap-2">
+            {/* Save / sync status — compact indicator */}
+            <div className="hidden sm:flex items-center gap-1.5 text-[11px] text-muted-foreground select-none">
+              {saveStatus === 'saving' ? (
+                <>
+                  <span className="w-1.5 h-1.5 rounded-full bg-[color:var(--primary)] opacity-70 animate-pulse shrink-0" />
+                  <span>同步中…</span>
+                </>
+              ) : saveStatus === 'error' ? (
+                <>
+                  <span className="w-1.5 h-1.5 rounded-full bg-[color:var(--destructive)] shrink-0" />
+                  <span className="text-[color:var(--destructive)]">同步失败</span>
+                </>
+              ) : (
+                <>
+                  <span className="w-1.5 h-1.5 rounded-full bg-[color:var(--success)] shrink-0" />
+                  <span>已同步</span>
+                  {lastSavedAt && (
+                    <span className="num opacity-60">
+                      {lastSavedAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                    </span>
+                  )}
+                </>
+              )}
+            </div>
+
             {/* Search box */}
             <button
               onClick={() => setSearchOpen(true)}
