@@ -12,7 +12,7 @@ import {
   DndContext, PointerSensor, useSensor, useSensors, useDraggable, useDroppable,
   type DragEndEvent,
 } from '@dnd-kit/core';
-import { Plus, Trash2, ChevronRight, ChevronLeft, Check, Copy, Lock, AlertTriangle, Search, Star, LayoutGrid, List as ListIcon, GanttChartSquare, X as XIcon, CalendarDays } from 'lucide-react';
+import { Plus, Minus, Trash2, ChevronRight, ChevronLeft, Check, Copy, Lock, AlertTriangle, Search, Star, LayoutGrid, List as ListIcon, GanttChartSquare, X as XIcon, CalendarDays } from 'lucide-react';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -29,6 +29,7 @@ import {
   LinearCard, Kicker, PageHeader, StatusDot, LinearBar, SegToggle, TypeBadge,
 } from '@/components/linear/primitives';
 import { cn } from '@/lib/utils';
+import { useBoardPrefs } from '@/hooks/useBoardPrefs';
 
 interface ProjectListViewProps {
   projects: Project[];
@@ -192,6 +193,8 @@ export function ProjectListView({
   const isAdmin = (user as (typeof user & { role?: string }) | null)?.role === 'admin';
   const moveMut = trpc.projects.move.useMutation();
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+  // WIP 上限（per-stage，跨泳道共享，持久化在 localStorage）。
+  const { wipLimits, setWipLimit } = useBoardPrefs();
   // Patch shape accepted by trpc.projects.move (only provided fields are written).
   type MovePatch = { currentPhase?: string; pmUserId?: number | null; productId?: string | null };
   // Pending drag awaiting confirmation. `patch`/`undoPatch`/`successMsg` carry the
@@ -246,6 +249,19 @@ export function ProjectListView({
     }
 
     if (!stageChanged && !reassignPatch) return;
+
+    // HARD WIP 上限：只有阶段推进（toStage 变化）才受限；纯改派不受 WIP 约束。
+    // 限制是 per-stage 的，计数为全板内 currentPhase 落在 toStage 的项目总数。
+    if (stageChanged) {
+      const limit = wipLimits[toStage];
+      if (limit != null) {
+        const countInTarget = projects.filter((p) => stageBucket(p.currentPhase) === toStage).length;
+        if (countInTarget >= limit) {
+          toast.error(`${stageLabel(toStage)} 已达 WIP 上限 ${limit}`);
+          return; // 不进入 confirm/move
+        }
+      }
+    }
 
     if (stageChanged && reassignPatch) {
       // Combined推进+改派 → keep the confirm dialog (stage change is the heavy part).
@@ -1237,7 +1253,7 @@ export function ProjectListView({
     // Droppable stage column. laneKey='' for ungrouped (Task 3); Task 4 will pass
     // a real laneKey for cross-lane reassign via the same makeDropId encoding.
     const column = (laneKey: string, stageId: string, label: string, items: Row[]) => (
-      <StageColumn key={`${laneKey}::${stageId}`} dropId={makeDropId(laneKey, stageId)} label={label} count={items.length}>
+      <StageColumn key={`${laneKey}::${stageId}`} dropId={makeDropId(laneKey, stageId)} stageId={stageId} label={label} count={items.length}>
         {items.map((r) => <ProjectCard key={r.project.id} row={r} onOpen={onOpen} onToggleStar={onToggleStar} draggable />)}
       </StageColumn>
     );
@@ -1279,8 +1295,12 @@ export function ProjectListView({
     );
   }
 
-  function StageColumn({ dropId, label, count, children }: { dropId: string; label: string; count: number; children: React.ReactNode }) {
+  function StageColumn({ dropId, stageId, label, count, children }: { dropId: string; stageId: string; label: string; count: number; children: React.ReactNode }) {
     const { setNodeRef, isOver } = useDroppable({ id: dropId });
+    const limit = wipLimits[stageId];
+    const atLimit = limit != null && count >= limit;
+    // 无上限时，从当前列计数起步增减；setWipLimit 处理 ≤0 → 清除。
+    const step = (delta: number) => setWipLimit(stageId, (limit ?? count) + delta);
     return (
       <div
         ref={setNodeRef}
@@ -1289,10 +1309,31 @@ export function ProjectListView({
           isOver ? 'border-[color:var(--acc-border)] bg-[color:var(--acc-soft)]' : 'border-border',
         )}
       >
-        <div className="flex items-center gap-2 px-3 pb-2.5 pt-3">
+        <div className="group/wip flex items-center gap-2 px-3 pb-2.5 pt-3">
           <span className="h-2 w-2 rounded-[3px] bg-primary" />
           <span className="flex-1 text-[12.5px] font-semibold">{label}</span>
-          <span className="rounded-full border border-border bg-card px-2 py-px text-[12px] text-muted-foreground num">{count}</span>
+          <button
+            type="button"
+            onClick={() => step(-1)}
+            aria-label={`降低 ${label} WIP 上限`}
+            title="降低 WIP 上限"
+            className="inline-flex h-4 w-4 items-center justify-center rounded-[4px] text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover/wip:opacity-100"
+          >
+            <Minus size={11} />
+          </button>
+          <span className="rounded-full border border-border bg-card px-2 py-px text-[12px] text-muted-foreground num">
+            <span className={cn(atLimit && 'text-[color:var(--destructive)]')}>{count}</span>
+            {limit != null && <span> / {limit}</span>}
+          </span>
+          <button
+            type="button"
+            onClick={() => step(1)}
+            aria-label={`提高 ${label} WIP 上限`}
+            title="提高 WIP 上限"
+            className="inline-flex h-4 w-4 items-center justify-center rounded-[4px] text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover/wip:opacity-100"
+          >
+            <Plus size={11} />
+          </button>
         </div>
         <div className="flex flex-1 flex-col gap-2.5 px-2.5 pb-2.5">
           {children}
