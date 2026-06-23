@@ -480,10 +480,10 @@ export function ProjectListView({
                         {changeLog.map((c, i) => (
                           <div key={i} className="flex gap-2.5 border-b border-border py-2 last:border-none">
                             <div className="text-[12px] leading-snug text-[color:var(--secondary-foreground)]">
-                              {(c as { summary?: string; description?: string }).summary || (c as { description?: string }).description || '变更'}
+                              {c.title || c.description || '变更'}
                               <span className="mt-0.5 block text-[10.5px] text-muted-foreground">
-                                {(c as { actor?: string; user?: string }).actor || (c as { user?: string }).user || ''}
-                                {(c as { timestamp?: string; date?: string }).timestamp || (c as { date?: string }).date ? ` · ${(c as { timestamp?: string; date?: string }).timestamp || (c as { date?: string }).date}` : ''}
+                                {c.decisionMaker || ''}
+                                {c.createdDate || c.createdAt ? ` · ${c.createdDate || c.createdAt}` : ''}
                               </span>
                             </div>
                           </div>
@@ -493,8 +493,8 @@ export function ProjectListView({
                   </section>
                 </div>
 
-                {/* Footer: existing navigation action (no new mutation) */}
-                <div className="flex gap-2 border-t border-border px-5 py-3.5">
+                {/* Footer: navigation + clone/delete actions */}
+                <div className="flex items-center gap-2 border-t border-border px-5 py-3.5">
                   <button
                     onClick={() => { onSelectProject(p.id); setDetailId(null); }}
                     className="inline-flex h-[34px] flex-1 items-center justify-center gap-1.5 rounded-[7px] bg-primary text-[12.5px] font-semibold text-primary-foreground transition-colors hover:opacity-90"
@@ -502,6 +502,24 @@ export function ProjectListView({
                     进入项目
                     <ChevronRight size={14} />
                   </button>
+                  <button
+                    onClick={(e) => handleOpenClone(e, p)}
+                    title="克隆项目"
+                    aria-label="克隆项目"
+                    className="inline-flex h-[34px] w-[34px] items-center justify-center rounded-[7px] border border-border bg-card text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                  >
+                    <Copy size={15} />
+                  </button>
+                  {p.canDeleteProject && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setDeleteConfirm({ id: p.id, name: p.name }); }}
+                      title="删除项目"
+                      aria-label="删除项目"
+                      className="inline-flex h-[34px] w-[34px] items-center justify-center rounded-[7px] border border-border bg-card text-muted-foreground transition-colors hover:bg-secondary hover:text-[color:var(--destructive)]"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  )}
                   <button
                     onClick={() => setDetailId(null)}
                     className="inline-flex h-[34px] items-center rounded-[7px] border border-border bg-card px-3 text-[12.5px] font-medium text-muted-foreground hover:bg-secondary"
@@ -1050,20 +1068,21 @@ export function ProjectListView({
 
   function ListView({ rows, groupBy, lanes, onOpen }: { rows: Row[]; groupBy: GroupBy; lanes: Lane[]; onOpen: (id: string) => void }) {
     const tableHead = (
-      <div className="grid grid-cols-[18px_1fr_120px_180px_140px_90px] items-center gap-4 border-b border-border px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+      <div className="grid grid-cols-[18px_1fr_120px_180px_140px_90px_64px] items-center gap-4 border-b border-border px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         <span />
         <span>项目</span>
         <span>阶段</span>
         <span>进度</span>
         <span>负责人</span>
         <span className="text-right">目标</span>
+        <span className="text-right">操作</span>
       </div>
     );
     const rowEl = (r: Row) => (
       <div
         key={r.project.id}
         onClick={() => onOpen(r.project.id)}
-        className="grid cursor-pointer grid-cols-[18px_1fr_120px_180px_140px_90px] items-center gap-4 border-b border-border px-4 py-2.5 transition-colors hover:bg-secondary"
+        className="group grid cursor-pointer grid-cols-[18px_1fr_120px_180px_140px_90px_64px] items-center gap-4 border-b border-border px-4 py-2.5 transition-colors hover:bg-secondary"
       >
         <StatusDot tone={r.tone} />
         <div className="flex min-w-0 items-center gap-2.5">
@@ -1082,6 +1101,26 @@ export function ProjectListView({
           <span className="truncate text-[12.5px] text-[color:var(--secondary-foreground)]">{r.project.pm || '未分配'}</span>
         </div>
         <span className="text-right text-[12px] text-muted-foreground num">{r.project.targetDate || '—'}</span>
+        <div className="flex items-center justify-end gap-1">
+          <button
+            onClick={(e) => handleOpenClone(e, r.project)}
+            title="克隆项目"
+            aria-label="克隆项目"
+            className="inline-flex h-7 w-7 items-center justify-center rounded-[6px] text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
+          >
+            <Copy size={14} />
+          </button>
+          {r.project.canDeleteProject && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setDeleteConfirm({ id: r.project.id, name: r.project.name }); }}
+              title="删除项目"
+              aria-label="删除项目"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-[6px] text-muted-foreground transition-colors hover:bg-card hover:text-[color:var(--destructive)]"
+            >
+              <Trash2 size={14} />
+            </button>
+          )}
+        </div>
       </div>
     );
 
