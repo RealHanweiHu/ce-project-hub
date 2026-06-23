@@ -555,6 +555,52 @@ export const projectsRouter = router({
     }),
 
   /**
+   * 轻量 patch mutation：仅修改阶段/负责人/产品线，不触碰 progress/category 等字段。
+   * 供看板拖拽使用；需 admin 或 canEditProjectInfo。
+   */
+  move: protectedProcedure
+    .input(z.object({
+      id: z.string(),
+      currentPhase: z.string().optional(),
+      pmUserId: z.number().int().nullable().optional(),
+      productId: z.string().nullable().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const existing = await getProjectById(input.id);
+      if (!existing) throw new TRPCError({ code: "NOT_FOUND" });
+      const role = await getEffectiveRole(input.id, ctx.user.id);
+      const allowed = ctx.user.role === "admin" || (role && ROLE_PERMISSIONS[role].canEditProjectInfo);
+      if (!allowed) throw new TRPCError({ code: "FORBIDDEN" });
+
+      const patch: Record<string, unknown> = {};
+      if (input.currentPhase !== undefined) patch.currentPhase = input.currentPhase;
+      if (input.pmUserId !== undefined) patch.pmUserId = input.pmUserId;
+      if (input.productId !== undefined) patch.productId = input.productId;
+      if (Object.keys(patch).length === 0) return { success: true };
+
+      await updateProject(input.id, patch);
+
+      if (input.pmUserId != null && input.pmUserId !== existing.pmUserId && input.pmUserId !== existing.createdBy) {
+        try { await ensureProjectMember(input.id, input.pmUserId, "pm", ctx.user.id); }
+        catch (e) { console.warn("[move] add pm failed (non-fatal):", e); }
+      }
+
+      await createActivityLog({
+        projectId: input.id,
+        userId: ctx.user.id,
+        action: "project.move",
+        entityType: "project",
+        entityId: input.id,
+        meta: {
+          fromPhase: existing.currentPhase, toPhase: input.currentPhase ?? existing.currentPhase,
+          fromPm: existing.pmUserId, toPm: input.pmUserId === undefined ? existing.pmUserId : input.pmUserId,
+          fromProduct: existing.productId, toProduct: input.productId === undefined ? existing.productId : input.productId,
+        },
+      });
+      return { success: true };
+    }),
+
+  /**
    * 按角色把未分配任务自动指派给对应成员,并给每位负责人发钉钉通知(含任务+截止日)。
    * 立项后由创建者/PM 在指定好各角色成员后触发。需 canEditProjectInfo。
    */
