@@ -1,10 +1,14 @@
 // client/src/components/linear/primitives.tsx
 import { cn } from '@/lib/utils';
-import type { ReactNode } from 'react';
+import { forwardRef, type ReactNode } from 'react';
 
-export function LinearCard({ className, hover, children, ...p }: React.HTMLAttributes<HTMLDivElement> & { hover?: boolean }) {
+export const LinearCard = forwardRef<
+  HTMLDivElement,
+  React.HTMLAttributes<HTMLDivElement> & { hover?: boolean }
+>(function LinearCard({ className, hover, children, ...p }, ref) {
   return (
     <div
+      ref={ref}
       className={cn(
         'rounded-[11px] border border-border bg-card shadow-[0_1px_2px_rgb(0_0_0/0.03)]',
         hover && 'transition-[box-shadow,border-color,transform] duration-150 hover:shadow-[0_4px_14px_rgb(0_0_0/0.09)] hover:border-[color:var(--acc-border)]',
@@ -15,7 +19,7 @@ export function LinearCard({ className, hover, children, ...p }: React.HTMLAttri
       {children}
     </div>
   );
-}
+});
 
 export function Kicker({ children, className }: { children: ReactNode; className?: string }) {
   return <div className={cn('text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground', className)}>{children}</div>;

@@ -6,6 +6,12 @@
 
 import { useMemo, useState } from 'react';
 import { trpc } from '@/lib/trpc';
+import { useAuth } from '@/_core/hooks/useAuth';
+import { toast } from 'sonner';
+import {
+  DndContext, PointerSensor, useSensor, useSensors, useDraggable, useDroppable,
+  type DragEndEvent,
+} from '@dnd-kit/core';
 import { Plus, Trash2, ChevronRight, ChevronLeft, Check, Copy, Lock, AlertTriangle, Search, Star, LayoutGrid, List as ListIcon, GanttChartSquare, X as XIcon, CalendarDays } from 'lucide-react';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -61,6 +67,19 @@ const STAGE_COLUMNS: { id: string; label: string; short: string }[] = [
 ];
 const STAGE_IDS = STAGE_COLUMNS.map((s) => s.id);
 const STAGE_SHORT: Record<string, string> = Object.fromEntries(STAGE_COLUMNS.map((s) => [s.id, s.short]));
+
+// ── Drop-zone id helpers ────────────────────────────────────────────────────
+// Encode lane + stage into a single droppable id. Task 3 uses laneKey='' (no
+// grouping); Task 4 will pass a real laneKey for cross-lane reassign. Splitting
+// on '::' keeps the parser forward-compatible.
+function makeDropId(laneKey: string, stageId: string): string {
+  return `${laneKey}::${stageId}`;
+}
+function parseDrop(id: string): { laneKey: string; stageId: string } {
+  const idx = String(id).indexOf('::');
+  if (idx === -1) return { laneKey: '', stageId: String(id) };
+  return { laneKey: String(id).slice(0, idx), stageId: String(id).slice(idx + 2) };
+}
 
 // Map an arbitrary phase id onto a kanban stage bucket.
 function stageBucket(phaseId: string): string {
@@ -149,6 +168,66 @@ export function ProjectListView({
   const [selectedCategory, setSelectedCategory] = useState<ProjectCategory>('npd');
   const { data: userList, isLoading: usersLoading, isError: usersError } = trpc.admin.listUsersForSelect.useQuery();
   const utils = trpc.useUtils();
+
+  // ── Drag-to-advance/regress (PM/admin override) ──
+  const { user } = useAuth();
+  const isAdmin = (user as (typeof user & { role?: string }) | null)?.role === 'admin';
+  const moveMut = trpc.projects.move.useMutation();
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+  // Pending drag awaiting confirmation
+  const [moveConfirm, setMoveConfirm] = useState<{ project: Project; fromStage: string; toStage: string } | null>(null);
+
+  // Can the current user drag (override the phase of) this project?
+  const canDrag = (project: Project): boolean =>
+    isAdmin || !!project.canEditProjectInfo;
+
+  const stageLabel = (stageId: string): string =>
+    STAGE_COLUMNS.find((s) => s.id === stageId)?.label ?? stageId;
+
+  // Refresh the board: `projects` is a prop derived from trpc.projects.list in
+  // Home, so invalidating that query (the same path Home's invalidateProjects
+  // uses) re-fetches and re-renders the board with persisted data.
+  const refreshBoard = () => {
+    utils.projects.list.invalidate();
+    utils.projects.portfolio.invalidate();
+  };
+
+  const handleDragEnd = (e: DragEndEvent) => {
+    if (!e.over) return;
+    const project = projects.find((p) => p.id === String(e.active.id));
+    if (!project || !canDrag(project)) return;
+    const { stageId: toStage } = parseDrop(String(e.over.id));
+    const fromStage = stageBucket(project.currentPhase);
+    if (!toStage || toStage === fromStage) return;
+    setMoveConfirm({ project, fromStage, toStage });
+  };
+
+  const doMove = async (project: Project, fromStage: string, toStage: string) => {
+    const fromLabel = stageLabel(fromStage);
+    const toLabel = stageLabel(toStage);
+    try {
+      await moveMut.mutateAsync({ id: project.id, currentPhase: toStage });
+      refreshBoard();
+      toast.success(`已将 ${project.name} 推进到 ${toLabel} · 可撤销`, {
+        action: {
+          label: '撤销',
+          onClick: async () => {
+            try {
+              await moveMut.mutateAsync({ id: project.id, currentPhase: fromStage });
+              refreshBoard();
+              toast.success(`已撤销 · ${project.name} 回到 ${fromLabel}`);
+            } catch {
+              toast.error('撤销失败');
+              refreshBoard();
+            }
+          },
+        },
+      });
+    } catch {
+      toast.error('操作失败，已回滚');
+      refreshBoard();
+    }
+  };
   const { data: productList = [] } = trpc.products.list.useQuery(undefined);
   const products = productList as Array<{ id: string; name: string; productNumber: string }>;
   const createProductMutation = trpc.products.create.useMutation({
@@ -929,6 +1008,44 @@ export function ProjectListView({
         </div>
       )}
 
+      {/* ── Drag Move Confirmation Dialog ── */}
+      <AlertDialog open={!!moveConfirm} onOpenChange={(open) => { if (!open) setMoveConfirm(null); }}>
+        <AlertDialogContent className="max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <ChevronRight size={18} className="text-primary" />
+              推进项目阶段
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-foreground">
+                {moveConfirm && (
+                  <p>
+                    手动覆盖：<span className="font-semibold">{moveConfirm.project.name}</span>
+                    （<span className="num">{moveConfirm.project.code || moveConfirm.project.id}</span>）
+                    {' '}{stageLabel(moveConfirm.fromStage)} → {stageLabel(moveConfirm.toStage)}。
+                    此操作直接改变阶段，不生成 Gate 通过记录。确认？
+                  </p>
+                )}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setMoveConfirm(null)}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (moveConfirm) {
+                  const { project, fromStage, toStage } = moveConfirm;
+                  setMoveConfirm(null);
+                  void doMove(project, fromStage, toStage);
+                }
+              }}
+            >
+              确认推进
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* ── Delete Confirmation Dialog ── */}
       <AlertDialog open={!!deleteConfirm} onOpenChange={(open) => { if (!open) setDeleteConfirm(null); }}>
         <AlertDialogContent className="max-w-md">
@@ -975,10 +1092,26 @@ export function ProjectListView({
   );
 
   // ── Sub-components defined inline so they close over canCreateProject etc. ──
-  function ProjectCard({ row, onOpen, onToggleStar }: { row: Row; onOpen: (id: string) => void; onToggleStar: (id: string) => void }) {
+  function ProjectCard({ row, onOpen, onToggleStar, draggable = false }: { row: Row; onOpen: (id: string) => void; onToggleStar: (id: string) => void; draggable?: boolean }) {
     const p = row.project;
+    const drag = useDraggable({ id: p.id, disabled: !draggable || !canDrag(p) });
+    // dnd-kit's CSS.Translate without the @dnd-kit/utilities package (not installed)
+    const transformStyle = drag.transform
+      ? { transform: `translate3d(${drag.transform.x}px, ${drag.transform.y}px, 0)` }
+      : undefined;
     return (
-      <LinearCard hover className="cursor-pointer p-3" onClick={() => onOpen(p.id)}>
+      <LinearCard
+        hover
+        ref={drag.setNodeRef}
+        {...(draggable ? drag.attributes : {})}
+        {...(draggable ? drag.listeners : {})}
+        style={transformStyle}
+        className={cn(
+          'cursor-pointer p-3',
+          drag.isDragging && 'z-10 opacity-60 shadow-lg',
+        )}
+        onClick={() => onOpen(p.id)}
+      >
         <div className="flex items-center gap-2">
           <StatusDot tone={row.tone} />
           <span className="text-[10.5px] text-muted-foreground num">{p.code}</span>
@@ -1017,51 +1150,69 @@ export function ProjectListView({
     stages: typeof STAGE_COLUMNS; groupBy: GroupBy; lanes: Lane[]; rows: Row[];
     collapsedLanes: Set<string>; onToggleLane: (k: string) => void; onToggleStar: (id: string) => void; onOpen: (id: string) => void;
   }) {
-    const column = (key: string, label: string, items: Row[]) => (
-      <div key={key} className="flex min-w-[208px] flex-1 flex-col rounded-[12px] border border-border bg-[color:var(--secondary)]">
+    // Droppable stage column. laneKey='' for ungrouped (Task 3); Task 4 will pass
+    // a real laneKey for cross-lane reassign via the same makeDropId encoding.
+    const column = (laneKey: string, stageId: string, label: string, items: Row[]) => (
+      <StageColumn key={`${laneKey}::${stageId}`} dropId={makeDropId(laneKey, stageId)} label={label} count={items.length}>
+        {items.map((r) => <ProjectCard key={r.project.id} row={r} onOpen={onOpen} onToggleStar={onToggleStar} draggable />)}
+      </StageColumn>
+    );
+
+    return (
+      <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+        {groupBy === 'none' ? (
+          <div className="flex gap-3 overflow-x-auto pb-2">
+            {stages.map((s) => column('', s.id, s.label, rows.filter((r) => r.stage === s.id)))}
+          </div>
+        ) : (
+          // Swimlanes: each lane is a row of stage columns
+          <div className="flex flex-col gap-3 overflow-x-auto pb-2">
+            {lanes.map((lane) => {
+              const ck = `${groupBy}:${lane.key}`;
+              const collapsed = collapsedLanes.has(ck);
+              return (
+                <div key={lane.key}>
+                  <button
+                    onClick={() => onToggleLane(ck)}
+                    className="mb-2 flex w-full items-center gap-2 text-left"
+                  >
+                    <ChevronRight size={15} className={cn('text-muted-foreground transition-transform', !collapsed && 'rotate-90')} />
+                    <span className="h-4 w-1 rounded-[2px]" style={{ background: lane.color }} />
+                    <span className="text-[13.5px] font-semibold">{lane.label}</span>
+                    <span className="text-[11px] text-muted-foreground num">{lane.rows.length} 个项目</span>
+                  </button>
+                  {!collapsed && (
+                    <div className="flex gap-3">
+                      {stages.map((s) => column(lane.key, s.id, s.label, lane.rows.filter((r) => r.stage === s.id)))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </DndContext>
+    );
+  }
+
+  function StageColumn({ dropId, label, count, children }: { dropId: string; label: string; count: number; children: React.ReactNode }) {
+    const { setNodeRef, isOver } = useDroppable({ id: dropId });
+    return (
+      <div
+        ref={setNodeRef}
+        className={cn(
+          'flex min-w-[208px] flex-1 flex-col rounded-[12px] border bg-[color:var(--secondary)] transition-colors',
+          isOver ? 'border-[color:var(--acc-border)] bg-[color:var(--acc-soft)]' : 'border-border',
+        )}
+      >
         <div className="flex items-center gap-2 px-3 pb-2.5 pt-3">
           <span className="h-2 w-2 rounded-[3px] bg-primary" />
           <span className="flex-1 text-[12.5px] font-semibold">{label}</span>
-          <span className="rounded-full border border-border bg-card px-2 py-px text-[12px] text-muted-foreground num">{items.length}</span>
+          <span className="rounded-full border border-border bg-card px-2 py-px text-[12px] text-muted-foreground num">{count}</span>
         </div>
         <div className="flex flex-1 flex-col gap-2.5 px-2.5 pb-2.5">
-          {items.map((r) => <ProjectCard key={r.project.id} row={r} onOpen={onOpen} onToggleStar={onToggleStar} />)}
+          {children}
         </div>
-      </div>
-    );
-
-    if (groupBy === 'none') {
-      return (
-        <div className="flex gap-3 overflow-x-auto pb-2">
-          {stages.map((s) => column(s.id, s.label, rows.filter((r) => r.stage === s.id)))}
-        </div>
-      );
-    }
-    // Swimlanes: each lane is a row of stage columns
-    return (
-      <div className="flex flex-col gap-3 overflow-x-auto pb-2">
-        {lanes.map((lane) => {
-          const ck = `${groupBy}:${lane.key}`;
-          const collapsed = collapsedLanes.has(ck);
-          return (
-            <div key={lane.key}>
-              <button
-                onClick={() => onToggleLane(ck)}
-                className="mb-2 flex w-full items-center gap-2 text-left"
-              >
-                <ChevronRight size={15} className={cn('text-muted-foreground transition-transform', !collapsed && 'rotate-90')} />
-                <span className="h-4 w-1 rounded-[2px]" style={{ background: lane.color }} />
-                <span className="text-[13.5px] font-semibold">{lane.label}</span>
-                <span className="text-[11px] text-muted-foreground num">{lane.rows.length} 个项目</span>
-              </button>
-              {!collapsed && (
-                <div className="flex gap-3">
-                  {stages.map((s) => column(s.id, s.label, lane.rows.filter((r) => r.stage === s.id)))}
-                </div>
-              )}
-            </div>
-          );
-        })}
       </div>
     );
   }
