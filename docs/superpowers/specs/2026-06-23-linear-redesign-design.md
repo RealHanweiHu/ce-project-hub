@@ -14,6 +14,11 @@
 **核心原则：只改表现层，不动数据与业务逻辑。** 现有视图已正确接好 tRPC、状态管理与业务规则；
 本次只翻译视觉（token / 布局 / 基元），数据 hooks、mutation、逻辑保持不变。
 
+**写操作约束（本次范围红线）**：本次视觉改版**只**做视觉 / 布局 / 筛选 / 搜索 / 视图切换 / 详情抽屉；
+任何写操作（推进阶段、改派、标星、完成勾选…）**只复用现有 tRPC mutation**，不新增写路径。
+看板的拖拽推进 / 跨泳道改派 / WIP 硬限制 / toast 撤销 / 分组持久化等**新行为**属于
+**Phase 2 功能增强**，明确排除在本次视觉改版之外（见 §5.4-1）。
+
 ## 2. 已确认的决策
 
 | 决策点 | 选择 |
@@ -25,7 +30,7 @@
 
 ## 3. 现状（目标代码库）
 
-- React 18 + Vite + TypeScript + **Tailwind v4** + shadcn/ui + wouter + tRPC。
+- React 19 + Vite + TypeScript + **Tailwind v4** + shadcn/ui + wouter + tRPC。
 - 应用为**单页**：`client/src/pages/Home.tsx`（1146 行）通过 state + URL query 切换视图，
   **非**每页 wouter 路由。视图切换/URL 同步逻辑保持不变。
 - ~32 个视图组件位于 `client/src/components/views/`，部分很大
@@ -38,8 +43,13 @@
 
 ## 4. 设计 Token（权威：`app.css` 的 `:root`）
 
-- **字体**：`Hanken Grotesk`（自托管，权重 400/500/600/700），`letter-spacing:-.01em`；
+- **字体**：`Hanken Grotesk`（自托管 woff2，权重 400/500/600/700）；
   数字 `font-variant-numeric:tabular-nums`（`.num`）。
+  - **执行细节**：当前 `client/public/fonts/` 只有 Playfair/JetBrains/SourceSans，**没有** Hanken Grotesk。
+    需把 400/500/600/700 四个权重的 woff2 加入 `client/public/fonts/`，并在 `client/src/index.css`
+    顶部替换旧 `@font-face` 声明（移除 Playfair/JetBrains/SourceSans，新增 Hanken Grotesk）。
+  - **字距**：全局 `letter-spacing: 0`（**不**用 `-.01em`），靠 Hanken Grotesk 本身 + 字号/字重做 Linear 感，
+    避免小字号中文与按钮文本发紧。
 - **颜色**：
   - 背景 `#ffffff` · 侧栏/面板 `#fafafa` · hover `#f7f7f8`
   - zinc：z100 `#f4f4f5` · z200 `#e9e9eb` · z300 `#d8d8dc` · z400 `#a1a1aa` · z500 `#71717a` · z600 `#52525b`
@@ -54,12 +64,19 @@
 
 ### 5.1 基础层 — 全局 token swap（先做，约拿下 60% 观感）
 重写 `client/src/index.css` 的 `:root` + `@theme inline` 块：
-- 字体：Playfair/JetBrains/Source Sans → 自托管 **Hanken Grotesk**；移除 serif/mono 强制。
+- 字体：Playfair/JetBrains/Source Sans → 自托管 **Hanken Grotesk**；移除 serif/mono 强制；`letter-spacing:0`。
 - 把 app.css token 映射到 shadcn 语义：`--primary`=`#5e6ad2`，`--background`=`#fff`，
   `--accent`=`--acc-soft`，`--destructive`=`#e5484d`，`--border`=`#e9e9eb`，`--radius`=11px，
   并新增成功/警示/星标 token。
 - 因 shadcn Card/Button/Badge/Dialog/DropdownMenu/Sheet/Popover 等都读这些 token，
-  全部视图自动迁移到 Linear 风。
+  **使用 shadcn 语义 token 的组件**自动迁移到 Linear 风。
+
+> **重要：token swap 只是基础层，不能自动盖住硬编码类。** 实测约 **37 个视图文件**仍硬编码
+> `stone-*` / `amber-*` / `font-serif` / `font-mono` / `ce-*` 基元
+> （例 `ProjectListView.tsx:145`：`font-serif text-stone-900 ce-page-header ce-kicker`）。
+> 这些**不会**被 token swap 自动改变，必须在 §5.4 逐屏改造时**逐个清理**：
+> 把旧 Tailwind 色彩/字体类替换为新语义 token 或 §5.2 基元，并移除 `ce-*` 旧基元。
+> 逐屏改造的「完成」标准之一 = 该屏不再残留 `stone-*/amber-*/font-serif/font-mono/ce-*`。
 
 ### 5.2 共享基元 — `linear-primitives`
 把 app.css 的 `.rail/.seg/.chip/.pill/.st/.badge/.bar/.card` 等基元
@@ -72,9 +89,14 @@
 **视图切换/URL 同步/懒加载逻辑保持不变**，只换外观。
 
 ### 5.4 七屏（复用逻辑，重皮 UI）
-1. **项目组合看板（核心）**：列表/看板/时间轴(甘特) 三视图；6 阶段列；
-   分组泳道（无/产品线/类型/负责人，可折叠持久化）；WIP 上限（硬限制 + toast 撤销）；
-   拖拽（阶段=推进/回退，跨泳道=改派）建议 dnd-kit；筛选+搜索；卡片标星；右侧详情抽屉。
+1. **项目组合看板（核心）**：
+   - **Phase 1（本次视觉改版）**：列表/看板/时间轴(甘特) 三视图切换；6 阶段列；
+     分组泳道（无/产品线/类型/负责人）的**显示**与本地折叠态；筛选 + 搜索；右侧详情抽屉；
+     卡片视觉（风险灯/编号/类型徽章/星标显示/进度/负责人/下一评审）。
+     标星 / 推进 / 改派等写操作**仅复用现有 tRPC mutation**（若现有 mutation 已支持则接上，否则归 Phase 2）。
+   - **Phase 2（功能增强，明确不在本次范围）**：dnd-kit 拖拽推进/回退、跨泳道拖拽改派、
+     WIP 硬限制（拖入已满阶段禁止落下）、toast 撤销、分组折叠态持久化。
+     这些是新交互/新行为，单独排期，不与视觉改版混做。
 2. **总览**：问候 + 6 KPI + 全宽今日聚焦 3 项 + 两栏等高齐底。
 3. **我的任务**：列表/看板双模式；逾期/进行中/已完成分组；勾选即完成；优先级旗标。
 4. **项目详情**：头部 + P1–P7 阶段进度条 + 多标签页；任务按阶段折叠可勾选。
