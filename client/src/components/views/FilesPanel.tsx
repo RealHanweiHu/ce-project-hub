@@ -43,44 +43,44 @@ export function FilesPanel({ project, role }: { project: Project; role: string }
     fileType: f.fileType, fileVersion: f.fileVersion,
   });
 
-  if (isLoading) return <div className="flex items-center gap-2 text-stone-400 text-sm py-8 justify-center"><Loader2 size={14} className="animate-spin" />加载文件…</div>;
+  if (isLoading) return <div className="flex items-center gap-2 text-muted-foreground text-sm py-8 justify-center"><Loader2 size={14} className="animate-spin" />加载文件…</div>;
 
   return (
     <div>
       <div className="flex items-center gap-2 mb-3">
-        <FolderOpen size={15} className="text-amber-500" />
-        <h3 className="text-sm font-medium text-stone-800">项目文件</h3>
-        <span className="text-[11px] font-mono text-stone-400">{visibleFiles.length} 个</span>
+        <FolderOpen size={15} className="text-primary" />
+        <h3 className="text-sm font-medium text-foreground">项目文件</h3>
+        <span className="text-[11px] num text-muted-foreground">{visibleFiles.length} 个</span>
       </div>
       {visibleFiles.length === 0 ? (
-        <div className="text-sm text-stone-400 border border-dashed border-stone-200 py-10 text-center">
+        <div className="text-sm text-muted-foreground border border-dashed border-border rounded-[11px] py-10 text-center">
           权限范围内暂无文件。文件在各任务详情里上传后会汇总到这里。
         </div>
       ) : (
-        <div className="border border-stone-200 divide-y divide-stone-100 bg-white">
+        <div className="border border-border rounded-[11px] divide-y divide-border bg-card overflow-hidden">
           {visibleFiles.map((f) => {
             const att = toAttachment(f);
             const meta = f.taskId ? taskMeta.get(f.taskId) : undefined;
             return (
-              <div key={f.id} className="flex items-center gap-3 px-3 py-2.5 hover:bg-stone-50/60">
-                <FileText size={15} className="text-stone-400 shrink-0" />
+              <div key={f.id} className="flex items-center gap-3 px-3 py-2.5 hover:bg-secondary">
+                <FileText size={15} className="text-muted-foreground shrink-0" />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-sm text-stone-800 truncate">{f.name}</span>
-                    {f.fileType && <span className="shrink-0 text-[10px] font-mono px-1.5 py-0.5 rounded bg-stone-100 text-stone-600">{f.fileType}</span>}
-                    {f.fileVersion && <span className="shrink-0 text-[10px] font-mono text-amber-700">{f.fileVersion}</span>}
+                    <span className="text-sm text-foreground truncate">{f.name}</span>
+                    {f.fileType && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground">{f.fileType}</span>}
+                    {f.fileVersion && <span className="shrink-0 text-[10px] num text-primary">{f.fileVersion}</span>}
                   </div>
-                  <div className="text-[10px] font-mono text-stone-400">
+                  <div className="text-[10px] num text-muted-foreground">
                     {meta ? `${meta.phaseName} · ${meta.taskName}` : '项目级'} · {formatBytes(f.size)}
                     {f.createdAt ? ` · ${new Date(f.createdAt).toLocaleDateString('zh-CN')}` : ''}
                   </div>
                 </div>
                 {canPreview(att) && (
-                  <button onClick={() => setPreview(att)} className="flex items-center gap-1 text-xs text-stone-500 hover:text-stone-800 px-2 py-1" title="预览">
+                  <button onClick={() => setPreview(att)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground px-2 py-1" title="预览">
                     <Eye size={13} />预览
                   </button>
                 )}
-                <a href={att.storageUrl} download={f.name} className="flex items-center gap-1 text-xs text-stone-500 hover:text-stone-800 px-2 py-1" title="下载">
+                <a href={att.storageUrl} download={f.name} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground px-2 py-1" title="下载">
                   <Download size={13} />下载
                 </a>
               </div>

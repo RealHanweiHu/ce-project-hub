@@ -1,4 +1,4 @@
-// Design: Industrial Precision - stone/amber color system
+// Design: Linear style
 // IssueList: Issue tracking for validation phases (EVT/DVT/PVT)
 // Features: create/edit/delete issues, filter by severity/status/category, stats summary
 
@@ -55,11 +55,11 @@ const emptyIssue = (): Omit<Issue, 'id'> => ({
 
 // ── Status Icon ───────────────────────────────────────────────────────────────
 function StatusIcon({ status }: { status: IssueStatus }) {
-  if (status === 'open') return <AlertCircle size={14} className="text-rose-500" />;
-  if (status === 'in_progress') return <Clock size={14} className="text-blue-500" />;
-  if (status === 'resolved') return <CheckCircle2 size={14} className="text-emerald-500" />;
-  if (status === 'closed') return <CheckCircle2 size={14} className="text-stone-400" />;
-  return <Ban size={14} className="text-stone-400" />;
+  if (status === 'open') return <AlertCircle size={14} className="text-destructive" />;
+  if (status === 'in_progress') return <Clock size={14} className="text-primary" />;
+  if (status === 'resolved') return <CheckCircle2 size={14} className="text-[color:var(--success)]" />;
+  if (status === 'closed') return <CheckCircle2 size={14} className="text-muted-foreground" />;
+  return <Ban size={14} className="text-muted-foreground" />;
 }
 
 // ── Issue Form Modal ──────────────────────────────────────────────────────────
@@ -82,18 +82,18 @@ function IssueFormModal({
   const isValid = form.title.trim().length > 0;
 
   return (
-    <div className="fixed inset-0 bg-stone-900/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-foreground/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div
-        className="bg-white w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl"
+        className="bg-card w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl rounded-[11px]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="p-5 border-b border-stone-200 flex items-center justify-between shrink-0">
+        <div className="p-5 border-b border-border flex items-center justify-between shrink-0">
           <div>
-            <h3 className="font-serif text-xl text-stone-900">{title}</h3>
-            <p className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mt-0.5">ISSUE TRACKING</p>
+            <h3 className="text-xl text-foreground">{title}</h3>
+            <p className="text-[10px] uppercase tracking-widest text-muted-foreground mt-0.5">ISSUE TRACKING</p>
           </div>
-          <button onClick={onClose} className="text-stone-400 hover:text-stone-700 transition-colors">
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
             <X size={20} />
           </button>
         </div>
@@ -102,12 +102,12 @@ function IssueFormModal({
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
           {/* Title */}
           <div>
-            <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">问题标题 *</label>
+            <label className="text-[10px] uppercase tracking-widest text-muted-foreground block mb-1.5">问题标题 *</label>
             <input
               type="text"
               value={form.title}
               onChange={(e) => set('title', e.target.value)}
-              className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors"
+              className="w-full px-3 py-2 border border-border focus:border-primary outline-none text-sm transition-colors rounded-md"
               placeholder="简要描述问题"
               autoFocus
             />
@@ -116,7 +116,7 @@ function IssueFormModal({
           {/* Severity + Status + Category */}
           <div className="grid grid-cols-3 gap-3">
             <div>
-              <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">缺陷等级</label>
+              <label className="text-[10px] uppercase tracking-widest text-muted-foreground block mb-1.5">缺陷等级</label>
               <div className="flex flex-col gap-1">
                 {(['P0', 'P1', 'P2', 'P3'] as IssueSeverity[]).map((s) => {
                   const cfg = SEVERITY_CONFIG[s];
@@ -126,10 +126,10 @@ function IssueFormModal({
                       key={s}
                       onClick={() => set('severity', s)}
                       aria-pressed={form.severity === s}
-                      className={`flex items-center gap-2 px-2 py-1.5 border-2 text-xs font-mono transition-colors ${
+                      className={`flex items-center gap-2 px-2 py-1.5 border-2 text-xs transition-colors ${
                         form.severity === s
                           ? `${cfg.bg} ${cfg.border} ${cfg.color} font-bold shadow-sm`
-                          : 'bg-white border-stone-200 text-stone-500 hover:border-stone-300'
+                          : 'bg-card border-border text-muted-foreground hover:border-border'
                       }`}
                     >
                       <div className={`w-2 h-2 rounded-full shrink-0 ${cfg.dot}`} />
@@ -142,7 +142,7 @@ function IssueFormModal({
             </div>
 
             <div>
-              <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">处理状态</label>
+              <label className="text-[10px] uppercase tracking-widest text-muted-foreground block mb-1.5">处理状态</label>
               <div className="flex flex-col gap-1">
                 {(['open', 'in_progress', 'resolved', 'closed', 'wont_fix'] as IssueStatus[]).map((s) => {
                   const cfg = STATUS_CONFIG[s];
@@ -155,7 +155,7 @@ function IssueFormModal({
                       className={`flex items-center gap-2 px-2 py-1.5 border-2 text-xs transition-colors ${
                         form.status === s
                           ? `${cfg.bg} ${cfg.border} ${cfg.color} font-medium shadow-sm`
-                          : 'bg-white border-stone-200 text-stone-500 hover:border-stone-300'
+                          : 'bg-card border-border text-muted-foreground hover:border-border'
                       }`}
                     >
                       <StatusIcon status={s} />
@@ -167,7 +167,7 @@ function IssueFormModal({
             </div>
 
             <div>
-              <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">问题类别</label>
+              <label className="text-[10px] uppercase tracking-widest text-muted-foreground block mb-1.5">问题类别</label>
               <div className="flex flex-col gap-1">
                 {(Object.keys(CATEGORY_LABELS) as IssueCategory[]).map((c) => (
                   <button
@@ -177,8 +177,8 @@ function IssueFormModal({
                     aria-pressed={form.category === c}
                     className={`px-2 py-1.5 border-2 text-xs text-left transition-colors ${
                       form.category === c
-                        ? 'bg-stone-900 border-stone-900 text-white font-medium shadow-sm'
-                        : 'bg-white border-stone-200 text-stone-500 hover:border-stone-300'
+                        ? 'bg-primary border-primary text-primary-foreground font-medium shadow-sm'
+                        : 'bg-card border-border text-muted-foreground hover:border-border'
                     }`}
                   >
                     {CATEGORY_LABELS[c]}
@@ -190,11 +190,11 @@ function IssueFormModal({
 
           {/* Description */}
           <div>
-            <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">问题描述</label>
+            <label className="text-[10px] uppercase tracking-widest text-muted-foreground block mb-1.5">问题描述</label>
             <textarea
               value={form.desc}
               onChange={(e) => set('desc', e.target.value)}
-              className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors resize-none"
+              className="w-full px-3 py-2 border border-border focus:border-primary outline-none text-sm transition-colors resize-none rounded-md"
               rows={3}
               placeholder="详细描述问题现象、复现步骤、影响范围..."
             />
@@ -203,22 +203,22 @@ function IssueFormModal({
           {/* Owner + Reporter */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">负责人</label>
+              <label className="text-[10px] uppercase tracking-widest text-muted-foreground block mb-1.5">负责人</label>
               <input
                 type="text"
                 value={form.owner}
                 onChange={(e) => set('owner', e.target.value)}
-                className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors"
+                className="w-full px-3 py-2 border border-border focus:border-primary outline-none text-sm transition-colors rounded-md"
                 placeholder="负责解决的工程师"
               />
             </div>
             <div>
-              <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">发现人</label>
+              <label className="text-[10px] uppercase tracking-widest text-muted-foreground block mb-1.5">发现人</label>
               <input
                 type="text"
                 value={form.reporter}
                 onChange={(e) => set('reporter', e.target.value)}
-                className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors"
+                className="w-full px-3 py-2 border border-border focus:border-primary outline-none text-sm transition-colors rounded-md"
                 placeholder="发现并提报问题的人"
               />
             </div>
@@ -227,53 +227,53 @@ function IssueFormModal({
           {/* Dates */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">发现日期</label>
+              <label className="text-[10px] uppercase tracking-widest text-muted-foreground block mb-1.5">发现日期</label>
               <input
                 type="date"
                 value={form.foundDate}
                 onChange={(e) => set('foundDate', e.target.value)}
-                className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors"
+                className="w-full px-3 py-2 border border-border focus:border-primary outline-none text-sm transition-colors rounded-md"
               />
             </div>
             <div>
-              <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">目标关闭日期</label>
+              <label className="text-[10px] uppercase tracking-widest text-muted-foreground block mb-1.5">目标关闭日期</label>
               <input
                 type="date"
                 value={form.targetDate}
                 onChange={(e) => set('targetDate', e.target.value)}
-                className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors"
+                className="w-full px-3 py-2 border border-border focus:border-primary outline-none text-sm transition-colors rounded-md"
               />
             </div>
           </div>
 
           {/* Root Cause + Solution */}
           <div>
-            <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">根本原因分析</label>
+            <label className="text-[10px] uppercase tracking-widest text-muted-foreground block mb-1.5">根本原因分析</label>
             <textarea
               value={form.rootCause || ''}
               onChange={(e) => set('rootCause', e.target.value)}
-              className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors resize-none"
+              className="w-full px-3 py-2 border border-border focus:border-primary outline-none text-sm transition-colors resize-none rounded-md"
               rows={2}
               placeholder="5-Why 分析、鱼骨图结论..."
             />
           </div>
           <div>
-            <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">解决方案 / 纠正措施</label>
+            <label className="text-[10px] uppercase tracking-widest text-muted-foreground block mb-1.5">解决方案 / 纠正措施</label>
             <textarea
               value={form.solution || ''}
               onChange={(e) => set('solution', e.target.value)}
-              className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors resize-none"
+              className="w-full px-3 py-2 border border-border focus:border-primary outline-none text-sm transition-colors resize-none rounded-md"
               rows={2}
               placeholder="具体的修复方案、验证方法..."
             />
           </div>
           {/* 关联修复任务(SOP 任务) */}
           <div>
-            <label className="text-[10px] font-mono uppercase tracking-widest text-stone-500 block mb-1.5">关联修复任务</label>
+            <label className="text-[10px] uppercase tracking-widest text-muted-foreground block mb-1.5">关联修复任务</label>
             <select
               value={form.relatedTaskId || ''}
               onChange={(e) => set('relatedTaskId', e.target.value)}
-              className="w-full px-3 py-2 border border-stone-300 focus:border-stone-900 outline-none text-sm transition-colors bg-white"
+              className="w-full px-3 py-2 border border-border focus:border-primary outline-none text-sm transition-colors bg-card rounded-md"
             >
               <option value="">未关联</option>
               {phaseTasks.map((t) => <option key={t.id} value={t.id}>{t.id} · {t.name}</option>)}
@@ -282,11 +282,11 @@ function IssueFormModal({
         </div>
 
         {/* Footer */}
-        <div className="p-5 border-t border-stone-200 flex justify-end gap-3 shrink-0">
+        <div className="p-5 border-t border-border flex justify-end gap-3 shrink-0">
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 text-xs font-mono uppercase tracking-wider text-stone-600 border border-stone-300 hover:bg-stone-50 transition-colors"
+            className="px-4 py-2 text-xs uppercase tracking-wider text-muted-foreground border border-border hover:bg-secondary transition-colors rounded-md"
           >
             取消
           </button>
@@ -294,7 +294,7 @@ function IssueFormModal({
             type="button"
             onClick={() => isValid && onSave(form)}
             disabled={!isValid}
-            className={`px-5 py-2 text-xs font-mono uppercase tracking-wider bg-stone-900 text-stone-50 hover:bg-stone-700 transition-colors ${!isValid ? 'opacity-50 cursor-not-allowed' : ''}`}
+            className={`px-5 py-2 text-xs uppercase tracking-wider bg-primary text-primary-foreground hover:opacity-90 transition-colors rounded-md ${!isValid ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
             保存问题
           </button>
@@ -371,16 +371,16 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Bug size={16} className="text-stone-500" />
+          <Bug size={16} className="text-muted-foreground" />
           <div>
-            <span className="font-serif text-lg text-stone-900">问题清单</span>
-            <span className="text-[10px] font-mono uppercase tracking-widest text-stone-400 ml-3">ISSUE LIST · {phaseName}</span>
+            <span className="text-lg text-foreground">问题清单</span>
+            <span className="text-[10px] uppercase tracking-widest text-muted-foreground ml-3">ISSUE LIST · {phaseName}</span>
           </div>
         </div>
         {canEdit && (
           <button
             onClick={() => setShowForm(true)}
-            className="flex items-center gap-2 px-3 py-1.5 bg-stone-900 text-stone-50 text-xs font-mono uppercase tracking-wider hover:bg-stone-700 transition-colors"
+            className="flex items-center gap-2 px-3 py-1.5 bg-primary text-primary-foreground text-xs uppercase tracking-wider hover:opacity-90 transition-colors rounded-md"
           >
             <Plus size={12} />
             新建问题
@@ -390,35 +390,35 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true
 
       {/* Stats Bar */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="bg-white border border-stone-200 p-3">
-          <div className="text-[10px] font-mono uppercase tracking-wider text-stone-400 mb-1">总计</div>
-          <div className="text-2xl font-serif font-semibold text-stone-900">{stats.total}</div>
-          <div className="text-[10px] font-mono text-stone-400 mt-0.5">关闭率 {stats.closureRate}%</div>
+        <div className="bg-card border border-border p-3 rounded-[11px]">
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">总计</div>
+          <div className="text-2xl font-semibold text-foreground num">{stats.total}</div>
+          <div className="text-[10px] text-muted-foreground mt-0.5 num">关闭率 {stats.closureRate}%</div>
         </div>
-        <div className="bg-rose-50 border border-rose-200 p-3">
-          <div className="text-[10px] font-mono uppercase tracking-wider text-rose-500 mb-1">待处理</div>
-          <div className="text-2xl font-serif font-semibold text-rose-700">{stats.open}</div>
-          <div className="text-[10px] font-mono text-rose-400 mt-0.5">处理中 {stats.inProgress}</div>
+        <div className="bg-[color:var(--destructive-soft)] border border-destructive/30 p-3 rounded-[11px]">
+          <div className="text-[10px] uppercase tracking-wider text-destructive mb-1">待处理</div>
+          <div className="text-2xl font-semibold text-destructive num">{stats.open}</div>
+          <div className="text-[10px] text-destructive mt-0.5 num">处理中 {stats.inProgress}</div>
         </div>
-        <div className="bg-emerald-50 border border-emerald-200 p-3">
-          <div className="text-[10px] font-mono uppercase tracking-wider text-emerald-600 mb-1">待复测</div>
-          <div className="text-2xl font-serif font-semibold text-emerald-700">{stats.pendingRetest}</div>
-          <div className="text-[10px] font-mono text-emerald-500 mt-0.5">通过 {stats.closed}</div>
+        <div className="bg-[color:var(--success-soft)] border border-[color:var(--success)]/30 p-3 rounded-[11px]">
+          <div className="text-[10px] uppercase tracking-wider text-[color:var(--success)] mb-1">待复测</div>
+          <div className="text-2xl font-semibold text-[color:var(--success)] num">{stats.pendingRetest}</div>
+          <div className="text-[10px] text-[color:var(--success)] mt-0.5 num">通过 {stats.closed}</div>
         </div>
-        <div className="bg-white border border-stone-200 p-3">
-          <div className="text-[10px] font-mono uppercase tracking-wider text-stone-400 mb-1">等级分布</div>
+        <div className="bg-card border border-border p-3 rounded-[11px]">
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">等级分布</div>
           <div className="flex items-center gap-2 mt-1">
             {(['P0', 'P1', 'P2', 'P3'] as IssueSeverity[]).map((s) => {
               const cfg = SEVERITY_CONFIG[s];
               const count = s === 'P0' ? stats.p0 : s === 'P1' ? stats.p1 : s === 'P2' ? stats.p2 : stats.p3;
               return count > 0 ? (
                 <div key={s} className={`flex items-center gap-1 px-1.5 py-0.5 ${cfg.bg} border ${cfg.border}`}>
-                  <span className={`text-[10px] font-mono font-bold ${cfg.color}`}>{s}</span>
-                  <span className={`text-[10px] font-mono ${cfg.color}`}>{count}</span>
+                  <span className={`text-[10px] font-bold ${cfg.color}`}>{s}</span>
+                  <span className={`text-[10px] num ${cfg.color}`}>{count}</span>
                 </div>
               ) : null;
             })}
-            {stats.total === 0 && <span className="text-[10px] font-mono text-stone-400">暂无问题</span>}
+            {stats.total === 0 && <span className="text-[10px] text-muted-foreground">暂无问题</span>}
           </div>
         </div>
       </div>
@@ -427,27 +427,27 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true
       <div className="flex flex-wrap items-center gap-2">
         {/* Search */}
         <div className="relative flex-1 min-w-[160px]">
-          <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
+          <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <input
             type="text"
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
-            className="w-full pl-8 pr-3 py-1.5 border border-stone-300 focus:border-stone-900 outline-none text-xs transition-colors"
+            className="w-full pl-8 pr-3 py-1.5 border border-border focus:border-primary outline-none text-xs transition-colors rounded-md"
             placeholder="搜索问题标题、描述、负责人..."
           />
         </div>
 
         {/* Severity Filter */}
         <div className="flex items-center gap-1">
-          <Filter size={11} className="text-stone-400" />
+          <Filter size={11} className="text-muted-foreground" />
           {(['all', 'P0', 'P1', 'P2', 'P3'] as const).map((s) => (
             <button
               key={s}
               onClick={() => setFilterSeverity(s)}
-              className={`px-2 py-1 text-[10px] font-mono uppercase border transition-all ${
+              className={`px-2 py-1 text-[10px] uppercase border transition-all rounded-md ${
                 filterSeverity === s
-                  ? s === 'all' ? 'bg-stone-900 text-white border-stone-900' : `${SEVERITY_CONFIG[s as IssueSeverity].bg} ${SEVERITY_CONFIG[s as IssueSeverity].border} ${SEVERITY_CONFIG[s as IssueSeverity].color} font-bold`
-                  : 'bg-white border-stone-200 text-stone-500 hover:border-stone-300'
+                  ? s === 'all' ? 'bg-primary text-primary-foreground border-primary' : `${SEVERITY_CONFIG[s as IssueSeverity].bg} ${SEVERITY_CONFIG[s as IssueSeverity].border} ${SEVERITY_CONFIG[s as IssueSeverity].color} font-bold`
+                  : 'bg-card border-border text-muted-foreground hover:border-border'
               }`}
             >
               {s === 'all' ? '全部' : s}
@@ -461,10 +461,10 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true
             <button
               key={s}
               onClick={() => setFilterStatus(s)}
-              className={`px-2 py-1 text-[10px] font-mono border transition-all ${
+              className={`px-2 py-1 text-[10px] border transition-all rounded-md ${
                 filterStatus === s
-                  ? s === 'all' ? 'bg-stone-900 text-white border-stone-900' : `${STATUS_CONFIG[s as IssueStatus].bg} ${STATUS_CONFIG[s as IssueStatus].border} ${STATUS_CONFIG[s as IssueStatus].color} font-medium`
-                  : 'bg-white border-stone-200 text-stone-500 hover:border-stone-300'
+                  ? s === 'all' ? 'bg-primary text-primary-foreground border-primary' : `${STATUS_CONFIG[s as IssueStatus].bg} ${STATUS_CONFIG[s as IssueStatus].border} ${STATUS_CONFIG[s as IssueStatus].color} font-medium`
+                  : 'bg-card border-border text-muted-foreground hover:border-border'
               }`}
             >
               {s === 'all' ? '全部状态' : STATUS_CONFIG[s as IssueStatus].label}
@@ -475,15 +475,15 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true
 
       {/* Issue List */}
       {filtered.length === 0 ? (
-        <div className="bg-stone-50 border border-stone-200 border-dashed p-10 text-center">
-          <Bug size={28} className="text-stone-300 mx-auto mb-3" />
-          <p className="text-sm font-medium text-stone-500">
+        <div className="bg-secondary border border-border border-dashed p-10 text-center rounded-[11px]">
+          <Bug size={28} className="text-muted-foreground mx-auto mb-3" />
+          <p className="text-sm font-medium text-muted-foreground">
             {issues.length === 0 ? `${phaseName} 阶段暂无问题记录` : '没有符合过滤条件的问题'}
           </p>
           {issues.length === 0 && (
             <button
               onClick={() => setShowForm(true)}
-              className="mt-4 px-4 py-2 text-xs font-mono uppercase tracking-wider bg-stone-900 text-stone-50 hover:bg-stone-700 transition-colors"
+              className="mt-4 px-4 py-2 text-xs uppercase tracking-wider bg-primary text-primary-foreground hover:opacity-90 transition-colors rounded-md"
             >
               <Plus size={12} className="inline mr-1.5" />
               新建第一个问题
@@ -502,34 +502,34 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true
             return (
               <div
                 key={issue.id}
-                className={`bg-white border border-stone-200 transition-all ${isClosed ? 'opacity-70' : ''}`}
-                style={{ borderLeftWidth: 3, borderLeftColor: sev.dot.replace('bg-', '').includes('red') ? '#ef4444' : sev.dot.includes('orange') ? '#f97316' : sev.dot.includes('amber') ? '#f59e0b' : '#a8a29e' }}
+                className={`bg-card border border-border rounded-[11px] transition-all ${isClosed ? 'opacity-70' : ''}`}
+                style={{ borderLeftWidth: 3, borderLeftColor: sev.dot.replace('bg-', '').includes('red') ? 'var(--destructive)' : sev.dot.includes('orange') ? 'var(--warning)' : sev.dot.includes('amber') ? 'var(--warning)' : 'var(--muted-foreground)' }}
               >
                 {/* Issue Row */}
                 <div className="flex items-center gap-3 p-3">
                   <button
                     onClick={() => setExpandedId(isExpanded ? null : issue.id)}
-                    className="text-stone-400 hover:text-stone-700 transition-colors shrink-0"
+                    className="text-muted-foreground hover:text-foreground transition-colors shrink-0"
                   >
                     {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                   </button>
 
                   {/* Severity Badge */}
-                  <div className={`shrink-0 w-8 h-6 flex items-center justify-center text-[10px] font-mono font-bold border ${sev.bg} ${sev.border} ${sev.color}`}>
+                  <div className={`shrink-0 w-8 h-6 flex items-center justify-center text-[10px] font-bold border ${sev.bg} ${sev.border} ${sev.color}`}>
                     {issue.severity}
                   </div>
 
                   {/* Title + Meta */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className={`text-sm font-medium text-stone-900 ${isClosed ? 'line-through text-stone-400' : ''}`}>
+                      <span className={`text-sm font-medium text-foreground ${isClosed ? 'line-through text-muted-foreground' : ''}`}>
                         {issue.title}
                       </span>
-                      <span className="text-[10px] font-mono text-stone-400 bg-stone-50 px-1.5 py-0.5 border border-stone-200">
+                      <span className="text-[10px] text-muted-foreground bg-secondary px-1.5 py-0.5 border border-border rounded">
                         {CATEGORY_LABELS[issue.category]}
                       </span>
                     </div>
-                    <div className="flex items-center gap-3 mt-0.5 text-[10px] font-mono text-stone-400">
+                    <div className="flex items-center gap-3 mt-0.5 text-[10px] text-muted-foreground">
                       {issue.owner && <span>负责人: {issue.owner}</span>}
                       {issue.foundDate && <span>发现: {issue.foundDate}</span>}
                       {issue.targetDate && <span>目标: {issue.targetDate}</span>}
@@ -542,14 +542,14 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true
                         value={issue.status}
                         onChange={(e) => handleStatusChange(issue.id, e.target.value as IssueStatus)}
                         onClick={(e) => e.stopPropagation()}
-                        className={`shrink-0 text-[10px] font-mono border px-2 py-1 outline-none cursor-pointer ${sta.bg} ${sta.border} ${sta.color}`}
+                        className={`shrink-0 text-[10px] border px-2 py-1 outline-none cursor-pointer rounded ${sta.bg} ${sta.border} ${sta.color}`}
                       >
                         {(['open', 'in_progress', 'resolved', 'closed', 'wont_fix'] as IssueStatus[]).map((s) => (
                           <option key={s} value={s}>{STATUS_CONFIG[s].label}</option>
                         ))}
                       </select>
                     ) : (
-                      <span className={`shrink-0 text-[10px] font-mono border px-2 py-1 ${sta.bg} ${sta.border} ${sta.color}`}>
+                      <span className={`shrink-0 text-[10px] border px-2 py-1 rounded ${sta.bg} ${sta.border} ${sta.color}`}>
                         {STATUS_CONFIG[issue.status].label}
                       </span>
                     )}
@@ -558,13 +558,13 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true
                     <div className="flex items-center gap-1 shrink-0">
                       <button
                         onClick={(e) => { e.stopPropagation(); handleStatusChange(issue.id, 'closed'); }}
-                        className="text-[10px] font-mono px-2 py-1 border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-colors"
+                        className="text-[10px] px-2 py-1 border border-[color:var(--success)]/30 bg-[color:var(--success-soft)] text-[color:var(--success)] hover:opacity-80 transition-colors rounded"
                       >
                         复测通过
                       </button>
                       <button
                         onClick={(e) => { e.stopPropagation(); handleStatusChange(issue.id, 'open'); }}
-                        className="text-[10px] font-mono px-2 py-1 border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 transition-colors"
+                        className="text-[10px] px-2 py-1 border border-destructive/30 bg-[color:var(--destructive-soft)] text-destructive hover:opacity-80 transition-colors rounded"
                       >
                         复测失败
                       </button>
@@ -582,7 +582,7 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true
                         {onRaiseChange && (
                           <button
                             onClick={(e) => { e.stopPropagation(); onRaiseChange(issue); }}
-                            className="p-1.5 text-stone-400 hover:text-amber-600 transition-colors"
+                            className="p-1.5 text-muted-foreground hover:text-primary transition-colors"
                             title="由此问题发起变更"
                           >
                             <GitBranch size={13} />
@@ -590,14 +590,14 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true
                         )}
                         <button
                           onClick={(e) => { e.stopPropagation(); setEditingIssue(issue); }}
-                          className="p-1.5 text-stone-400 hover:text-stone-700 transition-colors"
+                          className="p-1.5 text-muted-foreground hover:text-foreground transition-colors"
                           title="编辑"
                         >
                           <Edit2 size={13} />
                         </button>
                         <button
                           onClick={(e) => { e.stopPropagation(); handleDelete(issue.id); }}
-                          className="p-1.5 text-stone-400 hover:text-rose-600 transition-colors"
+                          className="p-1.5 text-muted-foreground hover:text-destructive transition-colors"
                           title="删除"
                         >
                           <Trash2 size={13} />
@@ -609,33 +609,33 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true
 
                 {/* Expanded Details */}
                 {isExpanded && (
-                  <div className="border-t border-stone-100 p-4 space-y-3 bg-stone-50/50">
+                  <div className="border-t border-border p-4 space-y-3 bg-secondary">
                     {issue.desc && (
                       <div>
-                        <div className="text-[10px] font-mono uppercase tracking-wider text-stone-400 mb-1">问题描述</div>
-                        <p className="text-sm text-stone-700 leading-relaxed">{issue.desc}</p>
+                        <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">问题描述</div>
+                        <p className="text-sm text-foreground leading-relaxed">{issue.desc}</p>
                       </div>
                     )}
                     {issue.rootCause && (
                       <div>
-                        <div className="text-[10px] font-mono uppercase tracking-wider text-stone-400 mb-1">根本原因</div>
-                        <p className="text-sm text-stone-700 leading-relaxed">{issue.rootCause}</p>
+                        <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">根本原因</div>
+                        <p className="text-sm text-foreground leading-relaxed">{issue.rootCause}</p>
                       </div>
                     )}
                     {issue.solution && (
-                      <div className="border-l-2 border-emerald-400 pl-3">
-                        <div className="text-[10px] font-mono uppercase tracking-wider text-emerald-600 mb-1">解决方案</div>
-                        <p className="text-sm text-stone-700 leading-relaxed">{issue.solution}</p>
+                      <div className="border-l-2 border-[color:var(--success)] pl-3">
+                        <div className="text-[10px] uppercase tracking-wider text-[color:var(--success)] mb-1">解决方案</div>
+                        <p className="text-sm text-foreground leading-relaxed">{issue.solution}</p>
                       </div>
                     )}
                     {issue.reporter && (
-                      <div className="text-[10px] font-mono text-stone-400">
+                      <div className="text-[10px] text-muted-foreground">
                         发现人: {issue.reporter}
                         {issue.closedDate && <span className="ml-4">关闭日期: {issue.closedDate}</span>}
                       </div>
                     )}
                     {/^\d+$/.test(issue.id) && (
-                      <div className="border-t border-stone-200 pt-3">
+                      <div className="border-t border-border pt-3">
                         <CommentThread entityType="issue" entityId={issue.id} />
                       </div>
                     )}

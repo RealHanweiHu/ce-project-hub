@@ -40,18 +40,18 @@ export function FilePreviewModal({ file, onClose }: { file: FileAttachment | nul
   const kind = previewKind(file.type, file.name);
 
   return (
-    <div className="fixed inset-0 z-50 bg-stone-900/80 flex flex-col" onClick={onClose}>
+    <div className="fixed inset-0 z-50 bg-foreground/80 flex flex-col" onClick={onClose}>
       {/* 顶栏 */}
-      <div className="flex items-center gap-3 px-5 py-3 text-stone-100" onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center gap-3 px-5 py-3 text-background" onClick={(e) => e.stopPropagation()}>
         <div className="flex-1 min-w-0">
           <div className="text-sm font-medium truncate">{file.name}</div>
-          <div className="text-[10px] font-mono uppercase tracking-wider text-stone-400">{file.type || '未知类型'} · {formatBytes(file.size)}</div>
+          <div className="text-[10px] uppercase tracking-wider text-background/60">{file.type || '未知类型'} · {formatBytes(file.size)}</div>
         </div>
         <a href={url} download={file.name} onClick={(e) => e.stopPropagation()}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-wider border border-stone-600 text-stone-200 hover:bg-stone-700 transition-colors">
+          className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs uppercase tracking-wider border border-background/30 text-background/80 hover:bg-background/10 transition-colors">
           <Download size={13} />下载
         </a>
-        <button onClick={onClose} className="p-1.5 text-stone-300 hover:text-white hover:bg-stone-700 transition-colors">
+        <button onClick={onClose} className="p-1.5 rounded-md text-background/70 hover:text-background hover:bg-background/10 transition-colors">
           <X size={20} />
         </button>
       </div>
@@ -71,11 +71,11 @@ export function FilePreviewModal({ file, onClose }: { file: FileAttachment | nul
 
 function UnsupportedFallback({ url, name }: { url: string; name: string }) {
   return (
-    <div className="text-center text-stone-300 space-y-3">
-      <FileQuestion size={48} className="mx-auto text-stone-500" />
+    <div className="text-center text-background/70 space-y-3">
+      <FileQuestion size={48} className="mx-auto text-background/40" />
       <div className="text-sm">该文件类型暂不支持在线预览</div>
       <a href={url} download={name}
-        className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-mono uppercase tracking-wider bg-stone-100 text-stone-800 hover:bg-white transition-colors">
+        className="inline-flex items-center gap-1.5 rounded-md px-4 py-2 text-xs uppercase tracking-wider bg-background text-foreground hover:opacity-90 transition-opacity">
         <Download size={13} />下载查看
       </a>
     </div>
@@ -120,7 +120,7 @@ function OfficePreview({ url, kind, name }: { url: string; kind: 'xlsx' | 'docx'
   }, [url, kind]);
 
   if (status === 'loading') {
-    return <div className="flex items-center gap-2 text-stone-200 text-sm"><Loader2 size={16} className="animate-spin" />正在解析 {kind === 'xlsx' ? 'Excel' : 'Word'} 文档…</div>;
+    return <div className="flex items-center gap-2 text-background/80 text-sm"><Loader2 size={16} className="animate-spin" />正在解析 {kind === 'xlsx' ? 'Excel' : 'Word'} 文档…</div>;
   }
   if (status === 'error') {
     return <UnsupportedFallback url={url} name={name} />;
@@ -129,7 +129,7 @@ function OfficePreview({ url, kind, name }: { url: string; kind: 'xlsx' | 'docx'
   // docx：渲染到容器
   if (kind === 'docx') {
     return (
-      <div className="w-full h-full overflow-auto bg-stone-200 shadow-2xl">
+      <div className="w-full h-full overflow-auto bg-secondary shadow-2xl">
         <div ref={containerRef} className="docx-host" />
       </div>
     );
@@ -139,10 +139,10 @@ function OfficePreview({ url, kind, name }: { url: string; kind: 'xlsx' | 'docx'
   return (
     <div className="w-full h-full flex flex-col bg-white shadow-2xl overflow-hidden">
       {sheets.length > 1 && (
-        <div className="flex items-center gap-1 px-2 py-1.5 border-b border-stone-200 bg-stone-50 overflow-x-auto shrink-0">
+        <div className="flex items-center gap-1 px-2 py-1.5 border-b border-border bg-background overflow-x-auto shrink-0">
           {sheets.map((s, i) => (
             <button key={s.name} onClick={() => setActive(i)}
-              className={`px-3 py-1 text-xs whitespace-nowrap transition-colors ${i === active ? 'bg-emerald-600 text-white' : 'text-stone-600 hover:bg-stone-200'}`}>
+              className={`rounded px-3 py-1 text-xs whitespace-nowrap transition-colors ${i === active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-secondary'}`}>
               {s.name}
             </button>
           ))}
