@@ -428,56 +428,7 @@ export function MembersPanel({ projectId, canManage }: MembersPanelProps) {
         </div>
       )}
 
-      {/* Permission Legend - only visible to project managers (owner/manager/pm) */}
-      {canManage && (
-        <div className="bg-secondary border border-border p-4">
-          <div className="text-[10px] num uppercase tracking-wider text-muted-foreground mb-3">权限说明</div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-[11px]">
-              <thead>
-                <tr className="border-b border-border">
-                  <th className="text-left py-1.5 pr-4 num text-muted-foreground font-normal">角色</th>
-                  <th className="text-center py-1.5 px-2 num text-muted-foreground font-normal">任务</th>
-                  <th className="text-center py-1.5 px-2 num text-muted-foreground font-normal">问题</th>
-                  <th className="text-center py-1.5 px-2 num text-muted-foreground font-normal">变更</th>
-                  <th className="text-center py-1.5 px-2 num text-muted-foreground font-normal">项目信息</th>
-                  <th className="text-center py-1.5 px-2 num text-muted-foreground font-normal">Gate评审</th>
-                  <th className="text-center py-1.5 px-2 num text-muted-foreground font-normal">管理成员</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(['owner', 'manager', 'pm', 'rd_hw', 'rd_sw', 'rd_mech', 'qa', 'scm', 'viewer'] as const).map((role) => {
-                  const meta = ROLE_META[role];
-                  const perms = {
-                    canEditTasks: role !== 'qa' && role !== 'scm' && role !== 'viewer',
-                    canEditIssues: role !== 'scm' && role !== 'viewer',
-                    canEditChangelog: ['owner', 'manager', 'pm', 'scm'].includes(role),
-                    canEditProjectInfo: ['owner', 'manager', 'pm'].includes(role),
-                    canGateReview: ['owner', 'manager'].includes(role),
-                    canManageMembers: ['owner', 'manager', 'pm'].includes(role),
-                  };
-                  return (
-                    <tr key={role} className="border-b border-border">
-                      <td className="py-1.5 pr-4">
-                        <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] num ${meta.color} ${meta.bg} border ${meta.border}`}>
-                          {meta.icon}{meta.label}
-                        </span>
-                      </td>
-                      {[perms.canEditTasks, perms.canEditIssues, perms.canEditChangelog, perms.canEditProjectInfo, perms.canGateReview, perms.canManageMembers].map((can, i) => (
-                        <td key={i} className="text-center py-1.5 px-2">
-                          {can
-                            ? <span className="text-[color:var(--success)]">✓</span>
-                            : <span className="text-muted-foreground">—</span>}
-                        </td>
-                      ))}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+      {/* 角色职权矩阵已按需求移除：不在项目详情显示角色具体职权 */}
 
       {/* Member List */}
       {isLoading ? (

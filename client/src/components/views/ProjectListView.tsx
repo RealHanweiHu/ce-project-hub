@@ -17,7 +17,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Sheet, SheetContent } from '@/components/ui/sheet';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import {
   Project, PHASE_MAP, HEALTH_CONFIG,
   computePhaseProgress, computeOverallProgress, getProjectPhases,
@@ -512,9 +512,6 @@ export function ProjectListView({
             className="w-full bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground"
           />
         </div>
-        <div className="ml-auto text-[12px] text-muted-foreground num">
-          显示 {visibleRows.length}/{projects.length}
-        </div>
       </div>
 
       {/* Filter strip: group-by + filter chips */}
@@ -590,8 +587,8 @@ export function ProjectListView({
       )}
 
       {/* ── Detail Drawer ── */}
-      <Sheet open={!!detailRow} onOpenChange={(o) => { if (!o) setDetailId(null); }}>
-        <SheetContent side="right" className="w-[380px] gap-0 overflow-y-auto p-0 sm:max-w-[380px]">
+      <Dialog open={!!detailRow} onOpenChange={(o) => { if (!o) setDetailId(null); }}>
+        <DialogContent className="max-w-[460px] gap-0 overflow-hidden p-0">
           {detailRow && (() => {
             const p = detailRow.project;
             const phases = p.category ? getPhasesForCategory(p.category) : getProjectPhases(p);
@@ -599,14 +596,14 @@ export function ProjectListView({
             const health = HEALTH_CONFIG[p.risk];
             const changeLog = (p.changeLog || []).slice(0, 5);
             return (
-              <div className="flex h-full flex-col">
+              <div className="flex max-h-[85vh] flex-col">
                 {/* Header */}
                 <div className="border-b border-border px-5 pb-4 pt-5">
                   <div className="mb-3 flex items-center gap-2.5">
                     <span className="text-[11.5px] text-muted-foreground num">{p.code}</span>
                     <TypeBadge type={detailRow.catBadge} />
                   </div>
-                  <h2 className="text-[21px] font-bold leading-tight tracking-[-0.3px]">{p.name}</h2>
+                  <DialogTitle className="text-[21px] font-bold leading-tight tracking-[-0.3px]">{p.name}</DialogTitle>
                   <p className="mt-1 text-[12px] text-muted-foreground">{p.type}</p>
                 </div>
 
@@ -710,8 +707,8 @@ export function ProjectListView({
               </div>
             );
           })()}
-        </SheetContent>
-      </Sheet>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Clone Project Modal ──────────────────────────────────────────────── */}
       {cloneSource && (
