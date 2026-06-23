@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { getPhasesForCategory } from "@/lib/sop-templates";
+import { LinearCard, PageHeader, SegToggle } from "@/components/linear/primitives";
 
 type CalendarEvent = {
   date: string;
@@ -57,12 +58,37 @@ type WorkbenchData = {
   tasks?: WorkbenchTask[];
 };
 
-const TYPE_META: Record<CalendarEvent["type"], { label: string; cls: string; icon: React.ReactNode }> = {
-  task: { label: "任务", cls: "bg-stone-50 text-stone-700 border-stone-200", icon: <ListChecks size={11} /> },
-  schedule: { label: "日程", cls: "bg-emerald-50 text-emerald-700 border-emerald-200", icon: <Clock size={11} /> },
-  gate: { label: "Gate", cls: "bg-amber-50 text-amber-700 border-amber-200", icon: <ShieldCheck size={11} /> },
-  phase: { label: "阶段", cls: "bg-blue-50 text-blue-700 border-blue-200", icon: <Flag size={11} /> },
-  target: { label: "目标", cls: "bg-rose-50 text-rose-700 border-rose-200", icon: <Rocket size={11} /> },
+const TYPE_META: Record<CalendarEvent["type"], { label: string; cls: string; chip: string; icon: React.ReactNode }> = {
+  task: {
+    label: "任务",
+    cls: "bg-secondary text-muted-foreground border-border",
+    chip: "bg-secondary text-[color:var(--secondary-foreground)]",
+    icon: <ListChecks size={11} />,
+  },
+  schedule: {
+    label: "日程",
+    cls: "bg-[color:var(--success-soft)] text-[color:var(--success)] border-[color:var(--success-soft)]",
+    chip: "bg-[color:var(--success-soft)] text-[color:var(--success)]",
+    icon: <Clock size={11} />,
+  },
+  gate: {
+    label: "Gate",
+    cls: "bg-[color:var(--acc-soft)] text-primary border-[color:var(--acc-border)]",
+    chip: "bg-[color:var(--acc-soft)] text-primary",
+    icon: <ShieldCheck size={11} />,
+  },
+  phase: {
+    label: "阶段",
+    cls: "bg-[color:var(--warning-soft)] text-[color:var(--warning)] border-[color:var(--warning-soft)]",
+    chip: "bg-[color:var(--warning-soft)] text-[color:var(--warning)]",
+    icon: <Flag size={11} />,
+  },
+  target: {
+    label: "目标",
+    cls: "bg-[color:var(--destructive-soft)] text-[color:var(--destructive)] border-[color:var(--destructive-soft)]",
+    chip: "bg-[color:var(--destructive-soft)] text-[color:var(--destructive)]",
+    icon: <Rocket size={11} />,
+  },
 };
 
 const LENS_META: Record<Lens, { label: string; icon: React.ReactNode }> = {
@@ -241,55 +267,68 @@ export function CalendarPage({ projects, onSelectProject }: { projects: ProjectO
   });
 
   return (
-    <div className="ce-page">
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-        <div>
-          <h1 className="font-serif text-xl text-stone-900">日历与里程碑</h1>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <button onClick={() => shift(-1)} className="ce-control border border-stone-200 bg-white p-2 text-stone-500 hover:text-stone-900" title="上个月">
-            <ChevronLeft size={15} />
-          </button>
-          <div className="ce-control min-w-[112px] border border-stone-200 bg-white px-3 py-2 text-center text-sm font-mono text-stone-700">
-            {ym.year}-{pad(ym.month + 1)}
+    <div className="p-7">
+      <PageHeader
+        title="日历与里程碑"
+        sub={<><span className="num">{ym.year}</span> 年 <span className="num">{pad(ym.month + 1)}</span> 月 · Gate / 里程碑 / 截止</>}
+        actions={(
+          <div className="flex flex-wrap items-center gap-2">
+            <button onClick={() => shift(-1)} className="inline-flex h-[30px] w-[30px] items-center justify-center rounded-[7px] border border-border bg-card text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground" title="上个月">
+              <ChevronLeft size={15} />
+            </button>
+            <div className="num inline-flex h-[30px] min-w-[96px] items-center justify-center rounded-[7px] border border-border bg-card px-3 text-[12.5px] font-semibold text-foreground">
+              {ym.year}-{pad(ym.month + 1)}
+            </div>
+            <button onClick={() => shift(1)} className="inline-flex h-[30px] w-[30px] items-center justify-center rounded-[7px] border border-border bg-card text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground" title="下个月">
+              <ChevronRight size={15} />
+            </button>
+            <button
+              onClick={() => setYm({ year: now.getFullYear(), month: now.getMonth() })}
+              className="inline-flex h-[30px] items-center rounded-[7px] border border-border bg-card px-3 text-[12.5px] font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+              title="回到本月"
+            >
+              今天
+            </button>
+            <button
+              onClick={() => setCreateOpen(true)}
+              disabled={creatableProjects.length === 0}
+              className="inline-flex h-[30px] items-center gap-1.5 rounded-[7px] bg-primary px-3 text-[12.5px] font-semibold text-primary-foreground transition-colors hover:opacity-90 disabled:opacity-40"
+            >
+              <Plus size={13} />
+              创建日程
+            </button>
           </div>
-          <button onClick={() => shift(1)} className="ce-control border border-stone-200 bg-white p-2 text-stone-500 hover:text-stone-900" title="下个月">
-            <ChevronRight size={15} />
-          </button>
-          <button
-            onClick={() => setCreateOpen(true)}
-            disabled={creatableProjects.length === 0}
-            className="ce-control inline-flex items-center gap-2 bg-stone-900 px-3 py-2 text-xs font-mono uppercase tracking-wider text-stone-50 hover:bg-stone-700 disabled:opacity-40"
-          >
-            <Plus size={13} />
-            创建日程
-          </button>
-        </div>
-      </div>
+        )}
+      />
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-        <Stat label="任务截止" value={counts.task} tone="stone" />
-        <Stat label="项目日程" value={counts.schedule} tone="emerald" />
-        <Stat label="Gate 评审" value={counts.gate} tone="amber" />
-        <Stat label="阶段截止" value={counts.phase} tone="blue" />
-        <Stat label="目标交付" value={counts.target} tone="rose" />
+        <Stat label="任务截止" value={counts.task} tone="task" />
+        <Stat label="项目日程" value={counts.schedule} tone="schedule" />
+        <Stat label="Gate 评审" value={counts.gate} tone="gate" />
+        <Stat label="阶段截止" value={counts.phase} tone="phase" />
+        <Stat label="目标交付" value={counts.target} tone="target" />
       </div>
 
-      <div className="ce-panel p-4">
+      <LinearCard className="mt-3 p-4">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div className="flex flex-wrap items-center gap-2">
-            <div className="inline-flex w-fit border border-stone-200 bg-stone-50 p-1">
-              <TabButton active={tab === "calendar"} onClick={() => setTab("calendar")} icon={<CalendarDays size={13} />}>日历</TabButton>
-              <TabButton active={tab === "milestones"} onClick={() => setTab("milestones")} icon={<Flag size={13} />}>截止清单</TabButton>
-            </div>
-            {availableLenses.length > 1 && (
-              <div className="inline-flex w-fit border border-stone-200 bg-white p-1">
-                {availableLenses.map((item) => (
-                  <TabButton key={item} active={activeLens === item} onClick={() => setLens(item)} icon={LENS_META[item].icon}>
-                    {LENS_META[item].label}
-                  </TabButton>
-                ))}
-              </div>
+            <SegToggle<Tab>
+              value={tab}
+              onChange={setTab}
+              options={[
+                { value: "calendar", label: <span className="flex items-center gap-1.5"><CalendarDays size={13} />日历</span> },
+                { value: "milestones", label: <span className="flex items-center gap-1.5"><Flag size={13} />截止清单</span> },
+              ]}
+            />
+            {availableLenses.length > 1 && activeLens && (
+              <SegToggle<Lens>
+                value={activeLens}
+                onChange={setLens}
+                options={availableLenses.map((item) => ({
+                  value: item,
+                  label: <span className="flex items-center gap-1.5">{LENS_META[item].icon}{LENS_META[item].label}</span>,
+                }))}
+              />
             )}
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
@@ -297,10 +336,10 @@ export function CalendarPage({ projects, onSelectProject }: { projects: ProjectO
               <button
                 key={item}
                 onClick={() => setFilter(item)}
-                className={`border px-2 py-1 text-[10px] font-mono transition-colors ${
+                className={`rounded-[6px] border px-2.5 py-1 text-[11px] font-medium transition-colors ${
                   filter === item
-                    ? "border-stone-900 bg-stone-900 text-white"
-                    : "border-stone-200 bg-white text-stone-500 hover:border-stone-400"
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border bg-card text-muted-foreground hover:border-[color:var(--acc-border)]"
                 }`}
               >
                 {item === "all" ? "全部" : TYPE_META[item].label}
@@ -310,7 +349,7 @@ export function CalendarPage({ projects, onSelectProject }: { projects: ProjectO
         </div>
 
         {calendarQ.isLoading ? (
-          <div className="flex items-center justify-center gap-2 py-16 text-sm text-stone-400">
+          <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
             <Loader2 size={16} className="animate-spin" />
             加载日历…
           </div>
@@ -319,7 +358,7 @@ export function CalendarPage({ projects, onSelectProject }: { projects: ProjectO
         ) : (
           <MilestoneList events={filteredEvents} onSelectProject={onSelectProject} />
         )}
-      </div>
+      </LinearCard>
 
       {createOpen && (
         <CreateScheduleDialog
@@ -344,27 +383,21 @@ function eventRank(type: CalendarEvent["type"]) {
   return 4;
 }
 
-function Stat({ label, value, tone }: { label: string; value: number; tone: "stone" | "emerald" | "amber" | "blue" | "rose" }) {
-  const cls = tone === "stone" ? "text-stone-900" : tone === "emerald" ? "text-emerald-700" : tone === "amber" ? "text-amber-700" : tone === "blue" ? "text-blue-700" : "text-rose-700";
+function Stat({ label, value, tone }: { label: string; value: number; tone: CalendarEvent["type"] }) {
+  const cls = tone === "task"
+    ? "text-foreground"
+    : tone === "schedule"
+      ? "text-[color:var(--success)]"
+      : tone === "gate"
+        ? "text-primary"
+        : tone === "phase"
+          ? "text-[color:var(--warning)]"
+          : "text-[color:var(--destructive)]";
   return (
-    <div className="ce-card p-4">
-      <div className="text-[10px] font-mono uppercase tracking-wider text-stone-400">{label}</div>
-      <div className={`mt-1 text-2xl font-serif font-semibold ${cls}`}>{value}</div>
-    </div>
-  );
-}
-
-function TabButton({ active, onClick, icon, children }: { active: boolean; onClick: () => void; icon: React.ReactNode; children: React.ReactNode }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs transition-colors ${
-        active ? "bg-white text-stone-900 shadow-sm" : "text-stone-500 hover:text-stone-900"
-      }`}
-    >
-      {icon}
-      {children}
-    </button>
+    <LinearCard className="p-4">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">{label}</div>
+      <div className={`num mt-1 text-2xl font-bold ${cls}`}>{value}</div>
+    </LinearCard>
   );
 }
 
@@ -381,28 +414,41 @@ function MonthGrid({
   byDay: Map<string, CalendarEvent[]>;
   onSelectProject: (id: string) => void;
 }) {
+  const todayStr = (() => {
+    const t = new Date();
+    return ymd(t.getFullYear(), t.getMonth(), t.getDate());
+  })();
   const cells: (number | null)[] = [
     ...Array(first.getDay()).fill(null),
     ...Array.from({ length: daysInMonth }, (_, index) => index + 1),
   ];
   return (
     <div className="mt-4">
-      <div className="mb-1 grid grid-cols-7 gap-1 text-center text-[10px] font-mono text-stone-400">
-        {["日", "一", "二", "三", "四", "五", "六"].map((day) => <div key={day}>{day}</div>)}
+      <div className="grid grid-cols-7 overflow-hidden rounded-t-[11px] border-l border-t border-border">
+        {["日", "一", "二", "三", "四", "五", "六"].map((day) => (
+          <div key={day} className="border-b border-r border-border bg-secondary py-2 text-center text-[11.5px] font-semibold text-muted-foreground">
+            {day}
+          </div>
+        ))}
       </div>
-      <div className="grid grid-cols-7 gap-1">
+      <div className="grid grid-cols-7 overflow-hidden rounded-b-[11px] border-l border-border">
         {cells.map((day, index) => {
-          if (day === null) return <div key={`blank-${index}`} className="min-h-[88px]" />;
+          if (day === null) return <div key={`blank-${index}`} className="min-h-[96px] border-b border-r border-border bg-secondary" />;
           const date = ymd(ym.year, ym.month, day);
           const events = byDay.get(date) ?? [];
+          const isToday = date === todayStr;
           return (
-            <div key={date} className="min-h-[92px] border border-stone-100 bg-white p-1.5">
-              <div className="text-[10px] font-mono text-stone-400">{day}</div>
-              <div className="mt-1 space-y-1">
+            <div key={date} className="flex min-h-[96px] flex-col gap-1 border-b border-r border-border bg-card p-2">
+              <span className={`num flex h-6 w-6 items-center justify-center text-[12.5px] font-semibold ${
+                isToday ? "rounded-full bg-primary text-primary-foreground" : "text-foreground"
+              }`}>
+                {day}
+              </span>
+              <div className="flex flex-col gap-1">
                 {events.slice(0, 3).map((event, eventIndex) => (
                   <EventPill key={`${event.type}-${event.projectId}-${eventIndex}`} event={event} onSelectProject={onSelectProject} />
                 ))}
-                {events.length > 3 && <div className="text-[9px] font-mono text-stone-400">+{events.length - 3}</div>}
+                {events.length > 3 && <div className="num px-1 text-[10px] font-medium text-muted-foreground">+{events.length - 3}</div>}
               </div>
             </div>
           );
@@ -421,9 +467,10 @@ function EventPill({ event, onSelectProject }: { event: CalendarEvent; onSelectP
     <button
       onClick={() => onSelectProject(event.projectId)}
       title={`${event.projectName} · ${event.label}`}
-      className={`block w-full truncate border px-1 py-0.5 text-left text-[9px] ${meta.cls}`}
+      className={`flex w-full items-center gap-1.5 truncate rounded-[5px] px-1.5 py-0.5 text-left text-[10.5px] font-medium ${meta.chip}`}
     >
-      {text}
+      <span className="h-[5px] w-[5px] shrink-0 rounded-full bg-current" />
+      <span className="truncate">{text}</span>
     </button>
   );
 }
@@ -431,37 +478,37 @@ function EventPill({ event, onSelectProject }: { event: CalendarEvent; onSelectP
 function MilestoneList({ events, onSelectProject }: { events: CalendarEvent[]; onSelectProject: (id: string) => void }) {
   if (events.length === 0) {
     return (
-      <div className="mt-4 border border-dashed border-stone-200 bg-stone-50 p-10 text-center text-sm text-stone-400">
+      <div className="mt-4 rounded-[11px] border border-dashed border-border bg-secondary p-10 text-center text-sm text-muted-foreground">
         当前月份没有匹配的任务、日程或里程碑。
       </div>
     );
   }
   return (
-    <div className="mt-4 divide-y divide-stone-100">
+    <div className="mt-4 divide-y divide-border">
       {events.map((event, index) => {
         const meta = TYPE_META[event.type];
         return (
           <button
             key={`${event.date}-${event.type}-${event.projectId}-${index}`}
             onClick={() => onSelectProject(event.projectId)}
-            className="flex w-full items-start gap-3 py-3 text-left hover:bg-stone-50/70 -mx-2 px-2 transition-colors"
+            className="-mx-2 flex w-full items-start gap-3 rounded-[7px] px-2 py-3 text-left transition-colors hover:bg-secondary"
           >
-            <span className={`mt-0.5 inline-flex items-center gap-1 border px-1.5 py-0.5 text-[10px] font-mono ${meta.cls}`}>
+            <span className={`mt-0.5 inline-flex items-center gap-1 rounded-[6px] border px-1.5 py-0.5 text-[11px] font-semibold ${meta.cls}`}>
               {meta.icon}
               {meta.label}
             </span>
             <div className="min-w-0 flex-1">
-              <div className="text-sm font-medium text-stone-900">{event.label}</div>
-              <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-stone-500">
+              <div className="text-sm font-semibold text-foreground">{event.label}</div>
+              <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-1 text-[11.5px] text-muted-foreground">
                 <span>{event.projectName}</span>
-                <span>{event.date}{event.startTime ? ` ${event.startTime}-${addMinutes(event.startTime, event.durationMin ?? 60)}` : ""}</span>
+                <span className="num">{event.date}{event.startTime ? ` ${event.startTime}-${addMinutes(event.startTime, event.durationMin ?? 60)}` : ""}</span>
                 {event.ownerLabel && <span>{event.ownerLabel}</span>}
-                {priorityLabel(event.priority) && <span>{priorityLabel(event.priority)}</span>}
+                {priorityLabel(event.priority) && <span className="num">{priorityLabel(event.priority)}</span>}
                 {event.status && <span>{statusLabel(event.status)}</span>}
                 {event.type === "schedule" && <SyncBadge status={event.dingtalkSyncStatus ?? "not_synced"} />}
               </div>
             </div>
-            <MapPin size={13} className="mt-1 text-stone-300" />
+            <MapPin size={13} className="mt-1 text-muted-foreground" />
           </button>
         );
       })}
@@ -472,10 +519,10 @@ function MilestoneList({ events, onSelectProject }: { events: CalendarEvent[]; o
 function SyncBadge({ status }: { status: string }) {
   const label = status === "synced" ? "已同步钉钉" : status === "group_push" ? "已发项目群" : status === "pending" ? "同步中" : "未同步钉钉";
   const cls = status === "synced"
-    ? "text-emerald-700"
+    ? "text-[color:var(--success)]"
     : status === "group_push"
-      ? "text-amber-700"
-      : "text-stone-400";
+      ? "text-[color:var(--warning)]"
+      : "text-muted-foreground";
   return <span className={cls}>{label}</span>;
 }
 
@@ -511,23 +558,23 @@ function CreateScheduleDialog({
   const canSubmit = form.projectId && form.title.trim() && form.date && form.time;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-900/50 p-4" onClick={onClose}>
-      <div className="w-full max-w-lg bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
-        <div className="flex items-center justify-between border-b border-stone-200 p-5">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/40 p-4" onClick={onClose}>
+      <div className="w-full max-w-lg rounded-[12px] border border-border bg-card shadow-[0_24px_60px_rgb(0_0_0/0.22)]" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-border p-5">
           <div>
-            <h3 className="font-serif text-xl text-stone-900">创建项目日程</h3>
+            <h3 className="text-lg font-bold tracking-[-0.3px] text-foreground">创建项目日程</h3>
           </div>
-          <button onClick={onClose} className="text-stone-400 hover:text-stone-700" title="关闭">
+          <button onClick={onClose} className="text-muted-foreground transition-colors hover:text-foreground" title="关闭">
             <X size={18} />
           </button>
         </div>
         <div className="space-y-4 p-5">
           <div>
-            <label className="mb-1.5 block text-[10px] font-mono uppercase tracking-widest text-stone-500">项目</label>
+            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">项目</label>
             <select
               value={form.projectId}
               onChange={(event) => setForm((prev) => ({ ...prev, projectId: event.target.value }))}
-              className="w-full border border-stone-300 bg-white px-3 py-2 text-sm outline-none focus:border-stone-900"
+              className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none transition-colors focus:border-[color:var(--acc-border)]"
             >
               {projects.map((project) => {
                 const projectCode = project.projectNumber ?? project.code;
@@ -538,67 +585,67 @@ function CreateScheduleDialog({
             </select>
           </div>
           <div>
-            <label className="mb-1.5 block text-[10px] font-mono uppercase tracking-widest text-stone-500">主题</label>
+            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">主题</label>
             <input
               value={form.title}
               onChange={(event) => setForm((prev) => ({ ...prev, title: event.target.value }))}
-              className="w-full border border-stone-300 px-3 py-2 text-sm outline-none focus:border-stone-900"
+              className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none transition-colors focus:border-[color:var(--acc-border)]"
               placeholder="例如：DVT 风险评审 / 客户包装确认"
               autoFocus
             />
           </div>
           <div className="grid grid-cols-3 gap-3">
             <div>
-              <label className="mb-1.5 block text-[10px] font-mono uppercase tracking-widest text-stone-500">日期</label>
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">日期</label>
               <input
                 type="date"
                 value={form.date}
                 onChange={(event) => setForm((prev) => ({ ...prev, date: event.target.value }))}
-                className="w-full border border-stone-300 px-3 py-2 text-sm outline-none focus:border-stone-900"
+                className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none transition-colors focus:border-[color:var(--acc-border)]"
               />
             </div>
             <div>
-              <label className="mb-1.5 block text-[10px] font-mono uppercase tracking-widest text-stone-500">时间</label>
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">时间</label>
               <input
                 type="time"
                 value={form.time}
                 onChange={(event) => setForm((prev) => ({ ...prev, time: event.target.value }))}
-                className="w-full border border-stone-300 px-3 py-2 text-sm outline-none focus:border-stone-900"
+                className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none transition-colors focus:border-[color:var(--acc-border)]"
               />
             </div>
             <div>
-              <label className="mb-1.5 block text-[10px] font-mono uppercase tracking-widest text-stone-500">时长</label>
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">时长</label>
               <select
                 value={form.durationMin}
                 onChange={(event) => setForm((prev) => ({ ...prev, durationMin: Number(event.target.value) }))}
-                className="w-full border border-stone-300 bg-white px-3 py-2 text-sm outline-none focus:border-stone-900"
+                className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none transition-colors focus:border-[color:var(--acc-border)]"
               >
                 {[30, 45, 60, 90, 120, 180].map((minutes) => <option key={minutes} value={minutes}>{minutes} 分钟</option>)}
               </select>
             </div>
           </div>
           <div>
-            <label className="mb-1.5 block text-[10px] font-mono uppercase tracking-widest text-stone-500">说明</label>
+            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">说明</label>
             <textarea
               value={form.description}
               onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))}
               rows={3}
-              className="w-full resize-none border border-stone-300 px-3 py-2 text-sm outline-none focus:border-stone-900"
+              className="w-full resize-none rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none transition-colors focus:border-[color:var(--acc-border)]"
               placeholder="议题、输入材料或需要拍板的问题"
             />
           </div>
-          <label className="flex items-center gap-2 text-sm text-stone-700">
+          <label className="flex items-center gap-2 text-sm text-foreground">
             <input
               type="checkbox"
               checked={form.syncDingtalk}
               onChange={(event) => setForm((prev) => ({ ...prev, syncDingtalk: event.target.checked }))}
-              className="accent-stone-900"
+              className="accent-[color:var(--primary)]"
             />
             同步到钉钉日历
           </label>
         </div>
-        <div className="flex justify-end gap-2 border-t border-stone-200 p-5">
-          <button onClick={onClose} className="border border-stone-300 px-4 py-2 text-xs font-mono text-stone-600 hover:bg-stone-50">取消</button>
+        <div className="flex justify-end gap-2 border-t border-border p-5">
+          <button onClick={onClose} className="rounded-[7px] border border-border bg-card px-4 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary">取消</button>
           <button
             disabled={!canSubmit || create.isPending}
             onClick={() => create.mutate({
@@ -610,7 +657,7 @@ function CreateScheduleDialog({
               durationMin: form.durationMin,
               syncDingtalk: form.syncDingtalk,
             })}
-            className="inline-flex items-center gap-2 bg-stone-900 px-4 py-2 text-xs font-mono text-white hover:bg-stone-700 disabled:opacity-40"
+            className="inline-flex items-center gap-2 rounded-[7px] bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:opacity-90 disabled:opacity-40"
           >
             {create.isPending ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
             保存日程
