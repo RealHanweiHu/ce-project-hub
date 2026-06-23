@@ -15,16 +15,21 @@
  */
 
 import "dotenv/config";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { getDb, createProjectWithSeed } from "../server/db";
 import {
   users,
   projects,
   projectRequirements,
   projectIssues,
+  projectTasks,
+  products,
+  projectCalendarEvents,
+  projectGateReviews,
   type InsertProject,
   type InsertProjectRequirement,
   type InsertProjectIssue,
+  type InsertProduct,
 } from "../drizzle/schema";
 
 // Category + phase ids are taken from shared/sop-templates.ts:
@@ -311,6 +316,102 @@ const buildIssues = (creatorId: number): InsertProjectIssue[] => {
   return base.map((i) => ({ ...i, creatorId }));
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// My Tasks — assign existing seeded project_tasks to test_pm with varied state.
+//
+// We UPDATE existing (projectId, phaseId, taskId) rows (created by
+// createProjectWithSeed) rather than inserting new ones, so referential
+// expectations (one row per SOP task) stay intact. The 我的任务 page reads
+// trpc.workbench.mine → getMyTasks, which filters out done/skipped, so the
+// overdue + in-progress rows surface there; the done rows are valid data but
+// only render in the project-detail task list (documented in the report).
+//
+// project_tasks enums (drizzle/schema.ts):
+//   status   : todo | in_progress | blocked | done | skipped
+//   priority : low | medium | high | critical
+// ─────────────────────────────────────────────────────────────────────────────
+type DemoTaskAssignment = {
+  projectId: string;
+  phaseId: string;
+  taskId: string;
+  status: "todo" | "in_progress" | "blocked" | "done" | "skipped";
+  priority: "low" | "medium" | "high" | "critical";
+  dueDate: string;
+  completed?: boolean;
+  completedAt?: string; // ISO timestamp
+};
+
+// today = 2026-06-23. ~4 overdue, ~5 in-progress/upcoming, ~3 completed.
+const DEMO_MY_TASKS: DemoTaskAssignment[] = [
+  // ── ~4 overdue (dueDate in the past, status not done) ──
+  { projectId: "demo-003", phaseId: "evt", taskId: "e1", status: "in_progress", priority: "critical", dueDate: "2026-06-12" },
+  { projectId: "demo-007", phaseId: "evt", taskId: "ev2", status: "todo",       priority: "high",     dueDate: "2026-06-16" },
+  { projectId: "demo-002", phaseId: "design", taskId: "d3", status: "blocked",  priority: "high",     dueDate: "2026-06-18" },
+  { projectId: "demo-004", phaseId: "dvt", taskId: "v2", status: "in_progress", priority: "medium",   dueDate: "2026-06-20" },
+  // ── ~5 in-progress / upcoming (dueDate near future) ──
+  { projectId: "demo-001", phaseId: "concept", taskId: "c1", status: "in_progress", priority: "high",   dueDate: "2026-06-24" },
+  { projectId: "demo-002", phaseId: "design",  taskId: "d4", status: "in_progress", priority: "medium", dueDate: "2026-06-26" },
+  { projectId: "demo-003", phaseId: "evt",     taskId: "e3", status: "todo",        priority: "critical", dueDate: "2026-06-30" },
+  { projectId: "demo-006", phaseId: "design",  taskId: "ed2", status: "todo",       priority: "low",    dueDate: "2026-07-06" },
+  { projectId: "demo-008", phaseId: "input",   taskId: "jin1", status: "in_progress", priority: "medium", dueDate: "2026-07-14" },
+  // ── ~3 completed (status done, completed flag, completedAt set) ──
+  { projectId: "demo-005", phaseId: "mp",      taskId: "mp1", status: "done", priority: "medium", dueDate: "2026-06-05", completed: true, completedAt: "2026-06-04T09:30:00Z" },
+  { projectId: "demo-004", phaseId: "dvt",     taskId: "v1",  status: "done", priority: "high",   dueDate: "2026-06-09", completed: true, completedAt: "2026-06-09T15:10:00Z" },
+  { projectId: "demo-007", phaseId: "evt",     taskId: "ev1", status: "done", priority: "low",    dueDate: "2026-06-11", completed: true, completedAt: "2026-06-10T11:00:00Z" },
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Products — populate the 产品库 screen. products columns (drizzle/schema.ts):
+//   id, productNumber, name, type(finished|component), category,
+//   platformId(null), targetMarkets[], lifecycleState
+//   (concept|development|mass_production|maintenance|eol), createdBy.
+// A couple of demo projects are linked via projects.productId so 在研项目数 > 0.
+// ─────────────────────────────────────────────────────────────────────────────
+type DemoProduct = Omit<InsertProduct, "createdBy">;
+const DEMO_PRODUCTS: DemoProduct[] = [
+  { id: "prod-001", productNumber: "PRD-ANC-001", name: "旗舰降噪耳机 ANC Pro", type: "finished", category: "耳机", targetMarkets: ["EU", "US", "CN"], lifecycleState: "concept" },
+  { id: "prod-002", productNumber: "PRD-WAT-003", name: "智能手表 Gen3", type: "finished", category: "可穿戴", targetMarkets: ["CN", "US"], lifecycleState: "development" },
+  { id: "prod-003", productNumber: "PRD-PRJ-X", name: "便携投影仪 Lumo X", type: "finished", category: "投影", targetMarkets: ["CN", "JP"], lifecycleState: "development" },
+  { id: "prod-004", productNumber: "PRD-RBT-VMX", name: "扫地机器人 Vmax", type: "finished", category: "清洁电器", targetMarkets: ["EU", "CN"], lifecycleState: "development" },
+  { id: "prod-005", productNumber: "PRD-KBD-K75", name: "无线键盘 K75", type: "finished", category: "外设", targetMarkets: ["CN", "US", "EU"], lifecycleState: "mass_production" },
+  { id: "prod-006", productNumber: "PRD-MTR-BLDC", name: "无刷直流电机 BLDC-40", type: "component", category: "电机", targetMarkets: ["CN"], lifecycleState: "maintenance" },
+];
+// Optional project → product links so "在研项目数" shows > 0.
+const DEMO_PRODUCT_LINKS: Array<{ projectId: string; productId: string }> = [
+  { projectId: "demo-001", productId: "prod-001" },
+  { projectId: "demo-002", productId: "prod-002" },
+  { projectId: "demo-003", productId: "prod-003" },
+  { projectId: "demo-004", productId: "prod-004" },
+  { projectId: "demo-005", productId: "prod-005" },
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Calendar — populate the 日历 screen for June 2026 (today = 2026-06-23).
+// getCalendar (server/db.ts) reads three dated sources:
+//   • project_gate_reviews.reviewDate     → type "gate"
+//   • project_calendar_events.eventDate   → type "schedule"
+//   • project_tasks.dueDate               → type "task"/"gate" (already seeded above)
+// We add a couple of dated gate reviews + several scheduled events (incl. today).
+// ─────────────────────────────────────────────────────────────────────────────
+const DEMO_GATE_MARKER = "[demo]";
+type DemoGate = { projectId: string; phaseId: string; gateName: string; reviewDate: string };
+const DEMO_GATE_REVIEWS: DemoGate[] = [
+  { projectId: "demo-002", phaseId: "design", gateName: `${DEMO_GATE_MARKER} Gate 2 设计评审`, reviewDate: "2026-06-12" },
+  { projectId: "demo-003", phaseId: "evt", gateName: `${DEMO_GATE_MARKER} Gate 3 EVT 评审`, reviewDate: "2026-06-23" },
+  { projectId: "demo-004", phaseId: "dvt", gateName: `${DEMO_GATE_MARKER} Gate 4 DVT 评审`, reviewDate: "2026-06-27" },
+];
+
+type DemoCalEvent = { projectId: string; title: string; eventDate: string; startTime: string; durationMin: number };
+const DEMO_CAL_EVENTS: DemoCalEvent[] = [
+  { projectId: "demo-001", title: "[demo] 概念方案对齐会", eventDate: "2026-06-05", startTime: "10:00", durationMin: 90 },
+  { projectId: "demo-007", title: "[demo] 降本方案评审", eventDate: "2026-06-10", startTime: "14:00", durationMin: 60 },
+  { projectId: "demo-002", title: "[demo] 结构堆叠复盘", eventDate: "2026-06-17", startTime: "11:00", durationMin: 45 },
+  { projectId: "demo-003", title: "[demo] EVT 问题攻关会（今日）", eventDate: "2026-06-23", startTime: "09:30", durationMin: 60 },
+  { projectId: "demo-005", title: "[demo] 量产爬坡日例会", eventDate: "2026-06-23", startTime: "16:00", durationMin: 30 },
+  { projectId: "demo-004", title: "[demo] 可靠性测试周报", eventDate: "2026-06-25", startTime: "15:00", durationMin: 45 },
+  { projectId: "demo-008", title: "[demo] 设计输入冻结评审", eventDate: "2026-06-29", startTime: "10:30", durationMin: 90 },
+];
+
 async function main() {
   const db = await getDb();
   if (!db) throw new Error("Database not available — is DATABASE_URL set?");
@@ -401,6 +502,131 @@ async function main() {
     issueCreated++;
   }
   console.log(`issues: ${issueCreated} created, ${issueSkipped} skipped`);
+
+  // ── My Tasks: assign existing tasks to test_pm ────────────────────────────
+  // Idempotent: we UPDATE by (projectId, phaseId, taskId) — re-running just
+  // re-applies the same assignment values.
+  let taskAssigned = 0;
+  let taskMissing = 0;
+  for (const t of DEMO_MY_TASKS) {
+    const res = await db
+      .update(projectTasks)
+      .set({
+        assigneeUserId: pmId,
+        status: t.status,
+        priority: t.priority,
+        dueDate: t.dueDate,
+        completed: t.completed ?? false,
+        completedAt: t.completedAt ? new Date(t.completedAt) : null,
+        statusChangedAt: new Date(),
+        updatedBy: pmId,
+      })
+      .where(
+        and(
+          eq(projectTasks.projectId, t.projectId),
+          eq(projectTasks.phaseId, t.phaseId),
+          eq(projectTasks.taskId, t.taskId)
+        )
+      )
+      .returning({ id: projectTasks.id });
+    if (res.length > 0) taskAssigned++;
+    else {
+      taskMissing++;
+      console.warn(`  ! task not found, skipped: ${t.projectId}/${t.phaseId}/${t.taskId}`);
+    }
+  }
+  console.log(`my-tasks: ${taskAssigned} assigned to test_pm (${taskMissing} missing)`);
+
+  // ── Products: create + optionally link projects ──────────────────────────
+  let prodCreated = 0;
+  let prodSkipped = 0;
+  for (const p of DEMO_PRODUCTS) {
+    const existing = await db
+      .select({ id: products.id })
+      .from(products)
+      .where(eq(products.id, p.id))
+      .limit(1);
+    if (existing.length > 0) {
+      prodSkipped++;
+      continue;
+    }
+    await db.insert(products).values({ ...p, createdBy: pmId });
+    prodCreated++;
+  }
+  // Link a couple of demo projects to products (idempotent UPDATE).
+  let linked = 0;
+  for (const l of DEMO_PRODUCT_LINKS) {
+    const res = await db
+      .update(projects)
+      .set({ productId: l.productId })
+      .where(eq(projects.id, l.projectId))
+      .returning({ id: projects.id });
+    if (res.length > 0) linked++;
+  }
+  console.log(`products: ${prodCreated} created, ${prodSkipped} skipped; ${linked} projects linked`);
+
+  // ── Calendar: dated gate reviews + scheduled events ──────────────────────
+  // Gate reviews: idempotent on (projectId, phaseId, gateName).
+  let gateCreated = 0;
+  let gateSkipped = 0;
+  for (const g of DEMO_GATE_REVIEWS) {
+    const existing = await db
+      .select({ id: projectGateReviews.id })
+      .from(projectGateReviews)
+      .where(
+        and(
+          eq(projectGateReviews.projectId, g.projectId),
+          eq(projectGateReviews.phaseId, g.phaseId),
+          eq(projectGateReviews.gateName, g.gateName)
+        )
+      )
+      .limit(1);
+    if (existing.length > 0) {
+      gateSkipped++;
+      continue;
+    }
+    await db.insert(projectGateReviews).values({
+      projectId: g.projectId,
+      phaseId: g.phaseId,
+      phaseName: g.phaseId,
+      gateName: g.gateName,
+      reviewDate: g.reviewDate,
+      decision: "conditional",
+      createdBy: pmId,
+    });
+    gateCreated++;
+  }
+  // Calendar events: idempotent on (projectId, title, eventDate).
+  let calCreated = 0;
+  let calSkipped = 0;
+  for (const e of DEMO_CAL_EVENTS) {
+    const existing = await db
+      .select({ id: projectCalendarEvents.id })
+      .from(projectCalendarEvents)
+      .where(
+        and(
+          eq(projectCalendarEvents.projectId, e.projectId),
+          eq(projectCalendarEvents.title, e.title),
+          eq(projectCalendarEvents.eventDate, e.eventDate)
+        )
+      )
+      .limit(1);
+    if (existing.length > 0) {
+      calSkipped++;
+      continue;
+    }
+    await db.insert(projectCalendarEvents).values({
+      projectId: e.projectId,
+      title: e.title,
+      eventDate: e.eventDate,
+      startTime: e.startTime,
+      durationMin: e.durationMin,
+      organizerUserId: pmId,
+      createdBy: pmId,
+    });
+    calCreated++;
+  }
+  console.log(`calendar: ${gateCreated} gate reviews created (${gateSkipped} skipped), ${calCreated} events created (${calSkipped} skipped)`);
 }
 
 main()
