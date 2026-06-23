@@ -151,12 +151,11 @@ export function ProjectListView({
   const [cloneForm, setCloneForm] = useState({ name: '', code: '', pmUserId: null as number | null, startDate: '', targetDate: '' });
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
 
-  // ── Board presentation state (local only, not persisted) ──
+  // ── Board presentation state (local only; collapse/WIP prefs are persisted via useBoardPrefs) ──
   const [viewMode, setViewMode] = useState<ViewMode>('kanban');
   const [groupBy, setGroupBy] = useState<GroupBy>('none');
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null);
   const [search, setSearch] = useState('');
-  const [collapsedLanes, setCollapsedLanes] = useState<Set<string>>(() => new Set());
   const [starred, setStarred] = useState<Set<string>>(() => new Set()); // display-only star
   const [detailId, setDetailId] = useState<string | null>(null);
 
@@ -194,7 +193,7 @@ export function ProjectListView({
   const moveMut = trpc.projects.move.useMutation();
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
   // WIP 上限（per-stage，跨泳道共享，持久化在 localStorage）。
-  const { wipLimits, setWipLimit } = useBoardPrefs();
+  const { wipLimits, setWipLimit, isLaneCollapsed, toggleLane: toggleLanePersist } = useBoardPrefs();
   // Patch shape accepted by trpc.projects.move (only provided fields are written).
   type MovePatch = { currentPhase?: string; pmUserId?: number | null; productId?: string | null };
   // Pending drag awaiting confirmation. `patch`/`undoPatch`/`successMsg` carry the
@@ -446,11 +445,7 @@ export function ProjectListView({
     return Array.from(map.values());
   }, [visibleRows, groupBy, productNameById, pmNameById]);
 
-  const toggleLane = (k: string) => setCollapsedLanes((prev) => {
-    const next = new Set(prev);
-    next.has(k) ? next.delete(k) : next.add(k);
-    return next;
-  });
+  const toggleLane = toggleLanePersist;
   const toggleStar = (id: string) => setStarred((prev) => {
     const next = new Set(prev);
     next.has(id) ? next.delete(id) : next.add(id);
@@ -577,7 +572,7 @@ export function ProjectListView({
           groupBy={groupBy}
           lanes={lanes}
           rows={visibleRows}
-          collapsedLanes={collapsedLanes}
+          isLaneCollapsed={isLaneCollapsed}
           onToggleLane={toggleLane}
           onToggleStar={toggleStar}
           onOpen={setDetailId}
@@ -1245,10 +1240,10 @@ export function ProjectListView({
   }
 
   function KanbanView({
-    stages, groupBy, lanes, rows, collapsedLanes, onToggleLane, onToggleStar, onOpen,
+    stages, groupBy, lanes, rows, isLaneCollapsed, onToggleLane, onToggleStar, onOpen,
   }: {
     stages: typeof STAGE_COLUMNS; groupBy: GroupBy; lanes: Lane[]; rows: Row[];
-    collapsedLanes: Set<string>; onToggleLane: (k: string) => void; onToggleStar: (id: string) => void; onOpen: (id: string) => void;
+    isLaneCollapsed: (k: string) => boolean; onToggleLane: (k: string) => void; onToggleStar: (id: string) => void; onOpen: (id: string) => void;
   }) {
     // Droppable stage column. laneKey='' for ungrouped (Task 3); Task 4 will pass
     // a real laneKey for cross-lane reassign via the same makeDropId encoding.
@@ -1269,7 +1264,7 @@ export function ProjectListView({
           <div className="flex flex-col gap-3 overflow-x-auto pb-2">
             {lanes.map((lane) => {
               const ck = `${groupBy}:${lane.key}`;
-              const collapsed = collapsedLanes.has(ck);
+              const collapsed = isLaneCollapsed(ck);
               return (
                 <div key={lane.key}>
                   <button
