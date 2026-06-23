@@ -267,7 +267,8 @@ export function ProjectListView({
       setMoveConfirm({
         project, fromStage, toStage,
         patch: { currentPhase: toStage, ...reassignPatch },
-        undoPatch: { currentPhase: fromStage, ...undoReassign! },
+        // 撤销须还原“原始”阶段（可能是 planning/d3 等细粒度 phase），不能用 stageBucket 折叠后的 fromStage
+        undoPatch: { currentPhase: project.currentPhase, ...undoReassign! },
         successMsg: `已推进并改派 · 可撤销`,
       });
     } else if (reassignPatch) {
@@ -278,7 +279,8 @@ export function ProjectListView({
       setMoveConfirm({
         project, fromStage, toStage,
         patch: { currentPhase: toStage },
-        undoPatch: { currentPhase: fromStage },
+        // 撤销还原原始细粒度 phase（非 stageBucket 折叠值）
+        undoPatch: { currentPhase: project.currentPhase },
         successMsg: `已将 ${project.name} 推进到 ${stageLabel(toStage)} · 可撤销`,
       });
     }
