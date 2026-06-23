@@ -1,4 +1,7 @@
-// Design: Industrial Precision - stone/amber color system
+// Linear redesign — 项目详情 Project Detail
+// Phase 1: VISUAL ONLY. Header / P1–P7 stepper / tab bar / task list restyled to the
+// Linear indigo-zinc system. All data wiring, mutations (advance-stage / task toggle /
+// gate review / deliverable review) and tab state are preserved unchanged.
 // ProjectDetailView: phase navigation, Gantt chart tab, task checklist, task details, file upload
 
 import { useState, useRef, useEffect } from 'react';
@@ -16,6 +19,7 @@ import {
   TaskDetails, FileAttachment, formatBytes, SOPTask, SOPPhase,
 } from '@/lib/data';
 import { CATEGORY_MAP } from '@/lib/sop-templates';
+import { LinearCard, Kicker, StatusDot, LinearBar, TypeBadge } from '@/components/linear/primitives';
 import { ProgressBar } from '@/components/shared/ProgressBar';
 import { GateStandardPanel } from '@/components/shared/GateStandardPanel';
 import { GanttView } from './GanttView';
@@ -151,7 +155,7 @@ function EditableText({
         onBlur={commit}
         onKeyDown={(e) => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') setEditing(false); }}
         autoFocus
-        className={`bg-amber-50 border-b-2 border-amber-500 outline-none px-1 ${inputClassName || className}`}
+        className={`bg-[color:var(--acc-soft)] border-b-2 border-primary outline-none px-1 ${inputClassName || className}`}
         placeholder={placeholder}
       />
     );
@@ -159,10 +163,10 @@ function EditableText({
   return (
     <span
       onClick={() => { setDraft(value || ''); setEditing(true); }}
-      className={`${className} cursor-text hover:bg-amber-50/40 rounded px-1 -mx-1 group inline-flex items-center gap-1`}
+      className={`${className} cursor-text hover:bg-[color:var(--acc-soft)] rounded px-1 -mx-1 group inline-flex items-center gap-1`}
     >
-      {value || <span className="text-stone-400 italic">{placeholder}</span>}
-      <Edit3 size={11} className="inline-block ml-1.5 text-stone-300 opacity-0 group-hover:opacity-100 transition-opacity" />
+      {value || <span className="text-muted-foreground italic">{placeholder}</span>}
+      <Edit3 size={11} className="inline-block ml-1.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
     </span>
   );
 }
@@ -180,7 +184,7 @@ function EditableSelect({
         onChange={(e) => { onChange(e.target.value); setEditing(false); }}
         onBlur={() => setEditing(false)}
         autoFocus
-        className={`bg-amber-50 border-b-2 border-amber-500 outline-none px-1 ${className}`}
+        className={`bg-[color:var(--acc-soft)] border-b-2 border-primary outline-none px-1 ${className}`}
       >
         {options.map((o) => <option key={o} value={o}>{o}</option>)}
       </select>
@@ -189,7 +193,7 @@ function EditableSelect({
   return (
     <span
       onClick={() => setEditing(true)}
-      className={`${className} cursor-pointer hover:bg-amber-50/40 rounded px-1 -mx-1`}
+      className={`${className} cursor-pointer hover:bg-[color:var(--acc-soft)] rounded px-1 -mx-1`}
     >
       {value}
     </span>
@@ -284,7 +288,7 @@ function FileUploadArea({
           <select
             value={selectedType}
             onChange={(e) => setSelectedType(e.target.value)}
-            className="text-xs border border-stone-300 bg-white px-2 py-1.5 text-stone-700"
+            className="text-xs rounded-md border border-border bg-card px-2 py-1.5 text-foreground"
           >
             <option value="">未分类</option>
             {FILE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
@@ -295,7 +299,7 @@ function FileUploadArea({
             onChange={(e) => setVersion(e.target.value)}
             maxLength={32}
             placeholder="版本 如 V1.0 / T1 / Rev.B"
-            className="flex-1 text-xs border border-stone-300 bg-white px-2 py-1.5 text-stone-700"
+            className="flex-1 text-xs rounded-md border border-border bg-card px-2 py-1.5 text-foreground"
           />
         </div>
       )}
@@ -304,17 +308,17 @@ function FileUploadArea({
         onDragOver={(e) => { e.preventDefault(); if (!readOnly) setDragOver(true); }}
         onDragLeave={() => setDragOver(false)}
         onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files); }}
-        className={`border-2 border-dashed p-4 text-center transition-colors ${
-          readOnly ? 'cursor-not-allowed border-stone-200 bg-stone-50 opacity-70' :
-          dragOver ? 'cursor-pointer border-amber-500 bg-amber-50' : 'cursor-pointer border-stone-300 hover:border-stone-400'
+        className={`rounded-md border-2 border-dashed p-4 text-center transition-colors ${
+          readOnly ? 'cursor-not-allowed border-border bg-secondary opacity-70' :
+          dragOver ? 'cursor-pointer border-primary bg-[color:var(--acc-soft)]' : 'cursor-pointer border-border hover:border-[color:var(--acc-border)]'
         }`}
       >
         <input ref={inputRef} type="file" multiple onChange={(e) => handleFiles(e.target.files!)} className="hidden" disabled={uploading || readOnly} />
-        <Upload size={18} className={`mx-auto mb-2 ${uploading ? 'text-amber-400 animate-pulse' : 'text-stone-400'}`} />
-        <div className="text-sm text-stone-700">
+        <Upload size={18} className={`mx-auto mb-2 ${uploading ? 'text-primary animate-pulse' : 'text-muted-foreground'}`} />
+        <div className="text-sm text-foreground">
           {readOnly ? '仅可查看附件' : uploading ? '上传中...' : <><span className="font-medium">点击上传</span>或拖拽文件</>}
         </div>
-        <div className="text-[10px] font-mono uppercase tracking-wider text-stone-400 mt-1">
+        <div className="text-[10px] uppercase tracking-wider text-muted-foreground mt-1">
           单个文件最大 {formatBytes(MAX_FILE_SIZE)} · 支持 PDF / 图片 / Office 文档
         </div>
       </div>
@@ -324,29 +328,29 @@ function FileUploadArea({
           {files.map((file) => {
             const previewable = canPreview(file);
             return (
-            <div key={file.id} className="flex items-center gap-3 p-2.5 bg-white border border-stone-200 group">
-              <span className="text-stone-500 shrink-0">{getIcon(file.type)}</span>
+            <div key={file.id} className="flex items-center gap-3 p-2.5 rounded-md bg-card border border-border group">
+              <span className="text-muted-foreground shrink-0">{getIcon(file.type)}</span>
               <div
                 className={`flex-1 min-w-0 ${previewable ? 'cursor-pointer' : ''}`}
                 onClick={(e) => { if (previewable) { e.stopPropagation(); setPreviewFile(file); } }}
               >
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className={`text-sm text-stone-900 truncate ${previewable ? 'group-hover:text-amber-700' : ''}`}>{file.name}</span>
-                  {file.fileType && <span className="shrink-0 text-[10px] font-mono px-1.5 py-0.5 rounded bg-stone-100 text-stone-600">{file.fileType}</span>}
-                  {file.fileVersion && <span className="shrink-0 text-[10px] font-mono text-amber-700">{file.fileVersion}</span>}
+                  <span className={`text-sm text-foreground truncate ${previewable ? 'group-hover:text-primary' : ''}`}>{file.name}</span>
+                  {file.fileType && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground">{file.fileType}</span>}
+                  {file.fileVersion && <span className="shrink-0 text-[10px] num text-primary">{file.fileVersion}</span>}
                 </div>
-                <div className="text-[10px] font-mono text-stone-500">{formatBytes(file.size)}</div>
+                <div className="text-[10px] num text-muted-foreground">{formatBytes(file.size)}</div>
               </div>
               {previewable && (
-                <button onClick={(e) => { e.stopPropagation(); setPreviewFile(file); }} title="预览" className="p-1.5 text-stone-400 hover:text-stone-900 hover:bg-stone-100 transition-colors">
+                <button onClick={(e) => { e.stopPropagation(); setPreviewFile(file); }} title="预览" className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
                   <Eye size={13} />
                 </button>
               )}
-              <button onClick={(e) => { e.stopPropagation(); downloadFile(file); }} title="下载" className="p-1.5 text-stone-400 hover:text-stone-900 hover:bg-stone-100 transition-colors">
+              <button onClick={(e) => { e.stopPropagation(); downloadFile(file); }} title="下载" className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
                 <Download size={13} />
               </button>
               {!readOnly && (
-                <button onClick={(e) => { e.stopPropagation(); if (confirm('删除文件？')) onRemove(file.id); }} className="p-1.5 text-stone-400 hover:text-rose-600 hover:bg-rose-50 transition-colors">
+                <button onClick={(e) => { e.stopPropagation(); if (confirm('删除文件？')) onRemove(file.id); }} className="p-1.5 rounded text-muted-foreground hover:text-destructive hover:bg-[color:var(--destructive-soft)] transition-colors">
                   <Trash2 size={13} />
                 </button>
               )}
@@ -504,25 +508,25 @@ function ProjectFocusBand({
         ? '需强制发布'
         : `${releasePrecheck.blockers.length} 项阻断`;
   const releaseTone = !releasePrecheck
-    ? 'text-stone-500'
+    ? 'text-muted-foreground'
     : releasePrecheck.canRelease
       ? 'text-emerald-700'
       : releasePrecheck.canForceRelease
-        ? 'text-amber-700'
+        ? 'text-primary'
         : 'text-rose-700';
   const issueChangeLabel = openIssueCount > 0 || pendingChangeCount > 0
     ? `${openIssueCount} 问题 · ${pendingChangeCount} 变更`
     : '暂无开放项';
 
   return (
-    <div className="ce-panel overflow-hidden">
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 divide-y md:divide-y-0 md:divide-x divide-stone-200">
+    <LinearCard className="overflow-hidden">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 divide-y md:divide-y-0 md:divide-x divide-border">
         <FocusItem
           icon={<Target size={15} />}
           label="当前阶段"
           value={phaseName}
           detail={`${activeProgress}% 完成`}
-          tone={activeProgress >= 100 ? 'text-emerald-700' : 'text-stone-800'}
+          tone={activeProgress >= 100 ? 'text-emerald-700' : 'text-foreground'}
           actionLabel="处理任务"
           onAction={onTasks}
         />
@@ -531,7 +535,7 @@ function ProjectFocusBand({
           label="Gate"
           value={gateBlocked ? `${readiness?.blockerCount ?? 0} 项未就绪` : readiness?.ready ? '已就绪' : gateName}
           detail={gateBlocked ? firstGateBlocker ?? gateName : gateName}
-          tone={gateBlocked ? 'text-amber-700' : readiness?.ready ? 'text-emerald-700' : 'text-stone-800'}
+          tone={gateBlocked ? 'text-primary' : readiness?.ready ? 'text-emerald-700' : 'text-foreground'}
           actionLabel="查看 Gate"
           onAction={onGate}
         />
@@ -540,7 +544,7 @@ function ProjectFocusBand({
           label="问题与变更"
           value={issueChangeLabel}
           detail={openIssueCount > 0 ? '开放问题需要先收口' : pendingChangeCount > 0 ? '有待决变更' : '无开放问题或待决变更'}
-          tone={openIssueCount > 0 ? 'text-rose-700' : pendingChangeCount > 0 ? 'text-amber-700' : 'text-emerald-700'}
+          tone={openIssueCount > 0 ? 'text-rose-700' : pendingChangeCount > 0 ? 'text-primary' : 'text-emerald-700'}
           actionLabel={openIssueCount > 0 ? '处理问题' : pendingChangeCount > 0 ? '看变更' : '查看问题'}
           onAction={openIssueCount > 0 ? onIssues : pendingChangeCount > 0 ? onChanges : onIssues}
         />
@@ -555,7 +559,7 @@ function ProjectFocusBand({
           disabled={!canReleaseAction}
         />
       </div>
-    </div>
+    </LinearCard>
   );
 }
 
@@ -579,20 +583,20 @@ function FocusItem({
   disabled?: boolean;
 }) {
   return (
-    <div className="min-h-[116px] p-4 flex flex-col justify-between gap-3 bg-white">
+    <div className="min-h-[116px] p-4 flex flex-col justify-between gap-3 bg-card">
       <div>
-        <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-stone-400">
-          <span className="text-stone-400">{icon}</span>
+        <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-muted-foreground">
+          <span className="text-muted-foreground">{icon}</span>
           {label}
         </div>
         <div className={`mt-2 text-lg font-semibold leading-tight ${tone}`}>{value}</div>
-        <div className="mt-1 max-h-8 overflow-hidden text-xs text-stone-500 leading-snug">{detail}</div>
+        <div className="mt-1 max-h-8 overflow-hidden text-xs text-muted-foreground leading-snug">{detail}</div>
       </div>
       <button
         type="button"
         onClick={onAction}
         disabled={disabled}
-        className="self-start text-[11px] font-mono uppercase tracking-wider text-stone-600 border border-stone-200 px-2 py-1 hover:border-stone-400 hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        className="self-start text-[11px] uppercase tracking-wider text-muted-foreground rounded-md border border-border px-2 py-1 hover:border-[color:var(--acc-border)] hover:bg-secondary disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
       >
         {actionLabel}
       </button>
@@ -604,10 +608,10 @@ function ReadinessRow({ label, ok, detail, soft }: { label: string; ok: boolean;
   return (
     <div className="flex items-center justify-between py-1 text-sm">
       <span className="flex items-center gap-1.5">
-        {ok ? <CheckCircle2 size={14} className="text-emerald-600" /> : <AlertTriangle size={14} className={soft ? 'text-amber-500' : 'text-rose-500'} />}
-        <span className="text-stone-700">{label}</span>
+        {ok ? <CheckCircle2 size={14} className="text-emerald-600" /> : <AlertTriangle size={14} className={soft ? 'text-primary' : 'text-rose-500'} />}
+        <span className="text-foreground">{label}</span>
       </span>
-      <span className={`text-xs font-mono ${ok ? 'text-stone-500' : soft ? 'text-amber-600' : 'text-rose-600'}`}>{detail}</span>
+      <span className={`text-xs num ${ok ? 'text-muted-foreground' : soft ? 'text-primary' : 'text-rose-600'}`}>{detail}</span>
     </div>
   );
 }
@@ -695,8 +699,8 @@ function DeliverableReviewControls({
   const pmMember = members.find((m) => m.userId === pmUserId) ?? members.find((m) => m.role === 'pm' || m.isOwner);
 
   return (
-    <div className="mt-3 pt-3 border-t border-stone-100 space-y-2">
-      <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">审核状态</div>
+    <div className="mt-3 pt-3 border-t border-border space-y-2">
+      <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">审核状态</div>
       {deliverableNames.map((name) => {
         const record = reviewByName.get(name);
         const hasFile = uploadedNames.has(name);
@@ -715,16 +719,16 @@ function DeliverableReviewControls({
         return (
           <div key={name} className="space-y-1">
             <div className="flex items-center justify-between gap-2 flex-wrap">
-              <span className="text-xs text-stone-600 min-w-0 truncate">{name}</span>
+              <span className="text-xs text-muted-foreground min-w-0 truncate">{name}</span>
               <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
                 {/* Status badge */}
                 {!record && hasFile && (
-                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-stone-100 text-stone-500 border border-stone-200">
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-secondary text-muted-foreground border border-border">
                     已上传
                   </span>
                 )}
                 {record?.status === 'pending' && (
-                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-[color:var(--acc-soft)] text-primary border border-[color:var(--acc-border)]">
                     待审 · {reviewerName}
                   </span>
                 )}
@@ -748,7 +752,7 @@ function DeliverableReviewControls({
                     <select
                       value={selReviewer}
                       onChange={(e) => setReviewerSelections((prev) => ({ ...prev, [name]: e.target.value === '' ? '' : Number(e.target.value) }))}
-                      className="text-[10px] border border-stone-200 bg-white text-stone-600 px-1 py-0.5 focus:outline-none focus:border-amber-400"
+                      className="text-[10px] rounded border border-border bg-card text-muted-foreground px-1 py-0.5 focus:outline-none focus:border-[color:var(--acc-border)]"
                     >
                       <option value="">— 选审核人 —</option>
                       {members.map((m) => (
@@ -763,7 +767,7 @@ function DeliverableReviewControls({
                         const rv = selReviewer === '' ? undefined : Number(selReviewer);
                         submitMut.mutate({ projectId, phaseId, deliverableName: name, reviewerUserId: rv });
                       }}
-                      className="text-[10px] font-mono px-1.5 py-0.5 bg-amber-50 text-amber-700 border border-amber-300 hover:bg-amber-100 disabled:opacity-50 transition-colors"
+                      className="text-[10px] rounded px-1.5 py-0.5 bg-[color:var(--acc-soft)] text-primary border border-[color:var(--acc-border)] hover:opacity-80 disabled:opacity-50 transition-colors"
                     >
                       提交审核
                     </button>
@@ -776,14 +780,14 @@ function DeliverableReviewControls({
                     <button
                       disabled={reviewMut.isPending}
                       onClick={() => reviewMut.mutate({ projectId, phaseId, deliverableName: name, decision: 'approved' })}
-                      className="text-[10px] font-mono px-1.5 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-300 hover:bg-emerald-100 disabled:opacity-50 transition-colors"
+                      className="text-[10px] rounded px-1.5 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-300 hover:bg-emerald-100 disabled:opacity-50 transition-colors"
                     >
                       通过
                     </button>
                     <button
                       disabled={reviewMut.isPending}
                       onClick={() => setRejectOpen((prev) => ({ ...prev, [name]: !prev[name] }))}
-                      className="text-[10px] font-mono px-1.5 py-0.5 bg-rose-50 text-rose-700 border border-rose-300 hover:bg-rose-100 disabled:opacity-50 transition-colors"
+                      className="text-[10px] rounded px-1.5 py-0.5 bg-rose-50 text-rose-700 border border-rose-300 hover:bg-rose-100 disabled:opacity-50 transition-colors"
                     >
                       驳回
                     </button>
@@ -811,13 +815,13 @@ function DeliverableReviewControls({
                     });
                     setRejectOpen((prev) => ({ ...prev, [name]: false }));
                   }}
-                  className="text-[10px] font-mono px-1.5 py-0.5 bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-50 transition-colors"
+                  className="text-[10px] rounded px-1.5 py-0.5 bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-50 transition-colors"
                 >
                   确认驳回
                 </button>
                 <button
                   onClick={() => setRejectOpen((prev) => ({ ...prev, [name]: false }))}
-                  className="text-[10px] font-mono text-stone-400 hover:text-stone-700"
+                  className="text-[10px] text-muted-foreground hover:text-foreground"
                 >
                   取消
                 </button>
@@ -894,8 +898,8 @@ function GateDeliverableOverridePanel({
   if (!hasContent) return null;
 
   return (
-    <div className="mt-3 pt-3 border-t border-stone-100 space-y-2">
-      <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400">资源库管理</div>
+    <div className="mt-3 pt-3 border-t border-border space-y-2">
+      <div className="text-[10px] uppercase tracking-widest text-muted-foreground">资源库管理</div>
 
       {/* 从资源库添加 */}
       {addableItems.length > 0 && (
@@ -904,7 +908,7 @@ function GateDeliverableOverridePanel({
             value={selectValue}
             onChange={(e) => { setSelectValue(e.target.value); handleAdd(e.target.value); }}
             disabled={overrideMut.isPending}
-            className="flex-1 text-xs border border-stone-200 bg-white text-stone-700 px-1.5 py-1 focus:outline-none focus:border-amber-400 min-w-0"
+            className="flex-1 text-xs rounded border border-border bg-card text-foreground px-1.5 py-1 focus:outline-none focus:border-[color:var(--acc-border)] min-w-0"
           >
             <option value="">＋ 从资源库添加…</option>
             {addableItems.map((name) => (
@@ -916,15 +920,15 @@ function GateDeliverableOverridePanel({
 
       {/* 手工添加的项（action=add）→ 可移除（clear） */}
       {effectiveDeliverables.filter((name) => addedNames.has(name)).map((name) => (
-        <div key={name} className="flex items-center justify-between gap-2 text-xs text-stone-600">
+        <div key={name} className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
           <span className="flex items-center gap-1 min-w-0">
-            <span className="text-[9px] font-mono text-emerald-600 bg-emerald-50 border border-emerald-200 px-1 py-0.5 shrink-0">手动添加</span>
+            <span className="text-[9px] text-emerald-600 bg-emerald-50 border border-emerald-200 rounded px-1 py-0.5 shrink-0">手动添加</span>
             <span className="truncate">{name}</span>
           </span>
           <button
             disabled={pending === name || overrideMut.isPending}
             onClick={() => handleRemoveOverride(name, 'clear')}
-            className="shrink-0 text-[10px] font-mono text-stone-400 hover:text-rose-500 disabled:opacity-40 transition-colors"
+            className="shrink-0 text-[10px] text-muted-foreground hover:text-rose-500 disabled:opacity-40 transition-colors"
             title="撤销添加"
           >
             × 移除
@@ -934,12 +938,12 @@ function GateDeliverableOverridePanel({
 
       {/* 模板/归集项（非手动添加）→ 可排除（remove） */}
       {effectiveDeliverables.filter((name) => !addedNames.has(name)).map((name) => (
-        <div key={name} className="flex items-center justify-between gap-2 text-xs text-stone-500">
+        <div key={name} className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
           <span className="truncate min-w-0">{name}</span>
           <button
             disabled={pending === name || overrideMut.isPending}
             onClick={() => handleRemoveOverride(name, 'remove')}
-            className="shrink-0 text-[10px] font-mono text-stone-400 hover:text-rose-500 disabled:opacity-40 transition-colors"
+            className="shrink-0 text-[10px] text-muted-foreground hover:text-rose-500 disabled:opacity-40 transition-colors"
             title="从本阶段排除此交付物"
           >
             × 排除
@@ -949,15 +953,15 @@ function GateDeliverableOverridePanel({
 
       {/* 已被排除的项（action=remove）→ 显示并提供恢复 */}
       {Array.from(removedNames).map((name) => (
-        <div key={name} className="flex items-center justify-between gap-2 text-xs text-stone-400">
+        <div key={name} className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
           <span className="flex items-center gap-1 min-w-0">
-            <span className="text-[9px] font-mono text-stone-400 bg-stone-50 border border-stone-200 px-1 py-0.5 shrink-0">已排除</span>
+            <span className="text-[9px] text-muted-foreground bg-secondary border border-border rounded px-1 py-0.5 shrink-0">已排除</span>
             <span className="truncate line-through">{name}</span>
           </span>
           <button
             disabled={pending === name || overrideMut.isPending}
             onClick={() => handleRemoveOverride(name, 'clear')}
-            className="shrink-0 text-[10px] font-mono text-stone-400 hover:text-amber-600 disabled:opacity-40 transition-colors"
+            className="shrink-0 text-[10px] text-muted-foreground hover:text-primary disabled:opacity-40 transition-colors"
             title="恢复此交付物"
           >
             ↩ 恢复
@@ -988,12 +992,12 @@ function DeliverablesChecklist({
   });
   const doneCount = items.filter((d) => status[d]).length;
 
-  if (items.length === 0) return <div className="text-sm text-stone-400">无预置交付物</div>;
+  if (items.length === 0) return <div className="text-sm text-muted-foreground">无预置交付物</div>;
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between mb-1">
-        <span className="text-[10px] font-mono text-stone-400">{doneCount}/{items.length} 完成</span>
-        {doneCount === items.length && <span className="text-[10px] font-mono text-emerald-600">✓ 全部交付</span>}
+        <span className="text-[10px] num text-muted-foreground">{doneCount}/{items.length} 完成</span>
+        {doneCount === items.length && <span className="text-[10px] text-emerald-600">✓ 全部交付</span>}
       </div>
       {items.map((d) => {
         const done = !!status[d];
@@ -1003,15 +1007,15 @@ function DeliverablesChecklist({
             key={d}
             disabled={!canEdit || pending === d}
             onClick={() => { setPending(d); mutation.mutate({ projectId, phaseId, taskId, name: d, done: !done }); }}
-            className={`w-full flex items-start gap-2 text-left text-sm py-0.5 ${canEdit ? 'hover:bg-stone-50 cursor-pointer' : 'cursor-default'} ${pending === d ? 'opacity-50' : ''}`}
+            className={`w-full flex items-start gap-2 text-left text-sm py-0.5 ${canEdit ? 'hover:bg-secondary cursor-pointer' : 'cursor-default'} ${pending === d ? 'opacity-50' : ''}`}
           >
             {done
               ? <CheckCircle2 size={15} className="shrink-0 mt-0.5 text-emerald-600" />
-              : <Circle size={15} className="shrink-0 mt-0.5 text-stone-300" />}
+              : <Circle size={15} className="shrink-0 mt-0.5 text-muted-foreground" />}
             <span className="flex items-center gap-1.5 min-w-0">
-              <span className={done ? 'text-stone-400 line-through' : 'text-stone-700'}>{d}</span>
+              <span className={done ? 'text-muted-foreground line-through' : 'text-foreground'}>{d}</span>
               {fromPhase && (
-                <span className="shrink-0 text-[9px] font-mono text-amber-600 bg-amber-50 border border-amber-200 px-1 py-0.5 leading-none">
+                <span className="shrink-0 text-[9px] text-primary bg-[color:var(--acc-soft)] border border-[color:var(--acc-border)] rounded px-1 py-0.5 leading-none">
                   来自 {fromPhase}
                 </span>
               )}
@@ -1104,11 +1108,11 @@ function TaskDetail({
     setMetaMut.mutate({ projectId, phaseId, taskId, ...(patch as any) });
   };
   const TASK_STATUS_CONFIG: Record<string, { label: string; className: string }> = {
-    todo: { label: '待开始', className: 'bg-stone-50 text-stone-600 border-stone-200' },
-    in_progress: { label: '进行中', className: 'bg-blue-50 text-blue-700 border-blue-200' },
+    todo: { label: '待开始', className: 'bg-secondary text-muted-foreground border-border' },
+    in_progress: { label: '进行中', className: 'bg-[color:var(--acc-soft)] text-primary border-[color:var(--acc-border)]' },
     blocked: { label: '阻塞', className: 'bg-red-50 text-red-700 border-red-200' },
     done: { label: '已完成', className: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-    skipped: { label: '跳过', className: 'bg-stone-50 text-stone-400 border-stone-200' },
+    skipped: { label: '跳过', className: 'bg-secondary text-muted-foreground border-border' },
   };
   const taskStatus = taskDetails?.taskStatus ?? 'todo';
   const taskStatusCfg = TASK_STATUS_CONFIG[taskStatus] ?? TASK_STATUS_CONFIG.todo;
@@ -1120,35 +1124,35 @@ function TaskDetail({
   ];
 
   return (
-    <div className="mt-3 border-t border-stone-100 pt-3 space-y-3">
+    <div className="mt-3 border-t border-border pt-3 space-y-3">
       {/* Task Meta Row: assignee / due date / status / priority.
           Execution roles (compact) see these read-only rather than hidden — P0-2. */}
       {compact ? (
       <div className="grid grid-cols-2 gap-2">
         <div>
-          <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">负责人</div>
-          <div className="flex h-[30px] items-center border border-stone-200 bg-stone-50 px-2 text-xs text-stone-700">
+          <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">负责人</div>
+          <div className="flex h-[30px] items-center rounded-md border border-border bg-secondary px-2 text-xs text-foreground">
             {metaUsers.find((u) => u.id === taskDetails?.assigneeUserId)?.name
               ?? metaUsers.find((u) => u.id === taskDetails?.assigneeUserId)?.username
               ?? '— 未指定 —'}
           </div>
         </div>
         <div>
-          <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">截止日期</div>
-          <div className="flex h-[30px] items-center border border-stone-200 bg-stone-50 px-2 text-xs text-stone-700">
+          <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">截止日期</div>
+          <div className="flex h-[30px] items-center rounded-md border border-border bg-secondary px-2 text-xs text-foreground">
             {taskDetails?.dueDate ?? '— 未排期 —'}
           </div>
         </div>
         <div>
-          <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">状态</div>
-          <div className={`flex h-[30px] items-center justify-between border px-2 text-xs ${taskStatusCfg.className}`}>
+          <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">状态</div>
+          <div className={`flex h-[30px] items-center justify-between rounded-md border px-2 text-xs ${taskStatusCfg.className}`}>
             <span>{taskStatusCfg.label}</span>
-            <span className="text-[10px] font-mono opacity-60">自动</span>
+            <span className="text-[10px] opacity-60">自动</span>
           </div>
         </div>
         <div>
-          <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">优先级</div>
-          <div className="flex h-[30px] items-center border border-stone-200 bg-stone-50 px-2 text-xs text-stone-700">
+          <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">优先级</div>
+          <div className="flex h-[30px] items-center rounded-md border border-border bg-secondary px-2 text-xs text-foreground">
             {TASK_PRIORITY_OPTIONS.find((o) => o.value === (taskDetails?.taskPriority ?? 'medium'))?.label ?? '—'}
           </div>
         </div>
@@ -1156,7 +1160,7 @@ function TaskDetail({
       ) : (
       <div className="grid grid-cols-2 gap-2">
         <div>
-          <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">负责人</div>
+          <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">负责人</div>
           <select
             value={taskDetails?.assigneeUserId ?? ''}
             disabled={!canEdit}
@@ -1164,7 +1168,7 @@ function TaskDetail({
               const val = e.target.value;
               saveMeta({ assigneeUserId: val === '' ? null : Number(val) });
             }}
-            className="w-full text-xs text-stone-700 bg-stone-50 border border-stone-200 px-2 py-1 outline-none focus:border-amber-400 transition-colors"
+            className="w-full text-xs text-foreground bg-secondary rounded-md border border-border px-2 py-1 outline-none focus:border-[color:var(--acc-border)] transition-colors"
           >
             <option value="">— 未指定 —</option>
             {assignableUsers.map((u) => (
@@ -1173,7 +1177,7 @@ function TaskDetail({
           </select>
         </div>
         <div>
-          <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">截止日期</div>
+          <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">截止日期</div>
           <input
             type="date"
             value={taskDetails?.dueDate ?? ''}
@@ -1187,23 +1191,23 @@ function TaskDetail({
               }
               setPendingReschedule({ taskId, startDate: taskDetails.startDate, newDue: nextDue });
             }}
-            className="w-full text-xs text-stone-700 bg-stone-50 border border-stone-200 px-2 py-1 outline-none focus:border-amber-400 transition-colors"
+            className="w-full text-xs text-foreground bg-secondary rounded-md border border-border px-2 py-1 outline-none focus:border-[color:var(--acc-border)] transition-colors"
           />
         </div>
         <div>
-          <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">状态</div>
-          <div className={`flex h-[30px] items-center justify-between border px-2 text-xs ${taskStatusCfg.className}`}>
+          <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">状态</div>
+          <div className={`flex h-[30px] items-center justify-between rounded-md border px-2 text-xs ${taskStatusCfg.className}`}>
             <span>{taskStatusCfg.label}</span>
-            <span className="text-[10px] font-mono opacity-60">自动</span>
+            <span className="text-[10px] opacity-60">自动</span>
           </div>
         </div>
         <div>
-          <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1">优先级</div>
+          <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">优先级</div>
           <select
             value={taskDetails?.taskPriority ?? 'medium'}
             disabled={!canEdit}
             onChange={(e) => saveMeta({ priority: e.target.value })}
-            className="w-full text-xs bg-stone-50 border border-stone-200 px-2 py-1 outline-none focus:border-amber-400 transition-colors"
+            className="w-full text-xs bg-secondary rounded-md border border-border px-2 py-1 outline-none focus:border-[color:var(--acc-border)] transition-colors"
           >
             {TASK_PRIORITY_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>{o.label}</option>
@@ -1213,7 +1217,7 @@ function TaskDetail({
       </div>
       )}
       <div>
-        <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1.5">执行说明</div>
+        <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1.5">执行说明</div>
         <div className="relative">
           <textarea
             value={draft}
@@ -1222,13 +1226,13 @@ function TaskDetail({
             disabled={!canEdit}
             rows={4}
             placeholder="记录执行说明、注意事项、进展备注..."
-            className="w-full px-3 py-2 border border-stone-200 focus:border-stone-400 outline-none text-xs text-stone-700 resize-none transition-colors"
+            className="w-full px-3 py-2 rounded-md border border-border focus:border-[color:var(--acc-border)] outline-none text-xs text-foreground resize-none transition-colors"
           />
-          {dirty && <div className="absolute bottom-2 right-2 text-[9px] font-mono text-stone-400">保存中...</div>}
+          {dirty && <div className="absolute bottom-2 right-2 text-[9px] text-muted-foreground">保存中...</div>}
         </div>
       </div>
       <div>
-        <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1.5 flex items-center gap-1.5">
+        <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1.5 flex items-center gap-1.5">
           <Paperclip size={10} />附件
         </div>
         <FileUploadArea
@@ -1247,8 +1251,8 @@ function TaskDetail({
       </div>
       {/* Visible Roles Selector - only shown to canEditProjectInfo users */}
       {!compact && canEditRoles && onVisibleRolesChange && (
-        <div className="border-t border-stone-100 pt-3">
-          <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-2 flex items-center gap-1.5">
+        <div className="border-t border-border pt-3">
+          <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-2 flex items-center gap-1.5">
             <Lock size={10} />可见岗位（空=所有人可见）
           </div>
           <div className="flex flex-wrap gap-1.5">
@@ -1265,10 +1269,10 @@ function TaskDetail({
                       : [...current, value];
                     onVisibleRolesChange(next);
                   }}
-                  className={`px-2 py-0.5 text-[10px] font-mono border transition-colors ${
+                  className={`px-2 py-0.5 text-[10px] rounded border transition-colors ${
                     selected
-                      ? 'bg-amber-500 text-stone-900 border-amber-500'
-                      : 'bg-white text-stone-500 border-stone-200 hover:border-amber-400'
+                      ? 'bg-primary text-white border-primary'
+                      : 'bg-card text-muted-foreground border-border hover:border-[color:var(--acc-border)]'
                   }`}
                 >
                   {label}
@@ -1277,7 +1281,7 @@ function TaskDetail({
             })}
           </div>
           {(visibleRoles || []).length === 0 && (
-            <p className="text-[10px] text-stone-400 mt-1">未选择岗位时所有成员均可见此任务</p>
+            <p className="text-[10px] text-muted-foreground mt-1">未选择岗位时所有成员均可见此任务</p>
           )}
         </div>
       )}
@@ -1319,7 +1323,7 @@ function PmSelector({
   const displayName = selected ? (selected.name || selected.username) : '—';
 
   if (disabled) {
-    return <span className="text-xs text-stone-700">{displayName}</span>;
+    return <span className="text-xs text-foreground">{displayName}</span>;
   }
 
   return (
@@ -1329,7 +1333,7 @@ function PmSelector({
         const val = e.target.value;
         onChange(val === '' ? null : Number(val));
       }}
-      className="text-xs text-stone-700 bg-transparent border-none outline-none cursor-pointer hover:text-amber-600 transition-colors"
+      className="text-xs text-foreground bg-transparent border-none outline-none cursor-pointer hover:text-primary transition-colors"
     >
       <option value="">— 未指定 —</option>
       {users.map((u) => (
@@ -1338,6 +1342,68 @@ function PmSelector({
         </option>
       ))}
     </select>
+  );
+}
+
+// ── P1–P7 Phase Stepper ───────────────────────────────────────────────────────
+// Linear-style horizontal stepper: done phases get a filled indigo dot + check,
+// the current phase a ringed dot, future phases a plain numbered dot. Clicking a
+// node jumps the task view to that phase (presentation-only; no data mutation).
+function PhaseStepper({
+  phases, currentPhaseId, activePhaseId, onSelect, getStatus,
+}: {
+  phases: SOPPhase[];
+  currentPhaseId: string;
+  activePhaseId: string;
+  onSelect: (id: string) => void;
+  getStatus: (id: string) => 'completed' | 'active' | string;
+}) {
+  return (
+    <div className="flex items-center rounded-[11px] border border-border bg-secondary px-4 py-3.5 overflow-x-auto">
+      {phases.map((phase, i) => {
+        const status = getStatus(phase.id);
+        const done = status === 'completed';
+        const isCurrent = phase.id === currentPhaseId;
+        const isActive = phase.id === activePhaseId;
+        const last = i === phases.length - 1;
+        return (
+          <div key={phase.id} className={`flex items-center ${last ? '' : 'flex-1'} min-w-fit`}>
+            <button
+              type="button"
+              onClick={() => onSelect(phase.id)}
+              className="flex flex-col items-center gap-1.5 shrink-0"
+              title={`${phase.code} · ${phase.name}`}
+            >
+              <span
+                className={`flex h-[26px] w-[26px] items-center justify-center rounded-full border-2 text-[11px] font-bold transition-colors ${
+                  done
+                    ? 'border-primary bg-primary text-white'
+                    : isCurrent
+                      ? 'border-primary text-primary shadow-[0_0_0_4px_var(--acc-soft)]'
+                      : 'border-border bg-card text-muted-foreground'
+                }`}
+              >
+                {done ? (
+                  <CheckCircle2 size={13} className="text-white" strokeWidth={3} />
+                ) : (
+                  i + 1
+                )}
+              </span>
+              <span
+                className={`text-[11.5px] font-semibold whitespace-nowrap transition-colors ${
+                  isActive ? 'text-primary' : done || isCurrent ? 'text-foreground' : 'text-muted-foreground'
+                }`}
+              >
+                {phase.code}
+              </span>
+            </button>
+            {!last && (
+              <span className={`h-0.5 flex-1 mx-2.5 mb-6 min-w-[16px] ${done ? 'bg-primary' : 'bg-border'}`} />
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -1662,20 +1728,20 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
   };
 
   return (
-    <div className="ce-page">
+    <div className="flex flex-col gap-5">
       {/* Header */}
-      <div className="ce-panel p-5 lg:p-6">
+      <LinearCard className="p-5 lg:p-6">
         <div className="flex items-center justify-between mb-4">
           <button
             onClick={onBack}
-            className="flex items-center gap-1.5 text-xs font-mono text-stone-500 hover:text-stone-900 transition-colors"
+            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
             <ArrowLeft size={14} /> 返回项目列表
           </button>
           {perms.canEditProjectInfo && (
             <button
               onClick={() => setReleaseOpen(true)}
-              className="ce-control flex items-center gap-1.5 text-xs font-medium bg-stone-900 hover:bg-stone-800 text-stone-50 px-3 py-1.5 shadow-sm transition-colors"
+              className="flex items-center gap-1.5 rounded-md text-xs font-medium bg-primary hover:opacity-90 text-white px-3 py-1.5 shadow-sm transition-opacity"
             >
               <Rocket size={13} /> 量产发布
             </button>
@@ -1684,33 +1750,33 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
-              <EditableText value={project.code} onChange={perms.canEditProjectInfo ? (v) => updateField('code', v) : () => {}} className="text-[10px] font-mono uppercase tracking-widest text-stone-400" />
+              <EditableText value={project.code} onChange={perms.canEditProjectInfo ? (v) => updateField('code', v) : () => {}} className="text-[10px] num uppercase tracking-widest text-muted-foreground" />
               {catConfig && (
-                <span className={`text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 ${catConfig.color} ${catConfig.textColor} border ${catConfig.borderColor}`}>
+                <span className={`text-[9px] uppercase tracking-wider rounded px-1.5 py-0.5 ${catConfig.color} ${catConfig.textColor} border ${catConfig.borderColor}`}>
                   {catConfig.badge}
                 </span>
               )}
             </div>
-            <h1 className="font-serif text-3xl lg:text-4xl text-stone-900 leading-tight">
+            <h1 className="text-3xl lg:text-4xl font-bold tracking-[-0.4px] text-foreground leading-tight">
               <EditableText
                 value={project.name}
                 onChange={perms.canEditProjectInfo ? (v) => updateField('name', v) : () => {}}
-                className="font-serif text-3xl lg:text-4xl text-stone-900 leading-tight"
-                inputClassName="font-serif text-3xl lg:text-4xl text-stone-900 leading-tight w-full"
+                className="text-3xl lg:text-4xl font-bold tracking-[-0.4px] text-foreground leading-tight"
+                inputClassName="text-3xl lg:text-4xl font-bold tracking-[-0.4px] text-foreground leading-tight w-full"
               />
             </h1>
-            <div className="flex flex-wrap items-center gap-x-6 gap-y-2 mt-3 text-xs text-stone-500">
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-2 mt-3 text-xs text-muted-foreground">
               <div className="flex items-center gap-1.5">
-                <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400">类型</span>
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground">类型</span>
                 <EditableSelect
                   value={project.type}
                   options={['汽车充气泵', '自行车充气泵', '户外充气泵', '车载吸尘器', '暴力风扇', '胎压计', '机械式打气筒', '组件']}
                   onChange={(v) => updateField('type', v)}
-                  className="text-xs text-stone-700"
+                  className="text-xs text-foreground"
                 />
               </div>
               <div className="flex items-center gap-1.5">
-                <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400">PM</span>
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground">PM</span>
                 <PmSelector
                   pmUserId={project.pmUserId ?? null}
                   onChange={(id) => updateFieldAny('pmUserId', id)}
@@ -1718,10 +1784,10 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                 />
               </div>
               <div className="flex items-center gap-1.5">
-                <Calendar size={12} className="text-stone-400" />
-                <EditableText value={project.startDate} onChange={(v) => updateField('startDate', v)} className="text-xs font-mono text-stone-700" placeholder="开始日期" />
-                <span className="text-stone-300">→</span>
-                <EditableText value={project.targetDate} onChange={(v) => updateField('targetDate', v)} className="text-xs font-mono text-stone-700" placeholder="目标日期" />
+                <Calendar size={12} className="text-muted-foreground" />
+                <EditableText value={project.startDate} onChange={(v) => updateField('startDate', v)} className="text-xs num text-foreground" placeholder="开始日期" />
+                <span className="text-muted-foreground">→</span>
+                <EditableText value={project.targetDate} onChange={(v) => updateField('targetDate', v)} className="text-xs num text-foreground" placeholder="目标日期" />
               </div>
               <div className="flex items-center gap-1.5">
                 <button
@@ -1734,19 +1800,19 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                     }
                   }}
                   className={`group inline-flex max-w-full items-center gap-1.5 rounded border border-transparent px-1.5 py-1 text-left transition-colors ${
-                    perms.canEditProjectInfo ? 'hover:border-stone-200 hover:bg-stone-50' : 'cursor-help hover:border-stone-200 hover:bg-stone-50'
+                    perms.canEditProjectInfo ? 'hover:border-border hover:bg-secondary' : 'cursor-help hover:border-border hover:bg-secondary'
                   }`}
                   title={riskOverrideReason || (perms.canEditProjectInfo ? '点击手动覆盖健康度' : '仅 Owner / 管理层 / PM 可手动覆盖健康度')}
                 >
-                  <AlertTriangle size={12} className="text-stone-400" />
+                  <StatusDot tone={project.risk === 'high' ? 'red' : project.risk === 'medium' ? 'amber' : 'green'} />
                   <span className={`text-xs font-medium ${health.color}`}>项目健康度：{health.label}</span>
-                  <span className={`text-[10px] font-mono ${riskOverrideActive ? 'text-stone-700' : 'text-stone-400'}`}>
+                  <span className={`text-[10px] ${riskOverrideActive ? 'text-foreground' : 'text-muted-foreground'}`}>
                     {riskOverrideActive ? '手动' : '自动'}
                   </span>
-                  {perms.canEditProjectInfo && <Edit3 size={11} className="text-stone-300 group-hover:text-stone-500" />}
+                  {perms.canEditProjectInfo && <Edit3 size={11} className="text-muted-foreground group-hover:text-foreground" />}
                 </button>
                 {riskOverrideActive && riskOverrideReason && (
-                  <span className="max-w-[220px] truncate text-[11px] text-stone-500" title={riskOverrideReason}>
+                  <span className="max-w-[220px] truncate text-[11px] text-muted-foreground" title={riskOverrideReason}>
                     原因：{riskOverrideReason}
                   </span>
                 )}
@@ -1756,29 +1822,37 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
           {/* Overall Progress */}
           <div className="lg:w-48 shrink-0">
             <div className="flex items-center justify-between mb-1.5">
-              <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400">整体进度</span>
-              <span className="text-lg font-serif font-semibold text-stone-900">{overallProgress}%</span>
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">整体进度</span>
+              <span className="text-lg font-semibold text-foreground num">{overallProgress}%</span>
             </div>
-            <ProgressBar value={overallProgress} color="bg-stone-900" height="h-2" />
+            <LinearBar value={overallProgress} className="h-2" />
           </div>
         </div>
-      </div>
+      </LinearCard>
+
+      <PhaseStepper
+        phases={projectPhases}
+        currentPhaseId={project.currentPhase}
+        activePhaseId={activePhaseId}
+        onSelect={(id) => { setActivePhaseId(id); setSelectedTaskId(null); }}
+        getStatus={(id) => getPhaseStatus(project, id)}
+      />
 
       {riskOverrideOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/40 p-4">
-          <div role="dialog" aria-modal="true" aria-labelledby="risk-override-title" className="w-full max-w-lg rounded-lg border border-stone-200 bg-white shadow-xl">
-            <div className="flex items-start justify-between gap-4 border-b border-stone-100 p-5">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div role="dialog" aria-modal="true" aria-labelledby="risk-override-title" className="w-full max-w-lg rounded-[11px] border border-border bg-card shadow-xl">
+            <div className="flex items-start justify-between gap-4 border-b border-border p-5">
               <div>
-                <h2 id="risk-override-title" className="font-serif text-xl text-stone-900">手动覆盖健康度</h2>
-                <p className="mt-1 text-xs text-stone-500">当前显示为 {health.label}，保存后工作台和项目列表会使用手动结果。</p>
+                <h2 id="risk-override-title" className="text-xl font-bold tracking-[-0.3px] text-foreground">手动覆盖健康度</h2>
+                <p className="mt-1 text-xs text-muted-foreground">当前显示为 {health.label}，保存后工作台和项目列表会使用手动结果。</p>
               </div>
-              <button type="button" onClick={() => setRiskOverrideOpen(false)} className="rounded p-1 text-stone-400 hover:bg-stone-100 hover:text-stone-700" aria-label="关闭">
+              <button type="button" onClick={() => setRiskOverrideOpen(false)} className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground" aria-label="关闭">
                 <X size={16} />
               </button>
             </div>
             <div className="space-y-4 p-5">
               <div>
-                <div className="mb-2 text-xs font-medium text-stone-700">健康度</div>
+                <div className="mb-2 text-xs font-medium text-foreground">健康度</div>
                 <div className="grid grid-cols-3 gap-2">
                   {RISK_OVERRIDE_OPTIONS.map((option) => {
                     const cfg = HEALTH_CONFIG[option.value];
@@ -1789,41 +1863,41 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                         type="button"
                         onClick={() => setRiskOverrideDraft(option.value)}
                         className={`rounded-md border px-3 py-2 text-left transition-colors ${
-                          active ? `${cfg.bg} ${cfg.border}` : 'border-stone-200 hover:bg-stone-50'
+                          active ? `${cfg.bg} ${cfg.border}` : 'border-border hover:bg-secondary'
                         }`}
                       >
                         <span className={`block text-sm font-semibold ${cfg.color}`}>{cfg.label}</span>
-                        <span className="mt-0.5 block text-[11px] text-stone-500">{option.description}</span>
+                        <span className="mt-0.5 block text-[11px] text-muted-foreground">{option.description}</span>
                       </button>
                     );
                   })}
                 </div>
               </div>
               <label className="block">
-                <span className="mb-2 block text-xs font-medium text-stone-700">覆盖原因 *</span>
+                <span className="mb-2 block text-xs font-medium text-foreground">覆盖原因 *</span>
                 <textarea
                   value={riskOverrideReasonDraft}
                   onChange={(event) => setRiskOverrideReasonDraft(event.target.value)}
                   placeholder="例如：[TEST] UN38.3 认证延期，DVT 样机放行存在两周风险。"
-                  className="min-h-28 w-full rounded-md border border-stone-200 bg-white px-3 py-2 text-sm text-stone-800 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100"
+                  className="min-h-28 w-full rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground outline-none focus:border-[color:var(--acc-border)] focus:ring-2 focus:ring-[color:var(--acc-soft)]"
                   maxLength={1000}
                 />
               </label>
             </div>
-            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-stone-100 p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border p-5">
               <button
                 type="button"
                 onClick={clearRiskOverride}
-                className="text-xs font-medium text-stone-500 hover:text-stone-900 disabled:cursor-not-allowed disabled:text-stone-300"
+                className="text-xs font-medium text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                 disabled={!riskOverrideActive}
               >
                 恢复自动
               </button>
               <div className="flex items-center gap-2">
-                <button type="button" onClick={() => setRiskOverrideOpen(false)} className="ce-control px-3 py-1.5 text-xs text-stone-600 hover:bg-stone-50">
+                <button type="button" onClick={() => setRiskOverrideOpen(false)} className="rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-secondary">
                   取消
                 </button>
-                <button type="button" onClick={saveRiskOverride} className="ce-control bg-stone-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-stone-800">
+                <button type="button" onClick={saveRiskOverride} className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-white hover:opacity-90">
                   保存覆盖
                 </button>
               </div>
@@ -2006,7 +2080,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                       isActive ? 'border-b-rose-600 bg-rose-50/30' : 'border-b-transparent hover:bg-stone-50'
                     }`}
                   >
-                    <div className="text-[9px] font-mono uppercase tracking-widest text-stone-400 mb-0.5">{phase.code}</div>
+                    <div className="text-[9px] uppercase tracking-widest text-muted-foreground mb-0.5">{phase.code}</div>
                     <div className={`text-xs font-medium ${isActive ? 'text-rose-700' : 'text-stone-500'}`}>{phase.name}</div>
                     <div className="mt-1 flex items-center gap-1">
                       {openCount > 0 ? (
@@ -2142,7 +2216,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                         : 'border-b-transparent hover:bg-stone-50'
                     } ${!unlocked ? 'opacity-60' : ''}`}
                   >
-                    <div className="text-[9px] font-mono uppercase tracking-widest text-stone-400 mb-0.5">{phase.code}</div>
+                    <div className="text-[9px] uppercase tracking-widest text-muted-foreground mb-0.5">{phase.code}</div>
                     <div className={`text-xs font-medium ${isActive ? 'text-stone-900' : 'text-stone-500'}`}>
                       {phase.nameEn}
                     </div>
@@ -2171,9 +2245,9 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                 <div className="flex items-start justify-between mb-3">
                   <div>
                     <div className="flex items-center gap-2 mb-1">
-                      <span className="text-[10px] font-mono uppercase tracking-widest text-stone-400">{activePhase?.code}</span>
+                      <span className="text-[10px] uppercase tracking-widest text-muted-foreground">{activePhase?.code}</span>
                       <span className="text-[10px] font-mono uppercase tracking-wider text-stone-300">·</span>
-                      <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400">{activePhase?.duration}</span>
+                      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{activePhase?.duration}</span>
                     </div>
                     <h2 className="font-serif text-2xl text-stone-900">{activePhase?.name}</h2>
                     <p className="text-sm text-stone-500 mt-1">{activePhase?.desc}</p>
@@ -2285,14 +2359,14 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                             }`}>
                               {task.name}
                             </span>
-                            <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400">{task.id}</span>
+                            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{task.id}</span>
                             {!locked && hasInstructions && (
                               <span className="text-[10px] font-mono uppercase tracking-wider text-amber-600 flex items-center gap-0.5">
                                 <Edit3 size={9} /> 已批注
                               </span>
                             )}
                             {!locked && fileCount > 0 && (
-                              <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400 flex items-center gap-0.5">
+                              <span className="text-[10px] uppercase tracking-wider text-muted-foreground flex items-center gap-0.5">
                                 <Paperclip size={9} /> {fileCount}
                               </span>
                             )}
@@ -2301,14 +2375,14 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                             {task.desc}
                           </p>
                           <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                            <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400 border border-stone-200 bg-stone-50 px-1.5 py-0.5">
+                            <span className="text-[10px] uppercase tracking-wider text-muted-foreground border border-stone-200 bg-stone-50 px-1.5 py-0.5">
                               {status === 'done' ? '已完成' :
                                 status === 'in_progress' ? '进行中' :
                                 status === 'blocked' ? '阻塞' :
                                 status === 'skipped' ? '跳过' : '待开始'}
                             </span>
                             {details?.taskPriority && (
-                              <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400 border border-stone-200 bg-stone-50 px-1.5 py-0.5">
+                              <span className="text-[10px] uppercase tracking-wider text-muted-foreground border border-stone-200 bg-stone-50 px-1.5 py-0.5">
                                 {details.taskPriority}
                               </span>
                             )}
@@ -2350,7 +2424,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                     <div className="flex items-start justify-between gap-3 pr-8">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2 mb-1">
-                          <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400">{selectedTask.id}</span>
+                          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{selectedTask.id}</span>
                           {selectedTaskIsGate && (
                             <span className="text-[9px] font-mono uppercase tracking-wider bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.5">
                               Gate
@@ -2382,7 +2456,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
 
                     <div className="mt-4 border-t border-stone-100 pt-4 space-y-4">
                       <div>
-                        <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-2">
+                        <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-muted-foreground mb-2">
                           <Users size={11} />
                           职责
                         </div>
@@ -2412,7 +2486,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                       </div>
 
                       <div>
-                        <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-2">
+                        <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-muted-foreground mb-2">
                           <Target size={11} />
                           交付物
                         </div>
@@ -2477,7 +2551,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                           </div>
                           {r.signoffRoles.length > 0 && (
                             <div className="mt-2 pt-2 border-t border-stone-100">
-                              <div className="text-[10px] font-mono uppercase tracking-wider text-stone-400 mb-1">需会签角色</div>
+                              <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">需会签角色</div>
                               <div className="flex flex-wrap gap-1">
                                 {r.signoffRoles.map((role, i) => (
                                   <span key={i} className="text-[10px] text-stone-600 bg-white border border-stone-200 px-1.5 py-0.5">{role}</span>
@@ -2503,7 +2577,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
 
                     <div className="mt-4 p-3 border border-stone-200 bg-white">
                       <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-stone-400">
+                        <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-muted-foreground">
                           <Bug size={11} />
                           关联问题
                         </div>
@@ -2583,7 +2657,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                           }`}>
                             <div className="flex items-center justify-between mb-2">
                               <div className="flex items-center gap-2">
-                                <span className="text-[10px] font-mono uppercase tracking-widest text-stone-400">评审记录</span>
+                                <span className="text-[10px] uppercase tracking-widest text-muted-foreground">评审记录</span>
                                 {reviews.length > 1 && (
                                   <span className="text-[9px] font-mono text-stone-400 bg-stone-100 px-1.5 py-0.5 border border-stone-200">
                                     共 {reviews.length} 次
@@ -2629,7 +2703,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
 
               {/* Phase Notes */}
               <div className="ce-panel p-5">
-                <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-3">阶段备注</div>
+                <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-3">阶段备注</div>
                 <textarea
                   value={activePhaseData?.notes || ''}
                   disabled={!perms.canEditProjectInfo}
@@ -2648,7 +2722,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
 
               {/* Phase Progress Summary */}
               <div className="ce-panel p-5">
-                <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-3">全阶段进度</div>
+                <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-3">全阶段进度</div>
                 <div className="space-y-3">
                   {projectPhases.map((phase) => {
                     const pd = project.phases[phase.id];
