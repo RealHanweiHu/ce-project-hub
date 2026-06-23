@@ -19,7 +19,7 @@ import {
   TaskDetails, FileAttachment, formatBytes, SOPTask, SOPPhase,
 } from '@/lib/data';
 import { CATEGORY_MAP } from '@/lib/sop-templates';
-import { LinearCard, Kicker, StatusDot, LinearBar, TypeBadge } from '@/components/linear/primitives';
+import { LinearCard, StatusDot, LinearBar } from '@/components/linear/primitives';
 import { ProgressBar } from '@/components/shared/ProgressBar';
 import { GateStandardPanel } from '@/components/shared/GateStandardPanel';
 import { GanttView } from './GanttView';
@@ -1929,13 +1929,13 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
       />
 
       {/* Main Tab Bar: Overview / Tasks / Issues / Gantt / Members */}
-      <div className="ce-panel ce-scroll-x flex items-center gap-0 px-1">
+      <div className="flex items-center gap-1 px-1 overflow-x-auto border-b border-border">
         <button
           onClick={() => setMainTab('overview')}
-          className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all ${
+          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors ${
             mainTab === 'overview'
-              ? 'border-b-stone-900 text-stone-900'
-              : 'border-b-transparent text-stone-400 hover:text-stone-700'
+              ? 'border-b-primary text-primary'
+              : 'border-b-transparent text-muted-foreground hover:text-foreground'
           }`}
         >
           <LayoutDashboard size={14} />
@@ -1943,10 +1943,10 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         </button>
         <button
           onClick={() => setMainTab('tasks')}
-          className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all ${
+          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors ${
             mainTab === 'tasks'
-              ? 'border-b-stone-900 text-stone-900'
-              : 'border-b-transparent text-stone-400 hover:text-stone-700'
+              ? 'border-b-primary text-primary'
+              : 'border-b-transparent text-muted-foreground hover:text-foreground'
           }`}
         >
           <ListChecks size={14} />
@@ -1955,10 +1955,10 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         {!execLens && (
         <button
           onClick={() => setMainTab('metrics')}
-          className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all whitespace-nowrap ${
+          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
             mainTab === 'metrics'
               ? 'border-b-teal-600 text-teal-700'
-              : 'border-b-transparent text-stone-400 hover:text-stone-700'
+              : 'border-b-transparent text-muted-foreground hover:text-foreground'
           }`}
         >
           <Activity size={14} />
@@ -1968,10 +1968,10 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         {!execLens && (
         <button
           onClick={() => setMainTab('kanban')}
-          className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all whitespace-nowrap ${
+          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
             mainTab === 'kanban'
-              ? 'border-b-stone-900 text-stone-900'
-              : 'border-b-transparent text-stone-400 hover:text-stone-700'
+              ? 'border-b-primary text-primary'
+              : 'border-b-transparent text-muted-foreground hover:text-foreground'
           }`}
         >
           <LayoutGrid size={14} />
@@ -1981,10 +1981,10 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         {!execLens && (
         <button
           onClick={() => setMainTab('requirements')}
-          className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all whitespace-nowrap ${
+          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
             mainTab === 'requirements'
-              ? 'border-b-stone-900 text-stone-900'
-              : 'border-b-transparent text-stone-400 hover:text-stone-700'
+              ? 'border-b-primary text-primary'
+              : 'border-b-transparent text-muted-foreground hover:text-foreground'
           }`}
         >
           <Inbox size={14} />
@@ -1993,16 +1993,16 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         )}
         <button
           onClick={() => setMainTab('issues')}
-          className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all ${
+          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors ${
             mainTab === 'issues'
               ? 'border-b-rose-600 text-rose-700'
-              : 'border-b-transparent text-stone-400 hover:text-stone-700'
+              : 'border-b-transparent text-muted-foreground hover:text-foreground'
           }`}
         >
           <Bug size={14} />
           问题清单
           {openIssueCount > 0 && (
-            <span className="text-[9px] font-mono bg-rose-100 text-rose-700 border border-rose-200 px-1.5 py-0.5 min-w-[18px] text-center">
+            <span className="text-[9px] num rounded-full bg-rose-100 text-rose-700 border border-rose-200 px-1.5 py-0.5 min-w-[18px] text-center">
               {openIssueCount}
             </span>
           )}
@@ -2010,10 +2010,10 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         {!execLens && (
         <button
           onClick={() => setMainTab('gantt')}
-          className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all ${
+          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors ${
             mainTab === 'gantt'
-              ? 'border-b-stone-900 text-stone-900'
-              : 'border-b-transparent text-stone-400 hover:text-stone-700'
+              ? 'border-b-primary text-primary'
+              : 'border-b-transparent text-muted-foreground hover:text-foreground'
           }`}
         >
           <BarChart2 size={14} />
@@ -2022,10 +2022,10 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         )}
         <button
           onClick={() => setMainTab('bom')}
-          className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all whitespace-nowrap ${
+          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
             mainTab === 'bom'
-              ? 'border-b-stone-900 text-stone-900'
-              : 'border-b-transparent text-stone-400 hover:text-stone-700'
+              ? 'border-b-primary text-primary'
+              : 'border-b-transparent text-muted-foreground hover:text-foreground'
           }`}
         >
           <ListChecks size={14} />
@@ -2033,10 +2033,10 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         </button>
         <button
           onClick={() => setMainTab('files')}
-          className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all whitespace-nowrap ${
+          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
             mainTab === 'files'
-              ? 'border-b-stone-900 text-stone-900'
-              : 'border-b-transparent text-stone-400 hover:text-stone-700'
+              ? 'border-b-primary text-primary'
+              : 'border-b-transparent text-muted-foreground hover:text-foreground'
           }`}
         >
           <FolderOpen size={14} />
@@ -2045,16 +2045,16 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         {!execLens && (
         <button
           onClick={() => setMainTab('changelog')}
-          className={`flex items-center gap-2 px-5 py-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-all ${
+          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors ${
             mainTab === 'changelog'
-              ? 'border-b-amber-500 text-amber-700'
-              : 'border-b-transparent text-stone-400 hover:text-stone-700'
+              ? 'border-b-primary text-primary'
+              : 'border-b-transparent text-muted-foreground hover:text-foreground'
           }`}
         >
           <GitBranch size={14} />
           变更记录
           {pendingChangeCount > 0 && (
-            <span className="text-[9px] font-mono bg-amber-100 text-amber-700 border border-amber-200 px-1.5 py-0.5 min-w-[18px] text-center">
+            <span className="text-[9px] num rounded-full bg-[color:var(--acc-soft)] text-primary border border-[color:var(--acc-border)] px-1.5 py-0.5 min-w-[18px] text-center">
               {pendingChangeCount}
             </span>
           )}
@@ -2066,7 +2066,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
       {mainTab === 'issues' && (
         <div className="space-y-4">
           {/* Phase Navigation (compact) — 任何阶段都可记录问题 */}
-          <div className="ce-panel ce-scroll-x">
+          <LinearCard className="overflow-x-auto">
             <div className="flex min-w-max">
               {projectPhases.map((phase) => {
                 const isActive = phase.id === activePhaseId;
@@ -2077,25 +2077,25 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                     key={phase.id}
                     onClick={() => setActivePhaseId(phase.id)}
                     className={`flex-1 min-w-[100px] p-3 text-left transition-all border-b-2 ${
-                      isActive ? 'border-b-rose-600 bg-rose-50/30' : 'border-b-transparent hover:bg-stone-50'
+                      isActive ? 'border-b-rose-600 bg-rose-50/30' : 'border-b-transparent hover:bg-secondary'
                     }`}
                   >
-                    <div className="text-[9px] uppercase tracking-widest text-muted-foreground mb-0.5">{phase.code}</div>
-                    <div className={`text-xs font-medium ${isActive ? 'text-rose-700' : 'text-stone-500'}`}>{phase.name}</div>
+                    <div className="text-[9px] num uppercase tracking-widest text-muted-foreground mb-0.5">{phase.code}</div>
+                    <div className={`text-xs font-medium ${isActive ? 'text-rose-700' : 'text-muted-foreground'}`}>{phase.name}</div>
                     <div className="mt-1 flex items-center gap-1">
                       {openCount > 0 ? (
-                        <span className="text-[9px] font-mono bg-rose-100 text-rose-700 border border-rose-200 px-1 py-0.5">
+                        <span className="text-[9px] num rounded bg-rose-100 text-rose-700 border border-rose-200 px-1 py-0.5">
                           {openCount} 待处理
                         </span>
                       ) : (
-                        <span className="text-[9px] font-mono text-stone-300">{phaseIssues.length} 问题</span>
+                        <span className="text-[9px] num text-muted-foreground">{phaseIssues.length} 问题</span>
                       )}
                     </div>
                   </button>
                 );
               })}
             </div>
-          </div>
+          </LinearCard>
           <IssueList
             phaseId={activePhaseId}
             phaseName={activePhase?.name || activePhaseId}
@@ -2133,10 +2133,10 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
        {/* ── Gantt Tab ─────────────────────────────────────────────────── */}
       {mainTab === 'gantt' && (
         <div className="space-y-3">
-          <div className="flex items-center gap-0 border border-stone-200 w-fit">
+          <div className="flex items-center gap-0 rounded-md border border-border w-fit overflow-hidden">
             {([['task', '任务视图'], ['phase', '阶段视图']] as const).map(([m, label]) => (
               <button key={m} onClick={() => setGanttMode(m)}
-                className={`px-3 py-1.5 text-xs font-mono uppercase tracking-wider transition-colors ${ganttMode === m ? 'bg-stone-900 text-white' : 'text-stone-500 hover:bg-stone-50'}`}>
+                className={`px-3 py-1.5 text-xs font-medium transition-colors ${ganttMode === m ? 'bg-primary text-white' : 'text-muted-foreground hover:bg-secondary'}`}>
                 {label}
               </button>
             ))}
@@ -2197,7 +2197,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
       {mainTab === 'tasks' && (
         <>
           {/* Phase Navigation */}
-          <div className="ce-panel ce-scroll-x">
+          <LinearCard className="overflow-x-auto">
             <div className="flex min-w-max">
               {projectPhases.map((phase) => {
                 const status = getPhaseStatus(project, phase.id);
@@ -2212,66 +2212,66 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                     }}
                     className={`flex-1 min-w-[80px] p-3 text-left transition-all border-b-2 relative ${
                       isActive
-                        ? 'border-b-stone-900 bg-stone-50'
-                        : 'border-b-transparent hover:bg-stone-50'
+                        ? 'border-b-primary bg-secondary'
+                        : 'border-b-transparent hover:bg-secondary'
                     } ${!unlocked ? 'opacity-60' : ''}`}
                   >
-                    <div className="text-[9px] uppercase tracking-widest text-muted-foreground mb-0.5">{phase.code}</div>
-                    <div className={`text-xs font-medium ${isActive ? 'text-stone-900' : 'text-stone-500'}`}>
+                    <div className="text-[9px] num uppercase tracking-widest text-muted-foreground mb-0.5">{phase.code}</div>
+                    <div className={`text-xs font-medium ${isActive ? 'text-primary' : 'text-muted-foreground'}`}>
                       {phase.nameEn}
                     </div>
                     <div className="mt-1.5 flex items-center gap-1">
                       {!unlocked ? (
-                        <Lock size={10} className="text-stone-400 shrink-0" />
+                        <Lock size={10} className="text-muted-foreground shrink-0" />
                       ) : status === 'completed' ? (
                         <CheckCircle2 size={10} className="text-emerald-500 shrink-0" />
                       ) : status === 'active' ? (
-                        <Zap size={10} className="text-amber-500 shrink-0" />
+                        <Zap size={10} className="text-primary shrink-0" />
                       ) : (
-                        <Circle size={10} className="text-stone-300 shrink-0" />
+                        <Circle size={10} className="text-muted-foreground shrink-0" />
                       )}
                     </div>
                   </button>
                 );
               })}
             </div>
-          </div>
+          </LinearCard>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Task List */}
             <div className="lg:col-span-2 space-y-3">
               {/* Phase Header */}
-              <div className="ce-panel p-5" style={{ borderLeftWidth: 4, borderLeftColor: activePhase?.color }}>
+              <LinearCard className="p-5" style={{ borderLeftWidth: 4, borderLeftColor: activePhase?.color }}>
                 <div className="flex items-start justify-between mb-3">
                   <div>
                     <div className="flex items-center gap-2 mb-1">
                       <span className="text-[10px] uppercase tracking-widest text-muted-foreground">{activePhase?.code}</span>
-                      <span className="text-[10px] font-mono uppercase tracking-wider text-stone-300">·</span>
+                      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">·</span>
                       <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{activePhase?.duration}</span>
                     </div>
-                    <h2 className="font-serif text-2xl text-stone-900">{activePhase?.name}</h2>
-                    <p className="text-sm text-stone-500 mt-1">{activePhase?.desc}</p>
+                    <h2 className="text-2xl font-bold tracking-[-0.3px] text-foreground">{activePhase?.name}</h2>
+                    <p className="text-sm text-muted-foreground mt-1">{activePhase?.desc}</p>
                   </div>
                   <div className="text-right shrink-0 ml-4">
-                    <div className="text-2xl font-serif font-semibold text-stone-900">{activeProgress}%</div>
-                    <div className="text-[10px] font-mono text-stone-400">完成</div>
+                    <div className="text-2xl font-semibold text-foreground num">{activeProgress}%</div>
+                    <div className="text-[10px] text-muted-foreground">完成</div>
                   </div>
                 </div>
-                <ProgressBar value={activeProgress} color="bg-amber-500" height="h-1.5" />
+                <LinearBar value={activeProgress} className="h-1.5" />
                 <div className="mt-3 flex items-center gap-1.5">
-                  <Target size={12} className="text-amber-600" />
-                  <span className="text-xs font-medium text-stone-700">Gate: {activePhase?.gate}</span>
+                  <Target size={12} className="text-primary" />
+                  <span className="text-xs font-medium text-foreground">Gate: {activePhase?.gate}</span>
                 </div>
-              </div>
+              </LinearCard>
 
               {/* Gate Lock Banner */}
               {!isCurrentPhaseUnlocked && blockingGate && (
-                <div className="flex items-start gap-3 p-4 bg-rose-50 border border-rose-200 border-l-4 border-l-rose-500">
+                <div className="flex items-start gap-3 p-4 rounded-md bg-rose-50 border border-rose-200 border-l-4 border-l-rose-500">
                   <ShieldAlert size={18} className="text-rose-500 shrink-0 mt-0.5" />
                   <div>
                     <div className="text-sm font-semibold text-rose-800 mb-0.5">此阶段已锁定</div>
                     <div className="text-xs text-rose-700">
-                      请先完成 <span className="font-mono font-semibold">{blockingGate.phaseName}</span> 的
+                      请先完成 <span className="num font-semibold">{blockingGate.phaseName}</span> 的
                       Gate 评审任务：<span className="font-medium">「{blockingGate.gateTaskName}」</span>，
                       通过后此阶段将自动解锁。
                     </div>
@@ -2285,7 +2285,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                 const hiddenCount = totalTasks - visibleActiveTasks.length;
                 if (hiddenCount === 0) return null;
                 return (
-                  <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 text-xs text-amber-700">
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-[color:var(--acc-soft)] border border-[color:var(--acc-border)] text-xs text-primary">
                     <Filter size={11} className="shrink-0" />
                     <span>已按您的岗位角色过滤，当前显示 <strong>{visibleActiveTasks.length}</strong> 项相关任务（共 {totalTasks} 项，隐藏 {hiddenCount} 项非本岗位任务）</span>
                   </div>
@@ -2309,25 +2309,25 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                     <div
                       key={task.id}
                       onClick={() => setSelectedTaskId(task.id)}
-                      className={`rounded-md border transition-all cursor-pointer min-h-[118px] shadow-sm ${
+                      className={`rounded-[10px] border transition-all cursor-pointer min-h-[118px] shadow-[0_1px_2px_rgb(0_0_0/0.03)] ${
                         locked
-                          ? 'border-stone-200 bg-stone-50/30 opacity-60'
+                          ? 'border-border bg-secondary/40 opacity-60'
                         : isGateTask
                           ? checked
-                            ? 'border-l-4 border-l-emerald-500 border-stone-200 bg-emerald-50/30'
-                            : 'border-l-4 border-l-amber-500 border-amber-200 bg-amber-50/30'
+                            ? 'border-l-4 border-l-emerald-500 border-border bg-emerald-50/30'
+                            : 'border-l-4 border-l-primary border-[color:var(--acc-border)] bg-[color:var(--acc-soft)]'
                           : checked
-                          ? 'border-l-2 border-l-stone-900 border-stone-200 bg-stone-50/50'
-                          : 'border-stone-200 bg-white'
-                      } ${selected ? 'ring-2 ring-amber-300 border-amber-300' : 'hover:border-stone-400 hover:bg-stone-50/50 hover:shadow-md'}`}
+                          ? 'border-l-2 border-l-primary border-border bg-secondary/50'
+                          : 'border-border bg-card'
+                      } ${selected ? 'ring-2 ring-[color:var(--acc-border)] border-[color:var(--acc-border)]' : 'hover:border-[color:var(--acc-border)] hover:bg-secondary/40 hover:shadow-md'}`}
                     >
                       {/* Gate Task Label */}
                       {isGateTask && (
                         <div className={`flex items-center gap-1.5 px-3 pt-2 pb-0 ${
-                          checked ? 'text-emerald-700' : 'text-amber-700'
+                          checked ? 'text-emerald-700' : 'text-primary'
                         }`}>
                           <Flag size={10} />
-                          <span className="text-[9px] font-mono uppercase tracking-widest font-semibold">
+                          <span className="text-[9px] uppercase tracking-widest font-semibold">
                             Gate 评审 · 通过后解锁下一阶段
                           </span>
                         </div>
@@ -2345,23 +2345,23 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                           title={locked ? '此阶段已锁定，请先完成前置 Gate 评审' : isGateTask && !checked ? '点击完成 Gate 评审并填写评审记录' : undefined}
                         >
                           {locked ? (
-                            <Lock size={18} className="text-stone-300" />
+                            <Lock size={18} className="text-muted-foreground" />
                           ) : checked ? (
-                            <CheckCircle2 size={18} className={isGateTask ? 'text-emerald-600' : 'text-stone-900'} />
+                            <CheckCircle2 size={18} className={isGateTask ? 'text-emerald-600' : 'text-primary'} />
                           ) : (
-                            <Circle size={18} className={`${isGateTask ? 'text-amber-400 hover:text-amber-600' : 'text-stone-300 hover:text-stone-500'} transition-colors`} />
+                            <Circle size={18} className={`${isGateTask ? 'text-primary/50 hover:text-primary' : 'text-muted-foreground hover:text-foreground'} transition-colors`} />
                           )}
                         </button>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className={`text-sm font-medium ${
-                              locked ? 'text-stone-400' : checked ? 'text-stone-500 line-through' : isGateTask ? 'text-stone-900 font-semibold' : 'text-stone-900'
+                              locked ? 'text-muted-foreground' : checked ? 'text-muted-foreground line-through' : isGateTask ? 'text-foreground font-semibold' : 'text-foreground'
                             }`}>
                               {task.name}
                             </span>
-                            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{task.id}</span>
+                            <span className="text-[10px] num uppercase tracking-wider text-muted-foreground">{task.id}</span>
                             {!locked && hasInstructions && (
-                              <span className="text-[10px] font-mono uppercase tracking-wider text-amber-600 flex items-center gap-0.5">
+                              <span className="text-[10px] uppercase tracking-wider text-primary flex items-center gap-0.5">
                                 <Edit3 size={9} /> 已批注
                               </span>
                             )}
@@ -2371,29 +2371,29 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                               </span>
                             )}
                           </div>
-                          <p className={`text-xs mt-1 ${locked || checked ? 'text-stone-400' : 'text-stone-500'}`}>
+                          <p className={`text-xs mt-1 ${locked || checked ? 'text-muted-foreground' : 'text-muted-foreground'}`}>
                             {task.desc}
                           </p>
                           <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                            <span className="text-[10px] uppercase tracking-wider text-muted-foreground border border-stone-200 bg-stone-50 px-1.5 py-0.5">
+                            <span className="text-[10px] uppercase tracking-wider text-muted-foreground rounded border border-border bg-secondary px-1.5 py-0.5">
                               {status === 'done' ? '已完成' :
                                 status === 'in_progress' ? '进行中' :
                                 status === 'blocked' ? '阻塞' :
                                 status === 'skipped' ? '跳过' : '待开始'}
                             </span>
                             {details?.taskPriority && (
-                              <span className="text-[10px] uppercase tracking-wider text-muted-foreground border border-stone-200 bg-stone-50 px-1.5 py-0.5">
+                              <span className="text-[10px] uppercase tracking-wider text-muted-foreground rounded border border-border bg-secondary px-1.5 py-0.5">
                                 {details.taskPriority}
                               </span>
                             )}
                             {selected && (
-                              <span className="text-[10px] font-mono uppercase tracking-wider text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5">
+                              <span className="text-[10px] uppercase tracking-wider text-primary bg-[color:var(--acc-soft)] border border-[color:var(--acc-border)] rounded px-1.5 py-0.5">
                                 详情已打开
                               </span>
                             )}
                           </div>
                         </div>
-                        <ChevronRight size={16} className={`shrink-0 mt-0.5 transition-colors ${selected ? 'text-amber-600' : 'text-stone-300 group-hover:text-stone-500'}`} />
+                        <ChevronRight size={16} className={`shrink-0 mt-0.5 transition-colors ${selected ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground'}`} />
                       </div>
                     </div>
                   );
@@ -2406,16 +2406,16 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
               {/* 任务详情子窗口（点击任务弹出） */}
               {selectedTask && (
                 <div
-                  className="fixed inset-0 z-50 flex justify-center overflow-y-auto bg-stone-900/40 backdrop-blur-sm p-4 sm:p-8"
+                  className="fixed inset-0 z-50 flex justify-center overflow-y-auto bg-black/40 backdrop-blur-sm p-4 sm:p-8"
                   onClick={() => setSelectedTaskId(null)}
                 >
                   <div
-                    className="relative w-full max-w-2xl h-fit my-auto ce-panel shadow-2xl"
+                    className="relative w-full max-w-2xl h-fit my-auto rounded-[11px] border border-border bg-card shadow-2xl"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <button
                       onClick={() => setSelectedTaskId(null)}
-                      className="absolute top-3.5 right-3.5 z-10 p-1.5 text-stone-400 hover:text-stone-700 hover:bg-stone-100 transition-colors"
+                      className="absolute top-3.5 right-3.5 z-10 p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
                       title="关闭 (Esc)"
                     >
                       <X size={18} />
@@ -2426,27 +2426,27 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                         <div className="flex flex-wrap items-center gap-2 mb-1">
                           <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{selectedTask.id}</span>
                           {selectedTaskIsGate && (
-                            <span className="text-[9px] font-mono uppercase tracking-wider bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.5">
+                            <span className="text-[9px] uppercase tracking-wider rounded bg-[color:var(--acc-soft)] text-primary border border-[color:var(--acc-border)] px-1.5 py-0.5">
                               Gate
                             </span>
                           )}
                           {selectedTaskChecked && (
-                            <span className="text-[9px] font-mono uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5">
+                            <span className="text-[9px] uppercase tracking-wider rounded bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5">
                               Done
                             </span>
                           )}
                         </div>
-                        <h3 className="font-serif text-xl leading-tight text-stone-900">{selectedTask.name}</h3>
-                        <p className="text-sm text-stone-500 mt-1 leading-relaxed">{selectedTask.desc}</p>
+                        <h3 className="text-xl font-bold tracking-[-0.3px] leading-tight text-foreground">{selectedTask.name}</h3>
+                        <p className="text-sm text-muted-foreground mt-1 leading-relaxed">{selectedTask.desc}</p>
                       </div>
                     </div>
 
                     {!isCurrentPhaseUnlocked && (
-                      <div className="mt-4 flex items-start gap-2 border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                      <div className="mt-4 flex items-start gap-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
                         <Lock size={13} className="shrink-0 mt-0.5" />
                         <span>
                           {blockingGate ? (
-                            <>前置条件未完成：需先通过 <span className="font-mono font-semibold">{blockingGate.phaseName}</span> 的 Gate 评审「{blockingGate.gateTaskName}」。本任务暂仅可查看。</>
+                            <>前置条件未完成：需先通过 <span className="num font-semibold">{blockingGate.phaseName}</span> 的 Gate 评审「{blockingGate.gateTaskName}」。本任务暂仅可查看。</>
                           ) : (
                             <>此阶段被前置 Gate 锁定，当前任务详情仅可查看。</>
                           )}
@@ -2454,28 +2454,28 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                       </div>
                     )}
 
-                    <div className="mt-4 border-t border-stone-100 pt-4 space-y-4">
+                    <div className="mt-4 border-t border-border pt-4 space-y-4">
                       <div>
                         <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-muted-foreground mb-2">
                           <Users size={11} />
                           职责
                         </div>
-                        <div className="space-y-1.5 text-xs text-stone-600">
+                        <div className="space-y-1.5 text-xs text-muted-foreground">
                           <div className="flex gap-2">
-                            <span className="w-16 shrink-0 font-mono text-stone-400">责任角色</span>
-                            <span className="text-stone-800">{selectedTask.owner || '未指定'}</span>
+                            <span className="w-16 shrink-0 text-muted-foreground">责任角色</span>
+                            <span className="text-foreground">{selectedTask.owner || '未指定'}</span>
                           </div>
                           <div className="flex gap-2">
-                            <span className="w-16 shrink-0 font-mono text-stone-400">可见岗位</span>
-                            <span className="text-stone-800">{selectedTaskRoleLabels}</span>
+                            <span className="w-16 shrink-0 text-muted-foreground">可见岗位</span>
+                            <span className="text-foreground">{selectedTaskRoleLabels}</span>
                           </div>
                           {selectedTaskIsGate && activePhase?.gateStandard?.responsibleRoles?.length > 0 && (
                             <div className="pt-1">
-                              <div className="font-mono text-stone-400 mb-1">Gate 责任分工</div>
+                              <div className="text-muted-foreground mb-1">Gate 责任分工</div>
                               <div className="space-y-1">
                                 {activePhase.gateStandard.responsibleRoles.map((role, i) => (
-                                  <div key={i} className="flex items-start gap-2 text-stone-700">
-                                    <span className="text-stone-300 mt-0.5">▸</span>
+                                  <div key={i} className="flex items-start gap-2 text-foreground">
+                                    <span className="text-muted-foreground mt-0.5">▸</span>
                                     <span>{role}</span>
                                   </div>
                                 ))}
@@ -2527,40 +2527,40 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                     </div>
 
                     {selectedTask.guide && (
-                      <div className="mt-4 p-3 border-l-2 border-amber-500 bg-amber-50">
-                        <div className="text-[10px] font-mono uppercase tracking-widest text-amber-600 mb-1.5">操作指南</div>
-                        <pre className="text-xs text-stone-700 whitespace-pre-wrap font-sans leading-relaxed">{selectedTask.guide}</pre>
+                      <div className="mt-4 p-3 rounded-md border-l-2 border-primary bg-[color:var(--acc-soft)]">
+                        <div className="text-[10px] uppercase tracking-widest text-primary mb-1.5">操作指南</div>
+                        <pre className="text-xs text-foreground whitespace-pre-wrap font-sans leading-relaxed">{selectedTask.guide}</pre>
                       </div>
                     )}
 
                     {selectedTaskIsGate && (() => {
                       const r = computeGateReadiness(activePhase, activePhaseData, activeGateDeliverables, serverDelivSatisfiedSet);
                       return (
-                        <div className={`mt-4 p-3 border ${r.ready ? 'border-emerald-200 bg-emerald-50/50' : 'border-amber-200 bg-amber-50/50'}`}>
+                        <div className={`mt-4 p-3 rounded-md border ${r.ready ? 'border-emerald-200 bg-emerald-50/50' : 'border-[color:var(--acc-border)] bg-[color:var(--acc-soft)]'}`}>
                           <div className="flex items-center justify-between mb-2">
-                            <div className="text-[10px] font-mono uppercase tracking-widest text-stone-500">Gate 就绪检查</div>
-                            <span className={`text-[10px] font-mono px-1.5 py-0.5 border ${r.ready ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
+                            <div className="text-[10px] uppercase tracking-widest text-muted-foreground">Gate 就绪检查</div>
+                            <span className={`text-[10px] rounded px-1.5 py-0.5 border ${r.ready ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-[color:var(--acc-soft)] text-primary border-[color:var(--acc-border)]'}`}>
                               {r.ready ? '已就绪' : '未就绪'}
                             </span>
                           </div>
-                          <div className="divide-y divide-stone-100">
+                          <div className="divide-y divide-border">
                             <ReadinessRow label="阶段任务完成" ok={r.tasksDone === r.tasksTotal} detail={`${r.tasksDone}/${r.tasksTotal}`} />
                             <ReadinessRow label="交付物审核" ok={r.delivTotal === 0 || r.delivDone === r.delivTotal} detail={`${r.delivDone}/${r.delivTotal}`} />
                             <ReadinessRow label="无未关闭 P0/P1" ok={r.openP0P1 === 0} detail={r.openP0P1 === 0 ? '通过' : `${r.openP0P1} 个待关闭`} />
                             <ReadinessRow label="关键文件已上传" ok={r.fileCount > 0} detail={`${r.fileCount} 个`} soft />
                           </div>
                           {r.signoffRoles.length > 0 && (
-                            <div className="mt-2 pt-2 border-t border-stone-100">
+                            <div className="mt-2 pt-2 border-t border-border">
                               <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">需会签角色</div>
                               <div className="flex flex-wrap gap-1">
                                 {r.signoffRoles.map((role, i) => (
-                                  <span key={i} className="text-[10px] text-stone-600 bg-white border border-stone-200 px-1.5 py-0.5">{role}</span>
+                                  <span key={i} className="text-[10px] text-muted-foreground bg-card border border-border rounded px-1.5 py-0.5">{role}</span>
                                 ))}
                               </div>
                             </div>
                           )}
                           {!r.ready && (
-                            <div className="mt-2 pt-2 border-t border-amber-100 text-xs text-amber-700 leading-relaxed">
+                            <div className="mt-2 pt-2 border-t border-[color:var(--acc-border)] text-xs text-primary leading-relaxed">
                               未就绪:{r.blockers.join('、')}。补齐后再通过;若需放行,请在评审里选「有条件通过」并填写例外项的责任人与截止。
                             </div>
                           )}
@@ -2569,13 +2569,13 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                     })()}
 
                     {selectedTaskIsGate && activePhase?.gateStandard && (
-                      <div className="mt-4 p-3 border-l-2 border-l-stone-900 bg-stone-50">
-                        <div className="text-[10px] font-mono uppercase tracking-widest text-stone-500 mb-2">Gate 管理标准</div>
+                      <div className="mt-4 p-3 rounded-md border-l-2 border-l-primary bg-secondary">
+                        <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-2">Gate 管理标准</div>
                         <GateStandardPanel standard={activePhase.gateStandard} compact evidenceHint />
                       </div>
                     )}
 
-                    <div className="mt-4 p-3 border border-stone-200 bg-white">
+                    <div className="mt-4 p-3 rounded-md border border-border bg-card">
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-muted-foreground">
                           <Bug size={11} />
@@ -2584,28 +2584,28 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                         {perms.canEditIssues && isCurrentPhaseUnlocked && (
                           <button
                             onClick={handleCreateIssueFromSelectedTask}
-                            className="text-[10px] font-mono px-2 py-1 border border-stone-300 text-stone-600 hover:border-amber-400 hover:text-amber-700 transition-colors"
+                            className="text-[10px] rounded px-2 py-1 border border-border text-muted-foreground hover:border-[color:var(--acc-border)] hover:text-primary transition-colors"
                           >
                             从此任务创建 Issue
                           </button>
                         )}
                       </div>
                       {selectedTaskIssues.length === 0 ? (
-                        <div className="mt-2 text-xs text-stone-400">暂无关联问题。</div>
+                        <div className="mt-2 text-xs text-muted-foreground">暂无关联问题。</div>
                       ) : (
-                        <div className="mt-2 divide-y divide-stone-100">
+                        <div className="mt-2 divide-y divide-border">
                           {selectedTaskIssues.map((issue) => (
                             <div key={issue.id} className="py-2 flex items-start gap-2">
-                              <span className={`mt-0.5 text-[10px] font-mono px-1.5 py-0.5 border ${
+                              <span className={`mt-0.5 text-[10px] num rounded px-1.5 py-0.5 border ${
                                 issue.severity === 'P0' || issue.severity === 'P1'
                                   ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                  : 'bg-stone-50 text-stone-600 border-stone-200'
+                                  : 'bg-secondary text-muted-foreground border-border'
                               }`}>
                                 {issue.severity}
                               </span>
                               <div className="min-w-0 flex-1">
-                                <div className="text-sm text-stone-800 truncate">{issue.title}</div>
-                                <div className="text-[11px] text-stone-500">
+                                <div className="text-sm text-foreground truncate">{issue.title}</div>
+                                <div className="text-[11px] text-muted-foreground">
                                   {issueStatusLabel(issue.status)}{issue.owner ? ` · ${issue.owner}` : ''}
                                   {(issue.duplicateCount ?? 1) > 1 ? ` · 重复 ${issue.duplicateCount} 条` : ''}
                                 </div>
@@ -2637,7 +2637,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                       phaseId={activePhaseId}
                     />
 
-                    <div className="mt-4 border-t border-stone-100 pt-4">
+                    <div className="mt-4 border-t border-border pt-4">
                       <CommentThread
                         entityType="task"
                         entityId={`${project.id}:${selectedTask.id}`}
@@ -2650,35 +2650,35 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                       const latest = reviews[reviews.length - 1];
                       if (selectedTaskChecked && latest) {
                         return (
-                          <div className={`mt-4 border p-3 ${
+                          <div className={`mt-4 rounded-md border p-3 ${
                             latest.decision === 'approved' ? 'border-emerald-200 bg-emerald-50/50' :
-                            latest.decision === 'conditional' ? 'border-amber-200 bg-amber-50/50' :
+                            latest.decision === 'conditional' ? 'border-[color:var(--acc-border)] bg-[color:var(--acc-soft)]' :
                             'border-rose-200 bg-rose-50/50'
                           }`}>
                             <div className="flex items-center justify-between mb-2">
                               <div className="flex items-center gap-2">
                                 <span className="text-[10px] uppercase tracking-widest text-muted-foreground">评审记录</span>
                                 {reviews.length > 1 && (
-                                  <span className="text-[9px] font-mono text-stone-400 bg-stone-100 px-1.5 py-0.5 border border-stone-200">
+                                  <span className="text-[9px] num text-muted-foreground bg-secondary px-1.5 py-0.5 rounded border border-border">
                                     共 {reviews.length} 次
                                   </span>
                                 )}
                               </div>
                               <button
                                 onClick={() => setGateReviewPending({ phaseId: activePhaseId })}
-                                className="text-[10px] font-mono text-stone-400 hover:text-stone-700 transition-colors"
+                                className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
                               >
                                 查看历史
                               </button>
                             </div>
                             <GateReviewBadge review={latest} />
-                            <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-stone-600">
-                              <div><span className="font-mono text-stone-400">参与人：</span>{latest.participants}</div>
+                            <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                              <div><span className="text-muted-foreground">参与人：</span>{latest.participants}</div>
                               {latest.conditions && (
-                                <div className="col-span-2"><span className="font-mono text-stone-400">条件：</span>{latest.conditions}</div>
+                                <div className="col-span-2"><span className="text-muted-foreground">条件：</span>{latest.conditions}</div>
                               )}
                               {latest.notes && (
-                                <div className="col-span-2 mt-1 text-stone-500 italic">{latest.notes}</div>
+                                <div className="col-span-2 mt-1 text-muted-foreground italic">{latest.notes}</div>
                               )}
                             </div>
                           </div>
@@ -2688,7 +2688,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                         return (
                           <button
                             onClick={() => setGateReviewPending({ phaseId: activePhaseId })}
-                            className="mt-4 w-full text-xs font-mono text-amber-600 border border-dashed border-amber-300 py-2 hover:bg-amber-50 transition-colors"
+                            className="mt-4 w-full text-xs text-primary rounded-md border border-dashed border-[color:var(--acc-border)] py-2 hover:bg-[color:var(--acc-soft)] transition-colors"
                           >
                             + 补充填写 Gate 评审记录
                           </button>
@@ -2702,7 +2702,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
               )}
 
               {/* Phase Notes */}
-              <div className="ce-panel p-5">
+              <LinearCard className="p-5">
                 <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-3">阶段备注</div>
                 <textarea
                   value={activePhaseData?.notes || ''}
@@ -2716,12 +2716,12 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                   }}
                   rows={5}
                   placeholder={perms.canEditProjectInfo ? '记录阶段备注、决策记录、风险说明...' : '仅 Owner/管理层/PM 可编辑阶段备注'}
-                  className="w-full text-xs text-stone-700 border border-stone-200 focus:border-stone-400 outline-none px-3 py-2 resize-none transition-colors disabled:cursor-not-allowed disabled:bg-stone-50 disabled:text-stone-400"
+                  className="w-full text-xs text-foreground rounded-md border border-border focus:border-[color:var(--acc-border)] outline-none px-3 py-2 resize-none transition-colors disabled:cursor-not-allowed disabled:bg-secondary disabled:text-muted-foreground"
                 />
-              </div>
+              </LinearCard>
 
               {/* Phase Progress Summary */}
-              <div className="ce-panel p-5">
+              <LinearCard className="p-5">
                 <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-3">全阶段进度</div>
                 <div className="space-y-3">
                   {projectPhases.map((phase) => {
@@ -2740,20 +2740,20 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                         <div className="flex items-center justify-between mb-1">
                           <div className="flex items-center gap-1.5">
                             <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: phase.color }} />
-                            <span className="text-[10px] font-mono uppercase tracking-wider text-stone-500">{phase.code}</span>
+                            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{phase.code}</span>
                           </div>
-                          <span className="text-[10px] font-mono text-stone-500">{prog}%</span>
+                          <span className="text-[10px] num text-muted-foreground">{prog}%</span>
                         </div>
                         <ProgressBar
                           value={prog}
-                          color={status === 'completed' ? 'bg-emerald-500' : status === 'active' ? 'bg-amber-500' : 'bg-stone-200'}
+                          color={status === 'completed' ? 'bg-emerald-500' : status === 'active' ? 'bg-primary' : 'bg-secondary'}
                           height="h-1"
                         />
                       </div>
                     );
                   })}
                 </div>
-              </div>
+              </LinearCard>
             </div>
           </div>
         </>
