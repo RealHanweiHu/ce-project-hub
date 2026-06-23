@@ -42,20 +42,20 @@ export function CustomFieldsPanel({
   };
 
   if (defsQuery.isLoading) {
-    return <div className="flex items-center gap-2 text-stone-400 text-sm py-6"><Loader2 size={14} className="animate-spin" />加载字段定义…</div>;
+    return <div className="flex items-center gap-2 text-muted-foreground text-sm py-6"><Loader2 size={14} className="animate-spin" />加载字段定义…</div>;
   }
 
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-medium text-stone-800">自定义字段</h3>
-          <p className="text-[11px] text-stone-400 mt-0.5">由系统管理员统一定义，所有项目共享字段集</p>
+          <h3 className="text-sm font-medium text-foreground">自定义字段</h3>
+          <p className="text-[11px] text-muted-foreground mt-0.5">由系统管理员统一定义，所有项目共享字段集</p>
         </div>
         {isAdmin && (
           <button
             onClick={() => setManaging((v) => !v)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-wider border border-stone-300 text-stone-600 hover:bg-stone-50 transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs uppercase tracking-wider rounded-[7px] border border-border text-foreground hover:bg-secondary transition-colors"
           >
             <Settings2 size={13} />
             {managing ? '完成' : '管理字段'}
@@ -66,16 +66,16 @@ export function CustomFieldsPanel({
       {managing && isAdmin && <FieldDefManager defs={defs} onChanged={() => utils.customFields.listDefs.invalidate()} />}
 
       {defs.length === 0 ? (
-        <div className="text-sm text-stone-400 border border-dashed border-stone-200 py-8 text-center">
+        <div className="text-sm text-muted-foreground border border-dashed border-border rounded-[11px] py-8 text-center">
           暂无自定义字段{isAdmin ? '，点击右上角「管理字段」添加' : '，请联系管理员添加'}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {defs.map((def) => (
             <div key={def.id} className="space-y-1">
-              <label className="text-[11px] font-mono uppercase tracking-wider text-stone-500 flex items-center gap-1">
+              <label className="text-[11px] uppercase tracking-wider text-muted-foreground flex items-center gap-1">
                 {def.label}
-                {def.required && <span className="text-rose-500">*</span>}
+                {def.required && <span className="text-[color:var(--destructive)]">*</span>}
               </label>
               <FieldValueInput def={def} value={values[def.fieldKey]} canEdit={canEdit} onChange={(v) => setValue(def.fieldKey, v)} />
             </div>
@@ -89,7 +89,7 @@ export function CustomFieldsPanel({
 function FieldValueInput({
   def, value, canEdit, onChange,
 }: { def: FieldDef; value: unknown; canEdit: boolean; onChange: (v: unknown) => void }) {
-  const base = 'w-full border border-stone-300 px-2.5 py-1.5 text-sm focus:border-stone-500 focus:outline-none disabled:bg-stone-50 disabled:text-stone-400';
+  const base = 'w-full rounded-[7px] border border-border px-2.5 py-1.5 text-sm focus:border-[color:var(--acc-border)] focus:outline-none disabled:bg-secondary disabled:text-muted-foreground';
   switch (def.fieldType) {
     case 'number':
       return <input type="number" disabled={!canEdit} value={value == null ? '' : String(value)}
@@ -102,8 +102,8 @@ function FieldValueInput({
         onChange={(e) => onChange(e.target.value || null)} className={base} />;
     case 'boolean':
       return (
-        <label className="flex items-center gap-2 text-sm text-stone-700 py-1.5">
-          <input type="checkbox" disabled={!canEdit} checked={!!value} onChange={(e) => onChange(e.target.checked)} className="accent-stone-700" />
+        <label className="flex items-center gap-2 text-sm text-foreground py-1.5">
+          <input type="checkbox" disabled={!canEdit} checked={!!value} onChange={(e) => onChange(e.target.checked)} className="accent-[color:var(--primary)]" />
           {value ? '是' : '否'}
         </label>
       );
@@ -162,20 +162,20 @@ function FieldDefManager({ defs, onChanged }: { defs: FieldDef[]; onChanged: () 
   };
 
   return (
-    <div className="border border-stone-200 bg-stone-50/60 p-4 space-y-3">
+    <div className="rounded-[11px] border border-border bg-secondary/60 p-4 space-y-3">
       {/* 现有字段列表 */}
       {defs.length > 0 && (
         <div className="space-y-1.5">
           {defs.map((d) => (
-            <div key={d.id} className="flex items-center gap-2 text-sm bg-white border border-stone-200 px-2.5 py-1.5">
-              <GripVertical size={13} className="text-stone-300" />
-              <span className="font-medium text-stone-700">{d.label}</span>
-              <span className="text-[10px] font-mono text-stone-400">{d.fieldKey}</span>
-              <span className="text-[10px] font-mono px-1.5 py-0.5 bg-stone-100 text-stone-500 border border-stone-200">{TYPE_LABELS[d.fieldType]}</span>
-              {d.required && <span className="text-[10px] text-rose-500">必填</span>}
-              {d.fieldType === 'select' && d.options.length > 0 && <span className="text-[10px] text-stone-400 truncate">{d.options.join(' / ')}</span>}
+            <div key={d.id} className="flex items-center gap-2 text-sm bg-card border border-border rounded-[7px] px-2.5 py-1.5">
+              <GripVertical size={13} className="text-muted-foreground/60" />
+              <span className="font-medium text-foreground">{d.label}</span>
+              <span className="num text-[10px] text-muted-foreground">{d.fieldKey}</span>
+              <span className="num text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground border border-border">{TYPE_LABELS[d.fieldType]}</span>
+              {d.required && <span className="text-[10px] text-[color:var(--destructive)]">必填</span>}
+              {d.fieldType === 'select' && d.options.length > 0 && <span className="text-[10px] text-muted-foreground truncate">{d.options.join(' / ')}</span>}
               <button disabled={busy} onClick={() => { if (confirm(`删除字段「${d.label}」？已填写的值会被忽略。`)) deleteDef.mutate({ id: d.id }); }}
-                className="ml-auto text-stone-400 hover:text-rose-600 disabled:opacity-40"><Trash2 size={13} /></button>
+                className="ml-auto text-muted-foreground hover:text-[color:var(--destructive)] disabled:opacity-40"><Trash2 size={13} /></button>
             </div>
           ))}
         </div>
@@ -184,22 +184,22 @@ function FieldDefManager({ defs, onChanged }: { defs: FieldDef[]; onChanged: () 
       {/* 新增字段 */}
       <div className="flex flex-wrap items-center gap-2 pt-1">
         <input placeholder="字段名(如 客户名称)" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })}
-          className="border border-stone-300 px-2 py-1.5 text-sm w-40 focus:border-stone-500 focus:outline-none" />
+          className="rounded-[7px] border border-border px-2 py-1.5 text-sm w-40 focus:border-[color:var(--acc-border)] focus:outline-none" />
         <input placeholder="key(可留空自动生成)" value={form.fieldKey} onChange={(e) => setForm({ ...form, fieldKey: e.target.value })}
-          className="border border-stone-300 px-2 py-1.5 text-sm w-44 font-mono text-xs focus:border-stone-500 focus:outline-none" />
+          className="num rounded-[7px] border border-border px-2 py-1.5 text-sm w-44 text-xs focus:border-[color:var(--acc-border)] focus:outline-none" />
         <select value={form.fieldType} onChange={(e) => setForm({ ...form, fieldType: e.target.value as FieldType })}
-          className="border border-stone-300 px-2 py-1.5 text-sm focus:border-stone-500 focus:outline-none">
+          className="rounded-[7px] border border-border px-2 py-1.5 text-sm focus:border-[color:var(--acc-border)] focus:outline-none">
           {(Object.keys(TYPE_LABELS) as FieldType[]).map((t) => <option key={t} value={t}>{TYPE_LABELS[t]}</option>)}
         </select>
         {form.fieldType === 'select' && (
           <input placeholder="选项,逗号分隔" value={form.options} onChange={(e) => setForm({ ...form, options: e.target.value })}
-            className="border border-stone-300 px-2 py-1.5 text-sm w-44 focus:border-stone-500 focus:outline-none" />
+            className="rounded-[7px] border border-border px-2 py-1.5 text-sm w-44 focus:border-[color:var(--acc-border)] focus:outline-none" />
         )}
-        <label className="flex items-center gap-1.5 text-xs text-stone-600">
-          <input type="checkbox" checked={form.required} onChange={(e) => setForm({ ...form, required: e.target.checked })} className="accent-stone-700" />必填
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <input type="checkbox" checked={form.required} onChange={(e) => setForm({ ...form, required: e.target.checked })} className="accent-[color:var(--primary)]" />必填
         </label>
         <button disabled={busy || !form.label.trim()} onClick={add}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-wider bg-stone-800 text-white hover:bg-stone-900 disabled:opacity-40 transition-colors">
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs uppercase tracking-wider rounded-[7px] bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40 transition-opacity">
           <Plus size={13} />添加
         </button>
       </div>

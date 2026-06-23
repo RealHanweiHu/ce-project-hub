@@ -1,5 +1,4 @@
-// Design: Industrial Precision - stone/amber color system
-// ProgressBar: thin horizontal progress indicator
+// ProgressBar: thin horizontal progress indicator (Linear style)
 
 interface ProgressBarProps {
   value: number;
@@ -8,9 +7,9 @@ interface ProgressBarProps {
   className?: string;
 }
 
-export function ProgressBar({ value, color = 'bg-stone-900', height = 'h-1', className = '' }: ProgressBarProps) {
+export function ProgressBar({ value, color = 'bg-primary', height = 'h-1', className = '' }: ProgressBarProps) {
   return (
-    <div className={`w-full bg-stone-200 rounded-full overflow-hidden ${height} ${className}`}>
+    <div className={`w-full bg-secondary rounded-full overflow-hidden ${height} ${className}`}>
       <div
         className={`${color} ${height} rounded-full transition-all duration-500`}
         style={{ width: `${Math.min(100, Math.max(0, value))}%` }}
