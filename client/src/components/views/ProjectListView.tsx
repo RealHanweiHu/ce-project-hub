@@ -397,6 +397,15 @@ export function ProjectListView({
     };
   }), [projects, starred]);
 
+  // pmUserId → 显示名解析（行的 project.pm 在数据层是空串，名字在 UI 用 listUsersForSelect 解析）
+  const pmNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    (userList || []).forEach((u) => m.set(String(u.id), u.name || u.username || `#${u.id}`));
+    return m;
+  }, [userList]);
+  const pmLabel = (p: Project): string =>
+    (p.pm && p.pm.trim()) || (p.pmUserId != null ? pmNameById.get(String(p.pmUserId)) ?? '' : '');
+
   // ── Filter + search ──────────────────────────────────────────────────────────
   const matches = (r: Row): boolean => {
     if (activeFilter === 'ontrack' && r.project.risk !== 'low') return false;
@@ -405,7 +414,7 @@ export function ProjectListView({
     if (activeFilter === 'starred' && !r.isStarred) return false;
     const q = search.trim().toLowerCase();
     if (q) {
-      const hay = `${r.project.name} ${r.project.code} ${r.project.pm} ${r.project.type}`.toLowerCase();
+      const hay = `${r.project.name} ${r.project.code} ${pmLabel(r.project)} ${r.project.type}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -419,11 +428,6 @@ export function ProjectListView({
     products.forEach((p) => m.set(p.id, p.name));
     return m;
   }, [products]);
-  const pmNameById = useMemo(() => {
-    const m = new Map<string, string>();
-    (userList || []).forEach((u) => m.set(String(u.id), u.name || u.username || `#${u.id}`));
-    return m;
-  }, [userList]);
   interface Lane { key: string; label: string; color: string; rows: Row[] }
   const lanes: Lane[] = useMemo(() => {
     if (groupBy === 'none') return [];
@@ -439,7 +443,7 @@ export function ProjectListView({
       } else if (groupBy === 'cat') {
         label = CATEGORY_MAP[r.catId as ProjectCategory]?.name || r.catBadge;
       } else { // 'pm'
-        label = key === LANE_NONE ? '未分配' : (r.project.pm || pmNameById.get(key) || `#${key}`);
+        label = key === LANE_NONE ? '未分配' : (pmLabel(r.project) || pmNameById.get(key) || `#${key}`);
       }
       if (!map.has(key)) map.set(key, { key, label, color: colorFor(key), rows: [] });
       map.get(key)!.rows.push(r);
@@ -614,7 +618,7 @@ export function ProjectListView({
                       <PropRow k="当前阶段" v={<span className="inline-flex items-center gap-1.5 rounded-[6px] border border-border bg-secondary px-2 py-0.5 text-[11.5px]"><span className="h-1.5 w-1.5 rounded-full bg-primary" />{detailRow.phaseName}</span>} />
                       <PropRow k="整体进度" v={<span className="num">{detailRow.overall}%</span>} />
                       <PropRow k="风险" v={<span className="inline-flex items-center gap-2"><span className="h-2 w-2 rounded-full" style={{ background: detailRow.tone === 'green' ? 'var(--success)' : detailRow.tone === 'amber' ? 'var(--warning)' : 'var(--destructive)' }} />{health.label}</span>} />
-                      <PropRow k="负责人" v={<span className="inline-flex items-center gap-2"><Avatar name={p.pm || '?'} size={20} />{p.pm || '未分配'}</span>} />
+                      <PropRow k="负责人" v={<span className="inline-flex items-center gap-2"><Avatar name={pmLabel(p) || '?'} size={20} />{pmLabel(p) || '未分配'}</span>} />
                       <PropRow k="目标日期" v={<span className="num">{p.targetDate || '—'}</span>} />
                     </div>
                   </section>
@@ -1230,8 +1234,8 @@ export function ProjectListView({
         </div>
         <div className="mt-2.5 flex items-center justify-between border-t border-border pt-2.5">
           <div className="flex items-center gap-1.5">
-            <Avatar name={p.pm || '?'} size={20} />
-            <span className="text-[11.5px] text-[color:var(--secondary-foreground)]">{p.pm || '未分配'}</span>
+            <Avatar name={pmLabel(p) || '?'} size={20} />
+            <span className="text-[11.5px] text-[color:var(--secondary-foreground)]">{pmLabel(p) || '未分配'}</span>
           </div>
           <span className="flex items-center gap-1 text-[11px] text-muted-foreground num">
             <CalendarDays size={11} />{p.targetDate || '—'}
@@ -1370,8 +1374,8 @@ export function ProjectListView({
           <span className="w-8 text-right text-[12px] text-muted-foreground num">{r.overall}%</span>
         </div>
         <div className="flex items-center gap-2">
-          <Avatar name={r.project.pm || '?'} size={22} />
-          <span className="truncate text-[12.5px] text-[color:var(--secondary-foreground)]">{r.project.pm || '未分配'}</span>
+          <Avatar name={pmLabel(r.project) || '?'} size={22} />
+          <span className="truncate text-[12.5px] text-[color:var(--secondary-foreground)]">{pmLabel(r.project) || '未分配'}</span>
         </div>
         <span className="text-right text-[12px] text-muted-foreground num">{r.project.targetDate || '—'}</span>
         <div className="flex items-center justify-end gap-1">
@@ -1453,7 +1457,7 @@ export function ProjectListView({
               <div className="truncate text-[13px] font-semibold">{r.project.name}</div>
               <div className="text-[10.5px] text-muted-foreground num">{r.project.code} · {STAGE_SHORT[r.stage]}</div>
             </div>
-            <Avatar name={r.project.pm || '?'} size={22} />
+            <Avatar name={pmLabel(r.project) || '?'} size={22} />
           </div>
           <div
             onClick={() => onOpen(r.project.id)}
