@@ -3,6 +3,7 @@ import { useMemo, useState, useEffect } from 'react';
 import { trpc } from '@/lib/trpc';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { Inbox } from 'lucide-react';
+import { PageHeader, Kicker } from '@/components/linear/primitives';
 import { RequirementPoolPanel, type RequirementPanelScope } from './RequirementPoolPanel';
 
 type ProductRow = { id: string; name: string; productNumber: string };
@@ -21,30 +22,29 @@ export function RequirementsView({ initialProductId }: { initialProductId?: stri
   const product = useMemo(() => productRows.find((p) => p.id === productId), [productRows, productId]);
 
   return (
-    <div className="ce-page">
-      <div className="ce-page-header flex-col items-start sm:flex-row sm:items-center">
-        <div className="flex items-center gap-2">
-          <Inbox size={18} className="text-amber-500" />
-          <h1 className="font-serif text-xl text-stone-900">需求池</h1>
-          <span className="ce-kicker">长期沉淀、跨项目承接</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] font-mono uppercase tracking-widest text-stone-400">产品</span>
-          <select
-            value={productId}
-            onChange={(e) => setProductId(e.target.value)}
-            className="ce-control text-xs border border-stone-300 bg-white px-2 py-1.5 outline-none focus:border-stone-900 min-w-[160px]"
-          >
-            <option value="">全部产品</option>
-            {productRows.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}{p.productNumber ? ` · ${p.productNumber}` : ''}</option>
-            ))}
-          </select>
-        </div>
-      </div>
+    <div className="flex flex-col">
+      <PageHeader
+        title={<span className="inline-flex items-center gap-2"><Inbox size={20} className="text-primary" />需求池</span>}
+        sub="长期沉淀、跨项目承接"
+        actions={
+          <div className="flex items-center gap-2">
+            <Kicker>产品</Kicker>
+            <select
+              value={productId}
+              onChange={(e) => setProductId(e.target.value)}
+              className="min-w-[160px] cursor-pointer rounded-[7px] border border-border bg-card px-2.5 py-1.5 text-[12.5px] text-foreground outline-none transition-colors focus:border-[color:var(--acc-border)]"
+            >
+              <option value="">全部产品</option>
+              {productRows.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}{p.productNumber ? ` · ${p.productNumber}` : ''}</option>
+              ))}
+            </select>
+          </div>
+        }
+      />
 
-      <p className="ce-muted-band text-xs text-stone-500 leading-relaxed px-3 py-2">
-        这里汇总所有产品的长期需求。决定要做时,到对应<strong>项目的需求池</strong>里「采纳转化」为任务/问题/变更 ——
+      <p className="mb-5 rounded-[9px] border border-border bg-secondary px-3.5 py-2.5 text-xs leading-relaxed text-muted-foreground">
+        这里汇总所有产品的长期需求。决定要做时,到对应<strong className="text-foreground">项目的需求池</strong>里「采纳转化」为任务/问题/变更 ——
         需求池只做收集与澄清,不充当第二套任务清单。
       </p>
 
