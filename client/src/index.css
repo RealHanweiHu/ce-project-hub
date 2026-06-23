@@ -84,6 +84,7 @@
   --success-soft: oklch(0.957 0.03 155);
   --warning: oklch(0.68 0.13 73);
   --warning-soft: oklch(0.96 0.04 80);
+  --destructive-soft: oklch(0.95 0.03 21.6);
   --star: oklch(0.82 0.16 85);
   --acc-soft: oklch(0.962 0.02 277.5);
   --acc-border: oklch(0.9 0.04 277.5);
