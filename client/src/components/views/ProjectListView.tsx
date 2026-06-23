@@ -108,6 +108,24 @@ type GroupBy = 'none' | 'type' | 'cat' | 'pm';
 type FilterKey = 'ontrack' | 'risk' | 'alert' | 'starred';
 type ViewMode = 'list' | 'kanban' | 'timeline';
 
+// Sentinel lane key for "unassigned" (no pm / no product). Must be used
+// consistently in laneKeyOf() AND when decoding the drop target so bucketing and
+// reassign stay in lockstep.
+const LANE_NONE = '__none__';
+
+// The single source of truth for a project's lane key under a given groupBy.
+// Used BOTH to bucket projects into lanes AND to build the droppable dropId, so
+// the value a card lands on always round-trips back to the same lane.
+//   - 'pm'   → pmUserId (numeric, stringified) — reassign target is pmUserId
+//   - 'type' → productId (产品线) — reassign target is productId
+//   - 'cat'  → category id (NOT reassignable)
+function laneKeyOf(project: Project, groupBy: GroupBy): string {
+  if (groupBy === 'pm') return project.pmUserId != null ? String(project.pmUserId) : LANE_NONE;
+  if (groupBy === 'type') return project.productId != null && project.productId !== '' ? project.productId : LANE_NONE;
+  if (groupBy === 'cat') return project.category || 'npd';
+  return '';
+}
+
 function Avatar({ name, size = 22 }: { name: string; size?: number }) {
   return (
     <span
@@ -174,8 +192,13 @@ export function ProjectListView({
   const isAdmin = (user as (typeof user & { role?: string }) | null)?.role === 'admin';
   const moveMut = trpc.projects.move.useMutation();
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
-  // Pending drag awaiting confirmation
-  const [moveConfirm, setMoveConfirm] = useState<{ project: Project; fromStage: string; toStage: string } | null>(null);
+  // Patch shape accepted by trpc.projects.move (only provided fields are written).
+  type MovePatch = { currentPhase?: string; pmUserId?: number | null; productId?: string | null };
+  // Pending drag awaiting confirmation. `patch`/`undoPatch`/`successMsg` carry the
+  // full mutation (stage and/or reassign) so the confirm dialog can dispatch it.
+  const [moveConfirm, setMoveConfirm] = useState<
+    { project: Project; fromStage: string; toStage: string; patch: MovePatch; undoPatch: MovePatch; successMsg: string } | null
+  >(null);
 
   // Can the current user drag (override the phase of) this project?
   const canDrag = (project: Project): boolean =>
@@ -196,26 +219,69 @@ export function ProjectListView({
     if (!e.over) return;
     const project = projects.find((p) => p.id === String(e.active.id));
     if (!project || !canDrag(project)) return;
-    const { stageId: toStage } = parseDrop(String(e.over.id));
+    const { stageId: toStage, laneKey: toLane } = parseDrop(String(e.over.id));
     const fromStage = stageBucket(project.currentPhase);
-    if (!toStage || toStage === fromStage) return;
-    setMoveConfirm({ project, fromStage, toStage });
+    const stageChanged = !!toStage && toStage !== fromStage;
+
+    // Cross-lane reassign — only for pm (负责人) and type (产品线) groupings.
+    // cat (项目类型) and none must NEVER reassign.
+    let reassignPatch: MovePatch | null = null;
+    let undoReassign: MovePatch | null = null;
+    let reassignLabel = '';
+    if (toLane != null && toLane !== '' && (groupBy === 'pm' || groupBy === 'type')) {
+      const fromLane = laneKeyOf(project, groupBy);
+      if (toLane !== fromLane) {
+        if (groupBy === 'pm') {
+          const newPm = toLane === LANE_NONE ? null : Number(toLane);
+          reassignPatch = { pmUserId: newPm };
+          undoReassign = { pmUserId: project.pmUserId ?? null };
+          reassignLabel = '改派负责人';
+        } else { // 'type' → 产品线
+          const newProduct = toLane === LANE_NONE ? null : toLane;
+          reassignPatch = { productId: newProduct };
+          undoReassign = { productId: project.productId ?? null };
+          reassignLabel = '改派产品线';
+        }
+      }
+    }
+
+    if (!stageChanged && !reassignPatch) return;
+
+    if (stageChanged && reassignPatch) {
+      // Combined推进+改派 → keep the confirm dialog (stage change is the heavy part).
+      setMoveConfirm({
+        project, fromStage, toStage,
+        patch: { currentPhase: toStage, ...reassignPatch },
+        undoPatch: { currentPhase: fromStage, ...undoReassign! },
+        successMsg: `已推进并改派 · 可撤销`,
+      });
+    } else if (reassignPatch) {
+      // Reassign-only is lighter → no confirm, dispatch directly.
+      void doMove(project, reassignPatch, undoReassign!, `已${reassignLabel} · 可撤销`);
+    } else {
+      // Stage-only → existing confirm path.
+      setMoveConfirm({
+        project, fromStage, toStage,
+        patch: { currentPhase: toStage },
+        undoPatch: { currentPhase: fromStage },
+        successMsg: `已将 ${project.name} 推进到 ${stageLabel(toStage)} · 可撤销`,
+      });
+    }
   };
 
-  const doMove = async (project: Project, fromStage: string, toStage: string) => {
-    const fromLabel = stageLabel(fromStage);
-    const toLabel = stageLabel(toStage);
+  // Generic move: apply `patch`, on success offer 撤销 that applies `undoPatch`.
+  const doMove = async (project: Project, patch: MovePatch, undoPatch: MovePatch, successMsg: string) => {
     try {
-      await moveMut.mutateAsync({ id: project.id, currentPhase: toStage });
+      await moveMut.mutateAsync({ id: project.id, ...patch });
       refreshBoard();
-      toast.success(`已将 ${project.name} 推进到 ${toLabel} · 可撤销`, {
+      toast.success(successMsg, {
         action: {
           label: '撤销',
           onClick: async () => {
             try {
-              await moveMut.mutateAsync({ id: project.id, currentPhase: fromStage });
+              await moveMut.mutateAsync({ id: project.id, ...undoPatch });
               refreshBoard();
-              toast.success(`已撤销 · ${project.name} 回到 ${fromLabel}`);
+              toast.success(`已撤销 · ${project.name}`);
             } catch {
               toast.error('撤销失败');
               refreshBoard();
@@ -330,21 +396,39 @@ export function ProjectListView({
   const visibleRows = rows.filter(matches);
 
   // ── Grouping (swimlanes) ───────────────────────────────────────────────────────
+  // id → human label resolvers for the id-based lane keys (pmUserId / productId).
+  const productNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    products.forEach((p) => m.set(p.id, p.name));
+    return m;
+  }, [products]);
+  const pmNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    (userList || []).forEach((u) => m.set(String(u.id), u.name || u.username || `#${u.id}`));
+    return m;
+  }, [userList]);
   interface Lane { key: string; label: string; color: string; rows: Row[] }
   const lanes: Lane[] = useMemo(() => {
     if (groupBy === 'none') return [];
     const map = new Map<string, Lane>();
     const colorFor = (k: string) => avatarColor(k);
     visibleRows.forEach((r) => {
-      let key: string, label: string;
-      if (groupBy === 'type') { key = r.project.type || '未分类'; label = key; }
-      else if (groupBy === 'cat') { key = r.catId; label = CATEGORY_MAP[r.catId as ProjectCategory]?.name || r.catBadge; }
-      else { key = r.project.pm || '未分配'; label = r.project.pm || '未分配'; }
+      // laneKeyOf is the single source of truth: the lane key is exactly the value
+      // a card's droppable carries, so cross-lane drops resolve back to this lane.
+      const key = laneKeyOf(r.project, groupBy);
+      let label: string;
+      if (groupBy === 'type') {
+        label = key === LANE_NONE ? '未关联产品' : (productNameById.get(key) || r.project.type || key);
+      } else if (groupBy === 'cat') {
+        label = CATEGORY_MAP[r.catId as ProjectCategory]?.name || r.catBadge;
+      } else { // 'pm'
+        label = key === LANE_NONE ? '未分配' : (r.project.pm || pmNameById.get(key) || `#${key}`);
+      }
       if (!map.has(key)) map.set(key, { key, label, color: colorFor(key), rows: [] });
       map.get(key)!.rows.push(r);
     });
     return Array.from(map.values());
-  }, [visibleRows, groupBy]);
+  }, [visibleRows, groupBy, productNameById, pmNameById]);
 
   const toggleLane = (k: string) => setCollapsedLanes((prev) => {
     const next = new Set(prev);
@@ -1034,9 +1118,9 @@ export function ProjectListView({
             <AlertDialogAction
               onClick={() => {
                 if (moveConfirm) {
-                  const { project, fromStage, toStage } = moveConfirm;
+                  const { project, patch, undoPatch, successMsg } = moveConfirm;
                   setMoveConfirm(null);
-                  void doMove(project, fromStage, toStage);
+                  void doMove(project, patch, undoPatch, successMsg);
                 }
               }}
             >
