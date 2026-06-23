@@ -1,5 +1,5 @@
 // CE Project Hub - SOP 标准流程数据
-// Design: Industrial Precision - stone/amber color system
+// Design: Linear-style monochrome-indigo token system
 
 export interface SOPTask {
   id: string;
@@ -327,9 +327,9 @@ export const getBlockingGate = (project: Project, phaseId: string): { phaseName:
 };
 
 export const HEALTH_CONFIG = {
-  low: { label: '绿灯', shortLabel: '绿', color: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-200', dot: 'bg-emerald-500' },
-  medium: { label: '黄灯', shortLabel: '黄', color: 'text-amber-700', bg: 'bg-amber-50', border: 'border-amber-200', dot: 'bg-amber-500' },
-  high: { label: '红灯', shortLabel: '红', color: 'text-rose-700', bg: 'bg-rose-50', border: 'border-rose-200', dot: 'bg-rose-500' },
+  low: { label: '绿灯', shortLabel: '绿', color: 'text-[color:var(--success)]', bg: 'bg-[color:var(--success-soft)]', border: 'border-[color:var(--success)]', dot: 'bg-[color:var(--success)]' },
+  medium: { label: '黄灯', shortLabel: '黄', color: 'text-[color:var(--warning)]', bg: 'bg-[color:var(--warning-soft)]', border: 'border-[color:var(--warning)]', dot: 'bg-[color:var(--warning)]' },
+  high: { label: '红灯', shortLabel: '红', color: 'text-[color:var(--destructive)]', bg: 'bg-[color:var(--destructive-soft)]', border: 'border-[color:var(--destructive)]', dot: 'bg-[color:var(--destructive)]' },
 };
 
 export const RISK_CONFIG = HEALTH_CONFIG;
@@ -433,20 +433,20 @@ export const SAMPLE_PROJECTS: Project[] = [
 export const SEVERITY_CONFIG: Record<IssueSeverity, {
   label: string; desc: string; color: string; bg: string; border: string; dot: string; textColor: string;
 }> = {
-  P0: { label: 'P0', desc: '严重缺陷', color: 'text-red-700', bg: 'bg-red-50', border: 'border-red-300', dot: 'bg-red-500', textColor: 'text-red-700' },
-  P1: { label: 'P1', desc: '重要缺陷', color: 'text-orange-700', bg: 'bg-orange-50', border: 'border-orange-300', dot: 'bg-orange-500', textColor: 'text-orange-700' },
-  P2: { label: 'P2', desc: '一般缺陷', color: 'text-amber-700', bg: 'bg-amber-50', border: 'border-amber-300', dot: 'bg-amber-500', textColor: 'text-amber-700' },
-  P3: { label: 'P3', desc: '观察项', color: 'text-stone-600', bg: 'bg-stone-50', border: 'border-stone-300', dot: 'bg-stone-400', textColor: 'text-stone-600' },
+  P0: { label: 'P0', desc: '严重缺陷', color: 'text-[color:var(--destructive)]', bg: 'bg-[color:var(--destructive-soft)]', border: 'border-[color:var(--destructive)]', dot: 'bg-[color:var(--destructive)]', textColor: 'text-[color:var(--destructive)]' },
+  P1: { label: 'P1', desc: '重要缺陷', color: 'text-[color:var(--destructive)]', bg: 'bg-[color:var(--destructive-soft)]', border: 'border-[color:var(--destructive)]', dot: 'bg-[color:var(--destructive)]', textColor: 'text-[color:var(--destructive)]' },
+  P2: { label: 'P2', desc: '一般缺陷', color: 'text-[color:var(--warning)]', bg: 'bg-[color:var(--warning-soft)]', border: 'border-[color:var(--warning)]', dot: 'bg-[color:var(--warning)]', textColor: 'text-[color:var(--warning)]' },
+  P3: { label: 'P3', desc: '观察项', color: 'text-muted-foreground', bg: 'bg-secondary', border: 'border-border', dot: 'bg-muted-foreground', textColor: 'text-muted-foreground' },
 };
 
 export const STATUS_CONFIG: Record<IssueStatus, {
   label: string; color: string; bg: string; border: string;
 }> = {
-  open:        { label: '待处理', color: 'text-rose-700', bg: 'bg-rose-50', border: 'border-rose-200' },
-  in_progress: { label: '修复中', color: 'text-blue-700', bg: 'bg-blue-50', border: 'border-blue-200' },
-  resolved:    { label: '待复测', color: 'text-amber-700', bg: 'bg-amber-50', border: 'border-amber-200' },
-  closed:      { label: '复测通过', color: 'text-stone-500', bg: 'bg-stone-100', border: 'border-stone-200' },
-  wont_fix:    { label: '不修复', color: 'text-stone-400', bg: 'bg-stone-50', border: 'border-stone-200' },
+  open:        { label: '待处理', color: 'text-[color:var(--destructive)]', bg: 'bg-[color:var(--destructive-soft)]', border: 'border-[color:var(--destructive)]' },
+  in_progress: { label: '修复中', color: 'text-primary', bg: 'bg-[color:var(--acc-soft)]', border: 'border-[color:var(--acc-border)]' },
+  resolved:    { label: '待复测', color: 'text-[color:var(--warning)]', bg: 'bg-[color:var(--warning-soft)]', border: 'border-[color:var(--warning)]' },
+  closed:      { label: '复测通过', color: 'text-muted-foreground', bg: 'bg-secondary', border: 'border-border' },
+  wont_fix:    { label: '不修复', color: 'text-muted-foreground', bg: 'bg-secondary', border: 'border-border' },
 };
 
 export const CATEGORY_LABELS: Record<IssueCategory, string> = {

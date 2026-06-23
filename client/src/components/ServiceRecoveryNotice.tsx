@@ -81,19 +81,19 @@ export function ServiceRecoveryNotice() {
 
   const ready = state === "ready";
   return (
-    <div className="fixed bottom-4 right-4 z-[80] w-[min(360px,calc(100vw-2rem))] border border-stone-200 bg-white shadow-2xl">
+    <div className="fixed bottom-4 right-4 z-[80] w-[min(360px,calc(100vw-2rem))] border border-border bg-card shadow-2xl">
       <div className="flex items-start gap-3 p-4">
-        <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center ${ready ? "bg-emerald-50 text-emerald-600" : "bg-amber-50 text-amber-600"}`}>
+        <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center ${ready ? "bg-[color:var(--success-soft)] text-[color:var(--success)]" : "bg-[color:var(--warning-soft)] text-[color:var(--warning)]"}`}>
           {ready ? <Wifi size={16} /> : state === "checking" ? <Loader2 size={16} className="animate-spin" /> : <CloudOff size={16} />}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium text-stone-900">{ready ? "服务已恢复" : "连接暂时中断"}</div>
-          <div className="mt-1 text-xs leading-relaxed text-stone-500">{message}</div>
+          <div className="text-sm font-medium text-foreground">{ready ? "服务已恢复" : "连接暂时中断"}</div>
+          <div className="mt-1 text-xs leading-relaxed text-muted-foreground">{message}</div>
           {ready && (
             <button
               type="button"
               onClick={() => window.location.reload()}
-              className="mt-3 inline-flex items-center gap-1.5 bg-stone-900 px-3 py-1.5 text-xs font-mono uppercase tracking-wider text-white transition-colors hover:bg-stone-700"
+              className="mt-3 inline-flex items-center gap-1.5 bg-primary px-3 py-1.5 text-xs uppercase tracking-wider text-primary-foreground transition-colors hover:bg-primary/90"
             >
               <RotateCcw size={12} />
               刷新页面

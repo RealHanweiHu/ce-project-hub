@@ -23,10 +23,10 @@ export function NotificationBell({ onNavigate }: { onNavigate?: (projectId: stri
 
   return (
     <div className="relative">
-      <button onClick={() => setOpen((o) => !o)} className="relative text-stone-400 hover:text-stone-700 transition-colors" title="通知">
+      <button onClick={() => setOpen((o) => !o)} className="relative text-muted-foreground hover:text-foreground transition-colors" title="通知">
         <Bell size={16} />
         {totalBadge > 0 && (
-          <span className="absolute -top-1.5 -right-1.5 min-w-[15px] h-[15px] px-0.5 bg-rose-500 text-white text-[9px] font-mono rounded-full flex items-center justify-center">
+          <span className="absolute -top-1.5 -right-1.5 min-w-[15px] h-[15px] px-0.5 bg-[color:var(--destructive)] text-white text-[9px] rounded-full flex items-center justify-center">
             {totalBadge > 9 ? '9+' : totalBadge}
           </span>
         )}
@@ -35,11 +35,11 @@ export function NotificationBell({ onNavigate }: { onNavigate?: (projectId: stri
       {open && (
         <>
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 mt-2 w-80 max-h-96 overflow-y-auto bg-white border border-stone-200 shadow-lg z-40">
-            <div className="flex items-center justify-between px-3 py-2 border-b border-stone-100 sticky top-0 bg-white">
-              <span className="text-[10px] font-mono uppercase tracking-widest text-stone-500">通知</span>
+          <div className="absolute right-0 mt-2 w-80 max-h-96 overflow-y-auto bg-white border border-border shadow-lg z-40">
+            <div className="flex items-center justify-between px-3 py-2 border-b border-border sticky top-0 bg-white">
+              <span className="text-[10px] uppercase tracking-widest text-muted-foreground">通知</span>
               {unread > 0 && (
-                <button onClick={() => markAll.mutate()} className="text-[10px] font-mono text-amber-600 hover:text-amber-700 flex items-center gap-1">
+                <button onClick={() => markAll.mutate()} className="text-[10px] text-[color:var(--warning)] hover:opacity-80 flex items-center gap-1">
                   <Check size={11} /> 全部已读
                 </button>
               )}
@@ -48,9 +48,9 @@ export function NotificationBell({ onNavigate }: { onNavigate?: (projectId: stri
             {/* ── 待审交付物 ──────────────────────────────────────────── */}
             {pending.length > 0 && (
               <div>
-                <div className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 border-b border-amber-100">
-                  <ClipboardCheck size={11} className="text-amber-600" />
-                  <span className="text-[10px] font-mono uppercase tracking-widest text-amber-600">待你审核的交付物 ({pending.length})</span>
+                <div className="flex items-center gap-1.5 px-3 py-1.5 bg-[color:var(--warning-soft)] border-b border-[color:var(--warning)]">
+                  <ClipboardCheck size={11} className="text-[color:var(--warning)]" />
+                  <span className="text-[10px] uppercase tracking-widest text-[color:var(--warning)]">待你审核的交付物 ({pending.length})</span>
                 </div>
                 {pending.map((r) => (
                   <button
@@ -59,13 +59,13 @@ export function NotificationBell({ onNavigate }: { onNavigate?: (projectId: stri
                       setOpen(false);
                       onNavigate?.(r.projectId);
                     }}
-                    className="w-full text-left px-3 py-2 border-b border-amber-50 hover:bg-amber-50/60 transition-colors"
+                    className="w-full text-left px-3 py-2 border-b border-[color:var(--warning)] hover:bg-[color:var(--warning-soft)] transition-colors"
                   >
                     <div className="flex items-start gap-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 mt-1.5 shrink-0" />
+                      <span className="w-1.5 h-1.5 rounded-full bg-[color:var(--warning)] mt-1.5 shrink-0" />
                       <div className="flex-1 min-w-0">
-                        <div className="text-xs font-medium text-stone-800 truncate">{r.deliverableName}</div>
-                        <div className="text-[10px] font-mono text-stone-500 truncate">项目 {r.projectId} · {r.phaseId}</div>
+                        <div className="text-xs font-medium text-foreground truncate">{r.deliverableName}</div>
+                        <div className="text-[10px] text-muted-foreground truncate">项目 {r.projectId} · {r.phaseId}</div>
                       </div>
                     </div>
                   </button>
@@ -74,29 +74,29 @@ export function NotificationBell({ onNavigate }: { onNavigate?: (projectId: stri
             )}
 
             {isLoading ? (
-              <div className="flex justify-center py-6"><Loader2 className="animate-spin text-amber-500" size={16} /></div>
+              <div className="flex justify-center py-6"><Loader2 className="animate-spin text-[color:var(--warning)]" size={16} /></div>
             ) : list.length === 0 && pending.length === 0 ? (
-              <p className="text-xs text-stone-400 text-center py-6">暂无通知</p>
+              <p className="text-xs text-muted-foreground text-center py-6">暂无通知</p>
             ) : list.length === 0 ? null : (
               (list as NotificationRow[]).map((n) => (
                 <button
                   key={n.id}
                   onClick={() => { if (!n.read) markRead.mutate({ id: n.id }); }}
-                  className={`w-full text-left px-3 py-2.5 border-b border-stone-50 hover:bg-stone-50 transition-colors ${n.read ? 'opacity-60' : ''}`}
+                  className={`w-full text-left px-3 py-2.5 border-b border-border hover:bg-secondary transition-colors ${n.read ? 'opacity-60' : ''}`}
                 >
                   <div className="flex items-start gap-2">
                     {n.entityType === 'portfolio'
-                      ? <Activity size={13} className="text-amber-500 mt-0.5 shrink-0" />
-                      : !n.read && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 mt-1.5 shrink-0" />}
+                      ? <Activity size={13} className="text-[color:var(--warning)] mt-0.5 shrink-0" />
+                      : !n.read && <span className="w-1.5 h-1.5 rounded-full bg-[color:var(--warning)] mt-1.5 shrink-0" />}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5">
-                        <div className="text-xs font-medium text-stone-800">{n.title}</div>
+                        <div className="text-xs font-medium text-foreground">{n.title}</div>
                         {n.entityType === 'portfolio' && (
-                          <span className="text-[9px] font-mono bg-amber-50 text-amber-700 border border-amber-200 px-1 py-0.5">聚合</span>
+                          <span className="text-[9px] bg-[color:var(--warning-soft)] text-[color:var(--warning)] border border-[color:var(--warning)] px-1 py-0.5">聚合</span>
                         )}
                       </div>
-                      {n.body && <div className="text-[11px] text-stone-500 truncate">{n.body}</div>}
-                      <div className="text-[9px] font-mono text-stone-400 mt-0.5">{new Date(n.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</div>
+                      {n.body && <div className="text-[11px] text-muted-foreground truncate">{n.body}</div>}
+                      <div className="text-[9px] text-muted-foreground mt-0.5">{new Date(n.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</div>
                     </div>
                   </div>
                 </button>

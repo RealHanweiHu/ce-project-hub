@@ -13,8 +13,8 @@ const NotFound = lazy(() => import("./pages/NotFound"));
 
 function RouteLoading() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-stone-50">
-      <div className="text-sm font-mono uppercase tracking-widest text-stone-400">
+    <div className="min-h-screen flex items-center justify-center bg-background">
+      <div className="text-sm uppercase tracking-widest text-muted-foreground">
         Loading...
       </div>
     </div>

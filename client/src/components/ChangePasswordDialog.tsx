@@ -72,16 +72,16 @@ export function ChangePasswordDialog({ open, onOpenChange }: ChangePasswordDialo
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
-          <DialogTitle className="font-serif flex items-center gap-2">
-            <KeyRound size={16} className="text-amber-500" />
+          <DialogTitle className="flex items-center gap-2">
+            <KeyRound size={16} className="text-primary" />
             修改密码
           </DialogTitle>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4 py-2">
           <div className="space-y-1.5">
-            <Label className="text-sm text-stone-700">
-              当前密码 <span className="text-rose-500">*</span>
+            <Label className="text-sm text-foreground">
+              当前密码 <span className="text-[color:var(--destructive)]">*</span>
             </Label>
             <div className="relative">
               <Input
@@ -95,7 +95,7 @@ export function ChangePasswordDialog({ open, onOpenChange }: ChangePasswordDialo
               <button
                 type="button"
                 onClick={() => setShowCurrent(!showCurrent)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600 transition-colors"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
               >
                 {showCurrent ? <EyeOff size={14} /> : <Eye size={14} />}
               </button>
@@ -103,8 +103,8 @@ export function ChangePasswordDialog({ open, onOpenChange }: ChangePasswordDialo
           </div>
 
           <div className="space-y-1.5">
-            <Label className="text-sm text-stone-700">
-              新密码 <span className="text-rose-500">*</span>
+            <Label className="text-sm text-foreground">
+              新密码 <span className="text-[color:var(--destructive)]">*</span>
             </Label>
             <div className="relative">
               <Input
@@ -117,7 +117,7 @@ export function ChangePasswordDialog({ open, onOpenChange }: ChangePasswordDialo
               <button
                 type="button"
                 onClick={() => setShowNew(!showNew)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600 transition-colors"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
               >
                 {showNew ? <EyeOff size={14} /> : <Eye size={14} />}
               </button>
@@ -125,8 +125,8 @@ export function ChangePasswordDialog({ open, onOpenChange }: ChangePasswordDialo
           </div>
 
           <div className="space-y-1.5">
-            <Label className="text-sm text-stone-700">
-              确认新密码 <span className="text-rose-500">*</span>
+            <Label className="text-sm text-foreground">
+              确认新密码 <span className="text-[color:var(--destructive)]">*</span>
             </Label>
             <Input
               type="password"
@@ -136,7 +136,7 @@ export function ChangePasswordDialog({ open, onOpenChange }: ChangePasswordDialo
               className="text-sm"
             />
             {confirmPassword && newPassword && confirmPassword !== newPassword && (
-              <p className="text-xs text-rose-500">两次输入不一致</p>
+              <p className="text-xs text-[color:var(--destructive)]">两次输入不一致</p>
             )}
           </div>
 
@@ -152,7 +152,7 @@ export function ChangePasswordDialog({ open, onOpenChange }: ChangePasswordDialo
             </Button>
             <Button
               type="submit"
-              className="bg-amber-500 hover:bg-amber-600 text-stone-900 text-sm"
+              className="bg-primary hover:bg-primary/90 text-primary-foreground text-sm"
               disabled={changePasswordMutation.isPending}
             >
               {changePasswordMutation.isPending ? (

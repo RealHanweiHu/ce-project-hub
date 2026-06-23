@@ -130,32 +130,32 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen bg-stone-50 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-background flex items-center justify-center p-4">
       <div className="w-full max-w-sm">
         {/* Logo */}
         <div className="flex items-center justify-center gap-3 mb-8">
-          <div className="w-10 h-10 bg-amber-500 flex items-center justify-center">
-            <Cpu size={20} className="text-stone-900" />
+          <div className="w-10 h-10 bg-primary flex items-center justify-center">
+            <Cpu size={20} className="text-primary-foreground" />
           </div>
           <div>
-            <h1 className="font-serif text-xl text-stone-900 leading-tight">CE Project Hub</h1>
-            <p className="text-[10px] font-mono uppercase tracking-widest text-stone-500">
+            <h1 className="text-xl text-foreground leading-tight">CE Project Hub</h1>
+            <p className="text-[10px] uppercase tracking-widest text-muted-foreground">
               Product Dev
             </p>
           </div>
         </div>
 
-        <Card className="border-stone-200 shadow-sm">
+        <Card className="border-border shadow-sm">
           {/* Tab switcher */}
           <CardHeader className="pb-0 pt-4 px-4">
-            <div className="flex border-b border-stone-200">
+            <div className="flex border-b border-border">
               <button
                 type="button"
                 onClick={() => switchMode('login')}
                 className={`flex-1 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
                   mode === 'login'
-                    ? 'border-amber-500 text-amber-600'
-                    : 'border-transparent text-stone-400 hover:text-stone-600'
+                    ? 'border-primary text-primary'
+                    : 'border-transparent text-muted-foreground hover:text-foreground'
                 }`}
               >
                 登录
@@ -166,8 +166,8 @@ export default function Login() {
                   onClick={() => switchMode('register')}
                   className={`flex-1 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
                     mode === 'register'
-                      ? 'border-amber-500 text-amber-600'
-                      : 'border-transparent text-stone-400 hover:text-stone-600'
+                      ? 'border-primary text-primary'
+                      : 'border-transparent text-muted-foreground hover:text-foreground'
                   }`}
                 >
                   注册
@@ -188,8 +188,8 @@ export default function Login() {
               {/* Register-only: display name */}
               {mode === 'register' && (
                 <div className="space-y-1.5">
-                  <Label htmlFor="name" className="text-stone-700 text-sm">
-                    显示名称 <span className="text-rose-500">*</span>
+                  <Label htmlFor="name" className="text-foreground text-sm">
+                    显示名称 <span className="text-[color:var(--destructive)]">*</span>
                   </Label>
                   <Input
                     id="name"
@@ -199,7 +199,7 @@ export default function Login() {
                     placeholder="例：张三"
                     autoFocus
                     disabled={isPending}
-                    className="border-stone-300 focus:border-amber-400"
+                    className="border-border focus:border-primary"
                   />
                 </div>
               )}
@@ -207,8 +207,8 @@ export default function Login() {
               {/* Register-only: email */}
               {mode === 'register' && (
                 <div className="space-y-1.5">
-                  <Label htmlFor="email" className="text-stone-700 text-sm">
-                    邮箱 <span className="text-rose-500">*</span>
+                  <Label htmlFor="email" className="text-foreground text-sm">
+                    邮箱 <span className="text-[color:var(--destructive)]">*</span>
                   </Label>
                   <Input
                     id="email"
@@ -218,7 +218,7 @@ export default function Login() {
                     placeholder="example@company.com"
                     autoComplete="email"
                     disabled={isPending}
-                    className="border-stone-300 focus:border-amber-400"
+                    className="border-border focus:border-primary"
                   />
                 </div>
               )}
@@ -226,8 +226,8 @@ export default function Login() {
               {/* Register-only: invite code (shown when server requires it) */}
               {mode === 'register' && requiresInviteCode && (
                 <div className="space-y-1.5">
-                  <Label htmlFor="inviteCode" className="text-stone-700 text-sm">
-                    邀请码 <span className="text-rose-500">*</span>
+                  <Label htmlFor="inviteCode" className="text-foreground text-sm">
+                    邀请码 <span className="text-[color:var(--destructive)]">*</span>
                   </Label>
                   <Input
                     id="inviteCode"
@@ -236,14 +236,14 @@ export default function Login() {
                     onChange={(e) => setInviteCode(e.target.value)}
                     placeholder="请向管理员索取"
                     disabled={isPending}
-                    className="border-stone-300 focus:border-amber-400"
+                    className="border-border focus:border-primary"
                   />
                 </div>
               )}
 
               <div className="space-y-1.5">
-                <Label htmlFor="username" className="text-stone-700 text-sm">
-                  用户名 {mode === 'register' && <span className="text-rose-500">*</span>}
+                <Label htmlFor="username" className="text-foreground text-sm">
+                  用户名 {mode === 'register' && <span className="text-[color:var(--destructive)]">*</span>}
                 </Label>
                 <Input
                   id="username"
@@ -254,16 +254,16 @@ export default function Login() {
                   autoComplete="username"
                   autoFocus={mode === 'login'}
                   disabled={isPending}
-                  className="border-stone-300 focus:border-amber-400"
+                  className="border-border focus:border-primary"
                 />
                 {mode === 'register' && (
-                  <p className="text-[11px] text-stone-400">用于登录，创建后不可修改</p>
+                  <p className="text-[11px] text-muted-foreground">用于登录，创建后不可修改</p>
                 )}
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="password" className="text-stone-700 text-sm">
-                  密码 {mode === 'register' && <span className="text-rose-500">*</span>}
+                <Label htmlFor="password" className="text-foreground text-sm">
+                  密码 {mode === 'register' && <span className="text-[color:var(--destructive)]">*</span>}
                 </Label>
                 <div className="relative">
                   <Input
@@ -274,12 +274,12 @@ export default function Login() {
                     placeholder={mode === 'register' ? '至少6位' : '请输入密码'}
                     autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
                     disabled={isPending}
-                    className="border-stone-300 focus:border-amber-400 pr-10"
+                    className="border-border focus:border-primary pr-10"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600 transition-colors"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                   >
                     {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
                   </button>
@@ -289,8 +289,8 @@ export default function Login() {
               {/* Register-only: confirm password */}
               {mode === 'register' && (
                 <div className="space-y-1.5">
-                  <Label htmlFor="confirmPassword" className="text-stone-700 text-sm">
-                    确认密码 <span className="text-rose-500">*</span>
+                  <Label htmlFor="confirmPassword" className="text-foreground text-sm">
+                    确认密码 <span className="text-[color:var(--destructive)]">*</span>
                   </Label>
                   <Input
                     id="confirmPassword"
@@ -300,17 +300,17 @@ export default function Login() {
                     placeholder="再次输入密码"
                     autoComplete="new-password"
                     disabled={isPending}
-                    className="border-stone-300 focus:border-amber-400"
+                    className="border-border focus:border-primary"
                   />
                   {confirmPassword && password && confirmPassword !== password && (
-                    <p className="text-xs text-rose-500">两次输入不一致</p>
+                    <p className="text-xs text-[color:var(--destructive)]">两次输入不一致</p>
                   )}
                 </div>
               )}
 
               <Button
                 type="submit"
-                className="w-full bg-amber-500 hover:bg-amber-600 text-stone-900 font-medium"
+                className="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-medium"
                 disabled={isPending}
               >
                 {isPending ? (
@@ -327,7 +327,7 @@ export default function Login() {
         </Card>
 
         {mode === 'register' && (
-          <p className="text-center text-xs text-stone-400 mt-4 leading-relaxed">
+          <p className="text-center text-xs text-muted-foreground mt-4 leading-relaxed">
             注册后默认为普通用户，项目创建及其他权限<br />由管理员在后台授权
           </p>
         )}

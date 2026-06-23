@@ -127,57 +127,57 @@ export default function AdminPanel() {
   const canCreateCount = (users as UserRow[] | undefined)?.filter((u) => u.canCreateProject).length ?? 0;
 
   return (
-    <div className="min-h-screen bg-stone-50">
+    <div className="min-h-screen bg-background">
       {/* Header */}
-      <div className="bg-stone-900 text-stone-50 px-6 py-4 flex items-center gap-3">
+      <div className="bg-foreground text-background px-6 py-4 flex items-center gap-3">
         <button
           onClick={() => navigate('/')}
-          className="text-stone-400 hover:text-stone-200 transition-colors text-sm font-mono mr-2"
+          className="text-muted-foreground hover:text-background transition-colors text-sm mr-2"
         >
           ← 返回
         </button>
-        <Shield size={18} className="text-amber-400" />
+        <Shield size={18} className="text-primary" />
         <div>
-          <h1 className="font-serif text-lg leading-tight">系统管理</h1>
-          <p className="text-[10px] font-mono uppercase tracking-widest text-stone-500">Admin Panel</p>
+          <h1 className="text-lg leading-tight">系统管理</h1>
+          <p className="text-[10px] uppercase tracking-widest text-muted-foreground">Admin Panel</p>
         </div>
         <div className="ml-auto flex items-center gap-2">
-          <Crown size={14} className="text-amber-400" />
-          <span className="text-sm text-stone-300">{user?.name}</span>
+          <Crown size={14} className="text-primary" />
+          <span className="text-sm text-background/80">{user?.name}</span>
         </div>
       </div>
 
       <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
         {/* Stats */}
         <div className="grid grid-cols-3 gap-4">
-          <div className="bg-white border border-stone-200 p-4">
+          <div className="bg-card border border-border p-4">
             <div className="flex items-center gap-2 mb-1">
-              <Users size={14} className="text-stone-400" />
-              <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400">总用户数</span>
+              <Users size={14} className="text-muted-foreground" />
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">总用户数</span>
             </div>
-            <div className="text-2xl font-serif text-stone-900">{users?.length ?? '—'}</div>
+            <div className="text-2xl text-foreground">{users?.length ?? '—'}</div>
           </div>
-          <div className="bg-white border border-stone-200 p-4">
+          <div className="bg-card border border-border p-4">
             <div className="flex items-center gap-2 mb-1">
-              <Shield size={14} className="text-amber-500" />
-              <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400">管理员</span>
+              <Shield size={14} className="text-primary" />
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">管理员</span>
             </div>
-            <div className="text-2xl font-serif text-stone-900">{adminCount}</div>
+            <div className="text-2xl text-foreground">{adminCount}</div>
           </div>
-          <div className="bg-white border border-stone-200 p-4">
+          <div className="bg-card border border-border p-4">
             <div className="flex items-center gap-2 mb-1">
-              <CheckCircle2 size={14} className="text-emerald-500" />
-              <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400">可创建项目</span>
+              <CheckCircle2 size={14} className="text-[color:var(--success)]" />
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">可创建项目</span>
             </div>
-            <div className="text-2xl font-serif text-stone-900">{canCreateCount}</div>
+            <div className="text-2xl text-foreground">{canCreateCount}</div>
           </div>
         </div>
 
         {/* Permission Guide */}
-        <div className="bg-amber-50 border border-amber-200 p-4">
+        <div className="bg-[color:var(--warning-soft)] border border-[color:var(--warning)] p-4">
           <div className="flex items-start gap-2">
-            <AlertTriangle size={14} className="text-amber-600 mt-0.5 shrink-0" />
-            <div className="text-sm text-amber-800 space-y-1">
+            <AlertTriangle size={14} className="text-[color:var(--warning)] mt-0.5 shrink-0" />
+            <div className="text-sm text-[color:var(--warning)] space-y-1">
               <p className="font-semibold">权限说明</p>
               <p><strong>系统角色（admin/user）</strong>：admin 可访问本管理页面、管理所有用户权限。提升为 admin 时自动获得项目创建权限。</p>
               <p><strong>项目创建权限（canCreateProject）</strong>：控制用户是否可以新建项目。可单独授权给非 admin 用户（如产品经理、项目负责人）。</p>
@@ -189,11 +189,11 @@ export default function AdminPanel() {
         <AutomationSettings />
 
         {/* User Table */}
-        <div className="bg-white border border-stone-200">
-          <div className="px-4 py-3 border-b border-stone-100 flex items-center gap-3">
-            <h2 className="font-serif text-base text-stone-900 flex-1">用户管理</h2>
+        <div className="bg-card border border-border">
+          <div className="px-4 py-3 border-b border-border flex items-center gap-3">
+            <h2 className="text-base text-foreground flex-1">用户管理</h2>
             <div className="relative w-56">
-              <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-stone-400" />
+              <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
@@ -211,7 +211,7 @@ export default function AdminPanel() {
             </Button>
             <Button
               size="sm"
-              className="h-8 gap-1.5 bg-amber-500 hover:bg-amber-600 text-stone-900 text-xs"
+              className="h-8 gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground text-xs"
               onClick={() => setCreateOpen(true)}
             >
               <UserPlus size={13} />
@@ -220,42 +220,42 @@ export default function AdminPanel() {
           </div>
 
           {isLoading ? (
-            <div className="p-8 text-center text-stone-400 text-sm font-mono">加载中...</div>
+            <div className="p-8 text-center text-muted-foreground text-sm">加载中...</div>
           ) : filteredUsers.length === 0 ? (
-            <div className="p-8 text-center text-stone-400 text-sm font-mono">暂无用户</div>
+            <div className="p-8 text-center text-muted-foreground text-sm">暂无用户</div>
           ) : (
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-stone-100 bg-stone-50">
-                  <th className="text-left px-4 py-2.5 text-[10px] font-mono uppercase tracking-wider text-stone-400">用户</th>
-                  <th className="text-left px-4 py-2.5 text-[10px] font-mono uppercase tracking-wider text-stone-400">用户名</th>
-                  <th className="text-left px-4 py-2.5 text-[10px] font-mono uppercase tracking-wider text-stone-400">手机号(钉钉)</th>
-                  <th className="text-center px-4 py-2.5 text-[10px] font-mono uppercase tracking-wider text-stone-400">系统角色</th>
-                  <th className="text-center px-4 py-2.5 text-[10px] font-mono uppercase tracking-wider text-stone-400">可创建项目</th>
-                  <th className="text-left px-4 py-2.5 text-[10px] font-mono uppercase tracking-wider text-stone-400">最近登录</th>
-                  <th className="text-center px-4 py-2.5 text-[10px] font-mono uppercase tracking-wider text-stone-400">操作</th>
+                <tr className="border-b border-border bg-secondary">
+                  <th className="text-left px-4 py-2.5 text-[10px] uppercase tracking-wider text-muted-foreground">用户</th>
+                  <th className="text-left px-4 py-2.5 text-[10px] uppercase tracking-wider text-muted-foreground">用户名</th>
+                  <th className="text-left px-4 py-2.5 text-[10px] uppercase tracking-wider text-muted-foreground">手机号(钉钉)</th>
+                  <th className="text-center px-4 py-2.5 text-[10px] uppercase tracking-wider text-muted-foreground">系统角色</th>
+                  <th className="text-center px-4 py-2.5 text-[10px] uppercase tracking-wider text-muted-foreground">可创建项目</th>
+                  <th className="text-left px-4 py-2.5 text-[10px] uppercase tracking-wider text-muted-foreground">最近登录</th>
+                  <th className="text-center px-4 py-2.5 text-[10px] uppercase tracking-wider text-muted-foreground">操作</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredUsers.map((u) => (
-                  <tr key={u.id} className="border-b border-stone-50 hover:bg-stone-50/50 transition-colors">
+                  <tr key={u.id} className="border-b border-border hover:bg-secondary/50 transition-colors">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
                         {u.role === 'admin' ? (
-                          <Crown size={13} className="text-amber-500 shrink-0" />
+                          <Crown size={13} className="text-primary shrink-0" />
                         ) : (
-                          <User size={13} className="text-stone-400 shrink-0" />
+                          <User size={13} className="text-muted-foreground shrink-0" />
                         )}
-                        <span className="font-medium text-stone-900">{u.name}</span>
+                        <span className="font-medium text-foreground">{u.name}</span>
                         {u.id === user?.id && (
                           <Badge variant="outline" className="text-[9px] h-4 px-1">你</Badge>
                         )}
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-stone-500 font-mono text-xs">{u.username || '—'}</td>
-                    <td className="px-4 py-3 font-mono text-xs">
+                    <td className="px-4 py-3 text-muted-foreground text-xs">{u.username || '—'}</td>
+                    <td className="px-4 py-3 text-xs">
                       <button
-                        className={`hover:underline ${u.mobile ? 'text-stone-600' : 'text-stone-300'}`}
+                        className={`hover:underline ${u.mobile ? 'text-foreground' : 'text-muted-foreground'}`}
                         title="点击设置/修改手机号(用于钉钉日程映射)"
                         onClick={() => {
                           const v = window.prompt(`设置 ${u.name} 的手机号(与钉钉一致):`, u.mobile || '');
@@ -276,9 +276,9 @@ export default function AdminPanel() {
                             disabled={u.id === user?.id}
                           >
                             {u.role === 'admin' ? (
-                              <span className="text-amber-600 font-semibold">管理员</span>
+                              <span className="text-primary font-semibold">管理员</span>
                             ) : (
-                              <span className="text-stone-500">普通用户</span>
+                              <span className="text-muted-foreground">普通用户</span>
                             )}
                             {u.id !== user?.id && <ChevronDown size={11} />}
                           </Button>
@@ -288,13 +288,13 @@ export default function AdminPanel() {
                             onClick={() => setRoleMutation.mutate({ userId: u.id, role: 'admin' })}
                             disabled={u.role === 'admin'}
                           >
-                            <Crown size={13} className="mr-2 text-amber-500" />
+                            <Crown size={13} className="mr-2 text-primary" />
                             提升为管理员
                           </DropdownMenuItem>
                           <DropdownMenuItem
                             onClick={() => setRoleMutation.mutate({ userId: u.id, role: 'user' })}
                             disabled={u.role === 'user'}
-                            className="text-rose-600"
+                            className="text-[color:var(--destructive)]"
                           >
                             <User size={13} className="mr-2" />
                             降级为普通用户
@@ -314,13 +314,13 @@ export default function AdminPanel() {
                         title={u.canCreateProject ? '点击撤销创建权限' : '点击授予创建权限'}
                       >
                         {u.canCreateProject ? (
-                          <CheckCircle2 size={16} className="text-emerald-500 hover:text-emerald-700" />
+                          <CheckCircle2 size={16} className="text-[color:var(--success)] hover:opacity-80" />
                         ) : (
-                          <XCircle size={16} className="text-stone-300 hover:text-rose-400" />
+                          <XCircle size={16} className="text-muted-foreground hover:text-[color:var(--destructive)]" />
                         )}
                       </button>
                     </td>
-                    <td className="px-4 py-3 text-stone-400 text-xs font-mono">
+                    <td className="px-4 py-3 text-muted-foreground text-xs">
                       {u.lastSignedIn
                         ? new Date(u.lastSignedIn).toLocaleDateString('zh-CN', {
                             year: 'numeric', month: '2-digit', day: '2-digit',
@@ -355,20 +355,20 @@ export default function AdminPanel() {
         </div>
 
         {/* Calendar Exceptions Table */}
-        <div className="bg-white border border-stone-200 p-4">
-          <h2 className="font-serif text-base text-stone-900 mb-1">工作日历例外（节假日 / 调休）</h2>
-          <p className="text-xs text-stone-500 mb-3">默认周一~六工作、周日休息。此处登记法定假（休）与调休上班日（工）。</p>
+        <div className="bg-card border border-border p-4">
+          <h2 className="text-base text-foreground mb-1">工作日历例外（节假日 / 调休）</h2>
+          <p className="text-xs text-muted-foreground mb-3">默认周一~六工作、周日休息。此处登记法定假（休）与调休上班日（工）。</p>
           <div className="flex gap-2 mb-3 items-end flex-wrap">
             <input
               type="date"
               value={calForm.date}
               onChange={(e) => setCalForm({ ...calForm, date: e.target.value })}
-              className="border border-stone-300 rounded px-2 py-1 text-sm"
+              className="border border-border rounded px-2 py-1 text-sm"
             />
             <select
               value={calForm.type}
               onChange={(e) => setCalForm({ ...calForm, type: e.target.value as 'holiday' | 'makeup_workday' })}
-              className="border border-stone-300 rounded px-2 py-1 text-sm"
+              className="border border-border rounded px-2 py-1 text-sm"
             >
               <option value="holiday">法定假（休）</option>
               <option value="makeup_workday">调休上班（工）</option>
@@ -377,19 +377,19 @@ export default function AdminPanel() {
               placeholder="名称"
               value={calForm.name}
               onChange={(e) => setCalForm({ ...calForm, name: e.target.value })}
-              className="border border-stone-300 rounded px-2 py-1 text-sm"
+              className="border border-border rounded px-2 py-1 text-sm"
             />
             <button
               disabled={!calForm.date || upsertCal.isPending}
               onClick={() => upsertCal.mutate(calForm)}
-              className="bg-stone-900 text-white text-sm rounded px-3 py-1 disabled:opacity-40"
+              className="bg-primary text-primary-foreground text-sm rounded px-3 py-1 disabled:opacity-40"
             >
               添加/更新
             </button>
           </div>
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-left text-stone-500 border-b border-stone-200">
+              <tr className="text-left text-muted-foreground border-b border-border">
                 <th className="py-1">日期</th>
                 <th>类型</th>
                 <th>名称</th>
@@ -398,14 +398,14 @@ export default function AdminPanel() {
             </thead>
             <tbody>
               {(calExceptions ?? []).map((row) => (
-                <tr key={row.date} className="border-b border-stone-100">
-                  <td className="py-1 font-mono">{row.date}</td>
+                <tr key={row.date} className="border-b border-border">
+                  <td className="py-1">{row.date}</td>
                   <td>{row.type === 'holiday' ? '法定假' : '调休上班'}</td>
                   <td>{row.name}</td>
                   <td className="text-right">
                     <button
                       onClick={() => removeCal.mutate({ date: row.date })}
-                      className="text-rose-600 text-xs"
+                      className="text-[color:var(--destructive)] text-xs"
                     >
                       删除
                     </button>
@@ -417,26 +417,26 @@ export default function AdminPanel() {
         </div>
 
         {/* Role Reference Table */}
-        <div className="bg-white border border-stone-200 p-4">
-          <h3 className="font-serif text-sm text-stone-900 mb-3 flex items-center gap-2">
-            <Shield size={13} className="text-amber-500" />
+        <div className="bg-card border border-border p-4">
+          <h3 className="text-sm text-foreground mb-3 flex items-center gap-2">
+            <Shield size={13} className="text-primary" />
             项目内角色权限对照表
           </h3>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="border-b border-stone-100">
-                  <th className="text-left py-2 pr-4 text-stone-500 font-mono uppercase tracking-wider">角色</th>
-                  <th className="text-center py-2 px-2 text-stone-500 font-mono uppercase tracking-wider">查看</th>
-                  <th className="text-center py-2 px-2 text-stone-500 font-mono uppercase tracking-wider">编辑任务</th>
-                  <th className="text-center py-2 px-2 text-stone-500 font-mono uppercase tracking-wider">问题/变更</th>
-                  <th className="text-center py-2 px-2 text-stone-500 font-mono uppercase tracking-wider">Gate评审</th>
-                  <th className="text-center py-2 px-2 text-stone-500 font-mono uppercase tracking-wider">项目信息</th>
-                  <th className="text-center py-2 px-2 text-stone-500 font-mono uppercase tracking-wider">成员管理</th>
-                  <th className="text-center py-2 px-2 text-stone-500 font-mono uppercase tracking-wider">删除项目</th>
+                <tr className="border-b border-border">
+                  <th className="text-left py-2 pr-4 text-muted-foreground uppercase tracking-wider">角色</th>
+                  <th className="text-center py-2 px-2 text-muted-foreground uppercase tracking-wider">查看</th>
+                  <th className="text-center py-2 px-2 text-muted-foreground uppercase tracking-wider">编辑任务</th>
+                  <th className="text-center py-2 px-2 text-muted-foreground uppercase tracking-wider">问题/变更</th>
+                  <th className="text-center py-2 px-2 text-muted-foreground uppercase tracking-wider">Gate评审</th>
+                  <th className="text-center py-2 px-2 text-muted-foreground uppercase tracking-wider">项目信息</th>
+                  <th className="text-center py-2 px-2 text-muted-foreground uppercase tracking-wider">成员管理</th>
+                  <th className="text-center py-2 px-2 text-muted-foreground uppercase tracking-wider">删除项目</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-stone-50">
+              <tbody className="divide-y divide-border">
                 {[
                   { role: 'owner', label: 'Owner（创建者）', perms: [true, true, true, true, true, true, true] },
                   { role: 'manager', label: '管理层', perms: [true, true, true, true, true, true, false] },
@@ -448,14 +448,14 @@ export default function AdminPanel() {
                   { role: 'scm', label: '供应链 SCM', perms: [true, true, false, false, false, false, false] },
                   { role: 'viewer', label: '只读访客', perms: [true, false, false, false, false, false, false] },
                 ].map(({ role, label, perms }) => (
-                  <tr key={role} className="hover:bg-stone-50/50">
-                    <td className="py-2 pr-4 font-medium text-stone-700">{label}</td>
+                  <tr key={role} className="hover:bg-secondary/50">
+                    <td className="py-2 pr-4 font-medium text-foreground">{label}</td>
                     {perms.map((p, i) => (
                       <td key={i} className="py-2 px-2 text-center">
                         {p ? (
-                          <CheckCircle2 size={13} className="text-emerald-500 mx-auto" />
+                          <CheckCircle2 size={13} className="text-[color:var(--success)] mx-auto" />
                         ) : (
-                          <XCircle size={13} className="text-stone-200 mx-auto" />
+                          <XCircle size={13} className="text-muted-foreground mx-auto" />
                         )}
                       </td>
                     ))}
@@ -471,24 +471,24 @@ export default function AdminPanel() {
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle className="font-serif flex items-center gap-2">
-              <UserPlus size={16} className="text-amber-500" />
+            <DialogTitle className="flex items-center gap-2">
+              <UserPlus size={16} className="text-primary" />
               新建用户
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
-              <Label className="text-sm text-stone-700">用户名 <span className="text-rose-500">*</span></Label>
+              <Label className="text-sm text-foreground">用户名 <span className="text-[color:var(--destructive)]">*</span></Label>
               <Input
                 value={newUsername}
                 onChange={(e) => setNewUsername(e.target.value)}
                 placeholder="仅字母、数字、下划线、点、横线"
                 className="text-sm"
               />
-              <p className="text-xs text-stone-400">用于登录，创建后不可修改</p>
+              <p className="text-xs text-muted-foreground">用于登录，创建后不可修改</p>
             </div>
             <div className="space-y-1.5">
-              <Label className="text-sm text-stone-700">显示名称 <span className="text-rose-500">*</span></Label>
+              <Label className="text-sm text-foreground">显示名称 <span className="text-[color:var(--destructive)]">*</span></Label>
               <Input
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
@@ -497,7 +497,7 @@ export default function AdminPanel() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-sm text-stone-700">邮箱</Label>
+              <Label className="text-sm text-foreground">邮箱</Label>
               <Input
                 type="email"
                 value={newEmail}
@@ -507,7 +507,7 @@ export default function AdminPanel() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-sm text-stone-700">手机号（钉钉日程）</Label>
+              <Label className="text-sm text-foreground">手机号（钉钉日程）</Label>
               <Input
                 value={newMobile}
                 onChange={(e) => setNewMobile(e.target.value)}
@@ -516,7 +516,7 @@ export default function AdminPanel() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-sm text-stone-700">初始密码 <span className="text-rose-500">*</span></Label>
+              <Label className="text-sm text-foreground">初始密码 <span className="text-[color:var(--destructive)]">*</span></Label>
               <Input
                 type="password"
                 value={newPassword}
@@ -527,24 +527,24 @@ export default function AdminPanel() {
             </div>
             <div className="flex gap-4">
               <div className="space-y-1.5 flex-1">
-                <Label className="text-sm text-stone-700">系统角色</Label>
+                <Label className="text-sm text-foreground">系统角色</Label>
                 <select
                   value={newRole}
                   onChange={(e) => setNewRole(e.target.value as 'user' | 'admin')}
-                  className="w-full h-9 border border-stone-200 rounded-md px-3 text-sm bg-white"
+                  className="w-full h-9 border border-border rounded-md px-3 text-sm bg-card"
                 >
                   <option value="user">普通用户</option>
                   <option value="admin">管理员</option>
                 </select>
               </div>
               <div className="space-y-1.5">
-                <Label className="text-sm text-stone-700">可创建项目</Label>
+                <Label className="text-sm text-foreground">可创建项目</Label>
                 <div className="flex items-center h-9">
                   <input
                     type="checkbox"
                     checked={newCanCreate}
                     onChange={(e) => setNewCanCreate(e.target.checked)}
-                    className="w-4 h-4 accent-amber-500"
+                    className="w-4 h-4 accent-[var(--primary)]"
                   />
                 </div>
               </div>
@@ -553,7 +553,7 @@ export default function AdminPanel() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)} className="text-sm">取消</Button>
             <Button
-              className="bg-amber-500 hover:bg-amber-600 text-stone-900 text-sm"
+              className="bg-primary hover:bg-primary/90 text-primary-foreground text-sm"
               disabled={createUserMutation.isPending}
               onClick={() => {
                 if (!newUsername.trim() || !newPassword || !newName.trim()) {
@@ -581,17 +581,17 @@ export default function AdminPanel() {
       <Dialog open={resetOpen} onOpenChange={setResetOpen}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle className="font-serif flex items-center gap-2">
-              <KeyRound size={16} className="text-amber-500" />
+            <DialogTitle className="flex items-center gap-2">
+              <KeyRound size={16} className="text-primary" />
               重置密码
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
-            <p className="text-sm text-stone-600">
+            <p className="text-sm text-muted-foreground">
               正在重置 <strong>{resetUserName}</strong> 的密码
             </p>
             <div className="space-y-1.5">
-              <Label className="text-sm text-stone-700">新密码 <span className="text-rose-500">*</span></Label>
+              <Label className="text-sm text-foreground">新密码 <span className="text-[color:var(--destructive)]">*</span></Label>
               <Input
                 type="password"
                 value={newPwd}
@@ -605,7 +605,7 @@ export default function AdminPanel() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setResetOpen(false)} className="text-sm">取消</Button>
             <Button
-              className="bg-amber-500 hover:bg-amber-600 text-stone-900 text-sm"
+              className="bg-primary hover:bg-primary/90 text-primary-foreground text-sm"
               disabled={resetPasswordMutation.isPending}
               onClick={() => {
                 if (!newPwd || newPwd.length < 6) {

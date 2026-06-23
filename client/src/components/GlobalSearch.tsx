@@ -1,4 +1,4 @@
-// Design: Industrial Precision - stone/amber color system
+// Design: Linear-style monochrome-indigo token system
 // GlobalSearch: Ctrl+K command palette for searching projects, tasks, SOP, issues
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -32,10 +32,10 @@ interface GlobalSearchProps {
 }
 
 const TYPE_CONFIG: Record<ResultType, { label: string; icon: React.ElementType; color: string; bg: string }> = {
-  project: { label: '项目', icon: FolderKanban, color: 'text-amber-600', bg: 'bg-amber-50' },
-  task: { label: '任务', icon: CheckSquare, color: 'text-blue-600', bg: 'bg-blue-50' },
-  sop: { label: 'SOP', icon: BookOpen, color: 'text-emerald-600', bg: 'bg-emerald-50' },
-  issue: { label: '问题', icon: AlertTriangle, color: 'text-rose-600', bg: 'bg-rose-50' },
+  project: { label: '项目', icon: FolderKanban, color: 'text-primary', bg: 'bg-[color:var(--acc-soft)]' },
+  task: { label: '任务', icon: CheckSquare, color: 'text-primary', bg: 'bg-[color:var(--acc-soft)]' },
+  sop: { label: 'SOP', icon: BookOpen, color: 'text-[color:var(--success)]', bg: 'bg-[color:var(--success-soft)]' },
+  issue: { label: '问题', icon: AlertTriangle, color: 'text-[color:var(--destructive)]', bg: 'bg-[color:var(--destructive-soft)]' },
 };
 
 function highlight(text: string, query: string): React.ReactNode {
@@ -44,7 +44,7 @@ function highlight(text: string, query: string): React.ReactNode {
   const parts = text.split(regex);
   return parts.map((part, i) =>
     regex.test(part) ? (
-      <mark key={i} className="bg-amber-200 text-amber-900 rounded-sm px-0.5 not-italic font-semibold">
+      <mark key={i} className="bg-[color:var(--warning-soft)] text-[color:var(--warning)] rounded-sm px-0.5 not-italic font-semibold">
         {part}
       </mark>
     ) : (
@@ -218,30 +218,30 @@ export function GlobalSearch({ open, onClose, projects, onNavigate }: GlobalSear
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center pt-[12vh]" onClick={onClose}>
       {/* Backdrop */}
-      <div className="absolute inset-0 bg-stone-900/60 backdrop-blur-sm" />
+      <div className="absolute inset-0 bg-foreground/60 backdrop-blur-sm" />
 
       {/* Panel */}
       <div
-        className="relative w-full max-w-2xl mx-4 bg-white shadow-2xl border border-stone-200 overflow-hidden"
+        className="relative w-full max-w-2xl mx-4 bg-card shadow-2xl border border-border overflow-hidden"
         onClick={(e) => e.stopPropagation()}
         style={{ maxHeight: '70vh' }}
       >
         {/* Search Input */}
-        <div className="flex items-center gap-3 px-4 py-3.5 border-b border-stone-200 bg-stone-50">
-          <Search size={16} className="text-stone-400 shrink-0" />
+        <div className="flex items-center gap-3 px-4 py-3.5 border-b border-border bg-secondary">
+          <Search size={16} className="text-muted-foreground shrink-0" />
           <input
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="搜索项目、任务、问题、SOP..."
-            className="flex-1 bg-transparent text-stone-900 text-sm placeholder:text-stone-400 outline-none"
+            className="flex-1 bg-transparent text-foreground text-sm placeholder:text-muted-foreground outline-none"
           />
           {query && (
-            <button onClick={() => setQuery('')} className="text-stone-400 hover:text-stone-600 transition-colors">
+            <button onClick={() => setQuery('')} className="text-muted-foreground hover:text-foreground transition-colors">
               <X size={14} />
             </button>
           )}
-          <kbd className="hidden sm:flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-mono text-stone-400 bg-stone-200 border border-stone-300">
+          <kbd className="hidden sm:flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] text-muted-foreground bg-secondary border border-border">
             ESC
           </kbd>
         </div>
@@ -250,22 +250,22 @@ export function GlobalSearch({ open, onClose, projects, onNavigate }: GlobalSear
         <div ref={listRef} className="overflow-y-auto" style={{ maxHeight: 'calc(70vh - 60px)' }}>
           {!query.trim() && (
             <div className="px-4 py-8 text-center">
-              <div className="w-12 h-12 bg-stone-100 flex items-center justify-center mx-auto mb-3">
-                <Search size={20} className="text-stone-400" />
+              <div className="w-12 h-12 bg-secondary flex items-center justify-center mx-auto mb-3">
+                <Search size={20} className="text-muted-foreground" />
               </div>
-              <p className="text-sm text-stone-500">输入关键词搜索</p>
-              <p className="text-xs text-stone-400 mt-1 font-mono">项目名称 · 任务 · 问题 · SOP 内容</p>
+              <p className="text-sm text-muted-foreground">输入关键词搜索</p>
+              <p className="text-xs text-muted-foreground mt-1">项目名称 · 任务 · 问题 · SOP 内容</p>
               <div className="flex items-center justify-center gap-4 mt-4">
-                <span className="flex items-center gap-1 text-[10px] font-mono text-stone-400">
-                  <kbd className="px-1 py-0.5 bg-stone-100 border border-stone-200 text-stone-500">↑↓</kbd>
+                <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                  <kbd className="px-1 py-0.5 bg-secondary border border-border text-muted-foreground">↑↓</kbd>
                   导航
                 </span>
-                <span className="flex items-center gap-1 text-[10px] font-mono text-stone-400">
-                  <kbd className="px-1 py-0.5 bg-stone-100 border border-stone-200 text-stone-500">↵</kbd>
+                <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                  <kbd className="px-1 py-0.5 bg-secondary border border-border text-muted-foreground">↵</kbd>
                   跳转
                 </span>
-                <span className="flex items-center gap-1 text-[10px] font-mono text-stone-400">
-                  <kbd className="px-1 py-0.5 bg-stone-100 border border-stone-200 text-stone-500">ESC</kbd>
+                <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                  <kbd className="px-1 py-0.5 bg-secondary border border-border text-muted-foreground">ESC</kbd>
                   关闭
                 </span>
               </div>
@@ -274,8 +274,8 @@ export function GlobalSearch({ open, onClose, projects, onNavigate }: GlobalSear
 
           {query.trim() && results.length === 0 && (
             <div className="px-4 py-8 text-center">
-              <p className="text-sm text-stone-500">未找到与 "<span className="text-stone-700 font-medium">{query}</span>" 相关的内容</p>
-              <p className="text-xs text-stone-400 mt-1">尝试搜索项目名称、任务名称或负责人</p>
+              <p className="text-sm text-muted-foreground">未找到与 "<span className="text-foreground font-medium">{query}</span>" 相关的内容</p>
+              <p className="text-xs text-muted-foreground mt-1">尝试搜索项目名称、任务名称或负责人</p>
             </div>
           )}
 
@@ -297,12 +297,12 @@ export function GlobalSearch({ open, onClose, projects, onNavigate }: GlobalSear
                 return (
                   <div key={type}>
                     {/* Group header */}
-                    <div className="flex items-center gap-2 px-4 py-1.5 bg-stone-50 border-y border-stone-100">
+                    <div className="flex items-center gap-2 px-4 py-1.5 bg-secondary border-y border-border">
                       <Icon size={11} className={cfg.color} />
-                      <span className={`text-[10px] font-mono uppercase tracking-widest ${cfg.color}`}>
+                      <span className={`text-[10px] uppercase tracking-widest ${cfg.color}`}>
                         {cfg.label}
                       </span>
-                      <span className="text-[10px] font-mono text-stone-400 ml-auto">{group.length}</span>
+                      <span className="text-[10px] text-muted-foreground ml-auto">{group.length}</span>
                     </div>
 
                     {/* Items */}
@@ -316,32 +316,32 @@ export function GlobalSearch({ open, onClose, projects, onNavigate }: GlobalSear
                           onClick={() => { onNavigate(result); onClose(); }}
                           onMouseEnter={() => setActiveIndex(flatIdx)}
                           className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors ${
-                            isActive ? 'bg-amber-50 border-l-2 border-amber-500' : 'border-l-2 border-transparent hover:bg-stone-50'
+                            isActive ? 'bg-[color:var(--acc-soft)] border-l-2 border-primary' : 'border-l-2 border-transparent hover:bg-secondary'
                           }`}
                         >
                           <div className={`w-6 h-6 flex items-center justify-center shrink-0 ${cfg.bg}`}>
                             <Icon size={12} className={cfg.color} />
                           </div>
                           <div className="flex-1 min-w-0">
-                            <div className="text-sm text-stone-900 truncate">
+                            <div className="text-sm text-foreground truncate">
                               {highlight(result.title, query)}
                             </div>
-                            <div className="text-[11px] text-stone-400 font-mono truncate mt-0.5">
+                            <div className="text-[11px] text-muted-foreground truncate mt-0.5">
                               {result.subtitle}
                             </div>
                           </div>
                           {result.meta && (
-                            <span className={`text-[10px] font-mono px-1.5 py-0.5 shrink-0 ${
-                              result.meta.includes('红灯') ? 'bg-rose-100 text-rose-700' :
-                              result.meta.includes('P0') ? 'bg-rose-100 text-rose-700' :
-                              result.meta.includes('P1') ? 'bg-orange-100 text-orange-700' :
-                              result.meta.includes('已完成') ? 'bg-emerald-100 text-emerald-700' :
-                              'bg-stone-100 text-stone-500'
+                            <span className={`text-[10px] px-1.5 py-0.5 shrink-0 ${
+                              result.meta.includes('红灯') ? 'bg-[color:var(--destructive-soft)] text-[color:var(--destructive)]' :
+                              result.meta.includes('P0') ? 'bg-[color:var(--destructive-soft)] text-[color:var(--destructive)]' :
+                              result.meta.includes('P1') ? 'bg-[color:var(--destructive-soft)] text-[color:var(--destructive)]' :
+                              result.meta.includes('已完成') ? 'bg-[color:var(--success-soft)] text-[color:var(--success)]' :
+                              'bg-secondary text-muted-foreground'
                             }`}>
                               {result.meta}
                             </span>
                           )}
-                          {isActive && <ChevronRight size={12} className="text-amber-500 shrink-0" />}
+                          {isActive && <ChevronRight size={12} className="text-primary shrink-0" />}
                         </button>
                       );
                     })}
@@ -349,7 +349,7 @@ export function GlobalSearch({ open, onClose, projects, onNavigate }: GlobalSear
                 );
               })}
 
-              <div className="px-4 py-2 border-t border-stone-100 flex items-center gap-1 text-[10px] font-mono text-stone-400">
+              <div className="px-4 py-2 border-t border-border flex items-center gap-1 text-[10px] text-muted-foreground">
                 <Hash size={10} />
                 共 {results.length} 条结果
               </div>
