@@ -48,78 +48,78 @@
   --color-sidebar-ring: var(--sidebar-ring);
 
   /* Custom font families */
-  --font-serif: 'Playfair Display', Georgia, serif;
-  --font-mono: 'JetBrains Mono', 'Courier New', monospace;
-  --font-sans: 'Source Sans 3', system-ui, sans-serif;
+  --font-sans: 'Hanken Grotesk', system-ui, -apple-system, sans-serif;
+  --font-serif: 'Hanken Grotesk', system-ui, sans-serif;
+  --font-mono: 'Hanken Grotesk', system-ui, sans-serif;
 }
 
 :root {
-  /* Stone/Amber color system */
-  --primary: oklch(0.216 0.006 56.043);       /* stone-900 */
-  --primary-foreground: oklch(0.985 0.001 106.423); /* stone-50 */
-  --sidebar-primary: oklch(0.216 0.006 56.043);
-  --sidebar-primary-foreground: oklch(0.985 0.001 106.423);
-  
-  /* Chart colors - amber tones */
-  --chart-1: oklch(0.769 0.188 70.08);   /* amber-400 */
-  --chart-2: oklch(0.702 0.191 67.56);   /* amber-500 */
-  --chart-3: oklch(0.627 0.181 65.0);    /* amber-600 */
-  --chart-4: oklch(0.555 0.163 62.5);    /* amber-700 */
-  --chart-5: oklch(0.473 0.137 46.201);  /* amber-800 */
-  
-  --radius: 0.25rem;
-  
-  /* Light theme - warm stone */
-  --background: oklch(0.985 0.001 106.423);   /* stone-50 */
-  --foreground: oklch(0.216 0.006 56.043);    /* stone-900 */
-  --card: oklch(1 0 0);                        /* white */
-  --card-foreground: oklch(0.216 0.006 56.043);
+  --radius: 0.6875rem; /* 11px 卡片 */
+
+  /* 靛蓝主强调 #5e6ad2 */
+  --primary: oklch(0.556 0.146 277.5);
+  --primary-foreground: oklch(1 0 0);
+  --ring: oklch(0.556 0.146 277.5);
+
+  /* 背景/文本（白底 + zinc 中性） */
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.205 0.006 285.9);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.205 0.006 285.9);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.216 0.006 56.043);
-  --secondary: oklch(0.961 0.001 106.424);    /* stone-100 */
-  --secondary-foreground: oklch(0.374 0.01 67.558); /* stone-600 */
-  --muted: oklch(0.923 0.003 48.717);         /* stone-200 */
-  --muted-foreground: oklch(0.553 0.013 58.071); /* stone-500 */
-  --accent: oklch(0.769 0.188 70.08);         /* amber-400 */
-  --accent-foreground: oklch(0.216 0.006 56.043);
-  --destructive: oklch(0.637 0.237 25.331);   /* rose-600 */
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.869 0.005 56.366);        /* stone-300 */
-  --input: oklch(0.869 0.005 56.366);
-  --ring: oklch(0.702 0.191 67.56);           /* amber-500 */
-  
-  /* Sidebar */
-  --sidebar: oklch(0.216 0.006 56.043);       /* stone-900 */
-  --sidebar-foreground: oklch(0.923 0.003 48.717); /* stone-200 */
-  --sidebar-accent: oklch(0.268 0.007 34.298); /* stone-800 */
-  --sidebar-accent-foreground: oklch(0.985 0.001 106.423);
-  --sidebar-border: oklch(0.374 0.01 67.558); /* stone-600 */
-  --sidebar-ring: oklch(0.702 0.191 67.56);
+  --popover-foreground: oklch(0.205 0.006 285.9);
+  --secondary: oklch(0.967 0.001 286.4);
+  --secondary-foreground: oklch(0.37 0.012 285.8);
+  --muted: oklch(0.967 0.001 286.4);
+  --muted-foreground: oklch(0.552 0.014 285.9);
+  --accent: oklch(0.962 0.02 277.5);
+  --accent-foreground: oklch(0.556 0.146 277.5);
+  --destructive: oklch(0.62 0.21 21.6);
+  --destructive-foreground: oklch(1 0 0);
+  --border: oklch(0.918 0.002 286.3);
+  --input: oklch(0.918 0.002 286.3);
+
+  /* 语义扩展 token */
+  --success: oklch(0.64 0.13 155);
+  --success-soft: oklch(0.957 0.03 155);
+  --warning: oklch(0.68 0.13 73);
+  --warning-soft: oklch(0.96 0.04 80);
+  --star: oklch(0.82 0.16 85);
+  --acc-soft: oklch(0.962 0.02 277.5);
+  --acc-border: oklch(0.9 0.04 277.5);
+
+  /* chart */
+  --chart-1: oklch(0.556 0.146 277.5);
+  --chart-2: oklch(0.64 0.13 155);
+  --chart-3: oklch(0.68 0.13 73);
+  --chart-4: oklch(0.62 0.21 21.6);
+  --chart-5: oklch(0.552 0.014 285.9);
+
+  /* sidebar：Linear 浅侧栏 */
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.37 0.012 285.8);
+  --sidebar-primary: oklch(0.556 0.146 277.5);
+  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar-accent: oklch(0.962 0.02 277.5);
+  --sidebar-accent-foreground: oklch(0.556 0.146 277.5);
+  --sidebar-border: oklch(0.918 0.002 286.3);
+  --sidebar-ring: oklch(0.556 0.146 277.5);
 }
 
 @layer base {
-  * {
-    @apply border-border outline-ring/50;
-  }
+  * { @apply border-border outline-ring/50; }
   body {
     @apply bg-background text-foreground;
     font-family: var(--font-sans);
-    background:
-      linear-gradient(180deg, oklch(0.988 0.002 247) 0%, oklch(0.976 0.002 90) 42%, oklch(0.985 0.001 106) 100%);
+    letter-spacing: 0;
+    background: var(--background);
   }
-  
-  h1, h2, h3 {
-    font-family: var(--font-serif);
-  }
-  
-  .font-serif {
-    font-family: var(--font-serif) !important;
-  }
-  
-  .font-mono {
-    font-family: var(--font-mono) !important;
-  }
-  
+  h1, h2, h3 { font-family: var(--font-sans); font-weight: 700; letter-spacing: -0.01em; }
+  .font-serif { font-family: var(--font-sans) !important; }
+  .font-mono  { font-family: var(--font-sans) !important; }
+  .num { font-variant-numeric: tabular-nums; }
+  /* KEEP the existing cursor rules block (button:not(:disabled){...} etc.) exactly as-is */
+
   button:not(:disabled),
   [role="button"]:not([aria-disabled="true"]),
   [type="button"]:not(:disabled),
@@ -156,22 +156,19 @@
   }
 
   .ce-kicker {
-    font-family: var(--font-mono);
     font-size: 0.6875rem;
     line-height: 1rem;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: oklch(0.553 0.013 58.071);
+    color: var(--muted-foreground);
   }
 
   .ce-panel,
   .ce-card {
     border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-    border-radius: 0.5rem;
+    border-radius: 0.6875rem;
     background: color-mix(in oklab, white 96%, var(--background));
-    box-shadow:
-      0 1px 2px rgb(28 25 23 / 0.04),
-      0 16px 36px rgb(28 25 23 / 0.055);
+    box-shadow: 0 1px 2px rgb(0 0 0 / .03);
   }
 
   .ce-card {
@@ -184,9 +181,7 @@
 
   .ce-card:hover {
     border-color: color-mix(in oklab, var(--foreground) 18%, var(--border));
-    box-shadow:
-      0 2px 6px rgb(28 25 23 / 0.05),
-      0 22px 48px rgb(28 25 23 / 0.075);
+    box-shadow: 0 4px 14px rgb(0 0 0 / .09);
   }
 
   .ce-table-shell {
