@@ -46,16 +46,16 @@ export function GateReadinessChecklist({
   const del = trpc.files.delete.useMutation({ onSuccess: refresh, onError: (e) => toast.error(e.message) });
 
   if (isLoading || !readiness) {
-    return <div className="text-xs text-stone-400 font-mono p-3 border border-stone-200 mb-4">就绪度加载中…</div>;
+    return <div className="text-xs text-muted-foreground p-3 border border-border rounded-[9px] mb-4">就绪度加载中…</div>;
   }
 
   const deliverablesDim = readiness.dimensions.find((d) => d.dimension === "deliverables");
 
   return (
-    <div className="border border-stone-200 bg-stone-50/60 p-3 mb-4 space-y-2">
+    <div className="border border-border bg-secondary rounded-[9px] p-3 mb-4 space-y-2">
       <div className="flex items-center justify-between">
-        <span className="text-[10px] font-mono uppercase tracking-widest text-stone-400">GATE 就绪度</span>
-        <span className={`text-xs font-medium ${readiness.ready ? "text-emerald-600" : "text-rose-600"}`}>
+        <span className="text-[10px] uppercase tracking-widest text-muted-foreground">GATE 就绪度</span>
+        <span className="text-xs font-medium" style={{ color: readiness.ready ? "var(--success)" : "var(--destructive)" }}>
           {readiness.ready ? "已就绪" : `还差 ${readiness.blockerCount} 项不能过会`}
         </span>
       </div>
@@ -63,10 +63,10 @@ export function GateReadinessChecklist({
         <div key={dim.dimension} className="text-sm">
           <div className="flex items-center gap-2">
             {dim.ok
-              ? <CheckCircle2 size={14} className="text-emerald-500 shrink-0" />
-              : <XCircle size={14} className="text-rose-500 shrink-0" />}
-            <span className="font-medium text-stone-700">{DIM_LABEL[dim.dimension] ?? dim.dimension}</span>
-            <span className="text-stone-400 text-xs">· {dim.summary}</span>
+              ? <CheckCircle2 size={14} className="text-[color:var(--success)] shrink-0" />
+              : <XCircle size={14} className="text-destructive shrink-0" />}
+            <span className="font-medium text-foreground">{DIM_LABEL[dim.dimension] ?? dim.dimension}</span>
+            <span className="text-muted-foreground text-xs">· {dim.summary}</span>
           </div>
           {dim.dimension === "deliverables" && (
             <DeliverableRows
@@ -77,7 +77,7 @@ export function GateReadinessChecklist({
             />
           )}
           {dim.dimension !== "deliverables" && !dim.ok && dim.blockers.length > 0 && (
-            <ul className="ml-6 mt-0.5 text-xs text-stone-500 list-disc pl-3 space-y-0.5">
+            <ul className="ml-6 mt-0.5 text-xs text-muted-foreground list-disc pl-3 space-y-0.5">
               {dim.blockers.map((b, i) => <li key={i}>{b}</li>)}
             </ul>
           )}
@@ -107,16 +107,16 @@ function DeliverableRows({
         return (
           <div key={name} className="text-xs">
             <div className="flex items-center gap-2">
-              {has ? <CheckCircle2 size={12} className="text-emerald-500 shrink-0" /> : <XCircle size={12} className="text-rose-400 shrink-0" />}
-              <span className={has ? "text-stone-700" : "text-stone-500"}>{name}</span>
+              {has ? <CheckCircle2 size={12} className="text-[color:var(--success)] shrink-0" /> : <XCircle size={12} className="text-destructive shrink-0" />}
+              <span className={has ? "text-foreground" : "text-muted-foreground"}>{name}</span>
               <UploadButton onPick={(f) => onUpload(name, f)} />
             </div>
             {versions.map((v, idx) => (
-              <div key={v.id} className="flex items-center gap-1 ml-5 mt-0.5 text-stone-500">
+              <div key={v.id} className="flex items-center gap-1 ml-5 mt-0.5 text-muted-foreground">
                 <FileText size={11} className="shrink-0" />
                 <a href={v.storageUrl} target="_blank" rel="noreferrer" className="hover:underline truncate max-w-[180px]">{v.name}</a>
-                {idx === 0 && <span className="text-[10px] text-emerald-600">最新</span>}
-                <button onClick={() => onDelete(v.id)} className="text-stone-300 hover:text-rose-500" title="删除该版本">
+                {idx === 0 && <span className="text-[10px] text-[color:var(--success)]">最新</span>}
+                <button onClick={() => onDelete(v.id)} className="text-muted-foreground hover:text-destructive" title="删除该版本">
                   <Trash2 size={11} />
                 </button>
               </div>
@@ -138,7 +138,7 @@ function UploadButton({ onPick }: { onPick: (f: File) => void }) {
         className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) onPick(f); e.target.value = ""; }}
       />
-      <button onClick={() => ref.current?.click()} className="inline-flex items-center gap-0.5 text-amber-600 hover:text-amber-700">
+      <button onClick={() => ref.current?.click()} className="inline-flex items-center gap-0.5 text-primary hover:opacity-80">
         <Upload size={11} /> 上传
       </button>
     </>

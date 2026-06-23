@@ -46,14 +46,14 @@ export function GateStandardPanel({
 
         return (
           <div key={key}>
-            <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-stone-400 mb-1.5">
+            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-muted-foreground mb-1.5">
               {icon}
               <span>{label}</span>
             </div>
             <div className="space-y-1.5">
               {items.map((item, index) => (
-                <div key={`${key}-${index}`} className="flex items-start gap-2 text-xs text-stone-700 leading-relaxed">
-                  <CheckCircle2 size={11} className="text-amber-500 shrink-0 mt-0.5" />
+                <div key={`${key}-${index}`} className="flex items-start gap-2 text-xs text-foreground leading-relaxed">
+                  <CheckCircle2 size={11} className="text-primary shrink-0 mt-0.5" />
                   <span>{item}</span>
                 </div>
               ))}
@@ -63,7 +63,7 @@ export function GateStandardPanel({
       })}
 
       {evidenceHint && (
-        <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 px-3 py-2">
+        <div className="text-[11px] text-primary bg-[color:var(--acc-soft)] border border-[color:var(--acc-border)] rounded-[7px] px-3 py-2">
           证据附件请上传到对应 Gate 评审任务，评审通过前应完成附件归档。
         </div>
       )}

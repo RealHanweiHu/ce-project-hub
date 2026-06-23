@@ -53,11 +53,11 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
   const Check = ({ ok, warn, children }: { ok: boolean; warn?: boolean; children: React.ReactNode }) => (
     <div className="flex items-start gap-2 text-sm">
       {ok
-        ? <CheckCircle2 size={15} className="text-emerald-500 mt-0.5 shrink-0" />
+        ? <CheckCircle2 size={15} className="text-[color:var(--success)] mt-0.5 shrink-0" />
         : warn
-          ? <AlertTriangle size={15} className="text-amber-500 mt-0.5 shrink-0" />
-          : <XCircle size={15} className="text-rose-500 mt-0.5 shrink-0" />}
-      <span className="text-stone-700">{children}</span>
+          ? <AlertTriangle size={15} className="text-[color:var(--warning)] mt-0.5 shrink-0" />
+          : <XCircle size={15} className="text-destructive mt-0.5 shrink-0" />}
+      <span className="text-foreground">{children}</span>
     </div>
   );
 
@@ -110,31 +110,31 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle className="font-serif flex items-center gap-2">
-            <Rocket size={16} className="text-amber-500" /> 量产发布
+          <DialogTitle className="flex items-center gap-2">
+            <Rocket size={16} className="text-primary" /> 量产发布
           </DialogTitle>
         </DialogHeader>
 
         {isLoading ? (
-          <div className="flex justify-center py-8"><Loader2 className="animate-spin text-amber-500" /></div>
+          <div className="flex justify-center py-8"><Loader2 className="animate-spin text-primary" /></div>
         ) : (
           <div className="space-y-4 py-2">
-            <div className={`border p-3 ${
+            <div className={`border rounded-[9px] p-3 ${
               precheck?.canRelease
-                ? 'border-emerald-200 bg-emerald-50/60'
+                ? 'border-[color:var(--success)] bg-[color:var(--success-soft)]'
                 : precheck?.canForceRelease
-                  ? 'border-amber-200 bg-amber-50/60'
-                  : 'border-rose-200 bg-rose-50/60'
+                  ? 'border-[color:var(--warning)] bg-[color:var(--warning-soft)]'
+                  : 'border-destructive bg-[color:var(--destructive-soft)]'
             }`}>
-              <div className="text-[10px] font-mono uppercase tracking-widest text-stone-500 mb-1">发布结论</div>
-              <div className={`text-sm font-semibold ${
-                precheck?.canRelease ? 'text-emerald-800' : precheck?.canForceRelease ? 'text-amber-800' : 'text-rose-800'
-              }`}>
+              <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">发布结论</div>
+              <div className="text-sm font-semibold" style={{
+                color: precheck?.canRelease ? 'var(--success)' : precheck?.canForceRelease ? 'var(--warning)' : 'var(--destructive)',
+              }}>
                 {precheck?.canRelease && '硬卡已满足，可以正常发布'}
                 {precheck?.canForceRelease && '硬卡已满足，但 Gate 为有条件通过'}
                 {!precheck?.canRelease && !precheck?.canForceRelease && '硬卡未满足，暂不可发布'}
               </div>
-              <div className="mt-1 text-[11px] text-stone-600 leading-snug">
+              <div className="mt-1 text-[11px] text-muted-foreground leading-snug">
                 {hardCardsSatisfied
                   ? gateConditional
                     ? '需要记录例外风险、跟进负责人与截止日，发布责任由批准人承接。'
@@ -144,8 +144,8 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
             </div>
 
             {/* 前置校验 */}
-            <div className="space-y-2 border border-stone-200 p-3 bg-stone-50">
-              <div className="text-[10px] font-mono uppercase tracking-widest text-stone-400">前置校验</div>
+            <div className="space-y-2 border border-border rounded-[9px] p-3 bg-secondary">
+              <div className="text-[10px] uppercase tracking-widest text-muted-foreground">前置校验</div>
               <Check ok={!!precheck?.hasProduct}>已关联产品</Check>
               <Check ok={(precheck?.openP0P1 ?? 0) === 0}>
                 无未关闭 P0/P1 问题{(precheck?.openP0P1 ?? 0) > 0 ? `（当前 ${precheck?.openP0P1} 个）` : ''}
@@ -156,7 +156,7 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
                   前置 Gate 交付物审核{!delOk ? `（${delDone}/${delTotal}）` : ''}
                 </Check>
                 {!delOk && delMissing.length > 0 && (
-                  <div className="ml-[23px] mt-0.5 text-[11px] text-rose-500 leading-snug">
+                  <div className="ml-[23px] mt-0.5 text-[11px] text-destructive leading-snug">
                     未通过：{delMissing.slice(0, 5).join('、')}{delMissing.length > 5 ? `…等 ${delMissing.length} 项` : ''}
                   </div>
                 )}
@@ -170,7 +170,7 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
                   {gateDecision === null && '无前置 Gate 评审记录'}
                 </Check>
                 {gateConditional && precheck?.releaseGate?.conditions && (
-                  <div className="ml-[23px] mt-0.5 text-[11px] text-amber-700 leading-snug bg-amber-50 border border-amber-200 p-1.5">
+                  <div className="ml-[23px] mt-0.5 text-[11px] text-[color:var(--warning)] leading-snug bg-[color:var(--warning-soft)] border border-[color:var(--warning)] rounded-[6px] p-1.5">
                     条件：{precheck.releaseGate.conditions}
                   </div>
                 )}
@@ -180,12 +180,12 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
             {/* 未关联产品 → 关联 */}
             {!precheck?.hasProduct && (
               <div className="space-y-1.5">
-                <Label className="text-sm text-stone-700">关联产品</Label>
+                <Label className="text-sm text-foreground">关联产品</Label>
                 <div className="flex gap-2">
                   <select
                     value={selectedProductId}
                     onChange={(e) => setSelectedProductId(e.target.value)}
-                    className="flex-1 border border-stone-300 text-sm px-2 py-2 bg-white"
+                    className="flex-1 border border-border rounded-[7px] text-sm px-2 py-2 bg-card"
                   >
                     <option value="">选择产品…</option>
                     {(products as { id: string; name: string; category: string }[]).map((p) => (
@@ -198,37 +198,37 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
                     onClick={() => setProjectMutation.mutate({ projectId, productId: selectedProductId })}
                   >关联</Button>
                 </div>
-                <p className="text-[11px] text-stone-400">产品库里没有？先去「产品库」新建。</p>
+                <p className="text-[11px] text-muted-foreground">产品库里没有？先去「产品库」新建。</p>
               </div>
             )}
 
             {/* 强制发布表单（仅 canForceRelease 时渲染） */}
             {precheck?.canForceRelease && (
-              <div className="space-y-3 border border-rose-200 p-3 bg-rose-50">
-                <div className="text-[10px] font-mono uppercase tracking-widest text-rose-400">
+              <div className="space-y-3 border border-destructive rounded-[9px] p-3 bg-[color:var(--destructive-soft)]">
+                <div className="text-[10px] uppercase tracking-widest text-destructive">
                   有条件通过 — 强制发布
                 </div>
                 {precheck.releaseGate?.conditions && (
-                  <div className="text-[11px] text-rose-700 leading-snug">
+                  <div className="text-[11px] text-destructive leading-snug">
                     <span className="font-medium">须跟进条件：</span>{precheck.releaseGate.conditions}
                   </div>
                 )}
                 <div className="space-y-1.5">
-                  <Label className="text-sm text-stone-700">强制发布理由 <span className="text-rose-500">*</span></Label>
+                  <Label className="text-sm text-foreground">强制发布理由 <span className="text-destructive">*</span></Label>
                   <textarea
                     value={overrideReason}
                     onChange={(e) => setOverrideReason(e.target.value)}
                     rows={2}
-                    className="w-full border border-rose-300 text-sm px-2 py-2 bg-white"
+                    className="w-full border border-destructive rounded-[7px] text-sm px-2 py-2 bg-card"
                     placeholder="说明强制发布的原因…"
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-sm text-stone-700">条件跟进负责人 <span className="text-rose-500">*</span></Label>
+                  <Label className="text-sm text-foreground">条件跟进负责人 <span className="text-destructive">*</span></Label>
                   <select
                     value={followUpOwner}
                     onChange={(e) => setFollowUpOwner(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full border border-rose-300 text-sm px-2 py-2 bg-white"
+                    className="w-full border border-destructive rounded-[7px] text-sm px-2 py-2 bg-card"
                   >
                     <option value="">选择负责人…</option>
                     {(members as { userId: number; userName: string | null; userEmail: string | null }[]).map((m) => (
@@ -239,12 +239,12 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
                   </select>
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-sm text-stone-700">条件跟进截止日 <span className="text-rose-500">*</span></Label>
+                  <Label className="text-sm text-foreground">条件跟进截止日 <span className="text-destructive">*</span></Label>
                   <input
                     type="date"
                     value={dueDate}
                     onChange={(e) => setDueDate(e.target.value)}
-                    className="w-full border border-rose-300 text-sm px-2 py-2 bg-white"
+                    className="w-full border border-destructive rounded-[7px] text-sm px-2 py-2 bg-card num"
                   />
                 </div>
               </div>
@@ -252,22 +252,22 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
 
             {/* 发布说明 */}
             <div className="space-y-1.5">
-              <Label className="text-sm text-stone-700">量产注意事项 / 备注</Label>
+              <Label className="text-sm text-foreground">量产注意事项 / 备注</Label>
               <textarea
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 rows={3}
-                className="w-full border border-stone-300 text-sm px-2 py-2 bg-white"
+                className="w-full border border-border rounded-[7px] text-sm px-2 py-2 bg-card"
                 placeholder="发布说明、风险、量产注意事项…"
               />
             </div>
 
             {/* 阻断原因列表（可强制发布时由上方强制表单替代，避免红框与表单并存） */}
             {blockers.length > 0 && !precheck?.canForceRelease && (
-              <div className="space-y-1 border border-rose-100 p-2.5 bg-rose-50">
-                <div className="text-[10px] font-mono uppercase tracking-widest text-rose-400">发布阻断</div>
+              <div className="space-y-1 border border-destructive rounded-[9px] p-2.5 bg-[color:var(--destructive-soft)]">
+                <div className="text-[10px] uppercase tracking-widest text-destructive">发布阻断</div>
                 {blockers.map((b, i) => (
-                  <div key={i} className="flex items-start gap-1.5 text-[11px] text-rose-600">
+                  <div key={i} className="flex items-start gap-1.5 text-[11px] text-destructive">
                     <XCircle size={12} className="mt-0.5 shrink-0" />
                     {b}
                   </div>
@@ -275,7 +275,7 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
               </div>
             )}
 
-            <p className="text-[11px] text-stone-400 leading-relaxed">
+            <p className="text-[11px] text-muted-foreground leading-relaxed">
               发布将生成新版本（Rev）、把产品转为「量产」状态、并归档本项目。此动作不可撤销。
             </p>
           </div>
@@ -284,7 +284,7 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
         <DialogFooter className="flex-col items-end gap-1.5">
           {/* 有条件通过但当前用户无权强制发布时的提示 */}
           {!precheck?.canRelease && !precheck?.canForceRelease && gateConditional && (
-            <p className="text-[11px] text-stone-400 w-full text-right">
+            <p className="text-[11px] text-muted-foreground w-full text-right">
               需项目创建人/PM/管理者强制发布
             </p>
           )}
@@ -294,7 +294,7 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
             {/* 三态按钮：普通发布 / 强制发布 / 不可发布 */}
             {precheck?.canRelease ? (
               <Button
-                className="bg-amber-500 hover:bg-amber-600 text-stone-900 gap-1.5"
+                className="bg-primary hover:opacity-90 text-primary-foreground gap-1.5"
                 disabled={releaseMutation.isPending}
                 onClick={handleNormalRelease}
               >
@@ -303,7 +303,7 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
               </Button>
             ) : precheck?.canForceRelease ? (
               <Button
-                className="bg-rose-600 hover:bg-rose-700 text-white gap-1.5"
+                className="bg-destructive hover:opacity-90 text-white gap-1.5"
                 disabled={!forceFormValid || releaseMutation.isPending}
                 onClick={handleForceRelease}
               >
@@ -312,7 +312,7 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
               </Button>
             ) : (
               <Button
-                className="bg-stone-300 text-stone-500 gap-1.5 cursor-not-allowed"
+                className="bg-secondary text-muted-foreground gap-1.5 cursor-not-allowed"
                 disabled
                 title={blockersText || '发布条件未满足'}
               >
