@@ -6,9 +6,9 @@
 import { lazy, Suspense, useState, useEffect, useRef, useCallback } from 'react';
 import { useLocation } from 'wouter';
 import {
-  LayoutDashboard, FolderKanban, BookOpen,
-  ChevronRight, Menu, X, Cpu, Search, LogIn, Loader2, Shield, KeyRound,
-  LogOut, Package, Inbox, CalendarDays, ListChecks,
+  LayoutDashboard, FolderKanban,
+  ChevronRight, Menu, X, Cpu, Search, LogIn, Loader2,
+  Package, Inbox, CalendarDays, ListChecks,
 } from 'lucide-react';
 import type { TaskFocus } from '@/components/views/TaskListView';
 import { nanoid } from 'nanoid';
@@ -27,9 +27,9 @@ import { NotificationBell } from '@/components/NotificationBell';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
 
-type View = 'overview' | 'mytasks' | 'projects' | 'calendar' | 'products' | 'requirements' | 'sop';
+type View = 'overview' | 'mytasks' | 'projects' | 'calendar' | 'products' | 'requirements' | 'sop' | 'account';
 
-const VIEW_IDS = new Set<View>(['overview', 'mytasks', 'projects', 'calendar', 'products', 'requirements', 'sop']);
+const VIEW_IDS = new Set<View>(['overview', 'mytasks', 'projects', 'calendar', 'products', 'requirements', 'sop', 'account']);
 const PROJECT_DETAIL_TABS = new Set<NonNullable<TaskFocus['tab']>>([
   'overview', 'metrics', 'tasks', 'kanban', 'requirements', 'gantt', 'issues', 'changelog', 'bom', 'files',
 ]);
@@ -124,6 +124,7 @@ const GlobalSearch = lazy(() =>
 const ChangePasswordDialog = lazy(() =>
   import('@/components/ChangePasswordDialog').then((module) => ({ default: module.ChangePasswordDialog }))
 );
+const AccountPage = lazy(() => import('@/components/views/AccountPage').then((m) => ({ default: m.AccountPage })));
 
 function ViewLoading() {
   return (
@@ -578,7 +579,7 @@ function ProjectDetailWrapper({
 
 // ── Home ─────────────────────────────────────────────────────────────────────
 export default function Home() {
-  const { user, loading: authLoading, logout } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [, navigate] = useLocation();
   const isAdmin = (user as (typeof user & { role?: string }) | null)?.role === 'admin';
   const canCreateProject = !!(user as (typeof user & { canCreateProject?: boolean }) | null)?.canCreateProject;
@@ -785,6 +786,7 @@ export default function Home() {
     products: 'Products',
     requirements: 'Requirements',
     sop: 'SOP Library',
+    account: '账户设置',
   };
 
   // ── Auth loading / login gate ────────────────────────────────────────────
@@ -888,41 +890,6 @@ export default function Home() {
               </Tooltip>
             );
           })}
-
-          {/* SOP library — secondary entry */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={() => handleNavClick('sop')}
-                aria-label="SOP 流程库"
-                aria-current={view === 'sop' ? 'page' : undefined}
-                className={`w-[38px] h-[38px] rounded-[9px] flex items-center justify-center transition-colors ${
-                  view === 'sop'
-                    ? 'bg-[color:var(--acc-soft)] text-primary'
-                    : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
-                }`}
-              >
-                <BookOpen size={18} />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="right">SOP 流程库</TooltipContent>
-          </Tooltip>
-
-          {/* Admin link — only visible to admin users */}
-          {isAdmin && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={() => navigate('/admin')}
-                  aria-label="系统管理"
-                  className="w-[38px] h-[38px] rounded-[9px] flex items-center justify-center text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
-                >
-                  <Shield size={18} />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="right">系统管理</TooltipContent>
-            </Tooltip>
-          )}
         </nav>
 
         {/* User actions */}
@@ -930,32 +897,13 @@ export default function Home() {
           <Tooltip>
             <TooltipTrigger asChild>
               <button
-                onClick={() => setChangePasswordOpen(true)}
-                aria-label="修改密码"
-                className="w-[38px] h-[38px] rounded-[9px] flex items-center justify-center text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+                onClick={() => handleNavClick('account')}
+                aria-label="账户设置"
+                aria-current={view === 'account' ? 'page' : undefined}
+                className="w-[28px] h-[28px] rounded-full bg-primary text-white flex items-center justify-center text-[11px] font-medium uppercase shrink-0 mt-1"
               >
-                <KeyRound size={16} />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="right">修改密码</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={() => logout()}
-                aria-label="退出登录"
-                className="w-[38px] h-[38px] rounded-[9px] flex items-center justify-center text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
-              >
-                <LogOut size={16} />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="right">退出登录</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div className="w-[28px] h-[28px] rounded-full bg-primary text-white flex items-center justify-center text-[11px] font-medium uppercase shrink-0 mt-1">
                 {(user.name || user.email || 'U').charAt(0)}
-              </div>
+              </button>
             </TooltipTrigger>
             <TooltipContent side="right">{user.name || user.email}</TooltipContent>
           </Tooltip>
@@ -1076,6 +1024,9 @@ export default function Home() {
               {view === 'products' && <ProductLibraryView />}
               {view === 'requirements' && <RequirementsView />}
               {view === 'sop' && <SOPLibraryView />}
+              {view === 'account' && (
+                <AccountPage onNavigate={(v) => handleNavClick(v)} onOpenAdmin={() => navigate('/admin')} />
+              )}
             </Suspense>
           )}
         </main>
