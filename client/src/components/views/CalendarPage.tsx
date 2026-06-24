@@ -161,6 +161,7 @@ export function CalendarPage({ projects, onSelectProject }: { projects: ProjectO
   const [ym, setYm] = useState({ year: now.getFullYear(), month: now.getMonth() });
   const [tab, setTab] = useState<Tab>("calendar");
   const [filter, setFilter] = useState<Filter>("all");
+  const [mineOnly, setMineOnly] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const first = new Date(ym.year, ym.month, 1);
   const daysInMonth = new Date(ym.year, ym.month + 1, 0).getDate();
@@ -211,10 +212,17 @@ export function CalendarPage({ projects, onSelectProject }: { projects: ProjectO
     list.push("rd");
     return Array.from(new Set(list));
   }, [creatableProjectIds, pmProjectIds.size, workbenchData?.roles, workbenchData?.systemRole]);
-  const [lens, setLens] = useState<Lens | null>(null);
-  const activeLens = lens && availableLenses.includes(lens) ? lens : availableLenses[0];
+  // 视角按账户角色自动决定（availableLenses 已按 manager>pm>rd 优先级排序）；不再手动切换。
+  const activeLens = availableLenses[0];
 
   const scopedEvents = useMemo(() => {
+    if (mineOnly) {
+      // 只看我负责的：我的任务 + 我有角色/有任务的项目的事件（覆盖当前视角）
+      return mergeCalendarEvents(
+        taskEvents,
+        projectEvents.filter((event) => roleProjectIds.has(event.projectId) || taskProjectIds.has(event.projectId)),
+      );
+    }
     if (activeLens === "manager") {
       return projectEvents;
     }
@@ -229,7 +237,7 @@ export function CalendarPage({ projects, onSelectProject }: { projects: ProjectO
       taskEvents,
       projectEvents.filter((event) => roleProjectIds.has(event.projectId) || taskProjectIds.has(event.projectId)),
     );
-  }, [activeLens, creatableProjectIds, pmProjectIds, projectEvents, roleProjectIds, taskEvents, taskProjectIds]);
+  }, [mineOnly, activeLens, creatableProjectIds, pmProjectIds, projectEvents, roleProjectIds, taskEvents, taskProjectIds]);
 
   const filteredEvents = useMemo(
     () => {
@@ -320,18 +328,19 @@ export function CalendarPage({ projects, onSelectProject }: { projects: ProjectO
                 { value: "milestones", label: <span className="flex items-center gap-1.5"><Flag size={13} />截止清单</span> },
               ]}
             />
-            {availableLenses.length > 1 && activeLens && (
-              <SegToggle<Lens>
-                value={activeLens}
-                onChange={setLens}
-                options={availableLenses.map((item) => ({
-                  value: item,
-                  label: <span className="flex items-center gap-1.5">{LENS_META[item].icon}{LENS_META[item].label}</span>,
-                }))}
-              />
-            )}
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              onClick={() => setMineOnly((v) => !v)}
+              className={`flex items-center gap-1.5 rounded-[6px] border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                mineOnly
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-border bg-card text-muted-foreground hover:border-[color:var(--acc-border)]"
+              }`}
+            >
+              <UserRound size={12} />只看我负责的
+            </button>
+            <span className="mx-0.5 h-4 w-px bg-border" />
             {(["all", "task", "schedule", "gate", "phase", "target"] as Filter[]).map((item) => (
               <button
                 key={item}
