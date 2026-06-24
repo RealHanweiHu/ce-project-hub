@@ -29,6 +29,9 @@ import { deliverableReviewsRouter } from "./routers/deliverableReviews";
 import { workbenchRouter } from "./routers/workbench";
 import { analyticsRouter } from "./routers/analytics";
 import * as db from "./db";
+import { getDb } from "./db";
+import { users } from "../drizzle/schema";
+import { eq } from "drizzle-orm";
 
 export const appRouter = router({
   // if you need to use socket.io, read and register route in server/_core/index.ts, all api should start with '/api/' so that the gateway can route correctly
@@ -219,6 +222,22 @@ export const appRouter = router({
         const newHash = await hashPassword(input.newPassword);
         await db.updateUserPassword(user.id, newHash);
         return { success: true } as const;
+      }),
+
+    /** Self-service: logged-in user updates their own display name and mobile */
+    updateProfile: protectedProcedure
+      .input(z.object({
+        name: z.string().trim().min(1, '请输入显示名称').max(64),
+        mobile: z.string().trim().max(32).nullable().optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const user = await db.getUserByOpenId(ctx.user.openId);
+        if (!user) throw new TRPCError({ code: 'NOT_FOUND', message: '用户不存在' });
+        const mobile = input.mobile && input.mobile.length > 0 ? input.mobile : null;
+        const database = await getDb();
+        if (!database) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });
+        await database.update(users).set({ name: input.name, mobile }).where(eq(users.id, user.id));
+        return { success: true, name: input.name, mobile } as const;
       }),
   }),
 
