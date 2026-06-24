@@ -4,8 +4,8 @@
 // All data wiring + mutations (create / definition / variants / revisions / changes) preserved.
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Package, Plus, Loader2, Cpu, Boxes, CheckCircle2, ShieldCheck, Save,
-  AlertTriangle, History, PlusCircle, FileText, Trash2, Search,
+  Package, Plus, Loader2, Cpu, Boxes, CheckCircle2, Save,
+  History, PlusCircle, Trash2, Search,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
@@ -48,7 +48,6 @@ type ProductDefinition = {
   targetCustomers: string | null;
   targetMarkets: string[];
   applicationScenarios: string | null;
-  competitors: Array<{ brand?: string; model?: string; price?: string; channel?: string; strengths?: string; weaknesses?: string; notes?: string }>;
   priceBand: string;
   positioning: string | null;
   sellingPoints: string[];
@@ -58,14 +57,11 @@ type ProductDefinition = {
   targetCost: string;
   targetPrice: string;
   targetGrossMargin: string;
-  skuPlan: Array<{ name: string; code?: string; targetMarket?: string; price?: string; differences?: string; customerName?: string }>;
   status: 'draft' | 'confirmed';
   confirmedAt: string | Date | null;
 };
 
-type CompetitorDraft = { brand: string; model: string; price: string; channel: string; notes: string };
 type SpecDraft = { label: string; target: string; tolerance: string; verification: string; ownerRole: string };
-type SkuDraft = { name: string; code: string; targetMarket: string; price: string; differences: string };
 
 type ProductDefinitionForm = {
   title: string;
@@ -74,7 +70,6 @@ type ProductDefinitionForm = {
   targetCustomers: string;
   targetMarkets: string;
   applicationScenarios: string;
-  competitors: CompetitorDraft[];
   priceBand: string;
   positioning: string;
   sellingPoints: string;
@@ -84,26 +79,6 @@ type ProductDefinitionForm = {
   targetCost: string;
   targetPrice: string;
   targetGrossMargin: string;
-  skuPlan: SkuDraft[];
-};
-
-type ProductDefinitionSnapshot = {
-  id: number;
-  productId: string;
-  versionNumber: number;
-  title: string;
-  snapshot: {
-    prdSummary?: string | null;
-    specs?: Array<{ label: string; target: string; tolerance?: string; verification?: string; ownerRole?: string }>;
-    competitors?: Array<{ brand?: string; model?: string; price?: string; channel?: string; notes?: string }>;
-    skuPlan?: Array<{ name: string; code?: string; targetMarket?: string; price?: string; differences?: string }>;
-    targetCost?: string;
-    targetPrice?: string;
-    targetGrossMargin?: string;
-  };
-  confirmedBy: number;
-  confirmedAt: string | Date;
-  createdAt: string | Date;
 };
 
 type ProductDefinitionChangeStatus = 'proposed' | 'approved' | 'rejected' | 'implemented' | 'cancelled';
@@ -142,15 +117,6 @@ type ProductDefinitionChange = {
   status: ProductDefinitionChangeStatus;
   decisionNotes: string | null;
   createdAt: string | Date;
-};
-
-type ProductDefinitionDeviation = {
-  baselineStatus: 'draft' | 'confirmed' | 'missing';
-  confirmedAt: string | Date | null;
-  deviated: boolean;
-  approvedDeviationCount: number;
-  pendingChangeCount: number;
-  items: ProductDefinitionChange[];
 };
 
 type CustomerVariant = {
@@ -257,9 +223,7 @@ const emptyVariantForm = (): VariantForm => ({
   status: 'draft',
 });
 
-const emptyCompetitor = (): CompetitorDraft => ({ brand: '', model: '', price: '', channel: '', notes: '' });
 const emptySpec = (): SpecDraft => ({ label: '', target: '', tolerance: '', verification: '', ownerRole: '' });
-const emptySku = (): SkuDraft => ({ name: '', code: '', targetMarket: '', price: '', differences: '' });
 
 const emptyDefinitionForm: ProductDefinitionForm = {
   title: '',
@@ -268,7 +232,6 @@ const emptyDefinitionForm: ProductDefinitionForm = {
   targetCustomers: '',
   targetMarkets: '',
   applicationScenarios: '',
-  competitors: [],
   priceBand: '',
   positioning: '',
   sellingPoints: '',
@@ -278,7 +241,6 @@ const emptyDefinitionForm: ProductDefinitionForm = {
   targetCost: '',
   targetPrice: '',
   targetGrossMargin: '',
-  skuPlan: [],
 };
 
 function splitList(value: string) {
@@ -317,13 +279,6 @@ function definitionToForm(definition: ProductDefinition | null | undefined, prod
     targetCustomers: definition.targetCustomers ?? '',
     targetMarkets: (definition.targetMarkets ?? []).join(', '),
     applicationScenarios: definition.applicationScenarios ?? '',
-    competitors: (definition.competitors ?? []).map((row) => ({
-      brand: row.brand ?? '',
-      model: row.model ?? '',
-      price: row.price ?? '',
-      channel: row.channel ?? '',
-      notes: row.notes ?? '',
-    })),
     priceBand: definition.priceBand ?? '',
     positioning: definition.positioning ?? '',
     sellingPoints: (definition.sellingPoints ?? []).join('\n'),
@@ -339,13 +294,6 @@ function definitionToForm(definition: ProductDefinition | null | undefined, prod
     targetCost: definition.targetCost ?? '',
     targetPrice: definition.targetPrice ?? '',
     targetGrossMargin: definition.targetGrossMargin ?? '',
-    skuPlan: (definition.skuPlan ?? []).map((row) => ({
-      name: row.name ?? '',
-      code: row.code ?? '',
-      targetMarket: row.targetMarket ?? '',
-      price: row.price ?? '',
-      differences: row.differences ?? '',
-    })),
   };
 }
 
@@ -622,9 +570,7 @@ export function ProductLibraryView() {
 function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: () => void }) {
   const utils = trpc.useUtils();
   const { data: definition, isLoading: definitionLoading } = trpc.products.definition.useQuery({ productId: product.id });
-  const { data: definitionSnapshots = [], isLoading: snapshotsLoading } = trpc.products.definitionSnapshots.useQuery({ productId: product.id });
   const { data: definitionChanges = [], isLoading: changesLoading } = trpc.products.definitionChanges.useQuery({ productId: product.id });
-  const { data: deviation } = trpc.products.definitionDeviation.useQuery({ productId: product.id });
   const { data: revisions = [], isLoading } = trpc.products.revisions.useQuery({ productId: product.id });
   const { data: variants = [], isLoading: variantsLoading } = trpc.products.variantsByProduct.useQuery({ parentProductId: product.id });
   const { data: usedBy = [] } = trpc.bom.whereUsed.useQuery(
@@ -644,29 +590,18 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
     await Promise.all([
       utils.products.definition.invalidate({ productId: product.id }),
       utils.products.definitionStatuses.invalidate(),
-      utils.products.definitionDeviation.invalidate({ productId: product.id }),
-      utils.products.definitionSnapshots.invalidate({ productId: product.id }),
     ]);
   };
 
   const refreshChanges = async () => {
     await Promise.all([
       utils.products.definitionChanges.invalidate({ productId: product.id }),
-      utils.products.definitionDeviation.invalidate({ productId: product.id }),
     ]);
   };
 
   const saveDefinition = trpc.products.saveDefinition.useMutation({
     onSuccess: async () => {
       toast.success('产品定义草稿已保存');
-      await refreshDefinition();
-    },
-    onError: (e) => toast.error(e.message),
-  });
-
-  const confirmDefinition = trpc.products.confirmDefinition.useMutation({
-    onSuccess: async () => {
-      toast.success('产品定义已确认');
       await refreshDefinition();
     },
     onError: (e) => toast.error(e.message),
@@ -718,15 +653,6 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
     targetCustomers: form.targetCustomers.trim() || null,
     targetMarkets: splitList(form.targetMarkets),
     applicationScenarios: form.applicationScenarios.trim() || null,
-    competitors: form.competitors
-      .map((row) => ({
-        brand: row.brand.trim(),
-        model: row.model.trim(),
-        price: row.price.trim(),
-        channel: row.channel.trim(),
-        notes: row.notes.trim(),
-      }))
-      .filter((row) => Object.values(row).some(Boolean)),
     priceBand: form.priceBand.trim(),
     positioning: form.positioning.trim() || null,
     sellingPoints: splitList(form.sellingPoints),
@@ -745,40 +671,16 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
     targetCost: form.targetCost.trim(),
     targetPrice: form.targetPrice.trim(),
     targetGrossMargin: form.targetGrossMargin.trim(),
-    skuPlan: form.skuPlan
-      .map((row) => ({
-        name: row.name.trim(),
-        code: row.code.trim(),
-        targetMarket: row.targetMarket.trim(),
-        price: row.price.trim(),
-        differences: row.differences.trim(),
-      }))
-      .filter((row) => row.name),
   });
 
   const save = () => saveDefinition.mutate({ productId: product.id, patch: buildPatch() });
-  const confirmed = (definition as ProductDefinition | undefined)?.status === 'confirmed';
-  const snapshots = definitionSnapshots as ProductDefinitionSnapshot[];
   const changes = definitionChanges as ProductDefinitionChange[];
   const customerVariants = variants as CustomerVariant[];
-  const deviationReport = deviation as ProductDefinitionDeviation | undefined;
-
-  const updateCompetitor = (index: number, patch: Partial<CompetitorDraft>) => {
-    const rows = [...form.competitors];
-    rows[index] = { ...rows[index], ...patch };
-    setForm({ ...form, competitors: rows });
-  };
 
   const updateSpec = (index: number, patch: Partial<SpecDraft>) => {
     const rows = [...form.specs];
     rows[index] = { ...rows[index], ...patch };
     setForm({ ...form, specs: rows });
-  };
-
-  const updateSku = (index: number, patch: Partial<SkuDraft>) => {
-    const rows = [...form.skuPlan];
-    rows[index] = { ...rows[index], ...patch };
-    setForm({ ...form, skuPlan: rows });
   };
 
   const createChange = () => {
@@ -921,14 +823,9 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
               <div>
                 <div className="flex items-center gap-2">
                   <h3 className="text-lg text-foreground">产品定义基线</h3>
-                  <span className={`text-[10px] px-2 py-0.5 ${
-                    confirmed ? 'bg-[color:var(--success-soft)] text-[color:var(--success)] border border-[color:var(--success)]/30' : 'bg-[color:var(--acc-soft)] text-primary border border-[color:var(--acc-border)]'
-                  }`}>
-                    {confirmed ? '已确认' : '草稿'}
-                  </span>
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">
-                  作为 PLM 侧可复用的定义基线；项目立项不依赖这里先确认。再次保存会回到草稿，需重新确认。
+                  作为 PLM 侧可复用的定义基线；项目立项不依赖这里。
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -939,15 +836,7 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
                   className="gap-1.5"
                 >
                   {saveDefinition.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                  保存草稿
-                </Button>
-                <Button
-                  onClick={() => confirmDefinition.mutate({ productId: product.id })}
-                  disabled={confirmDefinition.isPending || !definition}
-                  className="bg-[color:var(--success)] hover:opacity-90 text-white gap-1.5"
-                >
-                  {confirmDefinition.isPending ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
-                  确认定义
+                  保存
                 </Button>
               </div>
             </div>
@@ -962,18 +851,10 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
                 <Field label="目标市场" value={form.targetMarkets} onChange={(value) => setForm({ ...form, targetMarkets: value })} placeholder="US, EU, CN" />
                 <Area label="目标客户" value={form.targetCustomers} onChange={(value) => setForm({ ...form, targetCustomers: value })} placeholder="用户画像、渠道、客户类型" />
                 <Area label="应用场景" value={form.applicationScenarios} onChange={(value) => setForm({ ...form, applicationScenarios: value })} placeholder="车胎补气、户外装备、应急救援..." />
-                <div className="lg:col-span-2">
-                  <CompetitorRows
-                    rows={form.competitors}
-                    onAdd={() => setForm({ ...form, competitors: [...form.competitors, emptyCompetitor()] })}
-                    onUpdate={updateCompetitor}
-                    onRemove={(index) => setForm({ ...form, competitors: form.competitors.filter((_, rowIndex) => rowIndex !== index) })}
-                  />
-                </div>
-                <Area label="定位与差异化" value={form.positioning} onChange={(value) => setForm({ ...form, positioning: value })} placeholder="一句话定位；确认定义必填" />
+                <Area label="定位与差异化" value={form.positioning} onChange={(value) => setForm({ ...form, positioning: value })} placeholder="一句话定位" />
                 <Area label="核心卖点" value={form.sellingPoints} onChange={(value) => setForm({ ...form, sellingPoints: value })} placeholder="每行一个卖点" />
                 <Area label="差异化策略" value={form.differentiationStrategy} onChange={(value) => setForm({ ...form, differentiationStrategy: value })} />
-                <Area label="PRD 摘要" value={form.prdSummary} onChange={(value) => setForm({ ...form, prdSummary: value })} placeholder="范围、核心需求、不可妥协项；确认定义必填" />
+                <Area label="PRD 摘要" value={form.prdSummary} onChange={(value) => setForm({ ...form, prdSummary: value })} placeholder="范围、核心需求、不可妥协项" />
                 <div className="lg:col-span-2">
                   <SpecRows
                     rows={form.specs}
@@ -988,145 +869,6 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
                   <Field label="毛利要求" value={form.targetGrossMargin} onChange={(value) => setForm({ ...form, targetGrossMargin: value })} placeholder=">= 35%" />
                 </div>
                 <Field label="价格带" value={form.priceBand} onChange={(value) => setForm({ ...form, priceBand: value })} placeholder="USD 49-79" />
-                <div className="lg:col-span-2">
-                  <SkuRows
-                    rows={form.skuPlan}
-                    onAdd={() => setForm({ ...form, skuPlan: [...form.skuPlan, emptySku()] })}
-                    onUpdate={updateSku}
-                    onRemove={(index) => setForm({ ...form, skuPlan: form.skuPlan.filter((_, rowIndex) => rowIndex !== index) })}
-                  />
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="border border-border bg-white p-4 space-y-4">
-            <div className="flex items-center gap-2">
-              <FileText size={15} className="text-muted-foreground" />
-              <h3 className="text-base text-foreground">PRD 快照历史</h3>
-            </div>
-            {snapshotsLoading ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 size={14} className="animate-spin" />加载 PRD 快照…</div>
-            ) : snapshots.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-2">确认产品定义后会生成 PRD v1 快照。</p>
-            ) : (
-              <div className="space-y-2">
-                {snapshots.map((snapshot) => (
-                  <details key={snapshot.id} className="border border-border px-3 py-2 bg-secondary">
-                    <summary className="cursor-pointer select-none">
-                      <div className="inline-flex flex-wrap items-center gap-2">
-                        <span className="text-[10px] px-1.5 py-0.5 bg-primary text-primary-foreground">
-                          PRD v{snapshot.versionNumber}
-                        </span>
-                        <span className="text-sm text-foreground">{snapshot.title || product.name}</span>
-                        <span className="text-[11px] text-muted-foreground">
-                          {new Date(snapshot.confirmedAt).toLocaleString('zh-CN')}
-                        </span>
-                      </div>
-                    </summary>
-                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-4 gap-2 text-xs">
-                      <div className="border border-border bg-white px-2 py-2">
-                        <div className="text-muted-foreground">SPEC</div>
-                        <div className="text-foreground mt-1">{snapshot.snapshot.specs?.length ?? 0}</div>
-                      </div>
-                      <div className="border border-border bg-white px-2 py-2">
-                        <div className="text-muted-foreground">SKU</div>
-                        <div className="text-foreground mt-1">{snapshot.snapshot.skuPlan?.length ?? 0}</div>
-                      </div>
-                      <div className="border border-border bg-white px-2 py-2">
-                        <div className="text-muted-foreground">COMPETITOR</div>
-                        <div className="text-foreground mt-1">{snapshot.snapshot.competitors?.length ?? 0}</div>
-                      </div>
-                      <div className="border border-border bg-white px-2 py-2">
-                        <div className="text-muted-foreground">TARGET</div>
-                        <div className="text-foreground mt-1 truncate">
-                          {[snapshot.snapshot.targetCost, snapshot.snapshot.targetPrice, snapshot.snapshot.targetGrossMargin].filter(Boolean).join(' / ') || '—'}
-                        </div>
-                      </div>
-                    </div>
-                    {snapshot.snapshot.prdSummary ? (
-                      <p className="text-xs text-[color:var(--secondary-foreground)] mt-3 whitespace-pre-wrap">{snapshot.snapshot.prdSummary}</p>
-                    ) : null}
-                    {(snapshot.snapshot.specs?.length ?? 0) > 0 ? (
-                      <div className="mt-3 space-y-1">
-                        {snapshot.snapshot.specs!.slice(0, 5).map((spec, index) => (
-                          <div key={`${spec.label}-${index}`} className="text-xs text-[color:var(--secondary-foreground)] flex gap-2">
-                            <span className="text-muted-foreground shrink-0">{index + 1}</span>
-                            <span className="min-w-0">
-                              <span className="text-foreground">{spec.label}</span>
-                              <span className="text-muted-foreground"> · </span>
-                              {spec.target}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
-                  </details>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="border border-border bg-white p-4 space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-              <div>
-                <div className="flex items-center gap-2">
-                  <AlertTriangle size={15} className={deviationReport?.deviated ? 'text-[color:var(--destructive)]' : 'text-muted-foreground'} />
-                  <h3 className="text-base text-foreground">产品定义偏离检查</h3>
-                </div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  基于已确认定义和已批准/已实施的产品定义变更判断当前产品是否偏离最初定义。
-                </p>
-              </div>
-              <span className={`text-[10px] px-2 py-0.5 border ${
-                deviationReport?.deviated
-                  ? 'bg-[color:var(--destructive)]/8 text-[color:var(--destructive)] border-[color:var(--destructive)]/30'
-                  : 'bg-[color:var(--success-soft)] text-[color:var(--success)] border-[color:var(--success)]/30'
-              }`}>
-                {deviationReport?.deviated ? '存在偏离' : '未发现确认偏离'}
-              </span>
-            </div>
-
-            {!deviationReport || deviationReport.baselineStatus !== 'confirmed' ? (
-              <p className="text-sm text-primary bg-[color:var(--acc-soft)] border border-[color:var(--acc-border)] px-3 py-2">
-                产品定义尚未确认，无法形成可比对的开发基线。
-              </p>
-            ) : deviationReport.approvedDeviationCount === 0 ? (
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
-                <div className="border border-border px-3 py-2">
-                  <div className="text-muted-foreground">BASELINE</div>
-                  <div className="text-foreground mt-1">
-                    {deviationReport.confirmedAt ? new Date(deviationReport.confirmedAt).toLocaleString('zh-CN') : '已确认'}
-                  </div>
-                </div>
-                <div className="border border-border px-3 py-2">
-                  <div className="text-muted-foreground">APPROVED DEVIATION</div>
-                  <div className="text-foreground mt-1">{deviationReport.approvedDeviationCount}</div>
-                </div>
-                <div className="border border-border px-3 py-2">
-                  <div className="text-muted-foreground">PENDING CHANGE</div>
-                  <div className="text-foreground mt-1">{deviationReport.pendingChangeCount}</div>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {deviationReport.items.map((item) => (
-                  <div key={item.id} className="border border-[color:var(--destructive)]/30 bg-[color:var(--destructive)]/8 px-3 py-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-[10px] px-1.5 py-0.5 bg-white text-[color:var(--destructive)] border border-[color:var(--destructive)]/30 shrink-0">
-                          {CHANGE_AREA_LABELS[item.area]}
-                        </span>
-                        <span className="text-sm text-foreground truncate">{item.title}</span>
-                      </div>
-                      <span className="text-[10px] text-[color:var(--destructive)] shrink-0">{CHANGE_STATUS_LABELS[item.status]}</span>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2 text-xs text-[color:var(--secondary-foreground)]">
-                      <div><span className="text-muted-foreground">原定义：</span>{item.baselineValue || '—'}</div>
-                      <div><span className="text-muted-foreground">新要求：</span>{item.requestedValue || '—'}</div>
-                    </div>
-                  </div>
-                ))}
               </div>
             )}
           </div>
@@ -1535,37 +1277,6 @@ function DeleteRowButton({ onClick }: { onClick: () => void }) {
   );
 }
 
-function CompetitorRows({
-  rows, onAdd, onUpdate, onRemove,
-}: {
-  rows: CompetitorDraft[];
-  onAdd: () => void;
-  onUpdate: (index: number, patch: Partial<CompetitorDraft>) => void;
-  onRemove: (index: number) => void;
-}) {
-  return (
-    <div className="space-y-2">
-      <RowsHeader label="竞品资料" onAdd={onAdd} />
-      {rows.length === 0 ? (
-        <p className="text-xs text-muted-foreground border border-dashed border-border px-3 py-3 bg-white">暂无竞品资料。</p>
-      ) : (
-        <div className="space-y-2 md:overflow-x-auto">
-          {rows.map((row, index) => (
-            <div key={index} className="grid grid-cols-1 md:min-w-[640px] md:grid-cols-[1fr_1fr_0.8fr_0.9fr_1.5fr_36px] gap-2">
-              <RowInput value={row.brand} onChange={(value) => onUpdate(index, { brand: value })} placeholder="品牌" />
-              <RowInput value={row.model} onChange={(value) => onUpdate(index, { model: value })} placeholder="型号" />
-              <RowInput value={row.price} onChange={(value) => onUpdate(index, { price: value })} placeholder="价格" />
-              <RowInput value={row.channel} onChange={(value) => onUpdate(index, { channel: value })} placeholder="渠道" />
-              <RowInput value={row.notes} onChange={(value) => onUpdate(index, { notes: value })} placeholder="优势/弱点/备注" />
-              <DeleteRowButton onClick={() => onRemove(index)} />
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function SpecRows({
   rows, onAdd, onUpdate, onRemove,
 }: {
@@ -1578,7 +1289,7 @@ function SpecRows({
     <div className="space-y-2">
       <RowsHeader label="目标规格" onAdd={onAdd} />
       {rows.length === 0 ? (
-        <p className="text-xs text-muted-foreground border border-dashed border-border px-3 py-3 bg-white">至少添加 1 条规格后才能确认产品定义。</p>
+        <p className="text-xs text-muted-foreground border border-dashed border-border px-3 py-3 bg-white">暂无目标规格。</p>
       ) : (
         <div className="space-y-2 md:overflow-x-auto">
           {rows.map((row, index) => (
@@ -1597,33 +1308,3 @@ function SpecRows({
   );
 }
 
-function SkuRows({
-  rows, onAdd, onUpdate, onRemove,
-}: {
-  rows: SkuDraft[];
-  onAdd: () => void;
-  onUpdate: (index: number, patch: Partial<SkuDraft>) => void;
-  onRemove: (index: number) => void;
-}) {
-  return (
-    <div className="space-y-2">
-      <RowsHeader label="SKU 计划" onAdd={onAdd} />
-      {rows.length === 0 ? (
-        <p className="text-xs text-muted-foreground border border-dashed border-border px-3 py-3 bg-white">暂无目标 SKU 计划。</p>
-      ) : (
-        <div className="space-y-2 md:overflow-x-auto">
-          {rows.map((row, index) => (
-            <div key={index} className="grid grid-cols-1 md:min-w-[640px] md:grid-cols-[1fr_0.8fr_0.9fr_0.8fr_1.5fr_36px] gap-2">
-              <RowInput value={row.name} onChange={(value) => onUpdate(index, { name: value })} placeholder="SKU 名称" />
-              <RowInput value={row.code} onChange={(value) => onUpdate(index, { code: value })} placeholder="SKU 编码" />
-              <RowInput value={row.targetMarket} onChange={(value) => onUpdate(index, { targetMarket: value })} placeholder="市场" />
-              <RowInput value={row.price} onChange={(value) => onUpdate(index, { price: value })} placeholder="价格" />
-              <RowInput value={row.differences} onChange={(value) => onUpdate(index, { differences: value })} placeholder="差异" />
-              <DeleteRowButton onClick={() => onRemove(index)} />
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
