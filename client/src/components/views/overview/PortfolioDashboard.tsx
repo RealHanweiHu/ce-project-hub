@@ -116,11 +116,11 @@ export function PortfolioDashboard({
       <div className="grid grid-cols-1 items-stretch gap-[18px] lg:grid-cols-[1fr_340px]">
         <div className="flex flex-col gap-[18px]">
           <RiskAlertsBoard rows={data.riskAlerts} onSelectProject={onSelectProject} />
-          <ProgressBoard rows={data.progressRows} onSelectProject={onSelectProject} className="flex-1" />
+          <ProgressBoard rows={data.progressRows} onSelectProject={onSelectProject} />
         </div>
         <div className="flex flex-col gap-[18px]">
           <GatesBoard rows={data.gateRows} onSelectProject={onSelectProject} />
-          <PhaseDistBoard phases={data.phaseRows} total={data.total} className="flex-1" />
+          <PhaseDistBoard phases={data.phaseRows} total={data.total} />
         </div>
       </div>
     </div>
@@ -316,13 +316,14 @@ function KpiCard({ label, value, sub, tone = "neutral", onClick }: KpiSpec) {
 
 // ── Panel shell ────────────────────────────────────────────────────────────────
 function Panel({
-  title, sub, cta, onCta, className, children,
+  title, sub, cta, onCta, className, bodyClassName, children,
 }: {
   title: string;
   sub?: string;
   cta?: string;
   onCta?: () => void;
   className?: string;
+  bodyClassName?: string;
   children: React.ReactNode;
 }) {
   return (
@@ -338,7 +339,7 @@ function Panel({
           </button>
         )}
       </div>
-      {children}
+      <div className={bodyClassName}>{children}</div>
     </LinearCard>
   );
 }
@@ -393,7 +394,7 @@ function RiskAlertsBoard({
   onSelectProject: (id: string) => void;
 }) {
   return (
-    <Panel title="风险预警">
+    <Panel title="风险预警" bodyClassName="h-[280px] overflow-y-auto">
       {rows.length === 0 ? (
         <div className="px-4 py-5 text-sm text-muted-foreground">暂无风险项目。</div>
       ) : (
@@ -441,7 +442,7 @@ function ProgressBoard({
   className?: string;
 }) {
   return (
-    <Panel title="组合进度" className={className}>
+    <Panel title="组合进度" className={className} bodyClassName="h-[280px] overflow-y-auto">
       {rows.length === 0 ? (
         <div className="px-4 py-5 text-sm text-muted-foreground">暂无进行中的项目。</div>
       ) : (
@@ -482,7 +483,7 @@ function GatesBoard({
   onSelectProject: (id: string) => void;
 }) {
   return (
-    <Panel title="即将到来 Gate">
+    <Panel title="即将到来 Gate" bodyClassName="h-[280px] overflow-y-auto">
       {rows.length === 0 ? (
         <div className="px-4 py-5 text-sm text-muted-foreground">近期暂无 Gate 评审。</div>
       ) : (
@@ -531,7 +532,7 @@ function PhaseDistBoard({
   className?: string;
 }) {
   return (
-    <Panel title="阶段分布" className={className}>
+    <Panel title="阶段分布" className={className} bodyClassName="h-[280px] overflow-y-auto">
       <div className="flex flex-col gap-[10px] px-4 py-[14px]">
         {phases.length === 0 ? (
           <div className="text-sm text-muted-foreground">暂无阶段数据。</div>
