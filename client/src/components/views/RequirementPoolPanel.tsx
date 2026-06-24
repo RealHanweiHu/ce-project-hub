@@ -929,7 +929,7 @@ export function RequirementPoolPanel({ scope, canEdit = false, canCreate, canMan
       {/* 采纳转化子窗口 */}
       {convertRow && (
         <div className="fixed inset-0 z-50 flex justify-center overflow-y-auto bg-foreground/40 p-4 backdrop-blur-sm sm:p-8" onClick={() => setConvertRow(null)}>
-          <LinearCard className="relative my-auto h-fit w-full max-w-lg shadow-2xl" onClick={(e) => e.stopPropagation()}>
+          <LinearCard className="relative my-auto h-fit w-full max-w-[min(32rem,calc(100vw-1.5rem))] max-h-[85vh] overflow-y-auto shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-border p-4">
               <div>
                 <div className="text-sm font-semibold text-foreground">采纳转化</div>

@@ -558,7 +558,7 @@ export function ProductLibraryView() {
 
       {/* New product dialog */}
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-[min(28rem,calc(100vw-1.5rem))]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Package size={16} className="text-primary" /> 新建产品型号
@@ -863,7 +863,7 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
 
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="sm:max-w-4xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-[min(56rem,calc(100vw-1.5rem))] max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <div className="flex items-start justify-between gap-3 pr-6">
             <DialogTitle className="flex items-center gap-2">
@@ -1549,9 +1549,9 @@ function CompetitorRows({
       {rows.length === 0 ? (
         <p className="text-xs text-muted-foreground border border-dashed border-border px-3 py-3 bg-white">暂无竞品资料。</p>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-2 md:overflow-x-auto">
           {rows.map((row, index) => (
-            <div key={index} className="grid grid-cols-1 md:grid-cols-[1fr_1fr_0.8fr_0.9fr_1.5fr_36px] gap-2">
+            <div key={index} className="grid grid-cols-1 md:min-w-[640px] md:grid-cols-[1fr_1fr_0.8fr_0.9fr_1.5fr_36px] gap-2">
               <RowInput value={row.brand} onChange={(value) => onUpdate(index, { brand: value })} placeholder="品牌" />
               <RowInput value={row.model} onChange={(value) => onUpdate(index, { model: value })} placeholder="型号" />
               <RowInput value={row.price} onChange={(value) => onUpdate(index, { price: value })} placeholder="价格" />
@@ -1580,9 +1580,9 @@ function SpecRows({
       {rows.length === 0 ? (
         <p className="text-xs text-muted-foreground border border-dashed border-border px-3 py-3 bg-white">至少添加 1 条规格后才能确认产品定义。</p>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-2 md:overflow-x-auto">
           {rows.map((row, index) => (
-            <div key={index} className="grid grid-cols-1 md:grid-cols-[1fr_1fr_0.9fr_1fr_0.9fr_36px] gap-2">
+            <div key={index} className="grid grid-cols-1 md:min-w-[640px] md:grid-cols-[1fr_1fr_0.9fr_1fr_0.9fr_36px] gap-2">
               <RowInput value={row.label} onChange={(value) => onUpdate(index, { label: value })} placeholder="指标" />
               <RowInput value={row.target} onChange={(value) => onUpdate(index, { target: value })} placeholder="目标值" />
               <RowInput value={row.tolerance} onChange={(value) => onUpdate(index, { tolerance: value })} placeholder="公差/范围" />
@@ -1611,9 +1611,9 @@ function SkuRows({
       {rows.length === 0 ? (
         <p className="text-xs text-muted-foreground border border-dashed border-border px-3 py-3 bg-white">暂无目标 SKU 计划。</p>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-2 md:overflow-x-auto">
           {rows.map((row, index) => (
-            <div key={index} className="grid grid-cols-1 md:grid-cols-[1fr_0.8fr_0.9fr_0.8fr_1.5fr_36px] gap-2">
+            <div key={index} className="grid grid-cols-1 md:min-w-[640px] md:grid-cols-[1fr_0.8fr_0.9fr_0.8fr_1.5fr_36px] gap-2">
               <RowInput value={row.name} onChange={(value) => onUpdate(index, { name: value })} placeholder="SKU 名称" />
               <RowInput value={row.code} onChange={(value) => onUpdate(index, { code: value })} placeholder="SKU 编码" />
               <RowInput value={row.targetMarket} onChange={(value) => onUpdate(index, { targetMarket: value })} placeholder="市场" />
