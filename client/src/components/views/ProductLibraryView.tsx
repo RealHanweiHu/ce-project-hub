@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Package, Plus, Loader2, Cpu, Boxes, CheckCircle2, Save,
-  History, PlusCircle, Trash2, Search,
+  History, PlusCircle, Trash2, Search, Pencil, X,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
@@ -584,10 +584,17 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
   const [changeForm, setChangeForm] = useState(emptyChangeForm);
   const [variantForm, setVariantForm] = useState(() => emptyVariantForm());
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // 产品定义（基本信息 + 规格）默认只读展示，点「编辑」才进入可输入态
+  const [editingDef, setEditingDef] = useState(false);
 
   useEffect(() => {
     setForm(definitionToForm((definition as ProductDefinition | null | undefined) ?? null, product));
   }, [definition, product]);
+
+  const cancelEdit = () => {
+    setForm(definitionToForm((definition as ProductDefinition | null | undefined) ?? null, product));
+    setEditingDef(false);
+  };
 
   const refreshDefinition = async () => {
     await Promise.all([
@@ -605,6 +612,7 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
   const saveDefinition = trpc.products.saveDefinition.useMutation({
     onSuccess: async () => {
       toast.success('产品定义草稿已保存');
+      setEditingDef(false);
       await refreshDefinition();
     },
     onError: (e) => toast.error(e.message),
@@ -819,15 +827,15 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
               </span>
             </AccordionTrigger>
             <AccordionContent>
-              <div className="border border-border bg-secondary p-4 space-y-4">
+              <div className="border border-border bg-secondary p-4 space-y-3">
                 <p className="text-xs text-muted-foreground">
                   作为 PLM 侧可复用的定义基线；项目立项不依赖这里。
                 </p>
 
                 {definitionLoading ? (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 size={14} className="animate-spin" />加载产品定义…</div>
-                ) : (
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                ) : editingDef ? (
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                     <Field label="定义标题" value={form.title} onChange={(value) => setForm({ ...form, title: value })} />
                     <Field label="产品机会" value={form.opportunityName} onChange={(value) => setForm({ ...form, opportunityName: value })} placeholder="例：高端精致型便携车载泵" />
                     <Field label="机会来源" value={form.opportunitySource} onChange={(value) => setForm({ ...form, opportunitySource: value })} placeholder="客户 / 市场 / 内部策略" />
@@ -845,6 +853,8 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
                     </div>
                     <Field label="价格带" value={form.priceBand} onChange={(value) => setForm({ ...form, priceBand: value })} placeholder="USD 49-79" />
                   </div>
+                ) : (
+                  <BasicReadView form={form} />
                 )}
               </div>
             </AccordionContent>
@@ -861,13 +871,15 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
               <div className="border border-border bg-secondary p-4">
                 {definitionLoading ? (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 size={14} className="animate-spin" />加载产品定义…</div>
-                ) : (
+                ) : editingDef ? (
                   <SpecRows
                     rows={form.specs}
                     onAdd={() => setForm({ ...form, specs: [...form.specs, emptySpec()] })}
                     onUpdate={updateSpec}
                     onRemove={(index) => setForm({ ...form, specs: form.specs.filter((_, rowIndex) => rowIndex !== index) })}
                   />
+                ) : (
+                  <SpecReadView rows={form.specs} />
                 )}
               </div>
             </AccordionContent>
@@ -1092,15 +1104,36 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
         </Accordion>
 
         <DialogFooter>
-          <Button
-            variant="outline"
-            onClick={save}
-            disabled={saveDefinition.isPending || definitionLoading}
-            className="gap-1.5"
-          >
-            {saveDefinition.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-            保存基本信息 / 规格
-          </Button>
+          {editingDef ? (
+            <>
+              <Button
+                variant="ghost"
+                onClick={cancelEdit}
+                disabled={saveDefinition.isPending}
+                className="gap-1.5"
+              >
+                <X size={14} /> 取消
+              </Button>
+              <Button
+                variant="outline"
+                onClick={save}
+                disabled={saveDefinition.isPending || definitionLoading}
+                className="gap-1.5"
+              >
+                {saveDefinition.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                保存
+              </Button>
+            </>
+          ) : (
+            <Button
+              variant="outline"
+              onClick={() => setEditingDef(true)}
+              disabled={definitionLoading}
+              className="gap-1.5"
+            >
+              <Pencil size={14} /> 编辑产品定义
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -1265,11 +1298,83 @@ function Area({
       <textarea
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        rows={3}
+        rows={2}
         placeholder={placeholder}
         className="w-full border border-border px-3 py-2 text-sm outline-none focus:border-primary resize-y bg-white"
       />
     </label>
+  );
+}
+
+// 只读展示一项：值为空则不渲染（避免「待输入空表单」的观感）
+function ReadRow({ label, value, full = false }: { label: string; value: string; full?: boolean }) {
+  if (!value.trim()) return null;
+  return (
+    <div className={full ? 'sm:col-span-2' : undefined}>
+      <div className="text-[10px] uppercase tracking-widest text-muted-foreground">{label}</div>
+      <div className="mt-0.5 text-sm text-foreground whitespace-pre-line break-words">{value.trim()}</div>
+    </div>
+  );
+}
+
+// 基本信息只读视图：只展示已填字段，全空时给一句引导
+function BasicReadView({ form }: { form: ReturnType<typeof definitionToForm> }) {
+  const shortItems = [
+    { label: '定义标题', value: form.title },
+    { label: '产品机会', value: form.opportunityName },
+    { label: '机会来源', value: form.opportunitySource },
+    { label: '目标市场', value: form.targetMarkets },
+    { label: '目标成本', value: form.targetCost },
+    { label: '目标售价', value: form.targetPrice },
+    { label: '毛利要求', value: form.targetGrossMargin },
+    { label: '价格带', value: form.priceBand },
+  ];
+  const longItems = [
+    { label: '目标客户', value: form.targetCustomers },
+    { label: '应用场景', value: form.applicationScenarios },
+    { label: '定位与差异化', value: form.positioning },
+    { label: '核心卖点', value: form.sellingPoints },
+    { label: '差异化策略', value: form.differentiationStrategy },
+    { label: 'PRD 摘要', value: form.prdSummary },
+  ];
+  const hasAny = [...shortItems, ...longItems].some((i) => i.value.trim());
+  if (!hasAny) {
+    return <p className="text-sm text-muted-foreground">尚未填写产品定义，点「编辑产品定义」补充。</p>;
+  }
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-3">
+        {shortItems.map((i) => <ReadRow key={i.label} label={i.label} value={i.value} />)}
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3">
+        {longItems.map((i) => <ReadRow key={i.label} label={i.label} value={i.value} full />)}
+      </div>
+    </div>
+  );
+}
+
+// 规格只读视图：只列已填行
+function SpecReadView({ rows }: { rows: SpecDraft[] }) {
+  const filled = rows.filter((r) => r.label.trim() && r.target.trim());
+  if (filled.length === 0) {
+    return <p className="text-sm text-muted-foreground">暂无目标规格。</p>;
+  }
+  return (
+    <div className="divide-y divide-border">
+      {filled.map((r, index) => {
+        const headline = [r.target.trim(), r.tolerance.trim()].filter(Boolean).join(' ');
+        const meta = [r.verification.trim(), r.ownerRole.trim()].filter(Boolean).join(' · ');
+        return (
+          <div key={index} className="flex items-baseline justify-between gap-3 py-2">
+            <span className="text-sm text-foreground">{r.label.trim()}</span>
+            <span className="text-right">
+              <span className="block text-sm text-foreground">{headline}</span>
+              {meta && <span className="block text-[11px] text-muted-foreground">{meta}</span>}
+            </span>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
