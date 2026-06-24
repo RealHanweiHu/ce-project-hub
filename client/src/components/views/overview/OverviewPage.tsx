@@ -6,7 +6,6 @@ import { Kicker } from "@/components/linear/primitives";
 import type { PortfolioTableRow } from "./PortfolioTable";
 import { PerspectivePanel, type Lens } from "./PerspectivePanel";
 import { PortfolioDashboard } from "./PortfolioDashboard";
-import { PortfolioMetricsTable } from "./PortfolioMetricsTable";
 import { TaskListView, type TaskRow, type TaskFocus } from "../TaskListView";
 import type { TaskStatus, TaskPriority } from "@shared/const";
 
@@ -80,7 +79,6 @@ export function OverviewPage({ onSelectProject }: { onSelectProject: (id: string
         <PortfolioDashboard rows={dashboardRows} scopeLabel={scopeLabel} onSelectProject={onSelectProject} onDrill={setDrill} />
       )}
 
-      {activeLens === "exec" && <PortfolioMetricsTable />}
 
       {/* 「需要处理」行动队列仅在 pm/mine 工作台视角出现；exec 总览只看大盘，不要这一块 */}
       {isWorkbench && (
