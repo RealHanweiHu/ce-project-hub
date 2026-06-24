@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   BriefcaseBusiness, CalendarDays, ChevronLeft, ChevronRight, Clock, Flag, ListChecks, Loader2,
@@ -164,6 +164,12 @@ export function CalendarPage({ projects, onSelectProject }: { projects: ProjectO
   const [filter, setFilter] = useState<Filter>("all");
   const [mineOnly, setMineOnly] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const didInit = useRef(false);
+  useEffect(() => {
+    if (didInit.current) return;
+    didInit.current = true;
+    if (typeof window !== "undefined" && window.innerWidth < 640) setTab("milestones");
+  }, []);
   const first = new Date(ym.year, ym.month, 1);
   const daysInMonth = new Date(ym.year, ym.month + 1, 0).getDate();
   const fromDate = ymd(ym.year, ym.month, 1);
@@ -310,7 +316,7 @@ export function CalendarPage({ projects, onSelectProject }: { projects: ProjectO
         )}
       />
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <Stat label="任务截止" value={counts.task} tone="task" />
         <Stat label="项目日程" value={counts.schedule} tone="schedule" />
         <Stat label="Gate 评审" value={counts.gate} tone="gate" />
@@ -439,7 +445,8 @@ function MonthGrid({
     ...Array.from({ length: daysInMonth }, (_, index) => index + 1),
   ];
   return (
-    <div className="mt-4">
+    <div className="mt-4 overflow-x-auto">
+      <div className="min-w-[640px]">
       <div className="grid grid-cols-7 overflow-hidden rounded-t-[11px] border-l border-t border-border">
         {["日", "一", "二", "三", "四", "五", "六"].map((day) => (
           <div key={day} className="border-b border-r border-border bg-secondary py-2 text-center text-[11.5px] font-semibold text-muted-foreground">
@@ -470,6 +477,7 @@ function MonthGrid({
           );
         })}
       </div>
+      </div>
     </div>
   );
 }
@@ -483,7 +491,7 @@ function EventPill({ event, onSelectProject }: { event: CalendarEvent; onSelectP
     <button
       onClick={() => onSelectProject(event.projectId)}
       title={`${event.projectName} · ${event.label}`}
-      className={`flex w-full items-center gap-1.5 truncate rounded-[5px] px-1.5 py-0.5 text-left text-[10.5px] font-medium ${meta.chip}`}
+      className={`flex w-full items-center gap-1.5 truncate rounded-[5px] px-1.5 py-0.5 text-left text-[10px] font-medium lg:text-[10.5px] ${meta.chip}`}
     >
       <span className="h-[5px] w-[5px] shrink-0 rounded-full bg-current" />
       <span className="truncate">{text}</span>
