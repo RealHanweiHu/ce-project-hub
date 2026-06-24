@@ -113,13 +113,14 @@ export function PortfolioDashboard({
       <FocusBand items={data.focusItems} onSelectProject={onSelectProject} onDrill={onDrill} />
 
       {/* Two equal-height columns */}
-      <div className="grid grid-cols-1 items-start gap-[18px] lg:grid-cols-[1fr_340px]">
+      <div className="grid grid-cols-1 items-stretch gap-[18px] lg:grid-cols-[1fr_340px]">
         <div className="flex flex-col gap-[18px]">
           <RiskAlertsBoard rows={data.riskAlerts} onSelectProject={onSelectProject} />
           <ProgressBoard rows={data.progressRows} onSelectProject={onSelectProject} className="flex-1" />
         </div>
         <div className="flex flex-col gap-[18px]">
           <GatesBoard rows={data.gateRows} onSelectProject={onSelectProject} />
+          <PhaseDistBoard phases={data.phaseRows} total={data.total} className="flex-1" />
         </div>
       </div>
     </div>
