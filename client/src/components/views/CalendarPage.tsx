@@ -2,11 +2,12 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   BriefcaseBusiness, CalendarDays, ChevronLeft, ChevronRight, Clock, Flag, ListChecks, Loader2,
-  MapPin, Plus, Rocket, Save, ShieldCheck, UserRound, X,
+  MapPin, Plus, Rocket, Save, ShieldCheck, UserRound, X, ListFilter, ChevronDown,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { getPhasesForCategory } from "@/lib/sop-templates";
 import { LinearCard, PageHeader, SegToggle } from "@/components/linear/primitives";
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem } from "@/components/ui/dropdown-menu";
 
 type CalendarEvent = {
   date: string;
@@ -341,19 +342,25 @@ export function CalendarPage({ projects, onSelectProject }: { projects: ProjectO
               <UserRound size={12} />只看我负责的
             </button>
             <span className="mx-0.5 h-4 w-px bg-border" />
-            {(["all", "task", "schedule", "gate", "phase", "target"] as Filter[]).map((item) => (
-              <button
-                key={item}
-                onClick={() => setFilter(item)}
-                className={`rounded-[6px] border px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                  filter === item
-                    ? "border-primary bg-primary text-primary-foreground"
-                    : "border-border bg-card text-muted-foreground hover:border-[color:var(--acc-border)]"
-                }`}
-              >
-                {item === "all" ? "全部" : TYPE_META[item].label}
-              </button>
-            ))}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="flex items-center gap-1.5 rounded-[6px] border border-border bg-card px-2.5 py-1 text-[11px] font-medium text-foreground transition-colors hover:border-[color:var(--acc-border)]">
+                  <ListFilter size={12} className="text-muted-foreground" />
+                  {filter === "all" ? "全部类型" : TYPE_META[filter].label}
+                  <ChevronDown size={12} className="text-muted-foreground" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuRadioGroup value={filter} onValueChange={(v) => setFilter(v as Filter)}>
+                  <DropdownMenuRadioItem value="all">全部类型</DropdownMenuRadioItem>
+                  {(["task", "schedule", "gate", "phase", "target"] as CalendarEvent["type"][]).map((t) => (
+                    <DropdownMenuRadioItem key={t} value={t}>
+                      <span className="flex items-center gap-1.5">{TYPE_META[t].icon}{TYPE_META[t].label}</span>
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
 
