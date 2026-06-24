@@ -61,7 +61,8 @@ export function PortfolioMetricsTable() {
         <span>总近4周吞吐 <b className="text-foreground">{agg.totalRecentThroughput}</b></span>
         <span>池化逾期率 <b className="text-foreground">{fmt(agg.pooledOverdueRatePct, "%")}</b></span>
       </div>
-      <table className="w-full text-sm">
+      <div className="overflow-x-auto">
+      <table className="w-full min-w-[720px] text-sm">
         <thead>
           <tr className="text-left text-[11px] num uppercase tracking-wider text-muted-foreground">
             <th className="px-4 py-2">项目</th>
@@ -95,6 +96,7 @@ export function PortfolioMetricsTable() {
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }

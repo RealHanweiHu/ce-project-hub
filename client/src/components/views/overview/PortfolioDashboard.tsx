@@ -113,7 +113,7 @@ export function PortfolioDashboard({
       <FocusBand items={data.focusItems} onSelectProject={onSelectProject} onDrill={onDrill} />
 
       {/* Two equal-height columns */}
-      <div className="grid grid-cols-1 items-stretch gap-[18px] xl:grid-cols-[1fr_340px]">
+      <div className="grid grid-cols-1 items-stretch gap-[18px] lg:grid-cols-[1fr_340px]">
         <div className="flex flex-col gap-[18px]">
           <RiskAlertsBoard rows={data.riskAlerts} onSelectProject={onSelectProject} />
           <ProgressBoard rows={data.progressRows} onSelectProject={onSelectProject} className="flex-1" />
@@ -356,12 +356,12 @@ function FocusBand({
       {items.length === 0 ? (
         <div className="px-4 py-5 text-sm text-muted-foreground">今天没有紧急事项。</div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-3">
+        <div className="grid grid-cols-1 lg:grid-cols-3">
           {items.map((item) => (
             <button
               key={item.key}
               onClick={() => (item.drill ? onDrill(item.drill) : item.projectId && onSelectProject(item.projectId))}
-              className="flex items-center gap-3 border-b border-border px-4 py-[15px] text-left transition-colors last:border-b-0 hover:bg-secondary sm:border-b-0 sm:border-r sm:last:border-r-0"
+              className="flex items-center gap-3 border-b border-border px-4 py-[15px] text-left transition-colors last:border-b-0 hover:bg-secondary lg:border-b-0 lg:border-r lg:last:border-r-0"
             >
               <span
                 className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[8px]"
