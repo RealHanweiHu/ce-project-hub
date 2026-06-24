@@ -598,7 +598,7 @@ export function ProjectListView({
 
       {/* ── Detail Drawer ── */}
       <Dialog open={!!detailRow} onOpenChange={(o) => { if (!o) setDetailId(null); }}>
-        <DialogContent className="max-w-[460px] gap-0 overflow-hidden p-0">
+        <DialogContent className="max-w-[min(460px,calc(100vw-1.5rem))] gap-0 overflow-hidden p-0">
           {detailRow && (() => {
             const p = detailRow.project;
             const phases = p.category ? getPhasesForCategory(p.category) : getProjectPhases(p);
@@ -1290,7 +1290,7 @@ export function ProjectListView({
                     <span className="text-[11px] text-muted-foreground num">{lane.rows.length} 个项目</span>
                   </button>
                   {!collapsed && (
-                    <div className="flex gap-3">
+                    <div className="flex gap-3 overflow-x-auto pb-2">
                       {stages.map((s) => column(lane.key, s.id, s.label, lane.rows.filter((r) => r.stage === s.id)))}
                     </div>
                   )}
@@ -1313,7 +1313,7 @@ export function ProjectListView({
       <div
         ref={setNodeRef}
         className={cn(
-          'flex min-w-[208px] flex-1 flex-col rounded-[12px] border bg-[color:var(--secondary)] transition-colors',
+          'flex w-[208px] shrink-0 flex-col rounded-[12px] border bg-[color:var(--secondary)] transition-colors lg:w-auto lg:min-w-[208px] lg:flex-1 lg:shrink',
           isOver ? 'border-[color:var(--acc-border)] bg-[color:var(--acc-soft)]' : 'border-border',
         )}
       >
@@ -1410,19 +1410,23 @@ export function ProjectListView({
 
     return (
       <LinearCard className="overflow-hidden">
-        {tableHead}
-        {groupBy === 'none'
-          ? rows.map(rowEl)
-          : lanes.map((lane) => (
-            <div key={lane.key}>
-              <div className="flex items-center gap-2 bg-secondary px-4 py-2">
-                <span className="h-2 w-2 rounded-full" style={{ background: lane.color }} />
-                <span className="text-[12.5px] font-semibold">{lane.label}</span>
-                <span className="text-[12px] text-muted-foreground num">{lane.rows.length}</span>
-              </div>
-              {lane.rows.map(rowEl)}
-            </div>
-          ))}
+        <div className="overflow-x-auto">
+          <div className="min-w-[760px]">
+            {tableHead}
+            {groupBy === 'none'
+              ? rows.map(rowEl)
+              : lanes.map((lane) => (
+                <div key={lane.key}>
+                  <div className="flex items-center gap-2 bg-secondary px-4 py-2">
+                    <span className="h-2 w-2 rounded-full" style={{ background: lane.color }} />
+                    <span className="text-[12.5px] font-semibold">{lane.label}</span>
+                    <span className="text-[12px] text-muted-foreground num">{lane.rows.length}</span>
+                  </div>
+                  {lane.rows.map(rowEl)}
+                </div>
+              ))}
+          </div>
+        </div>
       </LinearCard>
     );
   }
