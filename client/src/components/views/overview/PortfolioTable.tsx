@@ -79,7 +79,6 @@ export function PortfolioTable({ rows, onSelectProject }: { rows: PortfolioTable
         <select value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className="rounded-[7px] border border-border bg-card px-2 py-1.5">
           <option value="">全部类型</option><option value="npd">新产品开发</option><option value="eco">迭代升级</option><option value="idr">外观翻新</option>
         </select>
-        <span className="text-muted-foreground">显示 {filtered.length} / {rows.length}</span>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm min-w-[860px]">
