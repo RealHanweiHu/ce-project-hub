@@ -201,7 +201,7 @@ export function MyTasksView({ onSelectProject }: { onSelectProject: (id: string,
       {/* Filter bar: status segmented + search + meta */}
       <div className="mb-4 flex flex-wrap items-center gap-3 border-b border-border pb-4">
         <SegToggle<StatusFilter> value={statusFilter} onChange={setStatusFilter} options={statusOptions} />
-        <div className="flex h-[32px] w-[220px] items-center gap-2 rounded-lg border border-border bg-card px-3 focus-within:border-[color:var(--acc-border)] focus-within:ring-2 focus-within:ring-[color:var(--acc-soft)]">
+        <div className="flex h-[32px] w-full min-w-[160px] items-center gap-2 rounded-lg border border-border bg-card px-3 focus-within:border-[color:var(--acc-border)] focus-within:ring-2 focus-within:ring-[color:var(--acc-soft)] sm:w-auto sm:flex-1 lg:w-[220px] lg:flex-none">
           <Search size={14} className="shrink-0 text-muted-foreground" />
           <input
             value={search}
@@ -248,11 +248,11 @@ function ListMode({ groups, onToggle, onOpen }: {
             <div
               key={t.id}
               onClick={() => onOpen(t.projectId, { tab: 'tasks', phaseId: t.phaseId, taskId: t.taskId })}
-              className="grid cursor-pointer grid-cols-[18px_16px_1fr_auto_auto_24px] items-center gap-3 border-b border-border px-4 py-2.5 transition-colors last:border-none hover:bg-secondary"
+              className="flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-4 py-2.5 transition-colors last:border-none hover:bg-secondary lg:grid lg:grid-cols-[18px_16px_1fr_auto_auto_24px] lg:gap-3"
             >
               <Checkbox checked={t.completed} onToggle={() => onToggle(t)} />
               <PriorityFlag priority={t.priority} />
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1 lg:flex-none">
                 <div className={cn('truncate text-[13.5px] font-medium', t.completed ? 'text-muted-foreground line-through' : 'text-foreground')}>
                   {t.name}
                 </div>
@@ -260,12 +260,15 @@ function ListMode({ groups, onToggle, onOpen }: {
                   {t.projectName} · {t.projectNumber} · {t.phaseLabel}
                 </div>
               </div>
-              <span className="hidden items-center gap-1.5 rounded-[6px] border border-border bg-secondary px-2 py-0.5 text-[11px] font-medium text-[color:var(--secondary-foreground)] sm:inline-flex">
-                <span className="h-1.5 w-1.5 rounded-[2px]" style={{ background: PRIORITY[t.priority].dot }} />
-                {PRIORITY[t.priority].label}优先级
-              </span>
-              <DueText task={t} className="w-[88px] text-right text-[12px]" />
-              <Avatar label="我" />
+              {/* Right group: wraps to its own line on phone/tablet; restores inline desktop layout at lg */}
+              <div className="flex w-full flex-wrap items-center justify-start gap-x-3 gap-y-1 pl-[34px] lg:contents lg:w-auto lg:pl-0">
+                <span className="hidden items-center gap-1.5 rounded-[6px] border border-border bg-secondary px-2 py-0.5 text-[11px] font-medium text-[color:var(--secondary-foreground)] sm:inline-flex">
+                  <span className="h-1.5 w-1.5 rounded-[2px]" style={{ background: PRIORITY[t.priority].dot }} />
+                  {PRIORITY[t.priority].label}优先级
+                </span>
+                <DueText task={t} className="text-[12px] lg:w-[88px] lg:text-right" />
+                <Avatar label="我" />
+              </div>
             </div>
           ))}
         </div>
