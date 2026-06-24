@@ -990,7 +990,7 @@ export default function Home() {
             )}
           </div>
 
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-1.5 sm:gap-2 min-w-0">
             {/* Save / sync status — compact indicator */}
             <div className="hidden sm:flex items-center gap-1.5 text-[11px] text-muted-foreground select-none">
               {saveStatus === 'saving' ? (
@@ -1019,7 +1019,7 @@ export default function Home() {
             {/* Search box */}
             <button
               onClick={() => setSearchOpen(true)}
-              className="flex items-center gap-2 w-[230px] h-8 border border-border rounded-[8px] bg-white px-3 text-muted-foreground transition-colors hover:border-foreground/20 focus:outline-none focus:ring-2 focus:ring-ring"
+              className="flex items-center gap-2 w-[180px] sm:w-[230px] h-8 border border-border rounded-[8px] bg-white px-3 text-muted-foreground transition-colors hover:border-foreground/20 focus:outline-none focus:ring-2 focus:ring-ring"
             >
               <Search size={14} className="shrink-0" />
               <span className="text-[13px] flex-1 text-left">搜索项目、任务…</span>
