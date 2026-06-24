@@ -249,6 +249,16 @@ export function ProjectListView({
 
     if (!stageChanged && !reassignPatch) return;
 
+    // 只允许往回拖（回退）；前进必须走项目详情的 Gate 评审，看板不做前进推进。
+    if (stageChanged) {
+      const fromIdx = STAGE_IDS.indexOf(fromStage);
+      const toIdx = STAGE_IDS.indexOf(toStage);
+      if (fromIdx >= 0 && toIdx > fromIdx) {
+        toast.error('看板只支持往回拖（回退）；前进推进请在项目详情走 Gate 评审');
+        return;
+      }
+    }
+
     // HARD WIP 上限：只有阶段推进（toStage 变化）才受限；纯改派不受 WIP 约束。
     // 限制是 per-stage 的，计数为全板内 currentPhase 落在 toStage 的项目总数。
     if (stageChanged) {
@@ -269,7 +279,7 @@ export function ProjectListView({
         patch: { currentPhase: toStage, ...reassignPatch },
         // 撤销须还原“原始”阶段（可能是 planning/d3 等细粒度 phase），不能用 stageBucket 折叠后的 fromStage
         undoPatch: { currentPhase: project.currentPhase, ...undoReassign! },
-        successMsg: `已推进并改派 · 可撤销`,
+        successMsg: `已回退并改派 · 可撤销`,
       });
     } else if (reassignPatch) {
       // Reassign-only is lighter → no confirm, dispatch directly.
@@ -281,7 +291,7 @@ export function ProjectListView({
         patch: { currentPhase: toStage },
         // 撤销还原原始细粒度 phase（非 stageBucket 折叠值）
         undoPatch: { currentPhase: project.currentPhase },
-        successMsg: `已将 ${project.name} 推进到 ${stageLabel(toStage)} · 可撤销`,
+        successMsg: `已将 ${project.name} 回退到 ${stageLabel(toStage)} · 可撤销`,
       });
     }
   };
@@ -1111,8 +1121,8 @@ export function ProjectListView({
         <AlertDialogContent className="max-w-md">
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2">
-              <ChevronRight size={18} className="text-primary" />
-              推进项目阶段
+              <ChevronRight size={18} className="text-primary rotate-180" />
+              回退项目阶段
             </AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-2 text-foreground">
@@ -1121,7 +1131,7 @@ export function ProjectListView({
                     手动覆盖：<span className="font-semibold">{moveConfirm.project.name}</span>
                     （<span className="num">{moveConfirm.project.code || moveConfirm.project.id}</span>）
                     {' '}{stageLabel(moveConfirm.fromStage)} → {stageLabel(moveConfirm.toStage)}。
-                    此操作直接改变阶段，不生成 Gate 通过记录。确认？
+                    看板回退直接改阶段、不生成 Gate 记录；前进推进请走 Gate 评审。确认？
                   </p>
                 )}
               </div>
