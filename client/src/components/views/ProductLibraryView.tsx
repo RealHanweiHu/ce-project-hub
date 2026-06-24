@@ -2,7 +2,7 @@
 // Linear redesign — Phase 1 VISUAL ONLY. Product card grid with placeholder thumbnails,
 // specs, active-project counts and current stage; category filter + search.
 // All data wiring + mutations (create / definition / variants / revisions / changes) preserved.
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import {
   Package, Plus, Loader2, Cpu, Boxes, CheckCircle2, Save,
   History, PlusCircle, Trash2, Search, Pencil, X,
@@ -1306,49 +1306,56 @@ function Area({
   );
 }
 
-// 只读展示一项：值为空则不渲染（避免「待输入空表单」的观感）
-function ReadRow({ label, value, full = false }: { label: string; value: string; full?: boolean }) {
-  if (!value.trim()) return null;
-  return (
-    <div className={full ? 'sm:col-span-2' : undefined}>
-      <div className="text-[10px] uppercase tracking-widest text-muted-foreground">{label}</div>
-      <div className="mt-0.5 text-sm text-foreground whitespace-pre-line break-words">{value.trim()}</div>
-    </div>
-  );
-}
-
-// 基本信息只读视图：只展示已填字段，全空时给一句引导
+// 基本信息只读视图：紧凑「定义表」排布（标签—值相邻、双对一行、填满宽度），
+// 只展示已填字段，长文本独占整行；全空时给一句引导。
 function BasicReadView({ form }: { form: ReturnType<typeof definitionToForm> }) {
-  const shortItems = [
+  const compact = [
     { label: '定义标题', value: form.title },
     { label: '产品机会', value: form.opportunityName },
     { label: '机会来源', value: form.opportunitySource },
     { label: '目标市场', value: form.targetMarkets },
+    { label: '定位与差异化', value: form.positioning },
+    { label: '价格带', value: form.priceBand },
     { label: '目标成本', value: form.targetCost },
     { label: '目标售价', value: form.targetPrice },
     { label: '毛利要求', value: form.targetGrossMargin },
-    { label: '价格带', value: form.priceBand },
-  ];
-  const longItems = [
+  ].filter((i) => i.value.trim());
+  const prose = [
     { label: '目标客户', value: form.targetCustomers },
     { label: '应用场景', value: form.applicationScenarios },
-    { label: '定位与差异化', value: form.positioning },
     { label: '核心卖点', value: form.sellingPoints },
     { label: '差异化策略', value: form.differentiationStrategy },
     { label: 'PRD 摘要', value: form.prdSummary },
-  ];
-  const hasAny = [...shortItems, ...longItems].some((i) => i.value.trim());
-  if (!hasAny) {
+  ].filter((i) => i.value.trim());
+
+  if (compact.length === 0 && prose.length === 0) {
     return <p className="text-sm text-muted-foreground">尚未填写产品定义，点「编辑产品定义」补充。</p>;
   }
   return (
-    <div className="space-y-3">
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-3">
-        {shortItems.map((i) => <ReadRow key={i.label} label={i.label} value={i.value} />)}
-      </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3">
-        {longItems.map((i) => <ReadRow key={i.label} label={i.label} value={i.value} full />)}
-      </div>
+    <div className="space-y-4">
+      {compact.length > 0 && (
+        <dl className="grid grid-cols-[auto_1fr] sm:grid-cols-[auto_1fr_auto_1fr] gap-x-3 gap-y-2 text-sm">
+          {compact.map((i) => (
+            <Fragment key={i.label}>
+              <dt className="whitespace-nowrap text-muted-foreground">{i.label}</dt>
+              <dd className="break-words text-foreground">{i.value.trim()}</dd>
+            </Fragment>
+          ))}
+        </dl>
+      )}
+      {prose.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-10 gap-y-3 border-t border-border/60 pt-3">
+          {prose.map((i) => {
+            const long = i.value.trim().length > 56 || i.value.includes('\n');
+            return (
+              <div key={i.label} className={long ? 'sm:col-span-2' : undefined}>
+                <div className="text-[10px] uppercase tracking-widest text-muted-foreground">{i.label}</div>
+                <div className="mt-1 whitespace-pre-line break-words text-sm leading-relaxed text-foreground">{i.value.trim()}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
