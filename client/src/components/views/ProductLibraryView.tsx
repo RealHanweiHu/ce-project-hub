@@ -18,6 +18,9 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import {
+  Accordion, AccordionItem, AccordionTrigger, AccordionContent,
+} from '@/components/ui/accordion';
 import { toast } from 'sonner';
 import { LinearCard, PageHeader, SegToggle } from '@/components/linear/primitives';
 import { cn } from '@/lib/utils';
@@ -807,78 +810,156 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
-        <div className="py-2 space-y-6">
-          <CustomerVariantSection
-            product={product}
-            variants={customerVariants}
-            isLoading={variantsLoading}
-            form={variantForm}
-            onChange={(patch) => setVariantForm((prev) => ({ ...prev, ...patch }))}
-            onCreate={createCustomerVariant}
-            isCreating={createVariant.isPending}
-          />
-
-          <div className="border border-border bg-secondary p-4 space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="text-lg text-foreground">产品定义基线</h3>
-                </div>
-                <p className="text-xs text-muted-foreground mt-1">
+        <Accordion type="multiple" defaultValue={["basic"]} className="py-2">
+          <AccordionItem value="basic">
+            <AccordionTrigger className="text-foreground">
+              <span className="flex items-center gap-2">
+                <Boxes size={15} className="text-muted-foreground" />
+                <span className="text-base text-foreground">基本信息</span>
+              </span>
+            </AccordionTrigger>
+            <AccordionContent>
+              <div className="border border-border bg-secondary p-4 space-y-4">
+                <p className="text-xs text-muted-foreground">
                   作为 PLM 侧可复用的定义基线；项目立项不依赖这里。
                 </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  onClick={save}
-                  disabled={saveDefinition.isPending || definitionLoading}
-                  className="gap-1.5"
-                >
-                  {saveDefinition.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                  保存
-                </Button>
-              </div>
-            </div>
 
-            {definitionLoading ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 size={14} className="animate-spin" />加载产品定义…</div>
-            ) : (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                <Field label="定义标题" value={form.title} onChange={(value) => setForm({ ...form, title: value })} />
-                <Field label="产品机会" value={form.opportunityName} onChange={(value) => setForm({ ...form, opportunityName: value })} placeholder="例：高端精致型便携车载泵" />
-                <Field label="机会来源" value={form.opportunitySource} onChange={(value) => setForm({ ...form, opportunitySource: value })} placeholder="客户 / 市场 / 内部策略" />
-                <Field label="目标市场" value={form.targetMarkets} onChange={(value) => setForm({ ...form, targetMarkets: value })} placeholder="US, EU, CN" />
-                <Area label="目标客户" value={form.targetCustomers} onChange={(value) => setForm({ ...form, targetCustomers: value })} placeholder="用户画像、渠道、客户类型" />
-                <Area label="应用场景" value={form.applicationScenarios} onChange={(value) => setForm({ ...form, applicationScenarios: value })} placeholder="车胎补气、户外装备、应急救援..." />
-                <Area label="定位与差异化" value={form.positioning} onChange={(value) => setForm({ ...form, positioning: value })} placeholder="一句话定位" />
-                <Area label="核心卖点" value={form.sellingPoints} onChange={(value) => setForm({ ...form, sellingPoints: value })} placeholder="每行一个卖点" />
-                <Area label="差异化策略" value={form.differentiationStrategy} onChange={(value) => setForm({ ...form, differentiationStrategy: value })} />
-                <Area label="PRD 摘要" value={form.prdSummary} onChange={(value) => setForm({ ...form, prdSummary: value })} placeholder="范围、核心需求、不可妥协项" />
-                <div className="lg:col-span-2">
+                {definitionLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 size={14} className="animate-spin" />加载产品定义…</div>
+                ) : (
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <Field label="定义标题" value={form.title} onChange={(value) => setForm({ ...form, title: value })} />
+                    <Field label="产品机会" value={form.opportunityName} onChange={(value) => setForm({ ...form, opportunityName: value })} placeholder="例：高端精致型便携车载泵" />
+                    <Field label="机会来源" value={form.opportunitySource} onChange={(value) => setForm({ ...form, opportunitySource: value })} placeholder="客户 / 市场 / 内部策略" />
+                    <Field label="目标市场" value={form.targetMarkets} onChange={(value) => setForm({ ...form, targetMarkets: value })} placeholder="US, EU, CN" />
+                    <Area label="目标客户" value={form.targetCustomers} onChange={(value) => setForm({ ...form, targetCustomers: value })} placeholder="用户画像、渠道、客户类型" />
+                    <Area label="应用场景" value={form.applicationScenarios} onChange={(value) => setForm({ ...form, applicationScenarios: value })} placeholder="车胎补气、户外装备、应急救援..." />
+                    <Area label="定位与差异化" value={form.positioning} onChange={(value) => setForm({ ...form, positioning: value })} placeholder="一句话定位" />
+                    <Area label="核心卖点" value={form.sellingPoints} onChange={(value) => setForm({ ...form, sellingPoints: value })} placeholder="每行一个卖点" />
+                    <Area label="差异化策略" value={form.differentiationStrategy} onChange={(value) => setForm({ ...form, differentiationStrategy: value })} />
+                    <Area label="PRD 摘要" value={form.prdSummary} onChange={(value) => setForm({ ...form, prdSummary: value })} placeholder="范围、核心需求、不可妥协项" />
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 lg:col-span-2">
+                      <Field label="目标成本" value={form.targetCost} onChange={(value) => setForm({ ...form, targetCost: value })} placeholder="USD 22 BOM" />
+                      <Field label="目标售价" value={form.targetPrice} onChange={(value) => setForm({ ...form, targetPrice: value })} placeholder="USD 69 MSRP" />
+                      <Field label="毛利要求" value={form.targetGrossMargin} onChange={(value) => setForm({ ...form, targetGrossMargin: value })} placeholder=">= 35%" />
+                    </div>
+                    <Field label="价格带" value={form.priceBand} onChange={(value) => setForm({ ...form, priceBand: value })} placeholder="USD 49-79" />
+                  </div>
+                )}
+              </div>
+            </AccordionContent>
+          </AccordionItem>
+
+          <AccordionItem value="specs">
+            <AccordionTrigger className="text-foreground">
+              <span className="flex items-center gap-2">
+                <CheckCircle2 size={15} className="text-muted-foreground" />
+                <span className="text-base text-foreground">规格</span>
+              </span>
+            </AccordionTrigger>
+            <AccordionContent>
+              <div className="border border-border bg-secondary p-4">
+                {definitionLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 size={14} className="animate-spin" />加载产品定义…</div>
+                ) : (
                   <SpecRows
                     rows={form.specs}
                     onAdd={() => setForm({ ...form, specs: [...form.specs, emptySpec()] })}
                     onUpdate={updateSpec}
                     onRemove={(index) => setForm({ ...form, specs: form.specs.filter((_, rowIndex) => rowIndex !== index) })}
                   />
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 lg:col-span-2">
-                  <Field label="目标成本" value={form.targetCost} onChange={(value) => setForm({ ...form, targetCost: value })} placeholder="USD 22 BOM" />
-                  <Field label="目标售价" value={form.targetPrice} onChange={(value) => setForm({ ...form, targetPrice: value })} placeholder="USD 69 MSRP" />
-                  <Field label="毛利要求" value={form.targetGrossMargin} onChange={(value) => setForm({ ...form, targetGrossMargin: value })} placeholder=">= 35%" />
-                </div>
-                <Field label="价格带" value={form.priceBand} onChange={(value) => setForm({ ...form, priceBand: value })} placeholder="USD 49-79" />
+                )}
               </div>
-            )}
-          </div>
+            </AccordionContent>
+          </AccordionItem>
 
-          <div className="border border-border bg-secondary p-4 space-y-4">
-            <div className="flex items-center gap-2">
-              <History size={15} className="text-muted-foreground" />
-              <h3 className="text-base text-foreground">产品需求变更</h3>
+          <AccordionItem value="revisions">
+            <AccordionTrigger className="text-foreground">
+              <span className="flex items-center gap-2">
+                <CheckCircle2 size={15} className="text-muted-foreground" />
+                <span className="text-base text-foreground">主版本时间线</span>
+              </span>
+            </AccordionTrigger>
+            <AccordionContent>
+              <div>
+          {isLoading ? (
+            <div className="flex justify-center py-6"><Loader2 className="animate-spin text-primary" /></div>
+          ) : revisions.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-6 text-center">还没有主版本。项目「量产发布」后会在这里出现 {productModelCode(product)} Rev A。</p>
+          ) : (
+            <div className="space-y-0">
+              {(revisions as { id: number; revisionLabel: string; status: string; releasedAt: string | null; createdByProjectId: string | null; snapshotChangelog?: { number: string; type: string; title: string; reason: string | null }[] }[]).map((r, i) => (
+                <div key={r.id} className="flex items-start gap-3 pb-4 relative">
+                  <div className="flex flex-col items-center">
+                    <div className="w-2.5 h-2.5 rounded-full bg-primary mt-1.5 shrink-0" />
+                    {i < revisions.length - 1 && <div className="w-px flex-1 bg-secondary mt-1" />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-base text-foreground">{formatMainRevisionLabel(product, r.revisionLabel)}</span>
+                      <span className={`text-[10px] px-1.5 py-0.5 ${
+                        r.status === 'released' ? 'bg-[color:var(--success-soft)] text-[color:var(--success)]' :
+                        r.status === 'superseded' ? 'bg-secondary text-muted-foreground' : 'bg-[color:var(--acc-soft)] text-primary'
+                      }`}>{r.status}</span>
+                    </div>
+                    <div className="text-[11px] text-muted-foreground mt-0.5">
+                      {r.releasedAt ? new Date(r.releasedAt).toLocaleString('zh-CN') : '—'}
+                      {r.createdByProjectId ? ` · 来源项目 ${r.createdByProjectId}` : ''}
+                    </div>
+                    {r.status === 'released' && (
+                      <details className="mt-1.5">
+                        <summary className="text-[11px] text-muted-foreground cursor-pointer select-none hover:text-foreground">
+                          本版本变更（{r.snapshotChangelog?.length ?? 0}）
+                        </summary>
+                        {(r.snapshotChangelog?.length ?? 0) === 0 ? (
+                          <p className="text-[11px] text-muted-foreground mt-1 pl-2">无登记变更</p>
+                        ) : (
+                          <ul className="mt-1 pl-2 space-y-1">
+                            {r.snapshotChangelog!.map((c, ci) => (
+                              <li key={ci} className="text-[11px] text-[color:var(--secondary-foreground)] flex gap-1.5">
+                                <span className="px-1 bg-secondary text-muted-foreground shrink-0">{c.type}</span>
+                                <span className="min-w-0">
+                                  <span className="text-foreground">{c.title}</span>
+                                  {c.reason ? <span className="text-muted-foreground"> — {c.reason}</span> : null}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </details>
+                    )}
+                  </div>
+                </div>
+              ))}
             </div>
+          )}
+              </div>
+              {product.type === 'component' && (
+                <div className="mt-4 pt-3 border-t border-border">
+                  <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-2">被以下整机引用 (where-used)</div>
+                  {usedBy.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">暂无整机引用此零部件。</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5">
+                      {(usedBy as { productId: string; productName: string; revisionLabel: string }[]).map((u, i) => (
+                        <span key={i} className="text-[11px] px-2 py-0.5 bg-[color:var(--acc-soft)] text-primary">{u.productName} · {u.revisionLabel}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </AccordionContent>
+          </AccordionItem>
 
+          <AccordionItem value="changes">
+            <AccordionTrigger className="text-foreground">
+              <span className="flex items-center gap-2">
+                <History size={15} className="text-muted-foreground" />
+                <span className="text-base text-foreground">产品需求变更</span>
+              </span>
+            </AccordionTrigger>
+            <AccordionContent>
+              <div className="border border-border bg-secondary p-4 space-y-4">
             <div className="grid grid-cols-1 lg:grid-cols-6 gap-3">
               <label className="block space-y-1.5 lg:col-span-1">
                 <span className="text-[10px] uppercase tracking-widest text-muted-foreground">范围</span>
@@ -985,80 +1066,42 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
                 ))}
               </div>
             )}
-          </div>
+              </div>
+            </AccordionContent>
+          </AccordionItem>
 
-          <div>
-            <div className="flex items-center gap-2 mb-3">
-              <CheckCircle2 size={15} className="text-muted-foreground" />
-              <h3 className="text-base text-foreground">版本时间线</h3>
-            </div>
-          {isLoading ? (
-            <div className="flex justify-center py-6"><Loader2 className="animate-spin text-primary" /></div>
-          ) : revisions.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-6 text-center">还没有主版本。项目「量产发布」后会在这里出现 {productModelCode(product)} Rev A。</p>
-          ) : (
-            <div className="space-y-0">
-              {(revisions as { id: number; revisionLabel: string; status: string; releasedAt: string | null; createdByProjectId: string | null; snapshotChangelog?: { number: string; type: string; title: string; reason: string | null }[] }[]).map((r, i) => (
-                <div key={r.id} className="flex items-start gap-3 pb-4 relative">
-                  <div className="flex flex-col items-center">
-                    <div className="w-2.5 h-2.5 rounded-full bg-primary mt-1.5 shrink-0" />
-                    {i < revisions.length - 1 && <div className="w-px flex-1 bg-secondary mt-1" />}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-base text-foreground">{formatMainRevisionLabel(product, r.revisionLabel)}</span>
-                      <span className={`text-[10px] px-1.5 py-0.5 ${
-                        r.status === 'released' ? 'bg-[color:var(--success-soft)] text-[color:var(--success)]' :
-                        r.status === 'superseded' ? 'bg-secondary text-muted-foreground' : 'bg-[color:var(--acc-soft)] text-primary'
-                      }`}>{r.status}</span>
-                    </div>
-                    <div className="text-[11px] text-muted-foreground mt-0.5">
-                      {r.releasedAt ? new Date(r.releasedAt).toLocaleString('zh-CN') : '—'}
-                      {r.createdByProjectId ? ` · 来源项目 ${r.createdByProjectId}` : ''}
-                    </div>
-                    {r.status === 'released' && (
-                      <details className="mt-1.5">
-                        <summary className="text-[11px] text-muted-foreground cursor-pointer select-none hover:text-foreground">
-                          本版本变更（{r.snapshotChangelog?.length ?? 0}）
-                        </summary>
-                        {(r.snapshotChangelog?.length ?? 0) === 0 ? (
-                          <p className="text-[11px] text-muted-foreground mt-1 pl-2">无登记变更</p>
-                        ) : (
-                          <ul className="mt-1 pl-2 space-y-1">
-                            {r.snapshotChangelog!.map((c, ci) => (
-                              <li key={ci} className="text-[11px] text-[color:var(--secondary-foreground)] flex gap-1.5">
-                                <span className="px-1 bg-secondary text-muted-foreground shrink-0">{c.type}</span>
-                                <span className="min-w-0">
-                                  <span className="text-foreground">{c.title}</span>
-                                  {c.reason ? <span className="text-muted-foreground"> — {c.reason}</span> : null}
-                                </span>
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </details>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-          </div>
-          {product.type === 'component' && (
-            <div className="mt-4 pt-3 border-t border-border">
-              <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-2">被以下整机引用 (where-used)</div>
-              {usedBy.length === 0 ? (
-                <p className="text-xs text-muted-foreground">暂无整机引用此零部件。</p>
-              ) : (
-                <div className="flex flex-wrap gap-1.5">
-                  {(usedBy as { productId: string; productName: string; revisionLabel: string }[]).map((u, i) => (
-                    <span key={i} className="text-[11px] px-2 py-0.5 bg-[color:var(--acc-soft)] text-primary">{u.productName} · {u.revisionLabel}</span>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+          <AccordionItem value="variants">
+            <AccordionTrigger className="text-foreground">
+              <span className="flex items-center gap-2">
+                <Package size={15} className="text-muted-foreground" />
+                <span className="text-base text-foreground">客户版本 / SKU</span>
+              </span>
+            </AccordionTrigger>
+            <AccordionContent>
+              <CustomerVariantSection
+                product={product}
+                variants={customerVariants}
+                isLoading={variantsLoading}
+                form={variantForm}
+                onChange={(patch) => setVariantForm((prev) => ({ ...prev, ...patch }))}
+                onCreate={createCustomerVariant}
+                isCreating={createVariant.isPending}
+              />
+            </AccordionContent>
+          </AccordionItem>
+        </Accordion>
+
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={save}
+            disabled={saveDefinition.isPending || definitionLoading}
+            className="gap-1.5"
+          >
+            {saveDefinition.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+            保存基本信息 / 规格
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
@@ -1091,16 +1134,10 @@ function CustomerVariantSection({
   return (
     <div className="border border-border bg-white p-4 space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2">
-            <Package size={15} className="text-muted-foreground" />
-            <h3 className="text-base text-foreground">客户版本 / SKU</h3>
-          </div>
-          <p className="text-xs text-muted-foreground mt-1">
-            客户版本不是独立产品，必须基于主产品 Revision；客户 BOM Revision 是标准 BOM 的受控派生。所有客户版本和 BOM 版本变化都必须挂 ECO/ECN 编号留痕。
-          </p>
-        </div>
-        <span className="text-[10px] px-2 py-0.5 border border-border bg-secondary text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
+          客户版本不是独立产品，必须基于主产品 Revision；客户 BOM Revision 是标准 BOM 的受控派生。所有客户版本和 BOM 版本变化都必须挂 ECO/ECN 编号留痕。
+        </p>
+        <span className="text-[10px] px-2 py-0.5 border border-border bg-secondary text-muted-foreground shrink-0">
           {variants.length} CUSTOMER REVISIONS
         </span>
       </div>
