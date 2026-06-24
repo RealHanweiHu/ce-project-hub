@@ -14,6 +14,10 @@ import { Label } from '@/components/ui/label';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
 import { LinearCard, PageHeader, SegToggle } from '@/components/linear/primitives';
 import { cn } from '@/lib/utils';
@@ -630,6 +634,7 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
   const [form, setForm] = useState(() => definitionToForm(null, product));
   const [changeForm, setChangeForm] = useState(emptyChangeForm);
   const [variantForm, setVariantForm] = useState(() => emptyVariantForm());
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   useEffect(() => {
     setForm(definitionToForm((definition as ProductDefinition | null | undefined) ?? null, product));
@@ -691,6 +696,19 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
       await refreshChanges();
     },
     onError: (e) => toast.error(e.message),
+  });
+
+  const deleteProduct = trpc.products.delete.useMutation({
+    onSuccess: async () => {
+      setConfirmDelete(false);
+      onClose();
+      await utils.products.list.invalidate();
+      toast.success('产品已删除');
+    },
+    onError: (e) => {
+      setConfirmDelete(false);
+      toast.error(e.message);
+    },
   });
 
   const buildPatch = () => ({
@@ -847,13 +865,46 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent className="sm:max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Boxes size={16} className="text-primary" /> {product.name} · 产品定义
-          </DialogTitle>
+          <div className="flex items-start justify-between gap-3 pr-6">
+            <DialogTitle className="flex items-center gap-2">
+              <Boxes size={16} className="text-primary" /> {product.name} · 产品定义
+            </DialogTitle>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1.5 text-[color:var(--destructive)] hover:text-[color:var(--destructive)]"
+              onClick={() => setConfirmDelete(true)}
+            >
+              <Trash2 size={14} /> 删除产品
+            </Button>
+          </div>
           <DialogDescription className="sr-only">
             维护产品型号、主版本、客户版本、SKU 与产品定义基线。
           </DialogDescription>
         </DialogHeader>
+
+        <AlertDialog open={confirmDelete} onOpenChange={(open) => { if (!open) setConfirmDelete(false); }}>
+          <AlertDialogContent className="max-w-md">
+            <AlertDialogHeader>
+              <AlertDialogTitle className="flex items-center gap-2 text-[color:var(--destructive)]">
+                <Trash2 size={16} /> 删除产品
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                确认删除「{product.name}」？该操作不可恢复，将一并删除其定义/快照/版本/客户版本。若被项目引用则无法删除。
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel onClick={() => setConfirmDelete(false)}>取消</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-[color:var(--destructive)] text-white hover:bg-[color:var(--destructive)]/90"
+                disabled={deleteProduct.isPending}
+                onClick={(e) => { e.preventDefault(); deleteProduct.mutate({ id: product.id }); }}
+              >
+                {deleteProduct.isPending ? '删除中…' : '确认删除'}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
         <div className="py-2 space-y-6">
           <CustomerVariantSection
             product={product}

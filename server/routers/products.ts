@@ -1,8 +1,10 @@
 import { z } from "zod";
 import { nanoid } from "nanoid";
+import { eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { protectedProcedure, router } from "../_core/trpc";
 import {
+  getDb,
   createProduct, getProductById, listProductsByCategory,
   getProductDefinitionByProductId, listProductDefinitionStatuses,
   upsertProductDefinition, confirmProductDefinition, listProductDefinitionSnapshots,
@@ -16,7 +18,11 @@ import {
   getDownstreamVariantImpact,
 } from "../db";
 import { VARIANT_DIMENSIONS } from "../../shared/oem-variant";
-import { CHANGE_STATUSES, PRODUCT_DEFINITION_CHANGE_AREAS } from "../../drizzle/schema";
+import {
+  CHANGE_STATUSES, PRODUCT_DEFINITION_CHANGE_AREAS,
+  products, projects, productDefinitions, productDefinitionSnapshots,
+  productDefinitionChanges, productRevisions, customerVariants,
+} from "../../drizzle/schema";
 import { emitAutomationEvent } from "../automation/events";
 import { assertProjectAccess, assertProjectPermission } from "../project-access";
 
@@ -301,6 +307,32 @@ export const productsRouter = router({
       const id = nanoid();
       await createProduct({ id, createdBy: ctx.user.id, ...input });
       return { id };
+    }),
+
+  delete: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [product] = await db.select().from(products).where(eq(products.id, input.id));
+      if (!product) throw new TRPCError({ code: "NOT_FOUND", message: "产品不存在" });
+      const allowed = ctx.user.role === "admin" || product.createdBy === ctx.user.id;
+      if (!allowed) throw new TRPCError({ code: "FORBIDDEN" });
+
+      const refs = await db.select({ id: projects.id }).from(projects).where(eq(projects.productId, input.id));
+      if (refs.length > 0) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `该产品被 ${refs.length} 个项目引用，请先在项目里解绑后再删除` });
+      }
+
+      await db.transaction(async (tx) => {
+        await tx.delete(customerVariants).where(eq(customerVariants.parentProductId, input.id));
+        await tx.delete(productDefinitionChanges).where(eq(productDefinitionChanges.productId, input.id));
+        await tx.delete(productRevisions).where(eq(productRevisions.productId, input.id));
+        await tx.delete(productDefinitionSnapshots).where(eq(productDefinitionSnapshots.productId, input.id));
+        await tx.delete(productDefinitions).where(eq(productDefinitions.productId, input.id));
+        await tx.delete(products).where(eq(products.id, input.id));
+      });
+      return { success: true } as const;
     }),
 
   createPlatform: protectedProcedure
