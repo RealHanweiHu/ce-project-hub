@@ -1929,10 +1929,10 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
       />
 
       {/* Main Tab Bar: Overview / Tasks / Issues / Gantt / Members */}
-      <div className="flex items-center gap-1 px-1 overflow-x-auto border-b border-border">
+      <div className="flex flex-nowrap items-center gap-1 px-1 overflow-x-auto border-b border-border">
         <button
           onClick={() => setMainTab('overview')}
-          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors ${
+          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors shrink-0 whitespace-nowrap ${
             mainTab === 'overview'
               ? 'border-b-primary text-primary'
               : 'border-b-transparent text-muted-foreground hover:text-foreground'
@@ -1943,7 +1943,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         </button>
         <button
           onClick={() => setMainTab('tasks')}
-          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors ${
+          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors shrink-0 whitespace-nowrap ${
             mainTab === 'tasks'
               ? 'border-b-primary text-primary'
               : 'border-b-transparent text-muted-foreground hover:text-foreground'
@@ -1955,7 +1955,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         {!execLens && (
         <button
           onClick={() => setMainTab('metrics')}
-          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
+          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors shrink-0 whitespace-nowrap ${
             mainTab === 'metrics'
               ? 'border-b-teal-600 text-teal-700'
               : 'border-b-transparent text-muted-foreground hover:text-foreground'
@@ -1968,7 +1968,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         {!execLens && (
         <button
           onClick={() => setMainTab('kanban')}
-          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
+          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors shrink-0 whitespace-nowrap ${
             mainTab === 'kanban'
               ? 'border-b-primary text-primary'
               : 'border-b-transparent text-muted-foreground hover:text-foreground'
@@ -1981,7 +1981,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         {!execLens && (
         <button
           onClick={() => setMainTab('requirements')}
-          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
+          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors shrink-0 whitespace-nowrap ${
             mainTab === 'requirements'
               ? 'border-b-primary text-primary'
               : 'border-b-transparent text-muted-foreground hover:text-foreground'
@@ -1993,7 +1993,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         )}
         <button
           onClick={() => setMainTab('issues')}
-          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors ${
+          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors shrink-0 whitespace-nowrap ${
             mainTab === 'issues'
               ? 'border-b-rose-600 text-rose-700'
               : 'border-b-transparent text-muted-foreground hover:text-foreground'
@@ -2010,7 +2010,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         {!execLens && (
         <button
           onClick={() => setMainTab('gantt')}
-          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors ${
+          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors shrink-0 whitespace-nowrap ${
             mainTab === 'gantt'
               ? 'border-b-primary text-primary'
               : 'border-b-transparent text-muted-foreground hover:text-foreground'
@@ -2022,7 +2022,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         )}
         <button
           onClick={() => setMainTab('bom')}
-          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
+          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors shrink-0 whitespace-nowrap ${
             mainTab === 'bom'
               ? 'border-b-primary text-primary'
               : 'border-b-transparent text-muted-foreground hover:text-foreground'
@@ -2033,7 +2033,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         </button>
         <button
           onClick={() => setMainTab('files')}
-          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
+          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors shrink-0 whitespace-nowrap ${
             mainTab === 'files'
               ? 'border-b-primary text-primary'
               : 'border-b-transparent text-muted-foreground hover:text-foreground'
@@ -2045,7 +2045,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         {!execLens && (
         <button
           onClick={() => setMainTab('changelog')}
-          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors ${
+          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors shrink-0 whitespace-nowrap ${
             mainTab === 'changelog'
               ? 'border-b-primary text-primary'
               : 'border-b-transparent text-muted-foreground hover:text-foreground'
