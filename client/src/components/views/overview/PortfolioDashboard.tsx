@@ -112,8 +112,9 @@ export function PortfolioDashboard({
       {/* 今日聚焦 / Today's Focus — full-width, 3 items */}
       <FocusBand items={data.focusItems} onSelectProject={onSelectProject} onDrill={onDrill} />
 
-      {/* Two balanced columns — top-aligned, each board sizes to content (caps + scrolls) */}
-      <div className="grid grid-cols-1 items-start gap-[18px] lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
+      {/* Two balanced, equal-height columns — boards keep a fixed height so adding/removing
+          content never changes the overall page length (content overflows + scrolls in place). */}
+      <div className="grid grid-cols-1 items-stretch gap-[18px] lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
         <div className="flex flex-col gap-[18px]">
           <RiskAlertsBoard rows={data.riskAlerts} onSelectProject={onSelectProject} />
           <ProgressBoard rows={data.progressRows} onSelectProject={onSelectProject} />
@@ -394,7 +395,7 @@ function RiskAlertsBoard({
   onSelectProject: (id: string) => void;
 }) {
   return (
-    <Panel title="风险预警" bodyClassName="max-h-[280px] overflow-y-auto">
+    <Panel title="风险预警" bodyClassName="h-[280px] overflow-y-auto">
       {rows.length === 0 ? (
         <div className="px-4 py-5 text-sm text-muted-foreground">暂无风险项目。</div>
       ) : (
@@ -442,7 +443,7 @@ function ProgressBoard({
   className?: string;
 }) {
   return (
-    <Panel title="组合进度" className={className} bodyClassName="max-h-[280px] overflow-y-auto">
+    <Panel title="组合进度" className={className} bodyClassName="h-[280px] overflow-y-auto">
       {rows.length === 0 ? (
         <div className="px-4 py-5 text-sm text-muted-foreground">暂无进行中的项目。</div>
       ) : (
@@ -483,7 +484,7 @@ function GatesBoard({
   onSelectProject: (id: string) => void;
 }) {
   return (
-    <Panel title="即将到来 Gate" bodyClassName="max-h-[280px] overflow-y-auto">
+    <Panel title="即将到来 Gate" bodyClassName="h-[280px] overflow-y-auto">
       {rows.length === 0 ? (
         <div className="px-4 py-5 text-sm text-muted-foreground">近期暂无 Gate 评审。</div>
       ) : (
@@ -532,7 +533,7 @@ function PhaseDistBoard({
   className?: string;
 }) {
   return (
-    <Panel title="阶段分布" className={className} bodyClassName="max-h-[280px] overflow-y-auto">
+    <Panel title="阶段分布" className={className} bodyClassName="h-[280px] overflow-y-auto">
       <div className="flex flex-col gap-[10px] px-4 py-[14px]">
         {phases.length === 0 ? (
           <div className="text-sm text-muted-foreground">暂无阶段数据。</div>
