@@ -6,6 +6,7 @@ import {
   upsertProjectTask,
   setTaskCompletion,
   setTaskApprovalConfig,
+  decideTaskApproval,
   updateTaskMeta,
   getMyTasks,
   getOverdueTasks,
@@ -79,6 +80,30 @@ export const tasksRouter = router({
         input.projectId, input.phaseId, input.taskId,
         { requiresApproval: input.requiresApproval, approverUserId: input.approverUserId },
         ctx.user.id,
+      );
+      return { success: true };
+    }),
+
+  /** 审批裁决：通过/驳回（仅指定审批人或全局 admin；admin 即代审） */
+  decideApproval: protectedProcedure
+    .input(z.object({
+      projectId: z.string(),
+      phaseId: z.string(),
+      taskId: z.string(),
+      decision: z.enum(["approved", "rejected"]),
+      note: z.string().nullable(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const tasks = await getProjectTasks(input.projectId, input.phaseId);
+      const task = tasks.find((t) => t.taskId === input.taskId);
+      const isAdmin = ctx.user.role === "admin";
+      if (!(task?.approverUserId === ctx.user.id || isAdmin)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "仅审批人或管理员可裁决" });
+      }
+      const isProxy = task?.approverUserId !== ctx.user.id;
+      await decideTaskApproval(
+        input.projectId, input.phaseId, input.taskId,
+        input.decision, ctx.user.id, input.note, isProxy,
       );
       return { success: true };
     }),

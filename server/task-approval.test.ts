@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
-  applyAutomaticTaskStatuses, setTaskCompletion, setTaskApprovalConfig, upsertProjectTask,
-  getProjectTasks, getActivityLogs,
+  applyAutomaticTaskStatuses, setTaskCompletion, setTaskApprovalConfig, decideTaskApproval,
+  upsertProjectTask, getProjectTasks, getActivityLogs,
 } from "./db";
 import type { ProjectTask } from "../drizzle/schema";
 
@@ -87,5 +87,43 @@ describe("setTaskApprovalConfig", () => {
     expect(row.completed).toBe(false);
     expect(row.status).not.toBe("done");
     expect(row.status).not.toBe("pending_approval");
+  });
+});
+
+describe("decideTaskApproval", () => {
+  async function intoPending(pid: string) {
+    await upsertProjectTask(pid, "ph1", "c1", { requiresApproval: true, approverUserId: 2 });
+    await setTaskCompletion(pid, "ph1", "c1", true, 3); // requester=3 → pending
+  }
+
+  it("通过 → done/completed=true/approved，记 task.approve", async () => {
+    const pid = uniquePid();
+    await intoPending(pid);
+    await decideTaskApproval(pid, "ph1", "c1", "approved", 2, "可以", false);
+    const row = (await getProjectTasks(pid, "ph1"))[0];
+    expect(row.status).toBe("done");
+    expect(row.completed).toBe(true);
+    expect(row.approvalStatus).toBe("approved");
+    const actions = (await getActivityLogs(pid)).filter((a) => a.entityId === "c1").map((a) => a.action);
+    expect(actions).toContain("task.approve");
+  });
+
+  it("驳回 → completed=false/approvalStatus=rejected，status 非 done/pending", async () => {
+    const pid = uniquePid();
+    await intoPending(pid);
+    await decideTaskApproval(pid, "ph1", "c1", "rejected", 2, "不行", false);
+    const row = (await getProjectTasks(pid, "ph1"))[0];
+    expect(row.completed).toBe(false);
+    expect(row.approvalStatus).toBe("rejected");
+    expect(row.status).not.toBe("done");
+    expect(row.status).not.toBe("pending_approval");
+  });
+
+  it("admin 代审 → 日志 meta.proxyBy 记录", async () => {
+    const pid = uniquePid();
+    await intoPending(pid);
+    await decideTaskApproval(pid, "ph1", "c1", "approved", 99, null, true); // actor 99 ≠ approver 2
+    const approve = (await getActivityLogs(pid)).find((a) => a.entityId === "c1" && a.action === "task.approve");
+    expect((approve?.meta as { proxyBy?: number } | null)?.proxyBy).toBe(99);
   });
 });

@@ -2097,6 +2097,52 @@ export async function setTaskApprovalConfig(
 }
 
 /**
+ * 审批裁决：通过 → done/completed=true；驳回 → 清待审、completed=false，
+ * status 交给 refresh 按 automaticTaskStatus 归位（todo/in_progress/blocked 皆可能）。
+ * isProxy=true（actor 非指定审批人，即 admin 代审）会在日志 meta.proxyBy 记录。
+ */
+export async function decideTaskApproval(
+  projectId: string,
+  phaseId: string,
+  taskId: string,
+  decision: "approved" | "rejected",
+  actor: number,
+  note: string | null,
+  isProxy: boolean
+): Promise<void> {
+  const db = await getDb();
+  const current = db
+    ? (
+        await db
+          .select()
+          .from(projectTasks)
+          .where(and(eq(projectTasks.projectId, projectId), eq(projectTasks.phaseId, phaseId), eq(projectTasks.taskId, taskId)))
+          .limit(1)
+      )[0]
+    : null;
+  const requester = current?.approvalRequestedBy ?? null;
+  if (decision === "approved") {
+    await upsertProjectTask(projectId, phaseId, taskId, {
+      status: "done", completedAt: new Date(),
+      approvalStatus: "approved", approvalDecidedBy: actor, approvalDecidedAt: new Date(),
+      approvalNote: note, updatedBy: actor,
+    });
+  } else {
+    await upsertProjectTask(projectId, phaseId, taskId, {
+      status: "todo", completedAt: null,
+      approvalStatus: "rejected", approvalDecidedBy: actor, approvalDecidedAt: new Date(),
+      approvalNote: note, updatedBy: actor,
+    });
+  }
+  await refreshProjectTaskStatuses(projectId);
+  await createActivityLog({
+    projectId, userId: actor, action: decision === "approved" ? "task.approve" : "task.reject",
+    entityType: "task", entityId: taskId,
+    meta: { phaseId, note, approver: current?.approverUserId ?? null, requester, proxyBy: isProxy ? actor : undefined },
+  });
+}
+
+/**
  * 切换某任务下单个交付物的完成状态（合并到 deliverables jsonb map）。
  * 行不存在则插入。返回更新后的完成 map。
  */
