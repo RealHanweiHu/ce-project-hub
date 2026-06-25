@@ -8,9 +8,9 @@ import { useState, useRef, useEffect } from 'react';
 import {
   ArrowLeft, CheckCircle2, Circle, ChevronRight,
   Upload, Download, Trash2, Paperclip, FileText, Image as ImageIcon,
-  Edit3, Calendar, AlertTriangle, Target, Zap, BarChart2, ListChecks, Activity,
+  Edit3, Calendar, AlertTriangle, Target, Zap, ListChecks,
   Lock, ShieldAlert, Flag, Bug, GitBranch, Filter, Rocket, LayoutDashboard,
-  Inbox, LayoutGrid, FolderOpen, Eye, X, Clock, Settings,
+  FolderOpen, Eye, X, Clock, Settings,
 } from 'lucide-react';
 import { TaskActivityTab, TaskFlowTab, TaskApprovalTab } from './task/TaskTabs';
 import {
@@ -20,7 +20,7 @@ import {
   TaskDetails, FileAttachment, formatBytes, SOPTask, SOPPhase,
 } from '@/lib/data';
 import { CATEGORY_MAP } from '@/lib/sop-templates';
-import { LinearCard, StatusDot, LinearBar } from '@/components/linear/primitives';
+import { LinearCard, StatusDot, LinearBar, SegToggle } from '@/components/linear/primitives';
 import { ProgressBar } from '@/components/shared/ProgressBar';
 import { GateStandardPanel } from '@/components/shared/GateStandardPanel';
 import { GanttView } from './GanttView';
@@ -37,6 +37,7 @@ import { ProjectSettingsDrawer } from './project-overview/ProjectSettingsDrawer'
 import { RequirementPoolPanel } from './RequirementPoolPanel';
 import { KanbanBoard } from './KanbanBoard';
 import { FilesPanel } from './FilesPanel';
+import { RisksPanel } from './RisksPanel';
 import { FilePreviewModal, canPreview } from './FilePreviewModal';
 import { MetricsView } from './MetricsView';
 import { RescheduleConfirmDialog } from './RescheduleConfirmDialog';
@@ -60,15 +61,77 @@ interface ProjectDetailViewProps {
   initialPhaseId?: string;
   /** Deep-link: auto-open this task's detail on mount. */
   initialTaskId?: string;
-  /** Deep-link: open a specific top-level tab on mount. */
-  initialTab?: ProjectMainTab;
+  /** Deep-link: open a specific top-level tab on mount. Accepts legacy tab ids
+   *  (e.g. 'issues' | 'changelog' | 'metrics') which are normalized internally. */
+  initialTab?: LegacyMainTab;
 }
 
-type ProjectMainTab = 'overview' | 'metrics' | 'tasks' | 'kanban' | 'requirements' | 'gantt' | 'issues' | 'changelog' | 'bom' | 'files';
+type ProjectMainTab = 'overview' | 'tasks' | 'reviews' | 'materials' | 'activity';
+
+// Sub-view types for the consolidated tabs.
+type TaskSubView = 'list' | 'kanban' | 'gantt' | 'metrics';
+type ReviewSubView = 'issues' | 'risks' | 'requirements' | 'gate';
+type MaterialSubView = 'bom' | 'files';
+
+// Legacy tab values (from old deep-links / setMainTab calls) → new 5-tab model.
+type LegacyMainTab =
+  | ProjectMainTab
+  | 'metrics' | 'kanban' | 'requirements' | 'gantt' | 'issues' | 'changelog' | 'bom' | 'files';
+
+// Normalize any (possibly legacy) tab value into the new 5-tab model so old
+// deep-links keep landing on the right tab.
+function normalizeMainTab(tab?: LegacyMainTab | null): ProjectMainTab {
+  switch (tab) {
+    case 'metrics':
+    case 'kanban':
+    case 'gantt':
+    case 'tasks':
+      return 'tasks';
+    case 'requirements':
+    case 'issues':
+    case 'reviews':
+      return 'reviews';
+    case 'bom':
+    case 'files':
+    case 'materials':
+      return 'materials';
+    case 'changelog':
+    case 'activity':
+      return 'activity';
+    case 'overview':
+    default:
+      return 'overview';
+  }
+}
+
+// Which task sub-view a legacy tab maps to (for deep-links into 度量/看板/甘特).
+function taskSubViewForLegacy(tab?: LegacyMainTab | null): TaskSubView {
+  switch (tab) {
+    case 'metrics': return 'metrics';
+    case 'kanban': return 'kanban';
+    case 'gantt': return 'gantt';
+    default: return 'list';
+  }
+}
+
+// Which review sub-view a legacy tab maps to (for deep-links into 需求池/问题).
+function reviewSubViewForLegacy(tab?: LegacyMainTab | null): ReviewSubView {
+  switch (tab) {
+    case 'requirements': return 'requirements';
+    default: return 'issues';
+  }
+}
+
+// Which material sub-view a legacy tab maps to (for deep-links into 文件).
+function materialSubViewForLegacy(tab?: LegacyMainTab | null): MaterialSubView {
+  return tab === 'files' ? 'files' : 'bom';
+}
 
 const EXECUTION_ROLES = new Set(['rd_hw', 'rd_sw', 'rd_mech', 'qa', 'scm', 'pe', 'mfg', 'sales', 'cert', 'battery_safety']);
 
-function defaultTabForRole(role?: string | null): ProjectMainTab {
+// Role default expressed as a legacy tab so the same role→landing semantics carry
+// over; callers normalize it (and derive the matching sub-view) via the mappers above.
+function defaultTabForRole(role?: string | null): LegacyMainTab {
   if (role === 'qa') return 'issues';
   if (role === 'scm') return 'bom';
   if (role === 'sales') return 'requirements';
@@ -1620,7 +1683,13 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedTaskId]);
-  const [mainTab, setMainTab] = useState<ProjectMainTab>(initialTab ?? (initialTaskId ? 'tasks' : 'overview'));
+  const [mainTab, setMainTab] = useState<ProjectMainTab>(
+    initialTab ? normalizeMainTab(initialTab) : (initialTaskId ? 'tasks' : 'overview'),
+  );
+  // Sub-view toggles for the consolidated tabs (seeded from any legacy deep-link).
+  const [taskView, setTaskView] = useState<TaskSubView>(taskSubViewForLegacy(initialTab));
+  const [reviewsView, setReviewsView] = useState<ReviewSubView>(reviewSubViewForLegacy(initialTab));
+  const [materialsView, setMaterialsView] = useState<MaterialSubView>(materialSubViewForLegacy(initialTab));
   // Deep-linked into a task/tab → land there; don't let the role-default override it.
   const roleDefaultAppliedRef = useRef(!!initialTaskId || !!initialTab);
   const issueDeepLinkPhaseAppliedRef = useRef(false);
@@ -1661,7 +1730,11 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
 
   useEffect(() => {
     if (roleDefaultAppliedRef.current || perms.isLoading) return;
-    setMainTab(defaultTabForRole(perms.role));
+    const legacyDefault = defaultTabForRole(perms.role);
+    setMainTab(normalizeMainTab(legacyDefault));
+    setTaskView(taskSubViewForLegacy(legacyDefault));
+    setReviewsView(reviewSubViewForLegacy(legacyDefault));
+    setMaterialsView(materialSubViewForLegacy(legacyDefault));
     roleDefaultAppliedRef.current = true;
   }, [perms.isLoading, perms.role]);
 
@@ -1690,7 +1763,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
       notes: `来源:问题「${issue.title}」(#${issue.id})`,
     };
     updateChangeLog([...(project.changeLog ?? []), newRecord]);
-    setMainTab('changelog');
+    setMainTab('activity');
     toast.success('已从问题发起变更,请补充决策人与影响');
   };
 
@@ -1753,6 +1826,14 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
   // P2: 执行角色(如结构工程师)收敛项目详情标签——只保留 总览/任务/问题/BOM/文件,
   // 隐藏 PM/管理层导向的 度量/看板/需求池/甘特/变更,减少干扰(内容仍按 mainTab 渲染,不影响深链)。
   const execLens = isExecutionRole(perms.role);
+
+  // 执行角色视角：若(经由深链等)落到被隐藏的子视图/标签，回落到可见默认，避免空白。
+  useEffect(() => {
+    if (!execLens) return;
+    if (taskView !== 'list') setTaskView('list');
+    if (reviewsView === 'requirements') setReviewsView('issues');
+    if (mainTab === 'activity') setMainTab('reviews');
+  }, [execLens, taskView, reviewsView, mainTab]);
 
   const updateField = (field: keyof Project, value: string) => onUpdate({ ...project, [field]: value });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1840,6 +1921,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
   const handleGanttPhaseClick = (phaseId: string) => {
     setActivePhaseId(phaseId);
     setSelectedTaskId(null);
+    setTaskView('list');
     setMainTab('tasks');
   };
 
@@ -2148,13 +2230,14 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         }}
         onIssues={() => {
           if (firstOpenIssuePhaseId) setActivePhaseId(firstOpenIssuePhaseId);
-          setMainTab('issues');
+          setReviewsView('issues');
+          setMainTab('reviews');
         }}
-        onChanges={() => setMainTab('changelog')}
+        onChanges={() => setMainTab('activity')}
         onRelease={() => setReleaseOpen(true)}
       />
 
-      {/* Main Tab Bar: Overview / Tasks / Issues / Gantt / Members */}
+      {/* Main Tab Bar (collapsed to 5): 总览 / 任务 / 评审与风险 / 物料与文件 / 动态 */}
       <div className="flex flex-nowrap items-center gap-1 px-1 overflow-x-auto border-b border-border">
         <button
           onClick={() => setMainTab('overview')}
@@ -2176,109 +2259,51 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
           }`}
         >
           <ListChecks size={14} />
-          任务清单
+          任务
+          {visibleActiveTasks.length > 0 && (
+            <span className="text-[9px] num rounded-full bg-secondary text-muted-foreground border border-border px-1.5 py-0.5 min-w-[18px] text-center">
+              {visibleActiveTasks.length}
+            </span>
+          )}
         </button>
-        {!execLens && (
         <button
-          onClick={() => setMainTab('metrics')}
+          onClick={() => setMainTab('reviews')}
           className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors shrink-0 whitespace-nowrap ${
-            mainTab === 'metrics'
-              ? 'border-b-teal-600 text-teal-700'
-              : 'border-b-transparent text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          <Activity size={14} />
-          度量
-        </button>
-        )}
-        {!execLens && (
-        <button
-          onClick={() => setMainTab('kanban')}
-          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors shrink-0 whitespace-nowrap ${
-            mainTab === 'kanban'
-              ? 'border-b-primary text-primary'
-              : 'border-b-transparent text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          <LayoutGrid size={14} />
-          看板
-        </button>
-        )}
-        {!execLens && (
-        <button
-          onClick={() => setMainTab('requirements')}
-          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors shrink-0 whitespace-nowrap ${
-            mainTab === 'requirements'
-              ? 'border-b-primary text-primary'
-              : 'border-b-transparent text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          <Inbox size={14} />
-          需求池
-        </button>
-        )}
-        <button
-          onClick={() => setMainTab('issues')}
-          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors shrink-0 whitespace-nowrap ${
-            mainTab === 'issues'
+            mainTab === 'reviews'
               ? 'border-b-rose-600 text-rose-700'
               : 'border-b-transparent text-muted-foreground hover:text-foreground'
           }`}
         >
           <Bug size={14} />
-          问题清单
+          评审与风险
           {openIssueCount > 0 && (
             <span className="text-[9px] num rounded-full bg-rose-100 text-rose-700 border border-rose-200 px-1.5 py-0.5 min-w-[18px] text-center">
               {openIssueCount}
             </span>
           )}
         </button>
-        {!execLens && (
         <button
-          onClick={() => setMainTab('gantt')}
+          onClick={() => setMainTab('materials')}
           className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors shrink-0 whitespace-nowrap ${
-            mainTab === 'gantt'
-              ? 'border-b-primary text-primary'
-              : 'border-b-transparent text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          <BarChart2 size={14} />
-          甘特图
-        </button>
-        )}
-        <button
-          onClick={() => setMainTab('bom')}
-          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors shrink-0 whitespace-nowrap ${
-            mainTab === 'bom'
-              ? 'border-b-primary text-primary'
-              : 'border-b-transparent text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          <ListChecks size={14} />
-          BOM
-        </button>
-        <button
-          onClick={() => setMainTab('files')}
-          className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors shrink-0 whitespace-nowrap ${
-            mainTab === 'files'
+            mainTab === 'materials'
               ? 'border-b-primary text-primary'
               : 'border-b-transparent text-muted-foreground hover:text-foreground'
           }`}
         >
           <FolderOpen size={14} />
-          文件
+          物料与文件
         </button>
         {!execLens && (
         <button
-          onClick={() => setMainTab('changelog')}
+          onClick={() => setMainTab('activity')}
           className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors shrink-0 whitespace-nowrap ${
-            mainTab === 'changelog'
+            mainTab === 'activity'
               ? 'border-b-primary text-primary'
               : 'border-b-transparent text-muted-foreground hover:text-foreground'
           }`}
         >
           <GitBranch size={14} />
-          变更记录
+          动态
           {pendingChangeCount > 0 && (
             <span className="text-[9px] num rounded-full bg-[color:var(--acc-soft)] text-primary border border-[color:var(--acc-border)] px-1.5 py-0.5 min-w-[18px] text-center">
               {pendingChangeCount}
@@ -2288,8 +2313,25 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         )}
       </div>
 
-      {/* ── Issues Tab ────────────────────────────────────────────────────── */}
-      {mainTab === 'issues' && (
+      {/* ── 评审与风险 Tab：问题 / 风险 / 需求池 / Gate 子视图切换 ─────────────── */}
+      {mainTab === 'reviews' && (
+        <div className="px-1 pt-3">
+          <SegToggle<ReviewSubView>
+            value={reviewsView}
+            onChange={setReviewsView}
+            options={[
+              { value: 'issues', label: '问题' },
+              { value: 'risks', label: '风险' },
+              // 需求池：执行角色视角下隐藏（与原 execLens 收敛一致）。
+              ...(!execLens ? [{ value: 'requirements' as const, label: '需求池' }] : []),
+              { value: 'gate', label: 'Gate' },
+            ]}
+          />
+        </div>
+      )}
+
+      {/* ── Issues sub-view ───────────────────────────────────────────────── */}
+      {mainTab === 'reviews' && reviewsView === 'issues' && (
         <div className="space-y-4">
           {/* Phase Navigation (compact) — 任何阶段都可记录问题 */}
           <LinearCard className="overflow-x-auto">
@@ -2336,18 +2378,15 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         </div>
       )}
 
-      {mainTab === 'metrics' && (
-        <MetricsView project={project} />
-      )}
-
-      {/* ── Requirement Pool Tab ─────────────────────────────────────────── */}
-      {mainTab === 'kanban' && (
+      {/* ── 风险 sub-view（复用 OverviewPanel 风险生命周期所用的 RisksPanel）──── */}
+      {mainTab === 'reviews' && reviewsView === 'risks' && (
         <div className="p-6">
-          <KanbanBoard project={project} onUpdate={onUpdate} canEdit={perms.canEditTasks} />
+          <RisksPanel projectId={project.id} canEdit={perms.canEditProjectInfo} />
         </div>
       )}
 
-      {mainTab === 'requirements' && (
+      {/* ── 需求池 sub-view ────────────────────────────────────────────────── */}
+      {mainTab === 'reviews' && reviewsView === 'requirements' && !execLens && (
         <div className="p-6">
           <RequirementPoolPanel
             scope={{ kind: 'project', projectId: project.id, phases: projectPhases }}
@@ -2356,9 +2395,89 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         </div>
       )}
 
-       {/* ── Gantt Tab ─────────────────────────────────────────────────── */}
-      {mainTab === 'gantt' && (
-        <div className="space-y-3">
+      {/* ── Gate sub-view：复用现有 Gate 评审就绪度 + GateReviewModal 流程 ────── */}
+      {mainTab === 'reviews' && reviewsView === 'gate' && (
+        <div className="p-6 space-y-4">
+          <LinearCard className="overflow-x-auto">
+            <div className="flex min-w-max">
+              {projectPhases.map((phase) => {
+                const isActive = phase.id === activePhaseId;
+                const reviews = project.phases[phase.id]?.gateReviews || [];
+                const latest = reviews[reviews.length - 1];
+                return (
+                  <button
+                    key={phase.id}
+                    onClick={() => setActivePhaseId(phase.id)}
+                    className={`flex-1 min-w-[100px] p-3 text-left transition-all border-b-2 ${
+                      isActive ? 'border-b-primary bg-secondary' : 'border-b-transparent hover:bg-secondary'
+                    }`}
+                  >
+                    <div className="text-[9px] num uppercase tracking-widest text-muted-foreground mb-0.5">{phase.code}</div>
+                    <div className={`text-xs font-medium ${isActive ? 'text-primary' : 'text-muted-foreground'}`}>{phase.name}</div>
+                    <div className="mt-1.5 flex items-center gap-1">
+                      {latest ? <GateReviewBadge review={latest} /> : <span className="text-[9px] num text-muted-foreground">未评审</span>}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </LinearCard>
+          <LinearCard className="p-5 space-y-3">
+            <div className="flex items-center gap-2">
+              <Target size={14} className="text-primary" />
+              <span className="text-sm font-medium text-foreground">{activePhase?.name} · {activePhase?.gate || 'Gate 评审'}</span>
+            </div>
+            {(() => {
+              const reviews = activePhaseData?.gateReviews || [];
+              const latest = reviews[reviews.length - 1];
+              const { blockers } = computeGateReadiness(activePhase, activePhaseData, activeGateDeliverables, serverDelivSatisfiedSet);
+              return (
+                <>
+                  {latest ? (
+                    <div className="space-y-2">
+                      <GateReviewBadge review={latest} />
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                        <div><span>参与人：</span>{latest.participants}</div>
+                        {latest.conditions && <div className="col-span-2"><span>条件：</span>{latest.conditions}</div>}
+                        {latest.notes && <div className="col-span-2 italic">{latest.notes}</div>}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-xs text-muted-foreground">本阶段尚无 Gate 评审记录。</div>
+                  )}
+                  {blockers.length > 0 && (
+                    <div className="text-xs text-muted-foreground">
+                      放行阻塞项：{blockers.join('、')}
+                    </div>
+                  )}
+                  <button
+                    onClick={() => setGateReviewPending({ phaseId: activePhaseId })}
+                    className="text-xs text-primary rounded-md border border-dashed border-[color:var(--acc-border)] px-3 py-2 hover:bg-[color:var(--acc-soft)] transition-colors"
+                  >
+                    {latest ? '查看 / 补充 Gate 评审记录' : '+ 填写 Gate 评审记录'}
+                  </button>
+                </>
+              );
+            })()}
+          </LinearCard>
+        </div>
+      )}
+
+      {/* ── 度量 sub-view ──────────────────────────────────────────────────── */}
+      {mainTab === 'tasks' && taskView === 'metrics' && !execLens && (
+        <MetricsView project={project} />
+      )}
+
+      {/* ── 看板 sub-view ──────────────────────────────────────────────────── */}
+      {mainTab === 'tasks' && taskView === 'kanban' && !execLens && (
+        <div className="p-6">
+          <KanbanBoard project={project} onUpdate={onUpdate} canEdit={perms.canEditTasks} />
+        </div>
+      )}
+
+       {/* ── 甘特 sub-view ─────────────────────────────────────────────────── */}
+      {mainTab === 'tasks' && taskView === 'gantt' && !execLens && (
+        <div className="p-6 space-y-3">
           <div className="flex items-center gap-0 rounded-md border border-border w-fit overflow-hidden">
             {([['task', '任务视图'], ['phase', '阶段视图']] as const).map(([m, label]) => (
               <button key={m} onClick={() => setGanttMode(m)}
@@ -2368,7 +2487,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
             ))}
           </div>
           {ganttMode === 'task' ? (
-            <TaskGanttView project={project} onTaskClick={(phaseId, taskId) => { setActivePhaseId(phaseId); setSelectedTaskId(taskId); setMainTab('tasks'); }} />
+            <TaskGanttView project={project} onTaskClick={(phaseId, taskId) => { setActivePhaseId(phaseId); setSelectedTaskId(taskId); setTaskView('list'); setMainTab('tasks'); }} />
           ) : (
             <GanttView
               project={project}
@@ -2380,8 +2499,8 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         </div>
       )}
 
-      {/* ── Change Log Tab ──────────────────────────────────────────── */}
-      {mainTab === 'changelog' && (
+      {/* ── 动态 Tab：变更记录 ───────────────────────────────────────────── */}
+      {mainTab === 'activity' && !execLens && (
         <div className="p-6">
           <ChangeLog
             projectId={project.id}
@@ -2392,14 +2511,27 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         </div>
       )}
 
-      {mainTab === 'bom' && (
+      {/* ── 物料与文件 Tab：BOM / 文件 子视图切换 ─────────────────────────── */}
+      {mainTab === 'materials' && (
+        <div className="px-1 pt-3">
+          <SegToggle<MaterialSubView>
+            value={materialsView}
+            onChange={setMaterialsView}
+            options={[
+              { value: 'bom', label: 'BOM' },
+              { value: 'files', label: '文件' },
+            ]}
+          />
+        </div>
+      )}
+
+      {mainTab === 'materials' && materialsView === 'bom' && (
         <div className="p-6">
           <BomPanel projectId={project.id} canEdit={perms.canEditProjectInfo || perms.canEditChangelog} />
         </div>
       )}
 
-      {/* ── Files Tab（权限范围内项目文件汇总）──────────────────────────── */}
-      {mainTab === 'files' && (
+      {mainTab === 'materials' && materialsView === 'files' && (
         <div className="p-6">
           <FilesPanel project={project} role={perms.role} />
         </div>
@@ -2410,7 +2542,13 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         <div className="p-6">
           <ProjectDashboard
             project={project}
-            onSelectTab={(tab) => setMainTab(tab as ProjectMainTab)}
+            onSelectTab={(tab) => {
+              const legacy = tab as LegacyMainTab;
+              setTaskView(taskSubViewForLegacy(legacy));
+              setReviewsView(reviewSubViewForLegacy(legacy));
+              setMaterialsView(materialSubViewForLegacy(legacy));
+              setMainTab(normalizeMainTab(legacy));
+            }}
             onOpenSettings={() => setSettingsOpen(true)}
           />
         </div>
@@ -2428,8 +2566,29 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         />
       </ProjectSettingsDrawer>
 
-      {/* ── Tasks Tab ─────────────────────────────────────────────────────── */}
+      {/* ── 任务 Tab：列表 / 看板 / 甘特 / 度量 子视图切换 ──────────────────── */}
       {mainTab === 'tasks' && (
+        <div className="px-1 pt-3">
+          <SegToggle<TaskSubView>
+            value={taskView}
+            onChange={setTaskView}
+            options={[
+              { value: 'list', label: '列表' },
+              // 看板/甘特/度量：执行角色视角下隐藏（与原 execLens 收敛一致）。
+              ...(!execLens
+                ? ([
+                    { value: 'kanban' as const, label: '看板' },
+                    { value: 'gantt' as const, label: '甘特' },
+                    { value: 'metrics' as const, label: '度量' },
+                  ])
+                : []),
+            ]}
+          />
+        </div>
+      )}
+
+      {/* ── 列表 sub-view ──────────────────────────────────────────────────── */}
+      {mainTab === 'tasks' && taskView === 'list' && (
         <>
           {/* Phase Navigation */}
           <LinearCard className="overflow-x-auto">
