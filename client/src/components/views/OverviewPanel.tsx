@@ -184,7 +184,7 @@ export function OverviewPanel({
 
             <div>
               <h3 className="text-[11px] uppercase tracking-widest text-muted-foreground mb-3">关键信息</h3>
-              <div className="overflow-hidden rounded-[10px] border border-border grid grid-cols-2 md:grid-cols-3 gap-px bg-secondary">
+              <div className="grid grid-cols-2 gap-x-8 gap-y-5 rounded-[12px] border border-border bg-card px-5 py-[18px] md:grid-cols-3">
                 <InfoCell icon={<Hash size={13} />} label="项目编号" value={project.code || '—'} mono />
                 <InfoCell icon={<User size={13} />} label="项目经理" value={pmName} />
                 <InfoCell icon={<Boxes size={13} />} label="关联产品" value={linkedProduct ? linkedProduct.name : (project.productId ? project.productId : '新产品 / 未关联')} />
@@ -217,10 +217,10 @@ export function OverviewPanel({
                 } />
                 <InfoCell icon={<Flag size={13} />} label="当前阶段" value={currentPhaseName} />
                 <InfoCell icon={<CalendarRange size={13} />} label="计划起止" value={`${project.startDate || '—'} ~ ${project.targetDate || '—'}`} mono />
-                <InfoCell icon={<GaugeCircle size={13} />} label="整体进度" value={
-                  <div className="flex items-center gap-2">
-                    <div className="flex-1 h-1.5 bg-secondary overflow-hidden min-w-[48px]"><div className="h-full bg-primary" style={{ width: `${overallProgress}%` }} /></div>
-                    <span className="text-xs num text-[color:var(--secondary-foreground)]">{overallProgress}%</span>
+                <InfoCell className="col-span-2 md:col-span-3" icon={<GaugeCircle size={13} />} label="整体进度" value={
+                  <div className="flex items-center gap-3">
+                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-secondary min-w-[48px]"><div className="h-full rounded-full bg-primary" style={{ width: `${overallProgress}%` }} /></div>
+                    <span className="num text-xs text-[color:var(--secondary-foreground)]">{overallProgress}%</span>
                   </div>
                 } />
               </div>
@@ -228,7 +228,7 @@ export function OverviewPanel({
 
             <div>
               <h3 className="text-[11px] uppercase tracking-widest text-muted-foreground mb-3">立项信息</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 gap-x-8 gap-y-[18px] rounded-[12px] border border-border bg-card px-5 py-[18px] md:grid-cols-2">
                 <Field label="客户 / 对接方" value={info.customer} onCommit={(v) => commitInfo({ customer: v })} canEdit={canEdit} placeholder="客户名称 / 内部对接方" />
                 <Field label="预期价值" value={info.value} onCommit={(v) => commitInfo({ value: v })} canEdit={canEdit} placeholder="目标销量 / 营收 / 战略价值" />
                 <Field label="项目背景" value={info.background} onCommit={(v) => commitInfo({ background: v })} canEdit={canEdit} placeholder="为什么做这个项目、市场/客户背景" textarea className="md:col-span-2" />
@@ -539,25 +539,26 @@ function Field({ label, value, onCommit, canEdit, placeholder, textarea, classNa
   const [draft, setDraft] = useState(value);
   useEffect(() => { setDraft(value); }, [value]);
   const commit = () => { if (draft !== value) onCommit(draft); };
+  const editClass = "w-full border-b border-transparent pb-0.5 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground hover:border-border focus:border-primary";
   return (
-    <div className={`rounded-[10px] border border-border bg-card p-3 ${className ?? ''}`}>
+    <div className={className ?? ''}>
       <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">{label}</div>
       {!canEdit ? (
         <div className="text-sm text-foreground whitespace-pre-wrap min-h-[1.25rem]">{value || <span className="text-muted-foreground">—</span>}</div>
       ) : textarea ? (
         <textarea value={draft} onChange={(e) => setDraft(e.target.value)} onBlur={commit} rows={3} placeholder={placeholder}
-          className="w-full text-sm text-foreground outline-none resize-none placeholder:text-muted-foreground" />
+          className={`${editClass} resize-none`} />
       ) : (
         <input value={draft} onChange={(e) => setDraft(e.target.value)} onBlur={commit} placeholder={placeholder}
-          className="w-full text-sm text-foreground outline-none placeholder:text-muted-foreground" />
+          className={editClass} />
       )}
     </div>
   );
 }
 
-function InfoCell({ icon, label, value, mono }: { icon: React.ReactNode; label: string; value: React.ReactNode; mono?: boolean }) {
+function InfoCell({ icon, label, value, mono, className }: { icon: React.ReactNode; label: string; value: React.ReactNode; mono?: boolean; className?: string }) {
   return (
-    <div className="bg-card p-3">
+    <div className={className}>
       <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground mb-1">{icon}{label}</div>
       <div className={`text-sm text-foreground ${mono ? 'num' : ''}`}>{value}</div>
     </div>
