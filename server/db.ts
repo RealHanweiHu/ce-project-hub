@@ -79,6 +79,20 @@ export async function getDb() {
   return _db;
 }
 
+// `deliverable-review-service` and this module form an import cycle (it imports
+// `getDb` from here; we import its functions back). Under vitest's parallel pool,
+// callers like getPortfolio / getPortfolioHealthForDigest fan out getGateReadiness
+// via Promise.all, firing many `import("./deliverable-review-service")` in the same
+// tick. While that cyclic module is mid-evaluation (yielding on its own cold
+// imports), a concurrent raw `await import(...)` can receive the not-yet-populated
+// namespace (`{}`), surfacing as "getReviewSatisfiedSet is not a function". Funnel
+// every caller through one memoized import so they all await a single, fully
+// evaluated module instead of racing separate in-flight imports.
+let _deliverableReviewServicePromise: Promise<typeof import("./deliverable-review-service")> | null = null;
+function loadDeliverableReviewService() {
+  return (_deliverableReviewServicePromise ??= import("./deliverable-review-service"));
+}
+
 export async function upsertUser(user: InsertUser): Promise<void> {
   if (!user.openId) {
     throw new Error("User openId is required for upsert");
@@ -1673,7 +1687,7 @@ export async function createProjectFile(record: Omit<InsertProjectFile, "id" | "
   const result = await db.insert(projectFiles).values(normalized).returning({ id: projectFiles.id });
   // 上传新版本后触发交付物重审（若已审核过则回退待审）
   if (record.deliverableName && record.phaseId) {
-    const { resetReviewOnReupload } = await import("./deliverable-review-service");
+    const { resetReviewOnReupload } = await loadDeliverableReviewService();
     await resetReviewOnReupload(record.projectId, record.phaseId, record.deliverableName);
   }
   return result[0].id;
@@ -3012,7 +3026,7 @@ export async function getGateReadiness(projectId: string, phaseId: string): Prom
     .map((t) => t.id);
 
   const required = effPhase?.submittedDeliverables ?? phase.gateStandard.requiredDeliverables;
-  const { getReviewSatisfiedSet } = await import("./deliverable-review-service");
+  const { getReviewSatisfiedSet } = await loadDeliverableReviewService();
   const uploaded = Array.from(await getReviewSatisfiedSet(projectId, phaseId, required));
 
   const critical = await getPhaseOpenP0P1(projectId, phaseId);

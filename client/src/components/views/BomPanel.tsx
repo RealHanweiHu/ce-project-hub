@@ -12,6 +12,23 @@ type BomRow = {
 
 const EMPTY = { partNumber: '', name: '', spec: '', quantity: 1, refDesignator: '', supplierName: '', unitCost: '', componentProductId: '' };
 
+// 模块级定义：避免在父组件渲染体内重建组件类型导致 input 每次渲染重挂载（丢失焦点/未保存内容）。
+function BomCell({ r, field, type = 'text', w, disabled, onCommit }: {
+  r: BomRow; field: keyof BomRow; type?: string; w: string; disabled: boolean;
+  onCommit: (id: number, field: keyof BomRow, value: string | number) => void;
+}) {
+  return (
+    <input
+      type={type} defaultValue={String(r[field] ?? '')} disabled={disabled}
+      onBlur={(e) => {
+        const v: string | number = type === 'number' ? (parseInt(e.target.value) || 0) : e.target.value;
+        if (String(v) !== String(r[field] ?? '')) onCommit(r.id, field, v);
+      }}
+      className={`${w} rounded-md border border-transparent hover:border-border focus:border-[color:var(--acc-border)] outline-none px-1.5 py-1 text-sm bg-transparent`}
+    />
+  );
+}
+
 export function BomPanel({ projectId, canEdit }: { projectId: string; canEdit: boolean }) {
   const utils = trpc.useUtils();
   const { data: rows = [], isLoading } = trpc.bom.working.useQuery({ projectId });
@@ -27,18 +44,9 @@ export function BomPanel({ projectId, canEdit }: { projectId: string; canEdit: b
 
   const totalCost = (rows as BomRow[]).reduce((s, r) => s + (parseFloat(r.unitCost) || 0) * r.quantity, 0);
 
-  if (isLoading) return <div className="flex justify-center py-10"><Loader2 className="animate-spin text-primary" /></div>;
+  const commitCell = (id: number, field: keyof BomRow, v: string | number) => updM.mutate({ id, patch: { [field]: v } });
 
-  const Cell = ({ r, field, type = 'text', w }: { r: BomRow; field: keyof BomRow; type?: string; w: string }) => (
-    <input
-      type={type} defaultValue={String(r[field] ?? '')} disabled={!canEdit}
-      onBlur={(e) => {
-        const v: string | number = type === 'number' ? (parseInt(e.target.value) || 0) : e.target.value;
-        if (String(v) !== String(r[field] ?? '')) updM.mutate({ id: r.id, patch: { [field]: v } });
-      }}
-      className={`${w} rounded-md border border-transparent hover:border-border focus:border-[color:var(--acc-border)] outline-none px-1.5 py-1 text-sm bg-transparent`}
-    />
-  );
+  if (isLoading) return <div className="flex justify-center py-10"><Loader2 className="animate-spin text-primary" /></div>;
 
   return (
     <div className="space-y-3 py-2">
@@ -71,13 +79,13 @@ export function BomPanel({ projectId, canEdit }: { projectId: string; canEdit: b
           <tbody>
             {(rows as BomRow[]).map((r) => (
               <tr key={r.id} className="border-t border-border">
-                <td><Cell r={r} field="partNumber" w="w-24" /></td>
-                <td><Cell r={r} field="name" w="w-40" /></td>
-                <td><Cell r={r} field="spec" w="w-32" /></td>
-                <td><Cell r={r} field="quantity" type="number" w="w-14" /></td>
-                <td><Cell r={r} field="refDesignator" w="w-20" /></td>
-                <td><Cell r={r} field="supplierName" w="w-24" /></td>
-                <td><Cell r={r} field="unitCost" w="w-16" /></td>
+                <td><BomCell r={r} field="partNumber" w="w-24" disabled={!canEdit} onCommit={commitCell} /></td>
+                <td><BomCell r={r} field="name" w="w-40" disabled={!canEdit} onCommit={commitCell} /></td>
+                <td><BomCell r={r} field="spec" w="w-32" disabled={!canEdit} onCommit={commitCell} /></td>
+                <td><BomCell r={r} field="quantity" type="number" w="w-14" disabled={!canEdit} onCommit={commitCell} /></td>
+                <td><BomCell r={r} field="refDesignator" w="w-20" disabled={!canEdit} onCommit={commitCell} /></td>
+                <td><BomCell r={r} field="supplierName" w="w-24" disabled={!canEdit} onCommit={commitCell} /></td>
+                <td><BomCell r={r} field="unitCost" w="w-16" disabled={!canEdit} onCommit={commitCell} /></td>
                 <td className="px-2">
                   {r.componentProductId
                     ? <span className="text-[11px] text-primary flex items-center gap-1"><Boxes size={11} />{components.find((c) => c.id === r.componentProductId)?.name || '零部件'}</span>

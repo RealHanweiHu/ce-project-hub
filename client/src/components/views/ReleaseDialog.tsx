@@ -16,6 +16,20 @@ interface ReleaseDialogProps {
   onReleased: () => void;
 }
 
+// 模块级定义：纯展示组件，避免在父组件渲染体内重建组件类型。
+function Check({ ok, warn, children }: { ok: boolean; warn?: boolean; children: React.ReactNode }) {
+  return (
+    <div className="flex items-start gap-2 text-sm">
+      {ok
+        ? <CheckCircle2 size={15} className="text-[color:var(--success)] mt-0.5 shrink-0" />
+        : warn
+          ? <AlertTriangle size={15} className="text-[color:var(--warning)] mt-0.5 shrink-0" />
+          : <XCircle size={15} className="text-destructive mt-0.5 shrink-0" />}
+      <span className="text-foreground">{children}</span>
+    </div>
+  );
+}
+
 export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: ReleaseDialogProps) {
   const utils = trpc.useUtils();
   const { data: precheck, isLoading } = trpc.products.releasePrecheck.useQuery(
@@ -49,17 +63,6 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
     },
     onError: (e) => toast.error(e.message),
   });
-
-  const Check = ({ ok, warn, children }: { ok: boolean; warn?: boolean; children: React.ReactNode }) => (
-    <div className="flex items-start gap-2 text-sm">
-      {ok
-        ? <CheckCircle2 size={15} className="text-[color:var(--success)] mt-0.5 shrink-0" />
-        : warn
-          ? <AlertTriangle size={15} className="text-[color:var(--warning)] mt-0.5 shrink-0" />
-          : <XCircle size={15} className="text-destructive mt-0.5 shrink-0" />}
-      <span className="text-foreground">{children}</span>
-    </div>
-  );
 
   // Derived gate state
   const gateDecision = precheck?.releaseGate?.decision ?? null;

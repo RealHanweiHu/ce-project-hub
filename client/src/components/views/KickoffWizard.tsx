@@ -20,6 +20,18 @@ const DEFAULT_MEETING = { enabled: true, weekday: 3, time: '15:00', durationMin:
 
 type UserRow = { id: number; name: string | null; username: string };
 
+// 模块级定义：避免在父组件渲染体内重建组件类型；当前步 step 通过 props 传入。
+function StepDot({ n, label, step }: { n: number; label: string; step: number }) {
+  return (
+    <div className="flex items-center gap-2">
+      <div className={`w-6 h-6 flex items-center justify-center text-[11px] num rounded-[6px] border ${step >= n ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground'}`}>
+        {step > n ? <CheckCircle2 size={13} /> : n}
+      </div>
+      <span className={`text-xs ${step >= n ? 'text-foreground' : 'text-muted-foreground'}`}>{label}</span>
+    </div>
+  );
+}
+
 export function KickoffWizard({ project, onClose }: {
   project: { id: string; name: string; category: string; pmUserId: number | null; startDate: string | null };
   onClose: () => void;
@@ -100,15 +112,6 @@ export function KickoffWizard({ project, onClose }: {
     }
   };
 
-  const StepDot = ({ n, label }: { n: number; label: string }) => (
-    <div className="flex items-center gap-2">
-      <div className={`w-6 h-6 flex items-center justify-center text-[11px] num rounded-[6px] border ${step >= n ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground'}`}>
-        {step > n ? <CheckCircle2 size={13} /> : n}
-      </div>
-      <span className={`text-xs ${step >= n ? 'text-foreground' : 'text-muted-foreground'}`}>{label}</span>
-    </div>
-  );
-
   return (
     <div className="fixed inset-0 z-50 flex justify-center overflow-y-auto bg-foreground/40 backdrop-blur-sm p-4 sm:p-8" onClick={onClose}>
       <div className="relative w-full max-w-xl h-fit my-auto bg-card border border-border rounded-[11px] shadow-2xl" onClick={(e) => e.stopPropagation()}>
@@ -125,11 +128,11 @@ export function KickoffWizard({ project, onClose }: {
 
         {/* 步骤指示 */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-border bg-secondary">
-          <StepDot n={1} label="开始日期" />
+          <StepDot n={1} label="开始日期" step={step} />
           <div className="flex-1 h-px bg-border mx-2" />
-          <StepDot n={2} label="角色分工" />
+          <StepDot n={2} label="角色分工" step={step} />
           <div className="flex-1 h-px bg-border mx-2" />
-          <StepDot n={3} label="确认启动" />
+          <StepDot n={3} label="确认启动" step={step} />
         </div>
 
         <div className="p-5 max-h-[60vh] overflow-y-auto">
