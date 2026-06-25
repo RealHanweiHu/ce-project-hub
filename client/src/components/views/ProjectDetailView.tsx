@@ -1694,6 +1694,8 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
   const roleDefaultAppliedRef = useRef(!!initialTaskId || !!initialTab);
   const issueDeepLinkPhaseAppliedRef = useRef(false);
   const [ganttMode, setGanttMode] = useState<'task' | 'phase'>('task');
+  // 任务 tab 的阶段筛选器：'all' 看全部，或某 phaseId 只看该阶段（统一作用看板/列表/甘特）。
+  const [taskPhaseFilter, setTaskPhaseFilter] = useState<string>('all');
   const perms = useProjectPermission(project.id);
   const { user: currentUser } = useAuth();
   // 任务详情弹窗：左栏底部四标签
@@ -1855,6 +1857,11 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
     if (reviewsView === 'requirements') setReviewsView('issues');
     if (mainTab === 'activity') setMainTab('reviews');
   }, [execLens, taskView, reviewsView, mainTab]);
+
+  // 阶段筛选器选中某阶段时，让「列表」子视图跟随切到该阶段（'all' 不动，保留 phase-nav 原行为）。
+  useEffect(() => {
+    if (taskPhaseFilter !== 'all') setActivePhaseId(taskPhaseFilter);
+  }, [taskPhaseFilter]);
 
   const updateField = (field: keyof Project, value: string) => onUpdate({ ...project, [field]: value });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -2579,6 +2586,28 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
             </div>
           </div>
 
+          {/* 阶段筛选器：全部 + 各阶段，统一作用看板/列表/甘特；阶段多时横向滚动 */}
+          <div className="-mx-1 overflow-x-auto px-1">
+            <div className="flex w-max items-center gap-1.5">
+              {([{ id: 'all', name: '全部' }, ...projectPhases] as { id: string; name: string }[]).map((p) => {
+                const isActive = taskPhaseFilter === p.id;
+                return (
+                  <button
+                    key={p.id}
+                    onClick={() => setTaskPhaseFilter(p.id)}
+                    className={`shrink-0 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                      isActive
+                        ? 'bg-primary text-white'
+                        : 'border border-border text-muted-foreground hover:bg-secondary hover:text-foreground'
+                    }`}
+                  >
+                    {p.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           {/* ── 列表 sub-view ──────────────────────────────────────────────── */}
           {taskView === 'list' && (
         <>
@@ -3234,7 +3263,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
 
           {/* ── 看板 sub-view ──────────────────────────────────────────────── */}
           {taskView === 'kanban' && !execLens && (
-            <KanbanBoard project={project} onUpdate={onUpdate} canEdit={perms.canEditTasks} />
+            <KanbanBoard project={project} onUpdate={onUpdate} canEdit={perms.canEditTasks} phaseFilter={taskPhaseFilter} />
           )}
 
           {/* ── 甘特 sub-view ──────────────────────────────────────────────── */}
@@ -3249,7 +3278,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                 ))}
               </div>
               {ganttMode === 'task' ? (
-                <TaskGanttView project={project} onTaskClick={(phaseId, taskId) => { setActivePhaseId(phaseId); setSelectedTaskId(taskId); setTaskView('list'); setMainTab('tasks'); }} />
+                <TaskGanttView project={project} phaseFilter={taskPhaseFilter} onTaskClick={(phaseId, taskId) => { setActivePhaseId(phaseId); setSelectedTaskId(taskId); setTaskView('list'); setMainTab('tasks'); }} />
               ) : (
                 <GanttView
                   project={project}

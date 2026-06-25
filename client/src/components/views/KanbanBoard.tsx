@@ -52,14 +52,15 @@ function Avatar({ name }: { name: string }) {
   );
 }
 
-export function KanbanBoard({ project }: { project: Project; onUpdate: (p: Project) => void; canEdit: boolean }) {
+export function KanbanBoard({ project, phaseFilter }: { project: Project; onUpdate: (p: Project) => void; canEdit: boolean; phaseFilter?: string }) {
   const { data: users = [] } = trpc.admin.listUsersForSelect.useQuery(undefined, { staleTime: 60_000 });
   const nameById = new Map<number, string>();
   for (const u of users) nameById.set(u.id, u.name || u.username || `#${u.id}`);
 
-  // 把所有阶段的任务摊平成卡片
+  // 把所有阶段的任务摊平成卡片（phaseFilter 指定单阶段时只取该阶段）
   const cards: Card[] = [];
   for (const phase of getProjectPhases(project)) {
+    if (phaseFilter && phaseFilter !== 'all' && phase.id !== phaseFilter) continue;
     const pd = project.phases[phase.id];
     for (const task of phase.tasks) {
       const det = pd?.taskDetails?.[task.id];

@@ -23,7 +23,7 @@ type Row = { kind: 'phase'; id: string; code: string; name: string; color: strin
 const ROW_H = 30;
 const LABEL_W = 200;
 
-export function TaskGanttView({ project, onTaskClick }: { project: Project; onTaskClick?: (phaseId: string, taskId: string) => void }) {
+export function TaskGanttView({ project, onTaskClick, phaseFilter }: { project: Project; onTaskClick?: (phaseId: string, taskId: string) => void; phaseFilter?: string }) {
   const [zoom, setZoom] = useState(1);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -34,6 +34,7 @@ export function TaskGanttView({ project, onTaskClick }: { project: Project; onTa
     const rows: Row[] = [];
     let minStart: Date | null = null, maxDue: Date | null = null;
     for (const phase of phases) {
+      if (phaseFilter && phaseFilter !== 'all' && phase.id !== phaseFilter) continue;
       const pd = project.phases[phase.id];
       const bars: TaskBar[] = [];
       for (const t of phase.tasks) {
