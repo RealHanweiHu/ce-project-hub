@@ -129,6 +129,14 @@ export function useProjectData(projectId: string | null) {
           taskStatus: t.status ?? "todo",
           taskPriority: t.priority ?? "medium",
           deliverables: (t.deliverables as Record<string, boolean> | null) ?? {},
+          requiresApproval: t.requiresApproval ?? false,
+          approverUserId: t.approverUserId ?? null,
+          approvalStatus: t.approvalStatus ?? "none",
+          approvalNote: t.approvalNote ?? null,
+          approvalRequestedBy: t.approvalRequestedBy ?? null,
+          approvalRequestedAt: t.approvalRequestedAt ? String(t.approvalRequestedAt) : null,
+          approvalDecidedBy: t.approvalDecidedBy ?? null,
+          approvalDecidedAt: t.approvalDecidedAt ? String(t.approvalDecidedAt) : null,
         };
       }
 

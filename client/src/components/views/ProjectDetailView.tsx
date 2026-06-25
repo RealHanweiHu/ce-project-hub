@@ -1113,6 +1113,7 @@ function TaskDetail({
     blocked: { label: '阻塞', className: 'bg-red-50 text-red-700 border-red-200' },
     done: { label: '已完成', className: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
     skipped: { label: '跳过', className: 'bg-secondary text-muted-foreground border-border' },
+    pending_approval: { label: '待审批', className: 'bg-[color:var(--acc-soft)] text-[color:var(--warning)] border-[color:var(--acc-border)]' },
   };
   const taskStatus = taskDetails?.taskStatus ?? 'todo';
   const taskStatusCfg = TASK_STATUS_CONFIG[taskStatus] ?? TASK_STATUS_CONFIG.todo;

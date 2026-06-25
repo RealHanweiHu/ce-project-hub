@@ -6,6 +6,7 @@ const COLUMNS: { status: string; label: string; tone: string }[] = [
   { status: 'todo', label: '待办', tone: 'var(--muted-foreground)' },
   { status: 'in_progress', label: '进行中', tone: 'var(--primary)' },
   { status: 'blocked', label: '阻塞', tone: 'var(--destructive)' },
+  { status: 'pending_approval', label: '待审批', tone: 'var(--warning)' },
   { status: 'done', label: '完成', tone: 'var(--success)' },
   { status: 'skipped', label: '跳过', tone: 'var(--border)' },
 ];

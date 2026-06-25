@@ -225,6 +225,13 @@
       "when": 1782013180405,
       "tag": "0031_unknown_bishop",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1782395388602,
+      "tag": "0032_unique_silk_fever",
+      "breakpoints": true
     }
   ]
 }

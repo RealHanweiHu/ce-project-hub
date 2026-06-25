@@ -131,6 +131,7 @@ function statusLabel(status: string) {
   if (status === "blocked") return "阻塞";
   if (status === "done") return "已完成";
   if (status === "skipped") return "跳过";
+  if (status === "pending_approval") return "待审批";
   return status;
 }
 

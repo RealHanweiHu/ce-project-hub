@@ -49,6 +49,15 @@ export interface TaskDetails {
   taskStatus?: string;           // TaskStatus (renamed to avoid collision with IssueStatus)
   taskPriority?: string;         // TaskPriority
   deliverables?: Record<string, boolean>; // 交付物名称 → 是否完成
+  // 逐任务审批闸门（默认 requiresApproval=false → 零回归）
+  requiresApproval?: boolean;
+  approverUserId?: number | null;
+  approvalStatus?: string;       // none/pending/approved/rejected
+  approvalNote?: string | null;
+  approvalRequestedBy?: number | null;
+  approvalRequestedAt?: string | null;
+  approvalDecidedBy?: number | null;
+  approvalDecidedAt?: string | null;
 }
 
 export interface FileAttachment {

@@ -452,13 +452,17 @@ export type InsertProjectDeliverableReview = typeof projectDeliverableReviews.$i
 // Tasks (per-project, per-phase task completion state)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const TASK_STATUSES = ["todo", "in_progress", "blocked", "done", "skipped"] as const;
+export const TASK_STATUSES = ["todo", "in_progress", "blocked", "done", "skipped", "pending_approval"] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export const TASK_PRIORITIES = ["low", "medium", "high", "critical"] as const;
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
+/** 逐任务审批闸门的审批态（默认 none = 不需审批/未提交） */
+export const TASK_APPROVAL_STATUSES = ["none", "pending", "approved", "rejected"] as const;
+export type TaskApprovalStatus = (typeof TASK_APPROVAL_STATUSES)[number];
 
 export const taskStatusEnum = pgEnum("task_status", TASK_STATUSES);
 export const taskPriorityEnum = pgEnum("task_priority", TASK_PRIORITIES);
+export const taskApprovalStatusEnum = pgEnum("task_approval_status", TASK_APPROVAL_STATUSES);
 
 /**
  * project_tasks table - tracks completion state and details for each SOP task.
@@ -499,6 +503,20 @@ export const projectTasks = pgTable(
     /** Timestamp when task was marked done */
     completedAt: timestamp("completedAt"),
     updatedBy: integer("updatedBy"),
+    /** 逐任务审批闸门：是否需要审批人通过才计入完成（默认 false → 零回归） */
+    requiresApproval: boolean("requiresApproval").notNull().default(false),
+    /** 指定审批人（FK → users.id） */
+    approverUserId: integer("approverUserId"),
+    /** 审批态：none/pending/approved/rejected */
+    approvalStatus: taskApprovalStatusEnum("approvalStatus").notNull().default("none"),
+    /** 审批意见（驳回/通过备注） */
+    approvalNote: text("approvalNote"),
+    /** 提交审批的人 + 时间 */
+    approvalRequestedBy: integer("approvalRequestedBy"),
+    approvalRequestedAt: timestamp("approvalRequestedAt"),
+    /** 裁决人 + 时间 */
+    approvalDecidedBy: integer("approvalDecidedBy"),
+    approvalDecidedAt: timestamp("approvalDecidedAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
   },
