@@ -32,6 +32,7 @@ import { GateReviewModal, GateReviewBadge } from './GateReviewModal';
 import { ReleaseDialog } from './ReleaseDialog';
 import { BomPanel } from './BomPanel';
 import { OverviewPanel } from './OverviewPanel';
+import { ProjectDashboard } from './project-overview/ProjectDashboard';
 import { RequirementPoolPanel } from './RequirementPoolPanel';
 import { KanbanBoard } from './KanbanBoard';
 import { FilesPanel } from './FilesPanel';
@@ -1721,6 +1722,8 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
   const riskOverrideActive = !!project.riskOverrideRisk;
   const riskOverrideReason = project.riskOverrideReason?.trim() ?? '';
   const [riskOverrideOpen, setRiskOverrideOpen] = useState(false);
+  // 设置抽屉占位（真实抽屉为后续任务 PD2；当前仅打开总览的设置面板入口）。
+  const [, setSettingsOpen] = useState(false);
   const [riskOverrideDraft, setRiskOverrideDraft] = useState<Project['risk']>(project.riskOverrideRisk ?? project.risk);
   const [riskOverrideReasonDraft, setRiskOverrideReasonDraft] = useState(project.riskOverrideReason ?? '');
   const isCurrentPhaseUnlocked = isPhaseUnlocked(project, activePhaseId);
@@ -2391,16 +2394,13 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         </div>
       )}
 
-      {/* ── Overview Tab（含 成员 / 字段）─────────────────────────────────── */}
+      {/* ── Overview Tab：三栏只读仪表盘（OverviewPanel 保留供后续设置抽屉复用）── */}
       {mainTab === 'overview' && (
         <div className="p-6">
-          <OverviewPanel
+          <ProjectDashboard
             project={project}
-            onUpdate={onUpdate}
-            canEdit={perms.canEditProjectInfo}
-            canManageMembers={perms.canManageMembers}
-            isAdmin={currentUser?.role === 'admin'}
-            onOpenRiskOverride={perms.canEditProjectInfo ? openRiskOverrideEditor : undefined}
+            onSelectTab={(tab) => setMainTab(tab as ProjectMainTab)}
+            onOpenSettings={() => setSettingsOpen(true)}
           />
         </div>
       )}
