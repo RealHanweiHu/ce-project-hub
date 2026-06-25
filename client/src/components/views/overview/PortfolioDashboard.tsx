@@ -112,8 +112,8 @@ export function PortfolioDashboard({
       {/* 今日聚焦 / Today's Focus — full-width, 3 items */}
       <FocusBand items={data.focusItems} onSelectProject={onSelectProject} onDrill={onDrill} />
 
-      {/* Two equal-height columns */}
-      <div className="grid grid-cols-1 items-stretch gap-[18px] lg:grid-cols-[1fr_340px]">
+      {/* Two balanced columns — top-aligned, each board sizes to content (caps + scrolls) */}
+      <div className="grid grid-cols-1 items-start gap-[18px] lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
         <div className="flex flex-col gap-[18px]">
           <RiskAlertsBoard rows={data.riskAlerts} onSelectProject={onSelectProject} />
           <ProgressBoard rows={data.progressRows} onSelectProject={onSelectProject} />
@@ -394,7 +394,7 @@ function RiskAlertsBoard({
   onSelectProject: (id: string) => void;
 }) {
   return (
-    <Panel title="风险预警" bodyClassName="h-[280px] overflow-y-auto">
+    <Panel title="风险预警" bodyClassName="max-h-[280px] overflow-y-auto">
       {rows.length === 0 ? (
         <div className="px-4 py-5 text-sm text-muted-foreground">暂无风险项目。</div>
       ) : (
@@ -442,7 +442,7 @@ function ProgressBoard({
   className?: string;
 }) {
   return (
-    <Panel title="组合进度" className={className} bodyClassName="h-[280px] overflow-y-auto">
+    <Panel title="组合进度" className={className} bodyClassName="max-h-[280px] overflow-y-auto">
       {rows.length === 0 ? (
         <div className="px-4 py-5 text-sm text-muted-foreground">暂无进行中的项目。</div>
       ) : (
@@ -452,15 +452,15 @@ function ProgressBoard({
             <button
               key={row.id}
               onClick={() => onSelectProject(row.id)}
-              className="grid w-full grid-cols-[14px_1fr_88px_120px] items-center gap-3 border-b border-border px-4 py-[11px] text-left transition-colors last:border-b-0 hover:bg-secondary"
+              className="grid w-full grid-cols-[14px_minmax(0,1fr)_auto_120px] items-center gap-3 border-b border-border px-4 py-[11px] text-left transition-colors last:border-b-0 hover:bg-secondary"
             >
               <StatusDot tone={ragTone(row.ragLevel)} />
               <div className="min-w-0">
                 <div className="truncate text-[13.5px] font-semibold">{row.name}</div>
                 <div className="num truncate text-[10.5px] text-muted-foreground">{row.projectNumber || "—"}</div>
               </div>
-              <span className="inline-flex w-fit items-center gap-1.5 rounded-[6px] border border-border bg-secondary px-2 py-0.5 text-[11px] font-medium text-[color:var(--secondary-foreground)]">
-                <span className="h-1.5 w-1.5 rounded-[2px] bg-primary" />
+              <span className="inline-flex w-fit items-center gap-1.5 whitespace-nowrap rounded-[6px] border border-border bg-secondary px-2 py-0.5 text-[11px] font-medium text-[color:var(--secondary-foreground)]">
+                <span className="h-1.5 w-1.5 shrink-0 rounded-[2px] bg-primary" />
                 {PHASE_MAP[row.currentPhase]?.name ?? row.currentPhase}
               </span>
               <div className="flex items-center gap-2">
@@ -483,7 +483,7 @@ function GatesBoard({
   onSelectProject: (id: string) => void;
 }) {
   return (
-    <Panel title="即将到来 Gate" bodyClassName="h-[280px] overflow-y-auto">
+    <Panel title="即将到来 Gate" bodyClassName="max-h-[280px] overflow-y-auto">
       {rows.length === 0 ? (
         <div className="px-4 py-5 text-sm text-muted-foreground">近期暂无 Gate 评审。</div>
       ) : (
@@ -532,14 +532,14 @@ function PhaseDistBoard({
   className?: string;
 }) {
   return (
-    <Panel title="阶段分布" className={className} bodyClassName="h-[280px] overflow-y-auto">
+    <Panel title="阶段分布" className={className} bodyClassName="max-h-[280px] overflow-y-auto">
       <div className="flex flex-col gap-[10px] px-4 py-[14px]">
         {phases.length === 0 ? (
           <div className="text-sm text-muted-foreground">暂无阶段数据。</div>
         ) : (
           phases.map((phase) => (
-            <div key={phase.id} className="grid grid-cols-[52px_1fr_20px] items-center gap-[10px]">
-              <span className="truncate text-[12px] text-[color:var(--secondary-foreground)]">{phase.name}</span>
+            <div key={phase.id} className="grid grid-cols-[auto_minmax(40px,1fr)_24px] items-center gap-[10px]">
+              <span className="whitespace-nowrap text-[12px] text-[color:var(--secondary-foreground)]">{phase.name}</span>
               <div className="h-2 overflow-hidden rounded-[5px] bg-secondary">
                 <div className="h-full rounded-[5px] bg-primary" style={{ width: `${phase.barPct}%` }} />
               </div>
