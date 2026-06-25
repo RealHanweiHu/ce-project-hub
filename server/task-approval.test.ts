@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   applyAutomaticTaskStatuses, setTaskCompletion, setTaskApprovalConfig, decideTaskApproval,
-  upsertProjectTask, getProjectTasks, getActivityLogs,
+  upsertProjectTask, getProjectTasks, getActivityLogs, getTaskActivityLogs,
 } from "./db";
 import type { ProjectTask } from "../drizzle/schema";
 
@@ -125,5 +125,18 @@ describe("decideTaskApproval", () => {
     await decideTaskApproval(pid, "ph1", "c1", "approved", 99, null, true); // actor 99 ≠ approver 2
     const approve = (await getActivityLogs(pid)).find((a) => a.entityId === "c1" && a.action === "task.approve");
     expect((approve?.meta as { proxyBy?: number } | null)?.proxyBy).toBe(99);
+  });
+});
+
+describe("getTaskActivityLogs 带 phaseId", () => {
+  it("只返回该 phaseId 的任务活动，不串其他阶段同名 taskId", async () => {
+    const pid = uniquePid();
+    await upsertProjectTask(pid, "ph1", "c1", { instructions: "x" });
+    await upsertProjectTask(pid, "ph2", "c1", { instructions: "y" });
+    await setTaskCompletion(pid, "ph1", "c1", true, 3); // 日志写在 ph1
+    await setTaskCompletion(pid, "ph2", "c1", true, 3); // 日志写在 ph2
+    const ph1 = await getTaskActivityLogs(pid, "ph1", "c1");
+    expect(ph1.length).toBeGreaterThan(0);
+    expect(ph1.every((a) => (a.meta as { phaseId?: string }).phaseId === "ph1")).toBe(true);
   });
 });

@@ -7,6 +7,7 @@ import {
   setTaskCompletion,
   setTaskApprovalConfig,
   decideTaskApproval,
+  getTaskActivityLogs,
   updateTaskMeta,
   getMyTasks,
   getOverdueTasks,
@@ -106,6 +107,17 @@ export const tasksRouter = router({
         input.decision, ctx.user.id, input.note, isProxy,
       );
       return { success: true };
+    }),
+
+  /** 单任务活动日志（带 phaseId，避免不同阶段同名 taskId 串任务） */
+  activity: protectedProcedure
+    .input(z.object({ projectId: z.string(), phaseId: z.string(), taskId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const role = await getEffectiveRole(input.projectId, ctx.user.id);
+      if (!role || !ROLE_PERMISSIONS[role].canView) {
+        throw new TRPCError({ code: "FORBIDDEN" });
+      }
+      return getTaskActivityLogs(input.projectId, input.phaseId, input.taskId);
     }),
 
   /** Update task instructions (requires canEditTasks) */

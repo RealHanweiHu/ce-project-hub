@@ -1785,6 +1785,34 @@ export async function getActivityLogs(
     .limit(limit);
 }
 
+/**
+ * 单个任务的活动日志（新→旧）。任务唯一身份是 (projectId, phaseId, taskId)，
+ * 而 activity 的 entityId 只是 taskId、phaseId 在 meta 里；必须带 phaseId 过滤，
+ * 否则不同阶段同名 taskId 会串任务。
+ */
+export async function getTaskActivityLogs(
+  projectId: string,
+  phaseId: string,
+  taskId: string,
+  limit = 100
+): Promise<ActivityLog[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(activityLogs)
+    .where(
+      and(
+        eq(activityLogs.projectId, projectId),
+        eq(activityLogs.entityType, "task"),
+        eq(activityLogs.entityId, taskId),
+        drizzleSql`${activityLogs.meta}->>'phaseId' = ${phaseId}`
+      )
+    )
+    .orderBy(desc(activityLogs.createdAt))
+    .limit(limit);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Task Meta (assignment, due date, status, priority)
 // ─────────────────────────────────────────────────────────────────────────────
