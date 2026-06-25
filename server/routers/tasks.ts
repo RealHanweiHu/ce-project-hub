@@ -73,9 +73,10 @@ export const tasksRouter = router({
       approverUserId: z.number().nullable(),
     }))
     .mutation(async ({ ctx, input }) => {
+      // 需审批 + 审批人 改为按项目角色可配置（有编辑任务权限即可），不再只限 PM/管理层。
       const role = await getEffectiveRole(input.projectId, ctx.user.id);
-      if (!role || !ROLE_PERMISSIONS[role].canEditProjectInfo) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "仅项目负责人/管理层可配置审批" });
+      if (!role || !ROLE_PERMISSIONS[role].canEditTasks) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "没有编辑任务的权限" });
       }
       await setTaskApprovalConfig(
         input.projectId, input.phaseId, input.taskId,
