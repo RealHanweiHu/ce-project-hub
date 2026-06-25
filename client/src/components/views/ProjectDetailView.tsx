@@ -10,7 +10,7 @@ import {
   Upload, Download, Trash2, Paperclip, FileText, Image as ImageIcon,
   Edit3, Calendar, AlertTriangle, Target, Zap, BarChart2, ListChecks, Activity,
   Lock, ShieldAlert, Flag, Bug, GitBranch, Filter, Rocket, LayoutDashboard,
-  Inbox, LayoutGrid, FolderOpen, Eye, X, Clock,
+  Inbox, LayoutGrid, FolderOpen, Eye, X, Clock, Settings,
 } from 'lucide-react';
 import { TaskActivityTab, TaskFlowTab, TaskApprovalTab } from './task/TaskTabs';
 import {
@@ -40,6 +40,7 @@ import { MetricsView } from './MetricsView';
 import { RescheduleConfirmDialog } from './RescheduleConfirmDialog';
 import { CommentThread } from '@/components/CommentThread';
 import { useProjectPermission } from '@/hooks/useProjectPermission';
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { trpc } from '@/lib/trpc';
 import { toast } from 'sonner';
@@ -1031,13 +1032,17 @@ function DeliverablesChecklist({
 function TaskDetail({
   taskId, taskDetails, onUpdate, visibleRoles, onVisibleRolesChange, canEditRoles,
   projectId, phaseId, canEdit = true, compact = false, layout = 'full',
+  currentUserId,
 }: {
   taskId: string;
   taskDetails: TaskDetails;
   onUpdate: (details: TaskDetails) => void;
   visibleRoles?: string[];
   onVisibleRolesChange?: (roles: string[]) => void;
+  /** canEditProjectInfo (PM/管理层): 可改可见岗位 + 负责人改派给任意成员 */
   canEditRoles?: boolean;
+  /** 当前登录用户 id — 用于「认领给自己」 */
+  currentUserId?: number;
   projectId: string;
   phaseId?: string;
   canEdit?: boolean;
@@ -1199,60 +1204,74 @@ function TaskDetail({
     </div>
   );
 
-  // ── 可见岗位 block (right sidebar, admin/canEditProjectInfo only) ────────────
-  const visibleRolesBlock = (!compact && canEditRoles && onVisibleRolesChange) ? (
-    <div className="border-t border-border pt-3">
-      <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-2 flex items-center gap-1.5">
-        <Lock size={10} />可见岗位（空=所有人可见）
+  // ── 可见岗位（可见性）block — 现位于「任务设置」弹层内。
+  // 可编辑：canEditRoles（canEditProjectInfo）。否则只读展示已选岗位 / 「空 = 所有人可见」。
+  const visibleRolesBlock = compact ? null : (() => {
+    const roles = visibleRoles || [];
+    const editable = canEditRoles && !!onVisibleRolesChange;
+    return (
+      <div>
+        <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-2 flex items-center gap-1.5">
+          <Lock size={10} />可见岗位（可见性）
+        </div>
+        {editable ? (
+          <>
+            <div className="flex flex-wrap gap-1.5">
+              {ROLE_OPTIONS.map(({ value, label }) => {
+                const selected = roles.includes(value);
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => {
+                      const next = selected
+                        ? roles.filter((r) => r !== value)
+                        : [...roles, value];
+                      onVisibleRolesChange!(next);
+                    }}
+                    className={`px-2 py-0.5 text-[10px] rounded border transition-colors ${
+                      selected
+                        ? 'bg-primary text-white border-primary'
+                        : 'bg-card text-muted-foreground border-border hover:border-[color:var(--acc-border)]'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+            {roles.length === 0 && (
+              <p className="text-[10px] text-muted-foreground mt-1">空 = 所有人可见（未选择岗位时所有成员均可见此任务）</p>
+            )}
+          </>
+        ) : (
+          <div className="text-[11px] text-foreground">
+            {roles.length === 0
+              ? <span className="text-muted-foreground">空 = 所有人可见</span>
+              : roles.map((r) => ROLE_OPTIONS.find((o) => o.value === r)?.label || r).join(' / ')}
+          </div>
+        )}
       </div>
-      <div className="flex flex-wrap gap-1.5">
-        {ROLE_OPTIONS.map(({ value, label }) => {
-          const selected = (visibleRoles || []).includes(value);
-          return (
-            <button
-              key={value}
-              type="button"
-              onClick={() => {
-                const current = visibleRoles || [];
-                const next = selected
-                  ? current.filter((r) => r !== value)
-                  : [...current, value];
-                onVisibleRolesChange(next);
-              }}
-              className={`px-2 py-0.5 text-[10px] rounded border transition-colors ${
-                selected
-                  ? 'bg-primary text-white border-primary'
-                  : 'bg-card text-muted-foreground border-border hover:border-[color:var(--acc-border)]'
-              }`}
-            >
-              {label}
-            </button>
-          );
-        })}
-      </div>
-      {(visibleRoles || []).length === 0 && (
-        <p className="text-[10px] text-muted-foreground mt-1">未选择岗位时所有成员均可见此任务</p>
-      )}
-    </div>
-  ) : null;
+    );
+  })();
 
-  // ── 需审批 + 审批人 block (right sidebar). canEditRoles = canEditProjectInfo. ─
+  // ── 需审批 + 审批人 block. 编辑权限 = canEditTasks（与后端 setApprovalConfig 对齐）。
   const approvalConfigBlock = (() => {
-    if (!canEditRoles) {
+    if (!canEdit) {
       // Read-only for non-editors: show only when 需审批 is on.
       if (!requiresApproval) return null;
       const approverName = metaUsers.find((u) => u.id === approverUserId)?.name
         ?? metaUsers.find((u) => u.id === approverUserId)?.username
         ?? '未指定';
       return (
-        <div className="border-t border-border pt-3 text-[11px] text-muted-foreground">
+        <div className="text-[11px] text-muted-foreground">
           需审批：是 · 审批人：<span className="text-foreground">{approverName}</span>
         </div>
       );
     }
     const canEnable = approverUserId != null;
     return (
-      <div className="border-t border-border pt-3 space-y-2">
+      <div className="space-y-2">
         <div className="flex items-center justify-between">
           <div className="text-[10px] uppercase tracking-widest text-muted-foreground">需审批</div>
           <button
@@ -1299,6 +1318,30 @@ function TaskDetail({
     );
   })();
 
+  // ── 「任务设置」⚙ 弹层：可见岗位（可见性） + 需审批/审批人 ───────────────────
+  // 触发按钮放在 sidebar 属性栏头部；Radix Popover 自带点击外部 / Esc 关闭。
+  const hasSettingsContent = !!visibleRolesBlock || !!approvalConfigBlock;
+  const taskSettingsPopover = (!compact && hasSettingsContent) ? (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          title="任务设置（可见性 / 需审批）"
+          className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-border bg-card text-muted-foreground hover:text-foreground hover:border-[color:var(--acc-border)] transition-colors"
+        >
+          <Settings size={12} />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-72 p-3 space-y-3 text-sm">
+        <div className="text-[10px] uppercase tracking-widest text-muted-foreground">任务设置</div>
+        {visibleRolesBlock}
+        {approvalConfigBlock && (
+          <div className="border-t border-border pt-3">{approvalConfigBlock}</div>
+        )}
+      </PopoverContent>
+    </Popover>
+  ) : null;
+
   // ── meta grid (assignee / due / status / priority) ─────────────────────────
   const metaGrid = (
     <>
@@ -1338,38 +1381,68 @@ function TaskDetail({
       <div className="grid grid-cols-2 gap-2">
         <div>
           <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">负责人</div>
-          <select
-            value={taskDetails?.assigneeUserId ?? ''}
-            disabled={!canEdit}
-            onChange={(e) => {
-              const val = e.target.value;
-              saveMeta({ assigneeUserId: val === '' ? null : Number(val) });
-            }}
-            className="w-full text-xs text-foreground bg-secondary rounded-md border border-border px-2 py-1 outline-none focus:border-[color:var(--acc-border)] transition-colors"
-          >
-            <option value="">— 未指定 —</option>
-            {assignableUsers.map((u) => (
-              <option key={u.id} value={u.id}>{u.name}</option>
-            ))}
-          </select>
+          {canEditRoles ? (
+            // PM / 管理层：可改派给任意成员。
+            <select
+              value={taskDetails?.assigneeUserId ?? ''}
+              disabled={!canEdit}
+              onChange={(e) => {
+                const val = e.target.value;
+                saveMeta({ assigneeUserId: val === '' ? null : Number(val) });
+              }}
+              className="w-full text-xs text-foreground bg-secondary rounded-md border border-border px-2 py-1 outline-none focus:border-[color:var(--acc-border)] transition-colors"
+            >
+              <option value="">— 未指定 —</option>
+              {assignableUsers.map((u) => (
+                <option key={u.id} value={u.id}>{u.name}</option>
+              ))}
+            </select>
+          ) : (canEdit && currentUserId != null) ? (
+            // 任务编辑者（非 PM）：仅可「认领给自己」/「取消认领」，不可指派他人。
+            (() => {
+              const assignedToSelf = taskDetails?.assigneeUserId === currentUserId;
+              const assigneeName = metaUsers.find((u) => u.id === taskDetails?.assigneeUserId)?.name
+                ?? metaUsers.find((u) => u.id === taskDetails?.assigneeUserId)?.username;
+              return (
+                <div className="flex h-[30px] items-center justify-between gap-2 rounded-md border border-border bg-secondary px-2 text-xs text-foreground">
+                  <span className="truncate">{assigneeName ?? '— 未指定 —'}</span>
+                  {assignedToSelf ? (
+                    <button
+                      type="button"
+                      disabled={setMetaMut.isPending}
+                      onClick={() => saveMeta({ assigneeUserId: null })}
+                      className="shrink-0 text-[10px] text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+                    >
+                      取消认领
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={setMetaMut.isPending}
+                      onClick={() => saveMeta({ assigneeUserId: currentUserId })}
+                      className="shrink-0 text-[10px] text-primary hover:underline disabled:opacity-50"
+                    >
+                      指给自己
+                    </button>
+                  )}
+                </div>
+              );
+            })()
+          ) : (
+            // 无编辑权限：只读负责人。
+            <div className="flex h-[30px] items-center rounded-md border border-border bg-secondary px-2 text-xs text-foreground">
+              {metaUsers.find((u) => u.id === taskDetails?.assigneeUserId)?.name
+                ?? metaUsers.find((u) => u.id === taskDetails?.assigneeUserId)?.username
+                ?? '— 未指定 —'}
+            </div>
+          )}
         </div>
         <div>
           <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">截止日期</div>
-          <input
-            type="date"
-            value={taskDetails?.dueDate ?? ''}
-            disabled={!canEdit}
-            onChange={(e) => {
-              const nextDue = e.target.value || null;
-              if (!nextDue || nextDue === (taskDetails?.dueDate ?? null)) return;
-              if (!taskDetails?.startDate) {
-                saveMeta({ dueDate: nextDue }); // 未排期任务：无起点不可级联，仅记录
-                return;
-              }
-              setPendingReschedule({ taskId, startDate: taskDetails.startDate, newDue: nextDue });
-            }}
-            className="w-full text-xs text-foreground bg-secondary rounded-md border border-border px-2 py-1 outline-none focus:border-[color:var(--acc-border)] transition-colors"
-          />
+          {/* 自动排期：截止日期只读展示，不再提供日期选择器。 */}
+          <div className="flex h-[30px] items-center rounded-md border border-border bg-secondary px-2 text-xs text-foreground">
+            {taskDetails?.dueDate ?? '未排期 (自动排期)'}
+          </div>
         </div>
         <div>
           <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">状态</div>
@@ -1406,14 +1479,15 @@ function TaskDetail({
     );
   }
 
-  // ── 'sidebar' layout: meta + 需审批配置 + 附件 + 可见岗位 (right column). ────
+  // ── 'sidebar' layout: 任务设置⚙(可见性/需审批) + meta + 附件 (right column). ──
   if (layout === 'sidebar') {
     return (
       <div className="space-y-3">
+        {taskSettingsPopover && (
+          <div className="flex justify-end">{taskSettingsPopover}</div>
+        )}
         {metaGrid}
-        {approvalConfigBlock}
         {attachmentsBlock}
-        {visibleRolesBlock}
         {rescheduleDialog}
       </div>
     );
@@ -1671,9 +1745,6 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
   const selectedTaskRoles = selectedTask
     ? project.taskVisibleRoles?.[selectedTask.id] ?? (selectedTask.visibleRoles || [])
     : [];
-  const selectedTaskRoleLabels = selectedTaskRoles.length > 0
-    ? selectedTaskRoles.map((role) => ROLE_OPTIONS.find((option) => option.value === role)?.label || role).join(' / ')
-    : '所有项目成员';
   const compactTaskDetail = isExecutionRole(perms.role) && !selectedTaskIsGate;
   // P2: 执行角色(如结构工程师)收敛项目详情标签——只保留 总览/任务/问题/BOM/文件,
   // 隐藏 PM/管理层导向的 度量/看板/需求池/甘特/变更,减少干扰(内容仍按 mainTab 渲染,不影响深链)。
@@ -2879,15 +2950,11 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                       {/* ── Right sidebar: 属性 ──────────────────────────────── */}
                       <aside className="rounded-lg border border-border bg-secondary p-3 h-fit space-y-3">
                         <div className="text-[10px] uppercase tracking-widest text-muted-foreground">属性</div>
-                        {/* 责任角色 / 可见岗位 (read-only summary) */}
+                        {/* 责任角色 (read-only summary). 可见岗位移入「任务设置」⚙ 弹层。 */}
                         <div className="space-y-1.5 text-xs">
                           <div className="flex gap-2">
                             <span className="w-16 shrink-0 text-muted-foreground">责任角色</span>
                             <span className="text-foreground">{selectedTask.owner || '未指定'}</span>
-                          </div>
-                          <div className="flex gap-2">
-                            <span className="w-16 shrink-0 text-muted-foreground">可见岗位</span>
-                            <span className="text-foreground">{selectedTaskRoleLabels}</span>
                           </div>
                           {selectedTaskIsGate && activePhase?.gateStandard?.responsibleRoles?.length > 0 && (
                             <div className="pt-1 text-muted-foreground">
@@ -2919,6 +2986,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                             });
                           }}
                           canEditRoles={perms.canEditProjectInfo}
+                          currentUserId={currentUser?.id}
                           canEdit={perms.canEditTasks && isCurrentPhaseUnlocked}
                           compact={compactTaskDetail}
                           projectId={project.id}
