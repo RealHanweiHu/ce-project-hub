@@ -10,8 +10,9 @@ import {
   Upload, Download, Trash2, Paperclip, FileText, Image as ImageIcon,
   Edit3, Calendar, AlertTriangle, Target, Zap, BarChart2, ListChecks, Activity,
   Lock, ShieldAlert, Flag, Bug, GitBranch, Filter, Rocket, LayoutDashboard,
-  Inbox, LayoutGrid, FolderOpen, Eye, X,
+  Inbox, LayoutGrid, FolderOpen, Eye, X, Clock,
 } from 'lucide-react';
+import { TaskActivityTab, TaskFlowTab, TaskApprovalTab } from './task/TaskTabs';
 import {
   Project, SOP_PHASES, PHASE_MAP, HEALTH_CONFIG,
   computePhaseProgress, computeOverallProgress, getPhaseStatus,
@@ -1029,7 +1030,7 @@ function DeliverablesChecklist({
 
 function TaskDetail({
   taskId, taskDetails, onUpdate, visibleRoles, onVisibleRolesChange, canEditRoles,
-  projectId, phaseId, canEdit = true, compact = false,
+  projectId, phaseId, canEdit = true, compact = false, layout = 'full',
 }: {
   taskId: string;
   taskDetails: TaskDetails;
@@ -1041,6 +1042,8 @@ function TaskDetail({
   phaseId?: string;
   canEdit?: boolean;
   compact?: boolean;
+  /** 'full' = legacy single column. 'sidebar' = 属性栏(meta/附件/可见岗位/审批配置). 'main' = 执行说明 only. */
+  layout?: 'full' | 'sidebar' | 'main';
 }) {
   const [draft, setDraft] = useState(taskDetails?.instructions || '');
   const [dirty, setDirty] = useState(false);
@@ -1107,6 +1110,19 @@ function TaskDetail({
     if (!canEdit || !phaseId) return;
     setMetaMut.mutate({ projectId, phaseId, taskId, ...(patch as any) });
   };
+  // 逐任务审批闸门配置（需审批 + 审批人）。仅可编辑项目信息者（canEditRoles）可改。
+  const setApprovalMut = trpc.tasks.setApprovalConfig.useMutation({
+    onSuccess: () => {
+      utils.tasks.list.invalidate({ projectId });
+      utils.projects.get.invalidate({ id: projectId });
+    },
+  });
+  const requiresApproval = !!taskDetails?.requiresApproval;
+  const approverUserId = taskDetails?.approverUserId ?? null;
+  const saveApprovalConfig = (next: { requiresApproval: boolean; approverUserId: number | null }) => {
+    if (!phaseId) return;
+    setApprovalMut.mutate({ projectId, phaseId, taskId, ...next });
+  };
   const TASK_STATUS_CONFIG: Record<string, { label: string; className: string }> = {
     todo: { label: '待开始', className: 'bg-secondary text-muted-foreground border-border' },
     in_progress: { label: '进行中', className: 'bg-[color:var(--acc-soft)] text-primary border-[color:var(--acc-border)]' },
@@ -1124,8 +1140,168 @@ function TaskDetail({
     { value: 'low', label: 'P3 低' },
   ];
 
-  return (
-    <div className="mt-3 border-t border-border pt-3 space-y-3">
+  // ── Reschedule confirm dialog (shared across layouts) ──────────────────────
+  const rescheduleDialog = pendingReschedule ? (
+    <RescheduleConfirmDialog
+      projectId={projectId}
+      taskId={pendingReschedule.taskId}
+      startDate={pendingReschedule.startDate}
+      newDue={pendingReschedule.newDue}
+      onClose={() => setPendingReschedule(null)}
+      onDone={() => {
+        setPendingReschedule(null);
+        void utils.tasks.list.invalidate({ projectId });
+        void utils.projects.get.invalidate({ id: projectId });
+        void utils.projects.list.invalidate();
+        void utils.projects.portfolio.invalidate();
+      }}
+    />
+  ) : null;
+
+  // ── 执行说明 block (lives in left main column) ──────────────────────────────
+  const instructionsBlock = (
+    <div>
+      <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1.5">执行说明</div>
+      <div className="relative">
+        <textarea
+          value={draft}
+          onChange={(e) => handleChange(e.target.value)}
+          onBlur={handleBlur}
+          disabled={!canEdit}
+          rows={4}
+          placeholder="记录执行说明、注意事项、进展备注..."
+          className="w-full px-3 py-2 rounded-md border border-border focus:border-[color:var(--acc-border)] outline-none text-xs text-foreground resize-none transition-colors"
+        />
+        {dirty && <div className="absolute bottom-2 right-2 text-[9px] text-muted-foreground">保存中...</div>}
+      </div>
+    </div>
+  );
+
+  // ── 附件 block (right sidebar) ──────────────────────────────────────────────
+  const attachmentsBlock = (
+    <div>
+      <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1.5 flex items-center gap-1.5">
+        <Paperclip size={10} />附件
+      </div>
+      <FileUploadArea
+        files={taskDetails?.files || []}
+        onAdd={(newFiles) => {
+          onUpdate({ ...taskDetails, files: [...(taskDetails?.files || []), ...newFiles] });
+          // Invalidate files.list so useProjectData re-fetches the updated list from DB
+          utils.files.list.invalidate({ projectId });
+        }}
+        onRemove={handleRemoveFile}
+        projectId={projectId}
+        phaseId={phaseId}
+        taskId={taskId}
+        readOnly={!canEdit}
+      />
+    </div>
+  );
+
+  // ── 可见岗位 block (right sidebar, admin/canEditProjectInfo only) ────────────
+  const visibleRolesBlock = (!compact && canEditRoles && onVisibleRolesChange) ? (
+    <div className="border-t border-border pt-3">
+      <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-2 flex items-center gap-1.5">
+        <Lock size={10} />可见岗位（空=所有人可见）
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {ROLE_OPTIONS.map(({ value, label }) => {
+          const selected = (visibleRoles || []).includes(value);
+          return (
+            <button
+              key={value}
+              type="button"
+              onClick={() => {
+                const current = visibleRoles || [];
+                const next = selected
+                  ? current.filter((r) => r !== value)
+                  : [...current, value];
+                onVisibleRolesChange(next);
+              }}
+              className={`px-2 py-0.5 text-[10px] rounded border transition-colors ${
+                selected
+                  ? 'bg-primary text-white border-primary'
+                  : 'bg-card text-muted-foreground border-border hover:border-[color:var(--acc-border)]'
+              }`}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+      {(visibleRoles || []).length === 0 && (
+        <p className="text-[10px] text-muted-foreground mt-1">未选择岗位时所有成员均可见此任务</p>
+      )}
+    </div>
+  ) : null;
+
+  // ── 需审批 + 审批人 block (right sidebar). canEditRoles = canEditProjectInfo. ─
+  const approvalConfigBlock = (() => {
+    if (!canEditRoles) {
+      // Read-only for non-editors: show only when 需审批 is on.
+      if (!requiresApproval) return null;
+      const approverName = metaUsers.find((u) => u.id === approverUserId)?.name
+        ?? metaUsers.find((u) => u.id === approverUserId)?.username
+        ?? '未指定';
+      return (
+        <div className="border-t border-border pt-3 text-[11px] text-muted-foreground">
+          需审批：是 · 审批人：<span className="text-foreground">{approverName}</span>
+        </div>
+      );
+    }
+    const canEnable = approverUserId != null;
+    return (
+      <div className="border-t border-border pt-3 space-y-2">
+        <div className="flex items-center justify-between">
+          <div className="text-[10px] uppercase tracking-widest text-muted-foreground">需审批</div>
+          <button
+            type="button"
+            disabled={setApprovalMut.isPending || (!requiresApproval && !canEnable)}
+            onClick={() => saveApprovalConfig({ requiresApproval: !requiresApproval, approverUserId })}
+            title={!requiresApproval && !canEnable ? '请先选择审批人' : undefined}
+            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+              requiresApproval ? 'bg-primary' : 'bg-secondary border border-border'
+            }`}
+          >
+            <span
+              className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${
+                requiresApproval ? 'translate-x-[18px]' : 'translate-x-[3px]'
+              }`}
+            />
+          </button>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">审批人</div>
+          <select
+            value={approverUserId ?? ''}
+            onChange={(e) => {
+              const val = e.target.value;
+              const nextApprover = val === '' ? null : Number(val);
+              // Clearing the approver while 需审批 is on would be invalid — turn off 需审批.
+              saveApprovalConfig({
+                requiresApproval: nextApprover == null ? false : requiresApproval,
+                approverUserId: nextApprover,
+              });
+            }}
+            className="w-full text-xs text-foreground bg-secondary rounded-md border border-border px-2 py-1 outline-none focus:border-[color:var(--acc-border)] transition-colors"
+          >
+            <option value="">— 未指定 —</option>
+            {assignableUsers.map((u) => (
+              <option key={u.id} value={u.id}>{u.name}</option>
+            ))}
+          </select>
+          {!requiresApproval && !canEnable && (
+            <p className="text-[10px] text-muted-foreground mt-1">请先选择审批人后再开启「需审批」</p>
+          )}
+        </div>
+      </div>
+    );
+  })();
+
+  // ── meta grid (assignee / due / status / priority) ─────────────────────────
+  const metaGrid = (
+    <>
       {/* Task Meta Row: assignee / due date / status / priority.
           Execution roles (compact) see these read-only rather than hidden — P0-2. */}
       {compact ? (
@@ -1217,91 +1393,41 @@ function TaskDetail({
         </div>
       </div>
       )}
-      <div>
-        <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1.5">执行说明</div>
-        <div className="relative">
-          <textarea
-            value={draft}
-            onChange={(e) => handleChange(e.target.value)}
-            onBlur={handleBlur}
-            disabled={!canEdit}
-            rows={4}
-            placeholder="记录执行说明、注意事项、进展备注..."
-            className="w-full px-3 py-2 rounded-md border border-border focus:border-[color:var(--acc-border)] outline-none text-xs text-foreground resize-none transition-colors"
-          />
-          {dirty && <div className="absolute bottom-2 right-2 text-[9px] text-muted-foreground">保存中...</div>}
-        </div>
+    </>
+  );
+
+  // ── 'main' layout: 执行说明 only (left column). ─────────────────────────────
+  if (layout === 'main') {
+    return (
+      <div className="space-y-3">
+        {instructionsBlock}
+        {rescheduleDialog}
       </div>
-      <div>
-        <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1.5 flex items-center gap-1.5">
-          <Paperclip size={10} />附件
-        </div>
-        <FileUploadArea
-          files={taskDetails?.files || []}
-          onAdd={(newFiles) => {
-            onUpdate({ ...taskDetails, files: [...(taskDetails?.files || []), ...newFiles] });
-            // Invalidate files.list so useProjectData re-fetches the updated list from DB
-            utils.files.list.invalidate({ projectId });
-          }}
-          onRemove={handleRemoveFile}
-          projectId={projectId}
-          phaseId={phaseId}
-          taskId={taskId}
-          readOnly={!canEdit}
-        />
+    );
+  }
+
+  // ── 'sidebar' layout: meta + 需审批配置 + 附件 + 可见岗位 (right column). ────
+  if (layout === 'sidebar') {
+    return (
+      <div className="space-y-3">
+        {metaGrid}
+        {approvalConfigBlock}
+        {attachmentsBlock}
+        {visibleRolesBlock}
+        {rescheduleDialog}
       </div>
-      {/* Visible Roles Selector - only shown to canEditProjectInfo users */}
-      {!compact && canEditRoles && onVisibleRolesChange && (
-        <div className="border-t border-border pt-3">
-          <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-2 flex items-center gap-1.5">
-            <Lock size={10} />可见岗位（空=所有人可见）
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {ROLE_OPTIONS.map(({ value, label }) => {
-              const selected = (visibleRoles || []).includes(value);
-              return (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => {
-                    const current = visibleRoles || [];
-                    const next = selected
-                      ? current.filter((r) => r !== value)
-                      : [...current, value];
-                    onVisibleRolesChange(next);
-                  }}
-                  className={`px-2 py-0.5 text-[10px] rounded border transition-colors ${
-                    selected
-                      ? 'bg-primary text-white border-primary'
-                      : 'bg-card text-muted-foreground border-border hover:border-[color:var(--acc-border)]'
-                  }`}
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </div>
-          {(visibleRoles || []).length === 0 && (
-            <p className="text-[10px] text-muted-foreground mt-1">未选择岗位时所有成员均可见此任务</p>
-          )}
-        </div>
-      )}
-      {pendingReschedule && (
-        <RescheduleConfirmDialog
-          projectId={projectId}
-          taskId={pendingReschedule.taskId}
-          startDate={pendingReschedule.startDate}
-          newDue={pendingReschedule.newDue}
-          onClose={() => setPendingReschedule(null)}
-          onDone={() => {
-            setPendingReschedule(null);
-            void utils.tasks.list.invalidate({ projectId });
-            void utils.projects.get.invalidate({ id: projectId });
-            void utils.projects.list.invalidate();
-            void utils.projects.portfolio.invalidate();
-          }}
-        />
-      )}
+    );
+  }
+
+  // ── 'full' layout (legacy single-column fallback). ──────────────────────────
+  return (
+    <div className="mt-3 border-t border-border pt-3 space-y-3">
+      {metaGrid}
+      {instructionsBlock}
+      {attachmentsBlock}
+      {approvalConfigBlock}
+      {visibleRolesBlock}
+      {rescheduleDialog}
     </div>
   );
 }
@@ -1425,8 +1551,22 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
   const [ganttMode, setGanttMode] = useState<'task' | 'phase'>('task');
   const perms = useProjectPermission(project.id);
   const { user: currentUser } = useAuth();
+  // 任务详情弹窗：左栏底部四标签
+  const [taskTab, setTaskTab] = useState<'comments' | 'activity' | 'flow' | 'approval'>('comments');
+  // 活动/流转/审批标签里把 userId 解析为人名用
+  const { data: detailUsers = [] } = trpc.admin.listUsersForSelect.useQuery(undefined, { staleTime: 60_000 });
   const detailUtils = trpc.useUtils();
   const confirmGateMutation = trpc.gateReviews.confirmAndAdvance.useMutation();
+  // 撤回待审批：直接以 completed=false 调用，避免本地 toggle 误发 completed=true（=重复提交）。
+  const withdrawApprovalMut = trpc.tasks.setCompleted.useMutation({
+    onSuccess: () => {
+      detailUtils.tasks.list.invalidate({ projectId: project.id });
+      detailUtils.projects.get.invalidate({ id: project.id });
+    },
+  });
+  const withdrawTaskApproval = (taskId: string) => {
+    withdrawApprovalMut.mutate({ projectId: project.id, phaseId: activePhaseId, taskId, completed: false });
+  };
   const { data: effectiveProcess } = trpc.tailoring.effectiveProcess.useQuery(
     { projectId: project.id },
     { staleTime: 5_000 }
@@ -2305,6 +2445,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                   const selected = selectedTaskId === task.id;
                   // status 为主状态;checked 已由 status 派生(done/skipped),直接显示真实状态
                   const status = details?.taskStatus || (checked ? 'done' : 'todo');
+                  const isPendingApproval = status === 'pending_approval';
 
                   return (
                     <div
@@ -2338,15 +2479,23 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            if (!locked) {
-                              isGateTask ? handleGateTaskToggle(task.id) : toggleTask(task.id);
-                            }
+                            if (locked) return;
+                            // 待审批中：点击撤回（恢复为未完成，由 setTaskCompletion(completed=false) 处理）
+                            if (isPendingApproval) { withdrawTaskApproval(task.id); return; }
+                            isGateTask ? handleGateTaskToggle(task.id) : toggleTask(task.id);
                           }}
                           className={`mt-0.5 shrink-0 ${locked ? 'cursor-not-allowed' : 'cursor-pointer'}`}
-                          title={locked ? '此阶段已锁定，请先完成前置 Gate 评审' : isGateTask && !checked ? '点击完成 Gate 评审并填写评审记录' : undefined}
+                          title={
+                            locked ? '此阶段已锁定，请先完成前置 Gate 评审'
+                            : isPendingApproval ? '待审批中，点击撤回'
+                            : isGateTask && !checked ? '点击完成 Gate 评审并填写评审记录'
+                            : undefined
+                          }
                         >
                           {locked ? (
                             <Lock size={18} className="text-muted-foreground" />
+                          ) : isPendingApproval ? (
+                            <Clock size={18} className="text-[color:var(--warning)]" />
                           ) : checked ? (
                             <CheckCircle2 size={18} className={isGateTask ? 'text-emerald-600' : 'text-primary'} />
                           ) : (
@@ -2376,8 +2525,13 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                             {task.desc}
                           </p>
                           <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                            <span className="text-[10px] uppercase tracking-wider text-muted-foreground rounded border border-border bg-secondary px-1.5 py-0.5">
+                            <span className={`text-[10px] uppercase tracking-wider rounded border px-1.5 py-0.5 ${
+                              isPendingApproval
+                                ? 'text-[color:var(--warning)] border-[color:var(--acc-border)] bg-[color:var(--acc-soft)]'
+                                : 'text-muted-foreground border-border bg-secondary'
+                            }`}>
                               {status === 'done' ? '已完成' :
+                                status === 'pending_approval' ? '待审批' :
                                 status === 'in_progress' ? '进行中' :
                                 status === 'blocked' ? '阻塞' :
                                 status === 'skipped' ? '跳过' : '待开始'}
@@ -2411,7 +2565,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                   onClick={() => setSelectedTaskId(null)}
                 >
                   <div
-                    className="relative w-full max-w-2xl h-fit my-auto rounded-[11px] border border-border bg-card shadow-2xl"
+                    className="relative w-full max-w-4xl h-fit my-auto rounded-[11px] border border-border bg-card shadow-2xl"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <button
@@ -2422,6 +2576,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                       <X size={18} />
                     </button>
                     <div className="max-h-[86vh] overflow-y-auto p-6">
+                    {/* ── Header (full width) ───────────────────────────────── */}
                     <div className="flex items-start justify-between gap-3 pr-8">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2 mb-1">
@@ -2455,13 +2610,277 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                       </div>
                     )}
 
-                    <div className="mt-4 border-t border-border pt-4 space-y-4">
-                      <div>
-                        <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-muted-foreground mb-2">
-                          <Users size={11} />
-                          职责
+                    {/* ── Body: two columns ─────────────────────────────────── */}
+                    <div className="mt-4 grid gap-6 lg:grid-cols-[1fr_300px]">
+
+                      {/* ── Left main column ────────────────────────────────── */}
+                      <div className="min-w-0 space-y-4">
+                        {selectedTask.guide && (
+                          <div className="p-3 rounded-md border-l-2 border-primary bg-[color:var(--acc-soft)]">
+                            <div className="text-[10px] uppercase tracking-widest text-primary mb-1.5">操作指南</div>
+                            <pre className="text-xs text-foreground whitespace-pre-wrap font-sans leading-relaxed">{selectedTask.guide}</pre>
+                          </div>
+                        )}
+
+                        <div>
+                          <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-muted-foreground mb-2">
+                            <Target size={11} />
+                            交付物
+                          </div>
+                          <DeliverablesChecklist
+                            projectId={project.id}
+                            phaseId={activePhaseId}
+                            taskId={selectedTask.id}
+                            items={
+                              selectedTaskIsGate
+                                ? activeGateDeliverables
+                                : getTaskDeliverables(selectedTask.id, activePhase?.deliverables || [])
+                            }
+                            status={selectedTaskDetails?.deliverables || {}}
+                            canEdit={perms.canEditTasks && isCurrentPhaseUnlocked}
+                            carried={selectedTaskIsGate ? activeGateCarriedMap : undefined}
+                          />
+                          {selectedTaskIsGate && (
+                            <GateDeliverableOverridePanel
+                              projectId={project.id}
+                              phaseId={activePhaseId}
+                              effectiveDeliverables={activeGateDeliverables}
+                              canEdit={perms.canEditTasks}
+                            />
+                          )}
+                          {selectedTaskIsGate && activeGateDeliverables.length > 0 && (
+                            <DeliverableReviewControls
+                              projectId={project.id}
+                              phaseId={activePhaseId}
+                              deliverableNames={activeGateDeliverables}
+                              canEditTasks={perms.canEditTasks}
+                              currentUserId={currentUser?.id}
+                              isAdmin={currentUser?.role === 'admin'}
+                              gateTaskId={activePhase?.gateTaskId}
+                              pmUserId={project.pmUserId ?? null}
+                            />
+                          )}
                         </div>
-                        <div className="space-y-1.5 text-xs text-muted-foreground">
+
+                        {/* ── Gate-only sections (under 交付物) ──────────────── */}
+                        {selectedTaskIsGate && (() => {
+                          const r = computeGateReadiness(activePhase, activePhaseData, activeGateDeliverables, serverDelivSatisfiedSet);
+                          return (
+                            <div className={`p-3 rounded-md border ${r.ready ? 'border-emerald-200 bg-emerald-50/50' : 'border-[color:var(--acc-border)] bg-[color:var(--acc-soft)]'}`}>
+                              <div className="flex items-center justify-between mb-2">
+                                <div className="text-[10px] uppercase tracking-widest text-muted-foreground">Gate 就绪检查</div>
+                                <span className={`text-[10px] rounded px-1.5 py-0.5 border ${r.ready ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-[color:var(--acc-soft)] text-primary border-[color:var(--acc-border)]'}`}>
+                                  {r.ready ? '已就绪' : '未就绪'}
+                                </span>
+                              </div>
+                              <div className="divide-y divide-border">
+                                <ReadinessRow label="阶段任务完成" ok={r.tasksDone === r.tasksTotal} detail={`${r.tasksDone}/${r.tasksTotal}`} />
+                                <ReadinessRow label="交付物审核" ok={r.delivTotal === 0 || r.delivDone === r.delivTotal} detail={`${r.delivDone}/${r.delivTotal}`} />
+                                <ReadinessRow label="无未关闭 P0/P1" ok={r.openP0P1 === 0} detail={r.openP0P1 === 0 ? '通过' : `${r.openP0P1} 个待关闭`} />
+                                <ReadinessRow label="关键文件已上传" ok={r.fileCount > 0} detail={`${r.fileCount} 个`} soft />
+                              </div>
+                              {r.signoffRoles.length > 0 && (
+                                <div className="mt-2 pt-2 border-t border-border">
+                                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">需会签角色</div>
+                                  <div className="flex flex-wrap gap-1">
+                                    {r.signoffRoles.map((role, i) => (
+                                      <span key={i} className="text-[10px] text-muted-foreground bg-card border border-border rounded px-1.5 py-0.5">{role}</span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              {!r.ready && (
+                                <div className="mt-2 pt-2 border-t border-[color:var(--acc-border)] text-xs text-primary leading-relaxed">
+                                  未就绪:{r.blockers.join('、')}。补齐后再通过;若需放行,请在评审里选「有条件通过」并填写例外项的责任人与截止。
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+
+                        {selectedTaskIsGate && activePhase?.gateStandard && (
+                          <div className="p-3 rounded-md border-l-2 border-l-primary bg-secondary">
+                            <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-2">Gate 管理标准</div>
+                            <GateStandardPanel standard={activePhase.gateStandard} compact evidenceHint />
+                          </div>
+                        )}
+
+                        <div className="p-3 rounded-md border border-border bg-card">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-muted-foreground">
+                              <Bug size={11} />
+                              关联问题
+                            </div>
+                            {perms.canEditIssues && isCurrentPhaseUnlocked && (
+                              <button
+                                onClick={handleCreateIssueFromSelectedTask}
+                                className="text-[10px] rounded px-2 py-1 border border-border text-muted-foreground hover:border-[color:var(--acc-border)] hover:text-primary transition-colors"
+                              >
+                                从此任务创建 Issue
+                              </button>
+                            )}
+                          </div>
+                          {selectedTaskIssues.length === 0 ? (
+                            <div className="mt-2 text-xs text-muted-foreground">暂无关联问题。</div>
+                          ) : (
+                            <div className="mt-2 divide-y divide-border">
+                              {selectedTaskIssues.map((issue) => (
+                                <div key={issue.id} className="py-2 flex items-start gap-2">
+                                  <span className={`mt-0.5 text-[10px] num rounded px-1.5 py-0.5 border ${
+                                    issue.severity === 'P0' || issue.severity === 'P1'
+                                      ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                      : 'bg-secondary text-muted-foreground border-border'
+                                  }`}>
+                                    {issue.severity}
+                                  </span>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="text-sm text-foreground truncate">{issue.title}</div>
+                                    <div className="text-[11px] text-muted-foreground">
+                                      {issueStatusLabel(issue.status)}{issue.owner ? ` · ${issue.owner}` : ''}
+                                      {(issue.duplicateCount ?? 1) > 1 ? ` · 重复 ${issue.duplicateCount} 条` : ''}
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {selectedTaskIsGate && (() => {
+                          const reviews = activePhaseData?.gateReviews || [];
+                          const latest = reviews[reviews.length - 1];
+                          if (selectedTaskChecked && latest) {
+                            return (
+                              <div className={`rounded-md border p-3 ${
+                                latest.decision === 'approved' ? 'border-emerald-200 bg-emerald-50/50' :
+                                latest.decision === 'conditional' ? 'border-[color:var(--acc-border)] bg-[color:var(--acc-soft)]' :
+                                'border-rose-200 bg-rose-50/50'
+                              }`}>
+                                <div className="flex items-center justify-between mb-2">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[10px] uppercase tracking-widest text-muted-foreground">评审记录</span>
+                                    {reviews.length > 1 && (
+                                      <span className="text-[9px] num text-muted-foreground bg-secondary px-1.5 py-0.5 rounded border border-border">
+                                        共 {reviews.length} 次
+                                      </span>
+                                    )}
+                                  </div>
+                                  <button
+                                    onClick={() => setGateReviewPending({ phaseId: activePhaseId })}
+                                    className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                                  >
+                                    查看历史
+                                  </button>
+                                </div>
+                                <GateReviewBadge review={latest} />
+                                <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                                  <div><span className="text-muted-foreground">参与人：</span>{latest.participants}</div>
+                                  {latest.conditions && (
+                                    <div className="col-span-2"><span className="text-muted-foreground">条件：</span>{latest.conditions}</div>
+                                  )}
+                                  {latest.notes && (
+                                    <div className="col-span-2 mt-1 text-muted-foreground italic">{latest.notes}</div>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          }
+                          if (selectedTaskChecked && !latest) {
+                            return (
+                              <button
+                                onClick={() => setGateReviewPending({ phaseId: activePhaseId })}
+                                className="w-full text-xs text-primary rounded-md border border-dashed border-[color:var(--acc-border)] py-2 hover:bg-[color:var(--acc-soft)] transition-colors"
+                              >
+                                + 补充填写 Gate 评审记录
+                              </button>
+                            );
+                          }
+                          return null;
+                        })()}
+
+                        {/* ── 执行说明 (left main) ──────────────────────────── */}
+                        <TaskDetail
+                          taskId={selectedTask.id}
+                          taskDetails={selectedTaskDetails || { instructions: '', files: [] }}
+                          onUpdate={(details) => updateTaskDetails(selectedTask.id, details)}
+                          canEdit={perms.canEditTasks && isCurrentPhaseUnlocked}
+                          compact={compactTaskDetail}
+                          projectId={project.id}
+                          phaseId={activePhaseId}
+                          layout="main"
+                        />
+
+                        {/* ── Tab bar (评论 / 活动 / 流转 / 状态审批) ─────────── */}
+                        <div className="border-t border-border pt-3">
+                          <div className="flex items-center gap-4 border-b border-border -mb-px">
+                            {([
+                              ['comments', '评论'],
+                              ['activity', '活动'],
+                              ['flow', '流转'],
+                              ['approval', '状态审批'],
+                            ] as const).map(([key, label]) => (
+                              <button
+                                key={key}
+                                type="button"
+                                onClick={() => setTaskTab(key)}
+                                className={`relative pb-2 text-xs transition-colors ${
+                                  taskTab === key
+                                    ? 'text-foreground font-medium border-b-2 border-primary'
+                                    : 'text-muted-foreground hover:text-foreground border-b-2 border-transparent'
+                                }`}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                          <div className="pt-3">
+                            {taskTab === 'comments' && (
+                              <CommentThread
+                                entityType="task"
+                                entityId={`${project.id}:${selectedTask.id}`}
+                                projectId={project.id}
+                              />
+                            )}
+                            {taskTab === 'activity' && (
+                              <TaskActivityTab
+                                projectId={project.id}
+                                phaseId={activePhaseId}
+                                taskId={selectedTask.id}
+                                users={detailUsers}
+                              />
+                            )}
+                            {taskTab === 'flow' && (
+                              <TaskFlowTab
+                                projectId={project.id}
+                                phaseId={activePhaseId}
+                                taskId={selectedTask.id}
+                                users={detailUsers}
+                              />
+                            )}
+                            {taskTab === 'approval' && (
+                              <TaskApprovalTab
+                                projectId={project.id}
+                                phaseId={activePhaseId}
+                                taskId={selectedTask.id}
+                                users={detailUsers}
+                                approvalStatus={selectedTaskDetails?.approvalStatus ?? 'none'}
+                                approverUserId={selectedTaskDetails?.approverUserId ?? null}
+                                approvalNote={selectedTaskDetails?.approvalNote ?? null}
+                                canDecide={
+                                  selectedTaskDetails?.approverUserId === currentUser?.id ||
+                                  currentUser?.role === 'admin'
+                                }
+                              />
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* ── Right sidebar: 属性 ──────────────────────────────── */}
+                      <aside className="rounded-lg border border-border bg-secondary p-3 h-fit space-y-3">
+                        <div className="text-[10px] uppercase tracking-widest text-muted-foreground">属性</div>
+                        {/* 责任角色 / 可见岗位 (read-only summary) */}
+                        <div className="space-y-1.5 text-xs">
                           <div className="flex gap-2">
                             <span className="w-16 shrink-0 text-muted-foreground">责任角色</span>
                             <span className="text-foreground">{selectedTask.owner || '未指定'}</span>
@@ -2471,8 +2890,8 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                             <span className="text-foreground">{selectedTaskRoleLabels}</span>
                           </div>
                           {selectedTaskIsGate && activePhase?.gateStandard?.responsibleRoles?.length > 0 && (
-                            <div className="pt-1">
-                              <div className="text-muted-foreground mb-1">Gate 责任分工</div>
+                            <div className="pt-1 text-muted-foreground">
+                              <div className="mb-1">Gate 责任分工</div>
                               <div className="space-y-1">
                                 {activePhase.gateStandard.responsibleRoles.map((role, i) => (
                                   <div key={i} className="flex items-start gap-2 text-foreground">
@@ -2484,219 +2903,30 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                             </div>
                           )}
                         </div>
-                      </div>
-
-                      <div>
-                        <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-muted-foreground mb-2">
-                          <Target size={11} />
-                          交付物
-                        </div>
-                        <DeliverablesChecklist
+                        {/* meta (assignee/due/status/priority) + 需审批配置 + 附件 + 可见岗位编辑 */}
+                        <TaskDetail
+                          taskId={selectedTask.id}
+                          taskDetails={selectedTaskDetails || { instructions: '', files: [] }}
+                          onUpdate={(details) => updateTaskDetails(selectedTask.id, details)}
+                          visibleRoles={selectedTaskRoles}
+                          onVisibleRolesChange={(roles) => {
+                            onUpdate({
+                              ...project,
+                              taskVisibleRoles: {
+                                ...(project.taskVisibleRoles || {}),
+                                [selectedTask.id]: roles,
+                              },
+                            });
+                          }}
+                          canEditRoles={perms.canEditProjectInfo}
+                          canEdit={perms.canEditTasks && isCurrentPhaseUnlocked}
+                          compact={compactTaskDetail}
                           projectId={project.id}
                           phaseId={activePhaseId}
-                          taskId={selectedTask.id}
-                          items={
-                            selectedTaskIsGate
-                              ? activeGateDeliverables
-                              : getTaskDeliverables(selectedTask.id, activePhase?.deliverables || [])
-                          }
-                          status={selectedTaskDetails?.deliverables || {}}
-                          canEdit={perms.canEditTasks && isCurrentPhaseUnlocked}
-                          carried={selectedTaskIsGate ? activeGateCarriedMap : undefined}
+                          layout="sidebar"
                         />
-                        {selectedTaskIsGate && (
-                          <GateDeliverableOverridePanel
-                            projectId={project.id}
-                            phaseId={activePhaseId}
-                            effectiveDeliverables={activeGateDeliverables}
-                            canEdit={perms.canEditTasks}
-                          />
-                        )}
-                        {selectedTaskIsGate && activeGateDeliverables.length > 0 && (
-                          <DeliverableReviewControls
-                            projectId={project.id}
-                            phaseId={activePhaseId}
-                            deliverableNames={activeGateDeliverables}
-                            canEditTasks={perms.canEditTasks}
-                            currentUserId={currentUser?.id}
-                            isAdmin={currentUser?.role === 'admin'}
-                            gateTaskId={activePhase?.gateTaskId}
-                            pmUserId={project.pmUserId ?? null}
-                          />
-                        )}
-                      </div>
+                      </aside>
                     </div>
-
-                    {selectedTask.guide && (
-                      <div className="mt-4 p-3 rounded-md border-l-2 border-primary bg-[color:var(--acc-soft)]">
-                        <div className="text-[10px] uppercase tracking-widest text-primary mb-1.5">操作指南</div>
-                        <pre className="text-xs text-foreground whitespace-pre-wrap font-sans leading-relaxed">{selectedTask.guide}</pre>
-                      </div>
-                    )}
-
-                    {selectedTaskIsGate && (() => {
-                      const r = computeGateReadiness(activePhase, activePhaseData, activeGateDeliverables, serverDelivSatisfiedSet);
-                      return (
-                        <div className={`mt-4 p-3 rounded-md border ${r.ready ? 'border-emerald-200 bg-emerald-50/50' : 'border-[color:var(--acc-border)] bg-[color:var(--acc-soft)]'}`}>
-                          <div className="flex items-center justify-between mb-2">
-                            <div className="text-[10px] uppercase tracking-widest text-muted-foreground">Gate 就绪检查</div>
-                            <span className={`text-[10px] rounded px-1.5 py-0.5 border ${r.ready ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-[color:var(--acc-soft)] text-primary border-[color:var(--acc-border)]'}`}>
-                              {r.ready ? '已就绪' : '未就绪'}
-                            </span>
-                          </div>
-                          <div className="divide-y divide-border">
-                            <ReadinessRow label="阶段任务完成" ok={r.tasksDone === r.tasksTotal} detail={`${r.tasksDone}/${r.tasksTotal}`} />
-                            <ReadinessRow label="交付物审核" ok={r.delivTotal === 0 || r.delivDone === r.delivTotal} detail={`${r.delivDone}/${r.delivTotal}`} />
-                            <ReadinessRow label="无未关闭 P0/P1" ok={r.openP0P1 === 0} detail={r.openP0P1 === 0 ? '通过' : `${r.openP0P1} 个待关闭`} />
-                            <ReadinessRow label="关键文件已上传" ok={r.fileCount > 0} detail={`${r.fileCount} 个`} soft />
-                          </div>
-                          {r.signoffRoles.length > 0 && (
-                            <div className="mt-2 pt-2 border-t border-border">
-                              <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">需会签角色</div>
-                              <div className="flex flex-wrap gap-1">
-                                {r.signoffRoles.map((role, i) => (
-                                  <span key={i} className="text-[10px] text-muted-foreground bg-card border border-border rounded px-1.5 py-0.5">{role}</span>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                          {!r.ready && (
-                            <div className="mt-2 pt-2 border-t border-[color:var(--acc-border)] text-xs text-primary leading-relaxed">
-                              未就绪:{r.blockers.join('、')}。补齐后再通过;若需放行,请在评审里选「有条件通过」并填写例外项的责任人与截止。
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })()}
-
-                    {selectedTaskIsGate && activePhase?.gateStandard && (
-                      <div className="mt-4 p-3 rounded-md border-l-2 border-l-primary bg-secondary">
-                        <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-2">Gate 管理标准</div>
-                        <GateStandardPanel standard={activePhase.gateStandard} compact evidenceHint />
-                      </div>
-                    )}
-
-                    <div className="mt-4 p-3 rounded-md border border-border bg-card">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-muted-foreground">
-                          <Bug size={11} />
-                          关联问题
-                        </div>
-                        {perms.canEditIssues && isCurrentPhaseUnlocked && (
-                          <button
-                            onClick={handleCreateIssueFromSelectedTask}
-                            className="text-[10px] rounded px-2 py-1 border border-border text-muted-foreground hover:border-[color:var(--acc-border)] hover:text-primary transition-colors"
-                          >
-                            从此任务创建 Issue
-                          </button>
-                        )}
-                      </div>
-                      {selectedTaskIssues.length === 0 ? (
-                        <div className="mt-2 text-xs text-muted-foreground">暂无关联问题。</div>
-                      ) : (
-                        <div className="mt-2 divide-y divide-border">
-                          {selectedTaskIssues.map((issue) => (
-                            <div key={issue.id} className="py-2 flex items-start gap-2">
-                              <span className={`mt-0.5 text-[10px] num rounded px-1.5 py-0.5 border ${
-                                issue.severity === 'P0' || issue.severity === 'P1'
-                                  ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                  : 'bg-secondary text-muted-foreground border-border'
-                              }`}>
-                                {issue.severity}
-                              </span>
-                              <div className="min-w-0 flex-1">
-                                <div className="text-sm text-foreground truncate">{issue.title}</div>
-                                <div className="text-[11px] text-muted-foreground">
-                                  {issueStatusLabel(issue.status)}{issue.owner ? ` · ${issue.owner}` : ''}
-                                  {(issue.duplicateCount ?? 1) > 1 ? ` · 重复 ${issue.duplicateCount} 条` : ''}
-                                </div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    <TaskDetail
-                      taskId={selectedTask.id}
-                      taskDetails={selectedTaskDetails || { instructions: '', files: [] }}
-                      onUpdate={(details) => updateTaskDetails(selectedTask.id, details)}
-                      visibleRoles={selectedTaskRoles}
-                      onVisibleRolesChange={(roles) => {
-                        onUpdate({
-                          ...project,
-                          taskVisibleRoles: {
-                            ...(project.taskVisibleRoles || {}),
-                            [selectedTask.id]: roles,
-                          },
-                        });
-                      }}
-                      canEditRoles={perms.canEditProjectInfo}
-                      canEdit={perms.canEditTasks && isCurrentPhaseUnlocked}
-                      compact={compactTaskDetail}
-                      projectId={project.id}
-                      phaseId={activePhaseId}
-                    />
-
-                    <div className="mt-4 border-t border-border pt-4">
-                      <CommentThread
-                        entityType="task"
-                        entityId={`${project.id}:${selectedTask.id}`}
-                        projectId={project.id}
-                      />
-                    </div>
-
-                    {selectedTaskIsGate && (() => {
-                      const reviews = activePhaseData?.gateReviews || [];
-                      const latest = reviews[reviews.length - 1];
-                      if (selectedTaskChecked && latest) {
-                        return (
-                          <div className={`mt-4 rounded-md border p-3 ${
-                            latest.decision === 'approved' ? 'border-emerald-200 bg-emerald-50/50' :
-                            latest.decision === 'conditional' ? 'border-[color:var(--acc-border)] bg-[color:var(--acc-soft)]' :
-                            'border-rose-200 bg-rose-50/50'
-                          }`}>
-                            <div className="flex items-center justify-between mb-2">
-                              <div className="flex items-center gap-2">
-                                <span className="text-[10px] uppercase tracking-widest text-muted-foreground">评审记录</span>
-                                {reviews.length > 1 && (
-                                  <span className="text-[9px] num text-muted-foreground bg-secondary px-1.5 py-0.5 rounded border border-border">
-                                    共 {reviews.length} 次
-                                  </span>
-                                )}
-                              </div>
-                              <button
-                                onClick={() => setGateReviewPending({ phaseId: activePhaseId })}
-                                className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
-                              >
-                                查看历史
-                              </button>
-                            </div>
-                            <GateReviewBadge review={latest} />
-                            <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                              <div><span className="text-muted-foreground">参与人：</span>{latest.participants}</div>
-                              {latest.conditions && (
-                                <div className="col-span-2"><span className="text-muted-foreground">条件：</span>{latest.conditions}</div>
-                              )}
-                              {latest.notes && (
-                                <div className="col-span-2 mt-1 text-muted-foreground italic">{latest.notes}</div>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      }
-                      if (selectedTaskChecked && !latest) {
-                        return (
-                          <button
-                            onClick={() => setGateReviewPending({ phaseId: activePhaseId })}
-                            className="mt-4 w-full text-xs text-primary rounded-md border border-dashed border-[color:var(--acc-border)] py-2 hover:bg-[color:var(--acc-soft)] transition-colors"
-                          >
-                            + 补充填写 Gate 评审记录
-                          </button>
-                        );
-                      }
-                      return null;
-                    })()}
                     </div>{/* /scroll-body */}
                   </div>{/* /modal-panel */}
                 </div>
