@@ -33,6 +33,7 @@ import { ReleaseDialog } from './ReleaseDialog';
 import { BomPanel } from './BomPanel';
 import { OverviewPanel } from './OverviewPanel';
 import { ProjectDashboard } from './project-overview/ProjectDashboard';
+import { ProjectSettingsDrawer } from './project-overview/ProjectSettingsDrawer';
 import { RequirementPoolPanel } from './RequirementPoolPanel';
 import { KanbanBoard } from './KanbanBoard';
 import { FilesPanel } from './FilesPanel';
@@ -1723,7 +1724,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
   const riskOverrideReason = project.riskOverrideReason?.trim() ?? '';
   const [riskOverrideOpen, setRiskOverrideOpen] = useState(false);
   // 设置抽屉占位（真实抽屉为后续任务 PD2；当前仅打开总览的设置面板入口）。
-  const [, setSettingsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [riskOverrideDraft, setRiskOverrideDraft] = useState<Project['risk']>(project.riskOverrideRisk ?? project.risk);
   const [riskOverrideReasonDraft, setRiskOverrideReasonDraft] = useState(project.riskOverrideReason ?? '');
   const isCurrentPhaseUnlocked = isPhaseUnlocked(project, activePhaseId);
@@ -1953,14 +1954,24 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
           >
             <ArrowLeft size={14} /> 返回项目列表
           </button>
-          {perms.canEditProjectInfo && (
+          <div className="flex items-center gap-2">
             <button
-              onClick={() => setReleaseOpen(true)}
-              className="flex items-center gap-1.5 rounded-md text-xs font-medium bg-primary hover:opacity-90 text-white px-3 py-1.5 shadow-sm transition-opacity"
+              onClick={() => setSettingsOpen(true)}
+              title="项目设置"
+              aria-label="项目设置"
+              className="flex items-center gap-1.5 rounded-md text-xs font-medium text-muted-foreground border border-border hover:bg-secondary hover:text-foreground px-2.5 py-1.5 transition-colors"
             >
-              <Rocket size={13} /> 量产发布
+              <Settings size={13} /> 设置
             </button>
-          )}
+            {perms.canEditProjectInfo && (
+              <button
+                onClick={() => setReleaseOpen(true)}
+                className="flex items-center gap-1.5 rounded-md text-xs font-medium bg-primary hover:opacity-90 text-white px-3 py-1.5 shadow-sm transition-opacity"
+              >
+                <Rocket size={13} /> 量产发布
+              </button>
+            )}
+          </div>
         </div>
         <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
           <div className="flex-1 min-w-0">
@@ -2404,6 +2415,18 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
           />
         </div>
       )}
+
+      {/* ── 项目设置抽屉：复用 OverviewPanel 的全部编辑分区 ─────────────────── */}
+      <ProjectSettingsDrawer open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <OverviewPanel
+          project={project}
+          onUpdate={onUpdate}
+          canEdit={perms.canEditProjectInfo}
+          canManageMembers={perms.canManageMembers}
+          isAdmin={currentUser?.role === 'admin'}
+          onOpenRiskOverride={perms.canEditProjectInfo ? openRiskOverrideEditor : undefined}
+        />
+      </ProjectSettingsDrawer>
 
       {/* ── Tasks Tab ─────────────────────────────────────────────────────── */}
       {mainTab === 'tasks' && (
