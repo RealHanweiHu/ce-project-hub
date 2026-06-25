@@ -31,7 +31,7 @@ import {
   projectDeliverableOverrides, ProjectDeliverableOverride,
   projectDeliverableReviews, ProjectDeliverableReview,
   calendarExceptions,
-  type TaskStatus, type TaskPriority, type GateDecision,
+  type TaskStatus, type TaskPriority, type TaskApprovalStatus, type GateDecision,
 } from "../drizzle/schema";
 import { buildRevisionChangelogSnapshot, REVISION_CHANGE_STATUSES, type RevisionChangeEntry } from "../shared/changelog-snapshot";
 import { normalizeFileType, normalizeFileVersion } from "../shared/file-types";
@@ -1151,6 +1151,14 @@ export async function upsertProjectTask(
     updatedBy?: number | null;
     dueDate?: string | null;
     startDate?: string | null;
+    requiresApproval?: boolean;
+    approverUserId?: number | null;
+    approvalStatus?: TaskApprovalStatus;
+    approvalNote?: string | null;
+    approvalRequestedBy?: number | null;
+    approvalRequestedAt?: Date | null;
+    approvalDecidedBy?: number | null;
+    approvalDecidedAt?: Date | null;
   }
 ): Promise<void> {
   const db = await getDb();
@@ -1793,6 +1801,15 @@ export type TaskMetaPatch = {
   /** 派生镜像列，勿手动传；由 status 推导。见 deriveCompletion */
   completed?: boolean;
   updatedBy?: number | null;
+  // 逐任务审批闸门列
+  requiresApproval?: boolean;
+  approverUserId?: number | null;
+  approvalStatus?: TaskApprovalStatus;
+  approvalNote?: string | null;
+  approvalRequestedBy?: number | null;
+  approvalRequestedAt?: Date | null;
+  approvalDecidedBy?: number | null;
+  approvalDecidedAt?: Date | null;
 };
 
 /**
@@ -1963,20 +1980,75 @@ export async function updateTaskMeta(
  * 卡片勾选「完成」：status 是主状态，勾选即把 status 设为 done/todo，
  * completed/completedAt 随之派生。行不存在则插入。
  */
+export type CompletionOutcome = "completed" | "uncompleted" | "submitted";
+
 export async function setTaskCompletion(
   projectId: string,
   phaseId: string,
   taskId: string,
   completed: boolean,
   updatedBy?: number | null
-): Promise<void> {
+): Promise<{ outcome: CompletionOutcome }> {
+  const db = await getDb();
+  const current = db
+    ? (
+        await db
+          .select()
+          .from(projectTasks)
+          .where(and(eq(projectTasks.projectId, projectId), eq(projectTasks.phaseId, phaseId), eq(projectTasks.taskId, taskId)))
+          .limit(1)
+      )[0]
+    : null;
+
+  // 需审批任务勾完成 → 进入待审批（completed 仍 false，不计入进度/看板完成/Gate）
+  if (completed && current?.requiresApproval) {
+    await upsertProjectTask(projectId, phaseId, taskId, {
+      status: "pending_approval",
+      approvalStatus: "pending",
+      approvalRequestedBy: updatedBy ?? null,
+      approvalRequestedAt: new Date(),
+      updatedBy: updatedBy ?? null,
+    });
+    await refreshProjectTaskStatuses(projectId);
+    if (updatedBy != null) {
+      await createActivityLog({
+        projectId, userId: updatedBy, action: "task.submit_approval",
+        entityType: "task", entityId: taskId,
+        meta: { phaseId, approver: current?.approverUserId ?? null },
+      });
+    }
+    return { outcome: "submitted" };
+  }
+
+  // 普通完成
+  if (completed) {
+    await upsertProjectTask(projectId, phaseId, taskId, {
+      status: "done", completedAt: new Date(), updatedBy: updatedBy ?? null,
+    });
+    await refreshProjectTaskStatuses(projectId);
+    if (updatedBy != null) {
+      await createActivityLog({
+        projectId, userId: updatedBy, action: "task.complete",
+        entityType: "task", entityId: taskId, meta: { phaseId },
+      });
+    }
+    return { outcome: "completed" };
+  }
+
+  // 取消勾选（含撤回 pending_approval）：清审批待审，status 交 refresh 归位
   await upsertProjectTask(projectId, phaseId, taskId, {
-    completed,
-    status: completed ? "done" : "todo",
-    completedAt: completed ? new Date() : null,
+    status: "todo", completedAt: null,
+    approvalStatus: "none", approvalRequestedBy: null, approvalRequestedAt: null,
     updatedBy: updatedBy ?? null,
   });
   await refreshProjectTaskStatuses(projectId);
+  if (updatedBy != null) {
+    await createActivityLog({
+      projectId, userId: updatedBy, action: "task.uncomplete",
+      entityType: "task", entityId: taskId, meta: { phaseId },
+    });
+  }
+  return { outcome: "uncompleted" };
 }
 
 /**

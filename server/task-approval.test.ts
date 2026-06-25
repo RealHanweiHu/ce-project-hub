@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { applyAutomaticTaskStatuses } from "./db";
+import {
+  applyAutomaticTaskStatuses, setTaskCompletion, upsertProjectTask,
+  getProjectTasks, getActivityLogs,
+} from "./db";
 import type { ProjectTask } from "../drizzle/schema";
+
+let pidSeq = 0;
+const uniquePid = () => `tst-appr-${Date.now()}-${pidSeq++}`;
 
 // 最小 ProjectTask（仅填 applyAutomaticTaskStatuses 用到的字段；其余以 any 占位）
 function makeTask(over: Partial<ProjectTask>): ProjectTask {
@@ -30,5 +36,33 @@ describe("automaticTaskStatus 保留 pending_approval", () => {
     const rows = [makeTask({ taskId: "c1", status: "todo", assigneeUserId: 5 })];
     const out = applyAutomaticTaskStatuses(rows, "npd", "2026-06-25");
     expect(out[0].status).toBe("in_progress");
+  });
+});
+
+describe("setTaskCompletion 需审批分支 + 单写日志", () => {
+  it("需审批任务勾完成 → pending_approval/completed=false/approvalStatus=pending/outcome=submitted，且只记 task.submit_approval", async () => {
+    const pid = uniquePid();
+    await upsertProjectTask(pid, "ph1", "c1", { requiresApproval: true, approverUserId: 2 });
+    const r = await setTaskCompletion(pid, "ph1", "c1", true, 3);
+    expect(r.outcome).toBe("submitted");
+    const row = (await getProjectTasks(pid, "ph1"))[0];
+    expect(row.status).toBe("pending_approval");
+    expect(row.completed).toBe(false);
+    expect(row.approvalStatus).toBe("pending");
+    expect(row.approvalRequestedBy).toBe(3);
+    const acts = await getActivityLogs(pid);
+    const actions = acts.filter((a) => a.entityId === "c1").map((a) => a.action);
+    expect(actions).toContain("task.submit_approval");
+    expect(actions).not.toContain("task.complete");
+  });
+
+  it("普通任务勾完成 → done/completed=true/outcome=completed", async () => {
+    const pid = uniquePid();
+    await upsertProjectTask(pid, "ph1", "c1", { instructions: "x" });
+    const r = await setTaskCompletion(pid, "ph1", "c1", true, 3);
+    expect(r.outcome).toBe("completed");
+    const row = (await getProjectTasks(pid, "ph1"))[0];
+    expect(row.status).toBe("done");
+    expect(row.completed).toBe(true);
   });
 });
