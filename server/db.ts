@@ -2052,6 +2052,51 @@ export async function setTaskCompletion(
 }
 
 /**
+ * 配置某任务的审批闸门（需审批开关 + 审批人）。
+ * 关开关且当前为 pending_approval → 取消在途审批（approvalStatus=none、completed=false），
+ * status 交给 refresh 按 automaticTaskStatus 归位（不擅自判通过）。
+ */
+export async function setTaskApprovalConfig(
+  projectId: string,
+  phaseId: string,
+  taskId: string,
+  cfg: { requiresApproval: boolean; approverUserId: number | null },
+  actorBy?: number | null
+): Promise<void> {
+  const db = await getDb();
+  const current = db
+    ? (
+        await db
+          .select()
+          .from(projectTasks)
+          .where(and(eq(projectTasks.projectId, projectId), eq(projectTasks.phaseId, phaseId), eq(projectTasks.taskId, taskId)))
+          .limit(1)
+      )[0]
+    : null;
+  const patch: Parameters<typeof upsertProjectTask>[3] = {
+    requiresApproval: cfg.requiresApproval,
+    approverUserId: cfg.approverUserId,
+    updatedBy: actorBy ?? null,
+  };
+  if (!cfg.requiresApproval && current?.status === "pending_approval") {
+    patch.status = "todo";
+    patch.completedAt = null;
+    patch.approvalStatus = "none";
+    patch.approvalRequestedBy = null;
+    patch.approvalRequestedAt = null;
+  }
+  await upsertProjectTask(projectId, phaseId, taskId, patch);
+  await refreshProjectTaskStatuses(projectId);
+  if (actorBy != null) {
+    await createActivityLog({
+      projectId, userId: actorBy, action: "task.update_meta",
+      entityType: "task", entityId: taskId,
+      meta: { phaseId, requiresApproval: cfg.requiresApproval, approverUserId: cfg.approverUserId },
+    });
+  }
+}
+
+/**
  * 切换某任务下单个交付物的完成状态（合并到 deliverables jsonb map）。
  * 行不存在则插入。返回更新后的完成 map。
  */

@@ -5,6 +5,7 @@ import {
   getProjectTasks,
   upsertProjectTask,
   setTaskCompletion,
+  setTaskApprovalConfig,
   updateTaskMeta,
   getMyTasks,
   getOverdueTasks,
@@ -55,14 +56,30 @@ export const tasksRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "没有编辑任务的权限" });
       }
       await setTaskCompletion(input.projectId, input.phaseId, input.taskId, input.completed, ctx.user.id);
-      await createActivityLog({
-        projectId: input.projectId,
-        userId: ctx.user.id,
-        action: input.completed ? "task.complete" : "task.uncomplete",
-        entityType: "task",
-        entityId: input.taskId,
-        meta: { phaseId: input.phaseId, completed: input.completed },
-      });
+      // 完成 / 待审提交 / 取消 的活动日志由 setTaskCompletion 单写（按 outcome），
+      // 此处不再盲写，避免「待审提交」被错记为「完成」。
+      return { success: true };
+    }),
+
+  /** 配置任务审批闸门（需审批 + 审批人）— 仅可编辑项目信息者（owner/manager/pm/admin） */
+  setApprovalConfig: protectedProcedure
+    .input(z.object({
+      projectId: z.string(),
+      phaseId: z.string(),
+      taskId: z.string(),
+      requiresApproval: z.boolean(),
+      approverUserId: z.number().nullable(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const role = await getEffectiveRole(input.projectId, ctx.user.id);
+      if (!role || !ROLE_PERMISSIONS[role].canEditProjectInfo) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "仅项目负责人/管理层可配置审批" });
+      }
+      await setTaskApprovalConfig(
+        input.projectId, input.phaseId, input.taskId,
+        { requiresApproval: input.requiresApproval, approverUserId: input.approverUserId },
+        ctx.user.id,
+      );
       return { success: true };
     }),
 

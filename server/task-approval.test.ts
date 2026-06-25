@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  applyAutomaticTaskStatuses, setTaskCompletion, upsertProjectTask,
+  applyAutomaticTaskStatuses, setTaskCompletion, setTaskApprovalConfig, upsertProjectTask,
   getProjectTasks, getActivityLogs,
 } from "./db";
 import type { ProjectTask } from "../drizzle/schema";
@@ -64,5 +64,28 @@ describe("setTaskCompletion 需审批分支 + 单写日志", () => {
     const row = (await getProjectTasks(pid, "ph1"))[0];
     expect(row.status).toBe("done");
     expect(row.completed).toBe(true);
+  });
+});
+
+describe("setTaskApprovalConfig", () => {
+  it("写入 requiresApproval/approverUserId", async () => {
+    const pid = uniquePid();
+    await upsertProjectTask(pid, "ph1", "c1", { instructions: "x" });
+    await setTaskApprovalConfig(pid, "ph1", "c1", { requiresApproval: true, approverUserId: 2 }, 9);
+    const row = (await getProjectTasks(pid, "ph1"))[0];
+    expect(row.requiresApproval).toBe(true);
+    expect(row.approverUserId).toBe(2);
+  });
+
+  it("待审时关开关 → approvalStatus=none、completed=false、status 非 done/pending_approval", async () => {
+    const pid = uniquePid();
+    await upsertProjectTask(pid, "ph1", "c1", { requiresApproval: true, approverUserId: 2 });
+    await setTaskCompletion(pid, "ph1", "c1", true, 3); // → pending_approval
+    await setTaskApprovalConfig(pid, "ph1", "c1", { requiresApproval: false, approverUserId: null }, 9);
+    const row = (await getProjectTasks(pid, "ph1"))[0];
+    expect(row.approvalStatus).toBe("none");
+    expect(row.completed).toBe(false);
+    expect(row.status).not.toBe("done");
+    expect(row.status).not.toBe("pending_approval");
   });
 });
