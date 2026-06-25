@@ -1803,6 +1803,27 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
   const isCurrentPhaseUnlocked = isPhaseUnlocked(project, activePhaseId);
   const blockingGate = getBlockingGate(project, activePhaseId);
   const catConfig = project.category ? CATEGORY_MAP[project.category] : null;
+  // 任务 tab 头部摘要：全项目完成度 + 当前阶段完成度（复用 projectPhases / project.phases 完成位图）。
+  const taskSummary = (() => {
+    let totalTasks = 0;
+    let doneTasks = 0;
+    for (const phase of projectPhases) {
+      const pd = project.phases[phase.id];
+      for (const task of phase.tasks) {
+        totalTasks += 1;
+        if (pd?.tasks?.[task.id]) doneTasks += 1;
+      }
+    }
+    const currentPhaseTotal = activePhase?.tasks.length || 0;
+    const currentPhaseDone = (activePhase?.tasks || []).filter((t) => activePhaseData?.tasks?.[t.id]).length;
+    return {
+      totalTasks,
+      doneTasks,
+      currentPhaseTotal,
+      currentPhaseDone,
+      currentPhaseName: activePhase?.name ?? activePhaseId,
+    };
+  })();
   const visibleActiveTasks = activePhase?.tasks.filter((task) => {
     // 指派优先于岗位可见性：指派给当前用户的任务无条件可见，
     // 避免「被指派了任务、工作台能看到、点进项目却被 visibleRoles 过滤隐藏」的死角。
@@ -2463,42 +2484,6 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         </div>
       )}
 
-      {/* ── 度量 sub-view ──────────────────────────────────────────────────── */}
-      {mainTab === 'tasks' && taskView === 'metrics' && !execLens && (
-        <MetricsView project={project} />
-      )}
-
-      {/* ── 看板 sub-view ──────────────────────────────────────────────────── */}
-      {mainTab === 'tasks' && taskView === 'kanban' && !execLens && (
-        <div className="p-6">
-          <KanbanBoard project={project} onUpdate={onUpdate} canEdit={perms.canEditTasks} />
-        </div>
-      )}
-
-       {/* ── 甘特 sub-view ─────────────────────────────────────────────────── */}
-      {mainTab === 'tasks' && taskView === 'gantt' && !execLens && (
-        <div className="p-6 space-y-3">
-          <div className="flex items-center gap-0 rounded-md border border-border w-fit overflow-hidden">
-            {([['task', '任务视图'], ['phase', '阶段视图']] as const).map(([m, label]) => (
-              <button key={m} onClick={() => setGanttMode(m)}
-                className={`px-3 py-1.5 text-xs font-medium transition-colors ${ganttMode === m ? 'bg-primary text-white' : 'text-muted-foreground hover:bg-secondary'}`}>
-                {label}
-              </button>
-            ))}
-          </div>
-          {ganttMode === 'task' ? (
-            <TaskGanttView project={project} onTaskClick={(phaseId, taskId) => { setActivePhaseId(phaseId); setSelectedTaskId(taskId); setTaskView('list'); setMainTab('tasks'); }} />
-          ) : (
-            <GanttView
-              project={project}
-              onUpdate={onUpdate}
-              onPhaseClick={handleGanttPhaseClick}
-              readOnly={!perms.canEditProjectInfo}
-            />
-          )}
-        </div>
-      )}
-
       {/* ── 动态 Tab：变更记录 ───────────────────────────────────────────── */}
       {mainTab === 'activity' && !execLens && (
         <div className="p-6">
@@ -2566,29 +2551,36 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         />
       </ProjectSettingsDrawer>
 
-      {/* ── 任务 Tab：列表 / 看板 / 甘特 / 度量 子视图切换 ──────────────────── */}
+      {/* ── 任务 Tab：列表 / 看板 / 甘特 / 度量 子视图（toggle 置顶，内容紧随其下） ── */}
       {mainTab === 'tasks' && (
-        <div className="px-1 pt-3">
-          <SegToggle<TaskSubView>
-            value={taskView}
-            onChange={setTaskView}
-            options={[
-              { value: 'list', label: '列表' },
-              // 看板/甘特/度量：执行角色视角下隐藏（与原 execLens 收敛一致）。
-              ...(!execLens
-                ? ([
-                    { value: 'kanban' as const, label: '看板' },
-                    { value: 'gantt' as const, label: '甘特' },
-                    { value: 'metrics' as const, label: '度量' },
-                  ])
-                : []),
-            ]}
-          />
-        </div>
-      )}
+        <div className="space-y-4">
+          {/* 头部：子视图切换 + 完成度摘要 */}
+          <div className="flex flex-wrap items-center justify-between gap-3 px-1 pt-3">
+            <SegToggle<TaskSubView>
+              value={taskView}
+              onChange={setTaskView}
+              options={[
+                { value: 'list', label: '列表' },
+                // 看板/甘特/度量：执行角色视角下隐藏（与原 execLens 收敛一致）。
+                ...(!execLens
+                  ? ([
+                      { value: 'kanban' as const, label: '看板' },
+                      { value: 'gantt' as const, label: '甘特' },
+                      { value: 'metrics' as const, label: '度量' },
+                    ])
+                  : []),
+              ]}
+            />
+            <div className="text-xs text-muted-foreground">
+              <span className="num text-foreground font-medium">{taskSummary.doneTasks}/{taskSummary.totalTasks}</span> 完成
+              <span className="mx-1.5 text-border">·</span>
+              当前 {taskSummary.currentPhaseName}{' '}
+              <span className="num text-foreground font-medium">{taskSummary.currentPhaseDone}/{taskSummary.currentPhaseTotal}</span>
+            </div>
+          </div>
 
-      {/* ── 列表 sub-view ──────────────────────────────────────────────────── */}
-      {mainTab === 'tasks' && taskView === 'list' && (
+          {/* ── 列表 sub-view ──────────────────────────────────────────────── */}
+          {taskView === 'list' && (
         <>
           {/* Phase Navigation */}
           <LinearCard className="overflow-x-auto">
@@ -3238,6 +3230,42 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
             </div>
           </div>
         </>
+          )}
+
+          {/* ── 看板 sub-view ──────────────────────────────────────────────── */}
+          {taskView === 'kanban' && !execLens && (
+            <KanbanBoard project={project} onUpdate={onUpdate} canEdit={perms.canEditTasks} />
+          )}
+
+          {/* ── 甘特 sub-view ──────────────────────────────────────────────── */}
+          {taskView === 'gantt' && !execLens && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-0 rounded-md border border-border w-fit overflow-hidden">
+                {([['task', '任务视图'], ['phase', '阶段视图']] as const).map(([m, label]) => (
+                  <button key={m} onClick={() => setGanttMode(m)}
+                    className={`px-3 py-1.5 text-xs font-medium transition-colors ${ganttMode === m ? 'bg-primary text-white' : 'text-muted-foreground hover:bg-secondary'}`}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {ganttMode === 'task' ? (
+                <TaskGanttView project={project} onTaskClick={(phaseId, taskId) => { setActivePhaseId(phaseId); setSelectedTaskId(taskId); setTaskView('list'); setMainTab('tasks'); }} />
+              ) : (
+                <GanttView
+                  project={project}
+                  onUpdate={onUpdate}
+                  onPhaseClick={handleGanttPhaseClick}
+                  readOnly={!perms.canEditProjectInfo}
+                />
+              )}
+            </div>
+          )}
+
+          {/* ── 度量 sub-view ──────────────────────────────────────────────── */}
+          {taskView === 'metrics' && !execLens && (
+            <MetricsView project={project} />
+          )}
+        </div>
       )}
 
       {/* ── Gate Review Modal ──────────────────────────────────────────────── */}
