@@ -54,7 +54,7 @@
 标签状态 `activeTab: 'comments'|'activity'|'flow'|'approval'`，默认 `comments`。
 
 - **评论**：`CommentThread`（entityType=`task`，entityId=`${projectId}:${taskId}`），不变。
-- **活动（任务活动）**：新增 `tasks.activity` 查询 → `getTaskActivityLogs(projectId, taskId)`（`activity_logs` where entityType='task' and entityId=taskId，新→旧）。渲染只读时间线：操作人 + 中文化动作 + 相对时间。**范围 = 任务自身活动**（meta/完成/交付物/执行说明/审批动作）；附件/关联问题事件目前不是 task 维度日志，**明确不纳入**（非目标，见 §9）。
+- **活动（任务活动）**：新增 `tasks.activity` 查询 → **`getTaskActivityLogs(projectId, phaseId, taskId)`**（`activity_logs` where entityType='task' AND entityId=taskId **AND `meta->>'phaseId' = phaseId`**，新→旧）。任务唯一身份是 `(projectId, phaseId, taskId)`，而 activity 的 entityId 只是 taskId、phaseId 在 meta 里；**必须带 phaseId 过滤**，否则不同阶段同名 taskId 会串任务。**前置要求**：所有 task 维度活动日志写入时 `meta` 必须含 `phaseId`（核对/补齐 `tasks.ts` 各 `createActivityLog` 调用）。渲染只读时间线：操作人 + 中文化动作 + 相对时间。**范围 = 任务自身活动**（meta/完成/交付物/执行说明/审批动作）；附件/关联问题事件目前不是 task 维度日志，**明确不纳入**（非目标，见 §9）。
 - **流转**：同一查询的子集（仅状态/审批迁移动作：`task.complete/uncomplete/submit_approval/approve/reject`），渲染为竖向步进时间线：`fromStatus → toStatus` + 人 + 时间 + 意见。
 - **状态审批**：见 §4.3，展示当前审批态 + 操作（提交/通过/驳回）+ 历史（取 activity 子集）。
 
@@ -67,13 +67,13 @@
 **闸门态（requiresApproval=true）**：
 1. **提交**：勾完成 → `status=pending_approval, completed=false`，`approvalStatus=pending`，`approvalRequestedBy=actor, approvalRequestedAt=now`。日志 `task.submit_approval {from, to:pending_approval, requester}`。通知 approver。
 2. **通过**（approver 或 admin）：`status=done, completed=true, completedAt=now`，`approvalStatus=approved, approvalDecidedBy/At, approvalNote`。日志 `task.approve {from:pending_approval,to:done,approver,note,proxyBy?}`。通知 requester。
-3. **驳回**（approver 或 admin）：`status=in_progress`（经 refresh 归位）`completed=false`，`approvalStatus=rejected, approvalDecidedBy/At, approvalNote`。日志 `task.reject {from:pending_approval,to:in_progress,approver,note,proxyBy?}`。通知 requester。
-4. **撤回**（requester/editor 取消勾选 pending_approval 任务）：回 `in_progress/todo, completed=false, approvalStatus=none`。日志 `task.uncomplete`。
+3. **驳回**（approver 或 admin）：`completed=false, approvalStatus=rejected, approvalDecidedBy/At, approvalNote`；**`status` 不写死** —— 清掉 pending 后交给 `refreshProjectTaskStatuses`/`automaticTaskStatus` 归位（结果按排期/依赖可能为 todo/in_progress/blocked，贴合现有系统）。日志 `task.reject {from:pending_approval,to:<归位后状态>,approver,note,proxyBy?}`。通知 requester。
+4. **撤回**（requester/editor 取消勾选 pending_approval 任务）：`completed=false, approvalStatus=none`；`status` 同样交给 `automaticTaskStatus` 归位（非写死）。日志 `task.uncomplete`。
 
 **边界（必须实现，避免 UI/测试各自猜）**：
-- **待审时关闭「需审批」开关**：若当前 `pending_approval` → **退回 `in_progress`、`approvalStatus=none`**（取消在途审批，不擅自替用户判定通过）。用户可重新勾选（此时直接完成）。
+- **待审时关闭「需审批」开关**：若当前 `pending_approval` → **取消在途审批（`approvalStatus=none`）、`completed=false`，status 交给 `automaticTaskStatus` 归位**（不擅自替用户判定通过）。用户可重新勾选（此时直接完成）。
 - **改审批人**（PM/admin，pending 期间允许）：更新 `approverUserId`，`approvalStatus` 仍 `pending`，通知新审批人，日志 `task.update_meta {approver: old→new}`；原审批人不再有裁决权。
-- **驳回后再次提交**：rejected 任务为 `in_progress`，再勾完成 → 新一轮 `pending`（新 `approvalRequestedAt`）。历史在 activity_logs 顺序可见。
+- **驳回后再次提交**：rejected 任务回到 `automaticTaskStatus` 归位的非终态，再勾完成 → 新一轮 `pending`（新 `approvalRequestedAt`）。历史在 activity_logs 顺序可见。
 - **通过后重开任务**（取消勾选 done+approved）：回 `in_progress, completed=false, approvalStatus=none`；再勾选 → 新审批轮。日志 `task.uncomplete`。
 - **审批人被移出项目**：`approverUserId` 可能指向非成员。裁决权 = `actor===approverUserId || admin`；审批人缺位时 **admin 代审**，或 PM/admin 改派审批人。
 - **admin 代审记录**：`approvalDecidedBy=admin.id`，日志 meta 带 `proxyBy`（actor!==approverUserId 时），UI 显示「（管理员代审）」。
@@ -96,8 +96,15 @@
 
 - `server/db.ts`
   - **`automaticTaskStatus`**：开头加 `if (task.status === "pending_approval") return "pending_approval";`（在 skipped 之后、completed 之前），使其成为 **显式保留状态**；`completed` 仍由 `status==="done"` 派生（pending_approval→false），下游依赖天然视为未完成。
-  - **`setTaskCompletion`**：完成分支先读该任务 `requiresApproval`；若 true 且 `completed=true` 入参 → 写 `status=pending_approval, completed=false, approvalStatus=pending, approvalRequestedBy/At`，记 `task.submit_approval` 日志，通知 approver；否则维持现状。取消勾选 pending_approval → 归 `todo/in_progress`、`approvalStatus=none`。
-  - 新 `decideTaskApproval(projectId, phaseId, taskId, decision, actor, note)`：approve→done/completed=true/approved；reject→in_progress/completed=false/rejected；写日志 + 通知 requester。
+  - **`setTaskCompletion`（改为「完成日志只由一层写」+ 返回 outcome）**：完成分支先读任务 `requiresApproval`：
+    - 普通完成 → `status=done, completed=true`，outcome=`completed`。
+    - 需审批 + 勾完成 → `status=pending_approval, completed=false, approvalStatus=pending, approvalRequestedBy/At`，outcome=`submitted`（通知 approver）。
+    - 取消勾选 → `completed=false, approvalStatus=none`，**status 交 refresh 归位**，outcome=`uncompleted`。
+    - **唯一日志规则（重要）**：完成 / 待审提交 / 取消 的 activity 日志**全部在 `setTaskCompletion` 内按 outcome 写**（三选一：`task.complete` / `task.submit_approval` / `task.uncomplete`）。`tasks.setCompleted` router **删除原有盲写**（现状：setTaskCompletion 后无脑写 `task.complete/uncomplete`，会把「待审提交」错记成「完成」），改用 helper 返回的 outcome 决定 toast/通知。其余调用方（如 `gate.confirmAndAdvance`）自动受益于单写层。
+  - 新 `decideTaskApproval(projectId, phaseId, taskId, decision, actor, note)`：
+    - approve → `status=done, completed=true, approvalStatus=approved`。
+    - reject → `completed=false, approvalStatus=rejected`，**status 交 `refreshProjectTaskStatuses` 按 `automaticTaskStatus` 归位**（todo/in_progress/blocked 皆可能）。
+    - 在 helper 内写唯一 `task.approve`/`task.reject` 日志（meta 带 from/to/note/approver/requester/proxyBy）+ 通知 requester。
 - `server/routers/tasks.ts`
   - `activity`（query）：`getTaskActivityLogs`，输出 join 用户名。
   - `setApprovalConfig`（mutation，权限见 §4.6）：设 `requiresApproval` + `approverUserId`；含「待审时关开关 → 退回 in_progress」边界。
@@ -123,8 +130,14 @@
 
 - **手写幂等迁移**（不完全依赖 `drizzle-kit generate` 的默认产物）：
   1. `ALTER TYPE "task_status" ADD VALUE IF NOT EXISTS 'pending_approval';`（独立语句，先于建列；PG12+ 允许，且本迁移内不使用该值）。
-  2. `CREATE TYPE "task_approval_status" AS ENUM(...)`（IF NOT EXISTS 包裹）。
-  3. `ALTER TABLE project_tasks ADD COLUMN ...`（全部可空/带安全默认）。
+  2. 新枚举幂等创建（**PG 无通用可靠的 `CREATE TYPE IF NOT EXISTS`**，用 DO 块吞 duplicate_object）：
+     ```sql
+     DO $$ BEGIN
+       CREATE TYPE "task_approval_status" AS ENUM ('none','pending','approved','rejected');
+     EXCEPTION WHEN duplicate_object THEN NULL;
+     END $$;
+     ```
+  3. `ALTER TABLE project_tasks ADD COLUMN IF NOT EXISTS ...`（全部可空/带安全默认）。
 - 流程：`drizzle-kit generate` 生成草稿后 **人工核对/改写**，确保上述顺序与幂等性；运行时 drizzle migrator 幂等应用（与现有机制一致）。
 - 存量行：所有新列默认值/空，`requiresApproval=false` → 完成路径不变。
 
@@ -139,15 +152,16 @@
 **服务端单测**：
 - `setApprovalConfig` 写入开关/审批人 + 权限校验（canEditProjectInfo 通过、纯研发拒绝）。
 - 需审批任务勾完成 → `status=pending_approval, completed=false, approvalStatus=pending, approvalRequestedBy` 已写。
-- `decideApproval` 通过 → done/completed=true/approved；驳回 → in_progress/completed=false/rejected。
-- `tasks.activity` 返回该任务条目（含新动作）。
-- 边界：待审时关开关→退回 in_progress、approvalStatus=none；admin 代审 proxyBy 记录。
+- `decideApproval` 通过 → done/completed=true/approved；驳回 → completed=false/approvalStatus=rejected 且 status ∈ {todo,in_progress,blocked}（automaticTaskStatus 归位，**不断言硬 in_progress**）。
+- `tasks.activity`（带 phaseId）返回该任务条目（含新动作），不串到其他阶段同名 taskId。
+- 完成日志单写：需审批任务勾完成只产生 `task.submit_approval`（**不得**同时出现 `task.complete`）。
+- 边界：待审时关开关→approvalStatus=none、completed=false、status 归位；admin 代审 proxyBy 记录。
 
 **硬验收（不回归 + 用户追加 2 条）**：
 - 【追加1】`refreshProjectTaskStatuses` **不会覆盖** `pending_approval`（automaticTaskStatus 保留）。
 - 【追加2】`pending_approval` 在 **看板 / 我的任务 / 日历 / 逾期统计** 都有明确展示口径（如上 §4.7）。
 - `requiresApproval=false` 任务：完成路径、`completed`、进度（`computeOverallProgress`）、看板、Gate 就绪 与现状逐一一致。
-- 全屏 0 残留 stone/amber/ce-*。
+- 改动文件 0 残留 `stone-` / **`amber-` Tailwind 类名** / `font-serif` / `font-mono` / `ce-*`。注意「待审批」用 `var(--warning)` token（不是 amber 类名），二者不冲突。
 
 **前端走查**：两栏版式、4 标签切换、需审批开关→勾完成→approver 通过/驳回 闭环、待审批徽标在看板/列表出现。
 
