@@ -1837,6 +1837,8 @@ function automaticTaskStatus(
   todayISO: string
 ): TaskStatus {
   if (task.status === "skipped") return "skipped";
+  // 待审批是显式保留态：勾完成进入待审后不被排期/依赖重算吞掉；completed 仍为 false → 下游依赖视为未完成。
+  if (task.status === "pending_approval") return "pending_approval";
   if (task.completed || task.status === "done") return "done";
 
   if (task.startDate && task.startDate > todayISO) return "todo";
@@ -1854,7 +1856,7 @@ function automaticTaskStatus(
   return "todo";
 }
 
-function applyAutomaticTaskStatuses(
+export function applyAutomaticTaskStatuses(
   rows: ProjectTask[],
   category: string | undefined,
   todayISO = todayInShanghaiISO()
