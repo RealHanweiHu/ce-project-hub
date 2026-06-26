@@ -355,7 +355,7 @@ function FileUploadArea({
           <select
             value={selectedType}
             onChange={(e) => setSelectedType(e.target.value)}
-            className="text-xs rounded-md border border-border bg-card px-2 py-1.5 text-foreground"
+            className="text-xs rounded-md bg-transparent px-1.5 py-1 text-foreground outline-none hover:bg-secondary focus:bg-secondary transition-colors"
           >
             <option value="">未分类</option>
             {FILE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
@@ -366,7 +366,7 @@ function FileUploadArea({
             onChange={(e) => setVersion(e.target.value)}
             maxLength={32}
             placeholder="版本 如 V1.0 / T1 / Rev.B"
-            className="flex-1 text-xs rounded-md border border-border bg-card px-2 py-1.5 text-foreground"
+            className="flex-1 text-xs rounded-md bg-transparent px-1.5 py-1 text-foreground outline-none border-b border-transparent hover:border-border focus:border-[color:var(--acc-border)] transition-colors"
           />
         </div>
       )}
@@ -375,9 +375,9 @@ function FileUploadArea({
         onDragOver={(e) => { e.preventDefault(); if (!readOnly) setDragOver(true); }}
         onDragLeave={() => setDragOver(false)}
         onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files); }}
-        className={`rounded-md border-2 border-dashed p-4 text-center transition-colors ${
-          readOnly ? 'cursor-not-allowed border-border bg-secondary opacity-70' :
-          dragOver ? 'cursor-pointer border-primary bg-[color:var(--acc-soft)]' : 'cursor-pointer border-border hover:border-[color:var(--acc-border)]'
+        className={`rounded-md border border-dashed p-3 text-center transition-colors ${
+          readOnly ? 'cursor-not-allowed border-border/60 bg-secondary/50 opacity-70' :
+          dragOver ? 'cursor-pointer border-primary bg-[color:var(--acc-soft)]' : 'cursor-pointer border-border/70 hover:border-[color:var(--acc-border)] hover:bg-secondary/50'
         }`}
       >
         <input ref={inputRef} type="file" multiple onChange={(e) => handleFiles(e.target.files!)} className="hidden" disabled={uploading || readOnly} />
@@ -395,7 +395,7 @@ function FileUploadArea({
           {files.map((file) => {
             const previewable = canPreview(file);
             return (
-            <div key={file.id} className="flex items-center gap-3 p-2.5 rounded-md bg-card border border-border group">
+            <div key={file.id} className="flex items-center gap-3 p-2 rounded-md hover:bg-secondary/60 transition-colors group">
               <span className="text-muted-foreground shrink-0">{getIcon(file.type)}</span>
               <div
                 className={`flex-1 min-w-0 ${previewable ? 'cursor-pointer' : ''}`}
@@ -1097,7 +1097,7 @@ function DeliverablesChecklist({
 function TaskDetail({
   taskId, taskDetails, onUpdate, visibleRoles, onVisibleRolesChange, canEditRoles,
   projectId, phaseId, canEdit = true, compact = false, layout = 'full',
-  currentUserId,
+  currentUserId, canEditPriority, canUploadFiles,
 }: {
   taskId: string;
   taskDetails: TaskDetails;
@@ -1108,6 +1108,10 @@ function TaskDetail({
   canEditRoles?: boolean;
   /** 当前登录用户 id — 用于「认领给自己」 */
   currentUserId?: number;
+  /** 优先级可改 = canEditProjectInfo（管理/PM）。其余只读展示。默认沿用 canEdit。 */
+  canEditPriority?: boolean;
+  /** 文件上传/删除可改 = 负责人本人 || canEditProjectInfo。默认沿用 canEdit。 */
+  canUploadFiles?: boolean;
   projectId: string;
   phaseId?: string;
   canEdit?: boolean;
@@ -1143,7 +1147,7 @@ function TaskDetail({
   };
 
   const handleRemoveFile = async (id: string) => {
-    if (!canEdit) return;
+    if (!filesEditable) return;
     if (!confirm('确定删除此文件？该操作不可撤销。')) return;
     const numId = parseInt(id, 10);
     if (!isNaN(numId)) {
@@ -1209,6 +1213,10 @@ function TaskDetail({
     { value: 'medium', label: 'P2 中' },
     { value: 'low', label: 'P3 低' },
   ];
+  // 权限收口：优先级仅管理/PM 可改；附件上传/删除限负责人或管理/PM。
+  // 未显式传入时（如 legacy 'full' 布局）沿用 canEdit，行为不回归。
+  const priorityEditable = (canEditPriority ?? canEdit) && canEdit;
+  const filesEditable = (canUploadFiles ?? canEdit) && canEdit;
 
   // ── Reschedule confirm dialog (shared across layouts) ──────────────────────
   const rescheduleDialog = pendingReschedule ? (
@@ -1240,7 +1248,7 @@ function TaskDetail({
           disabled={!canEdit}
           rows={4}
           placeholder="记录执行说明、注意事项、进展备注..."
-          className="w-full px-3 py-2 rounded-md border border-border focus:border-[color:var(--acc-border)] outline-none text-xs text-foreground resize-none transition-colors"
+          className="w-full px-3 py-2 rounded-md bg-secondary/40 border-b border-transparent hover:border-border focus:border-[color:var(--acc-border)] focus:bg-secondary/60 outline-none text-xs text-foreground resize-none transition-colors"
         />
         {dirty && <div className="absolute bottom-2 right-2 text-[9px] text-muted-foreground">保存中...</div>}
       </div>
@@ -1264,7 +1272,7 @@ function TaskDetail({
         projectId={projectId}
         phaseId={phaseId}
         taskId={taskId}
-        readOnly={!canEdit}
+        readOnly={!filesEditable}
       />
     </div>
   );
@@ -1416,7 +1424,7 @@ function TaskDetail({
       <div className="grid grid-cols-2 gap-2">
         <div>
           <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">负责人</div>
-          <div className="flex h-[30px] items-center rounded-md border border-border bg-secondary px-2 text-xs text-foreground">
+          <div className="flex h-[30px] items-center px-1.5 text-xs text-foreground">
             {metaUsers.find((u) => u.id === taskDetails?.assigneeUserId)?.name
               ?? metaUsers.find((u) => u.id === taskDetails?.assigneeUserId)?.username
               ?? '— 未指定 —'}
@@ -1424,20 +1432,20 @@ function TaskDetail({
         </div>
         <div>
           <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">截止日期</div>
-          <div className="flex h-[30px] items-center rounded-md border border-border bg-secondary px-2 text-xs text-foreground">
+          <div className="flex h-[30px] items-center px-1.5 text-xs text-foreground">
             {taskDetails?.dueDate ?? '— 未排期 —'}
           </div>
         </div>
         <div>
           <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">状态</div>
-          <div className={`flex h-[30px] items-center justify-between rounded-md border px-2 text-xs ${taskStatusCfg.className}`}>
-            <span>{taskStatusCfg.label}</span>
-            <span className="text-[10px] opacity-60">自动</span>
+          <div className="flex h-[30px] items-center gap-1.5 px-1.5 text-xs">
+            <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] ${taskStatusCfg.className}`}>{taskStatusCfg.label}</span>
+            <span className="text-[10px] text-muted-foreground">自动</span>
           </div>
         </div>
         <div>
           <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">优先级</div>
-          <div className="flex h-[30px] items-center rounded-md border border-border bg-secondary px-2 text-xs text-foreground">
+          <div className="flex h-[30px] items-center px-1.5 text-xs text-foreground">
             {TASK_PRIORITY_OPTIONS.find((o) => o.value === (taskDetails?.taskPriority ?? 'medium'))?.label ?? '—'}
           </div>
         </div>
@@ -1455,7 +1463,7 @@ function TaskDetail({
                 const val = e.target.value;
                 saveMeta({ assigneeUserId: val === '' ? null : Number(val) });
               }}
-              className="w-full text-xs text-foreground bg-secondary rounded-md border border-border px-2 py-1 outline-none focus:border-[color:var(--acc-border)] transition-colors"
+              className="w-full text-xs text-foreground bg-transparent rounded-md px-1.5 py-1 outline-none border-b border-transparent hover:border-border focus:border-[color:var(--acc-border)] transition-colors"
             >
               <option value="">— 未指定 —</option>
               {assignableUsers.map((u) => (
@@ -1469,7 +1477,7 @@ function TaskDetail({
               const assigneeName = metaUsers.find((u) => u.id === taskDetails?.assigneeUserId)?.name
                 ?? metaUsers.find((u) => u.id === taskDetails?.assigneeUserId)?.username;
               return (
-                <div className="flex h-[30px] items-center justify-between gap-2 rounded-md border border-border bg-secondary px-2 text-xs text-foreground">
+                <div className="flex h-[30px] items-center justify-between gap-2 px-1.5 text-xs text-foreground">
                   <span className="truncate">{assigneeName ?? '— 未指定 —'}</span>
                   {assignedToSelf ? (
                     <button
@@ -1495,7 +1503,7 @@ function TaskDetail({
             })()
           ) : (
             // 无编辑权限：只读负责人。
-            <div className="flex h-[30px] items-center rounded-md border border-border bg-secondary px-2 text-xs text-foreground">
+            <div className="flex h-[30px] items-center px-1.5 text-xs text-foreground">
               {metaUsers.find((u) => u.id === taskDetails?.assigneeUserId)?.name
                 ?? metaUsers.find((u) => u.id === taskDetails?.assigneeUserId)?.username
                 ?? '— 未指定 —'}
@@ -1505,29 +1513,35 @@ function TaskDetail({
         <div>
           <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">截止日期</div>
           {/* 自动排期：截止日期只读展示，不再提供日期选择器。 */}
-          <div className="flex h-[30px] items-center rounded-md border border-border bg-secondary px-2 text-xs text-foreground">
+          <div className="flex h-[30px] items-center px-1.5 text-xs text-foreground">
             {taskDetails?.dueDate ?? '未排期 (自动排期)'}
           </div>
         </div>
         <div>
           <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">状态</div>
-          <div className={`flex h-[30px] items-center justify-between rounded-md border px-2 text-xs ${taskStatusCfg.className}`}>
-            <span>{taskStatusCfg.label}</span>
-            <span className="text-[10px] opacity-60">自动</span>
+          <div className="flex h-[30px] items-center gap-1.5 px-1.5 text-xs">
+            <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] ${taskStatusCfg.className}`}>{taskStatusCfg.label}</span>
+            <span className="text-[10px] text-muted-foreground">自动</span>
           </div>
         </div>
         <div>
           <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">优先级</div>
-          <select
-            value={taskDetails?.taskPriority ?? 'medium'}
-            disabled={!canEdit}
-            onChange={(e) => saveMeta({ priority: e.target.value })}
-            className="w-full text-xs bg-secondary rounded-md border border-border px-2 py-1 outline-none focus:border-[color:var(--acc-border)] transition-colors"
-          >
-            {TASK_PRIORITY_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
+          {priorityEditable ? (
+            <select
+              value={taskDetails?.taskPriority ?? 'medium'}
+              onChange={(e) => saveMeta({ priority: e.target.value })}
+              className="w-full text-xs text-foreground bg-transparent rounded-md px-1.5 py-1 outline-none border-b border-transparent hover:border-border focus:border-[color:var(--acc-border)] transition-colors"
+            >
+              {TASK_PRIORITY_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          ) : (
+            // 仅管理/PM 可改优先级：其余只读展示标签。
+            <div className="flex h-[30px] items-center px-1.5 text-xs text-foreground">
+              {TASK_PRIORITY_OPTIONS.find((o) => o.value === (taskDetails?.taskPriority ?? 'medium'))?.label ?? '—'}
+            </div>
+          )}
         </div>
       </div>
       )}
@@ -2979,7 +2993,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                           </div>
                         )}
 
-                        <div className="p-3 rounded-md border border-border bg-card">
+                        <div className="p-3 rounded-md bg-secondary/40">
                           <div className="flex items-center justify-between gap-3">
                             <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-muted-foreground">
                               <Bug size={11} />
@@ -2988,7 +3002,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                             {perms.canEditIssues && isCurrentPhaseUnlocked && (
                               <button
                                 onClick={handleCreateIssueFromSelectedTask}
-                                className="text-[10px] rounded px-2 py-1 border border-border text-muted-foreground hover:border-[color:var(--acc-border)] hover:text-primary transition-colors"
+                                className="text-[10px] rounded px-2 py-1 text-muted-foreground hover:text-primary hover:bg-secondary transition-colors"
                               >
                                 从此任务创建 Issue
                               </button>
@@ -3191,6 +3205,14 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                           canEditRoles={perms.canEditProjectInfo}
                           currentUserId={currentUser?.id}
                           canEdit={perms.canEditTasks && isCurrentPhaseUnlocked}
+                          /* 优先级仅管理/PM 可改 */
+                          canEditPriority={perms.canEditProjectInfo}
+                          /* 文件上传/删除限负责人本人或管理/PM */
+                          canUploadFiles={
+                            (selectedTaskDetails?.assigneeUserId != null
+                              && selectedTaskDetails.assigneeUserId === currentUser?.id)
+                            || perms.canEditProjectInfo
+                          }
                           compact={compactTaskDetail}
                           projectId={project.id}
                           phaseId={activePhaseId}
