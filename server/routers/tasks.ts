@@ -15,6 +15,7 @@ import {
   getProjectsByUser,
   createActivityLog,
   setTaskDeliverable,
+  getProjectById,
 } from "../db";
 import {
   applyProjectSchedule,
@@ -26,6 +27,7 @@ import { TASK_STATUSES, TASK_PRIORITIES } from "../../drizzle/schema";
 import { emitAutomationEvent } from "../automation/events";
 import { isISODate } from "../../shared/scheduling";
 import { getEffectiveProjectRoleById as getEffectiveRole } from "../project-access";
+import { taskDisplayTitle } from "../task-title";
 
 const isoDateInput = z.string().refine(isISODate, "日期必须是有效的 YYYY-MM-DD");
 
@@ -198,6 +200,7 @@ export const tasksRouter = router({
       }
       const { projectId, phaseId, taskId, ...patch } = input;
       delete patch.status;
+      const project = await getProjectById(projectId);
       const existingTasks = await getProjectTasks(projectId, phaseId);
       const beforeTask = existingTasks.find((task) => task.taskId === taskId) ?? {
         projectId,
@@ -209,6 +212,12 @@ export const tasksRouter = router({
         status: "todo",
         priority: "medium",
       };
+      const title = taskDisplayTitle({
+        taskId,
+        phaseId,
+        projectCategory: project?.category,
+        instructions: "instructions" in beforeTask ? beforeTask.instructions : null,
+      });
       const metaPatch = { ...patch, updatedBy: ctx.user.id };
       await updateTaskMeta(projectId, phaseId, taskId, metaPatch);
       await createActivityLog({
@@ -225,8 +234,8 @@ export const tasksRouter = router({
         entityType: "task",
         entityId: `${projectId}:${phaseId}:${taskId}`,
         actorId: ctx.user.id,
-        before: beforeTask as unknown as Record<string, unknown>,
-        after: { ...beforeTask, ...metaPatch } as Record<string, unknown>,
+        before: { ...beforeTask, title, projectCategory: project?.category } as unknown as Record<string, unknown>,
+        after: { ...beforeTask, ...metaPatch, title, projectCategory: project?.category } as Record<string, unknown>,
       });
       return { success: true };
     }),

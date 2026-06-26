@@ -33,6 +33,7 @@ import { notifyUsersViaDingtalk, resolveCorpIdsForUsers } from "../_core/dingtal
 import { createGroupChat, sendToGroupChat } from "../_core/dingtalkGroup";
 import { storageDelete } from "../storage";
 import { getProjectMembers } from "../db";
+import { taskDisplayTitle } from "../task-title";
 import { getPhasesForCategory } from "../../shared/sop-templates";
 import { PROJECT_MEMBER_ROLES } from "../../drizzle/schema";
 import { getEffectiveProjectRoleById as getEffectiveRole } from "../project-access";
@@ -48,21 +49,25 @@ async function assignAndNotify(
   notify: boolean
 ): Promise<{ assigned: number; recipients: number; notified: number }> {
   const assignments = await assignTasksByRole(project.id, actorId);
-  const nameMap = new Map<string, string>();
-  for (const phase of getPhasesForCategory(project.category)) {
-    for (const t of phase.tasks) nameMap.set(t.id, t.name);
-  }
-  const byUser = new Map<number, Array<{ taskId: string; dueDate: string | null }>>();
+  const byUser = new Map<number, Array<{ taskId: string; phaseId: string; dueDate: string | null; instructions: string | null }>>();
   for (const a of assignments) {
     const arr = byUser.get(a.userId) ?? [];
-    arr.push({ taskId: a.taskId, dueDate: a.dueDate });
+    arr.push({ taskId: a.taskId, phaseId: a.phaseId, dueDate: a.dueDate, instructions: a.instructions });
     byUser.set(a.userId, arr);
   }
   let notified = 0;
   if (notify) {
     for (const [userId, items] of Array.from(byUser.entries())) {
       const lines = items
-        .map((i: { taskId: string; dueDate: string | null }) => `- ${nameMap.get(i.taskId) ?? i.taskId}${i.dueDate ? `（截止 ${i.dueDate}）` : ""}`)
+        .map((i) => {
+          const title = taskDisplayTitle({
+            taskId: i.taskId,
+            phaseId: i.phaseId,
+            projectCategory: project.category,
+            instructions: i.instructions,
+          });
+          return `- ${title}${i.dueDate ? `（截止 ${i.dueDate}）` : ""}`;
+        })
         .join("\n");
       const md = `### 项目「${project.name}」任务分配\n你被指派以下 ${items.length} 项任务：\n${lines}`;
       try { await notifyUsersViaDingtalk([userId], "项目任务分配", md); notified += 1; }

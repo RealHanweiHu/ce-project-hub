@@ -6,6 +6,7 @@ import { getPhasesForCategory } from "../../shared/sop-templates";
 import { rescheduleFrom, type CalendarExceptions, type Schedule } from "../../shared/scheduling";
 import { emitAutomationEvent } from "../automation/events";
 import { getCalendarExceptions, getDb, getProjectById, refreshProjectTaskStatuses } from "../db";
+import { taskDisplayTitle } from "../task-title";
 
 /** 按项目 category + 开始日重生成整套任务起止日，写回 project_tasks。返回写入任务数。 */
 export async function applyProjectSchedule(projectId: string): Promise<number> {
@@ -32,6 +33,8 @@ type EffectiveScheduleContext = {
   effectiveIds: Set<string>;
   gateTaskIds: Set<string>;
   gateNames: Record<string, string>;
+  taskTitles: Record<string, string>;
+  projectCategory: string;
   targetDate: string | null;
   cal: CalendarExceptions;
 };
@@ -43,7 +46,14 @@ async function loadEffectiveScheduleContext(projectId: string): Promise<Effectiv
   if (!project) return null;
 
   const rows = await db
-    .select({ taskId: projectTasks.taskId, startDate: projectTasks.startDate, dueDate: projectTasks.dueDate, status: projectTasks.status })
+    .select({
+      phaseId: projectTasks.phaseId,
+      taskId: projectTasks.taskId,
+      instructions: projectTasks.instructions,
+      startDate: projectTasks.startDate,
+      dueDate: projectTasks.dueDate,
+      status: projectTasks.status,
+    })
     .from(projectTasks)
     .where(eq(projectTasks.projectId, projectId));
 
@@ -60,6 +70,15 @@ async function loadEffectiveScheduleContext(projectId: string): Promise<Effectiv
   const gateTaskIds = new Set(phases.map((p) => p.gateTaskId).filter((id) => effectiveIds.has(id)));
   const gateNames: Record<string, string> = {};
   for (const p of phases) if (effectiveIds.has(p.gateTaskId)) gateNames[p.gateTaskId] = p.gate;
+  const taskTitles: Record<string, string> = {};
+  for (const row of rows) {
+    taskTitles[row.taskId] = taskDisplayTitle({
+      taskId: row.taskId,
+      phaseId: row.phaseId,
+      projectCategory: project.category,
+      instructions: row.instructions,
+    });
+  }
 
   return {
     schedTasks,
@@ -67,6 +86,8 @@ async function loadEffectiveScheduleContext(projectId: string): Promise<Effectiv
     effectiveIds,
     gateTaskIds,
     gateNames,
+    taskTitles,
+    projectCategory: project.category,
     targetDate: project.targetDate ?? null,
     cal: await getCalendarExceptions(),
   };
@@ -110,6 +131,11 @@ export async function rescheduleProjectFromTask(
       entityType: "task",
       entityId: taskId,
       projectId,
+      after: {
+        taskId,
+        title: ctx.taskTitles[taskId] ?? taskDisplayTitle({ taskId, projectCategory: ctx.projectCategory }),
+        projectCategory: ctx.projectCategory,
+      },
       impact,
     } as any);
   }

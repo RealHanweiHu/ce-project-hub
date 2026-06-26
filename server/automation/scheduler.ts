@@ -8,6 +8,7 @@ import {
   getBlockedTasks,
   getGateReadiness,
 } from "../db";
+import { taskDisplayTitle } from "../task-title";
 import { runAutomation } from "./engine";
 import { runHealthDigestScan } from "./healthDigest";
 
@@ -36,7 +37,7 @@ export async function runScheduledAutomationScan(now = new Date()): Promise<void
       now,
       after: {
         ...task,
-        title: task.taskId,
+        title: taskDisplayTitle(task),
         ...(shouldEscalateAsOverdue
           ? { exceptionType: "overdue_task", exceptionAgeDays: overdueDays }
           : {}),
@@ -65,7 +66,7 @@ export async function runScheduledAutomationScan(now = new Date()): Promise<void
       after: {
         ...task,
         dueDate: null,
-        title: task.taskId,
+        title: taskDisplayTitle(task),
         exceptionType: "blocked_task",
         exceptionAgeDays: ageDays(today, toShanghaiISODate(task.statusChangedAt ?? task.updatedAt)),
       },

@@ -2541,14 +2541,14 @@ export async function getProjectEffectiveProcess(projectId: string): Promise<Eff
 export async function assignTasksByRole(
   projectId: string,
   updatedBy: number
-): Promise<Array<{ userId: number; taskId: string; phaseId: string; dueDate: string | null }>> {
+): Promise<Array<{ userId: number; taskId: string; phaseId: string; dueDate: string | null; instructions: string | null }>> {
   const db = await getDb();
   if (!db) return [];
   const members = await getProjectMembers(projectId);
   const roleToUser = new Map<string, number>();
   for (const m of members) if (!roleToUser.has(m.role)) roleToUser.set(m.role, m.userId);
   const tasks = await getProjectTasks(projectId);
-  const out: Array<{ userId: number; taskId: string; phaseId: string; dueDate: string | null }> = [];
+  const out: Array<{ userId: number; taskId: string; phaseId: string; dueDate: string | null; instructions: string | null }> = [];
   for (const t of tasks) {
     if (t.assigneeUserId) continue; // 不覆盖已分配
     const roles = (t.visibleRoles as string[] | null) ?? [];
@@ -2558,7 +2558,7 @@ export async function assignTasksByRole(
     const userId = roleToUser.get(primary);
     if (!userId) continue;
     await db.update(projectTasks).set({ assigneeUserId: userId, updatedBy }).where(eq(projectTasks.id, t.id));
-    out.push({ userId, taskId: t.taskId, phaseId: t.phaseId, dueDate: t.dueDate ?? null });
+    out.push({ userId, taskId: t.taskId, phaseId: t.phaseId, dueDate: t.dueDate ?? null, instructions: t.instructions ?? null });
   }
   if (out.length > 0) await refreshProjectTaskStatuses(projectId);
   return out;
@@ -3646,12 +3646,19 @@ export async function listAutomationRuns(input: {
     .limit(limit);
 }
 
+export type AutomationDueTask = ProjectTask & {
+  projectCategory: string;
+};
+
 /** 逾期或 14 天内到期的未完成任务（逾期催办 + 截止前提醒 共用此扫描，规则各自精确过滤） */
-export async function getAutomationDueTasks(): Promise<ProjectTask[]> {
+export async function getAutomationDueTasks(): Promise<AutomationDueTask[]> {
   const db = await getDb();
   if (!db) return [];
   return db
-    .select(getTableColumns(projectTasks))
+    .select({
+      ...getTableColumns(projectTasks),
+      projectCategory: projects.category,
+    })
     .from(projectTasks)
     .innerJoin(projects, eq(projectTasks.projectId, projects.id))
     .where(and(

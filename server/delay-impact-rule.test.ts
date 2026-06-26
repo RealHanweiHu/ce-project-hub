@@ -69,4 +69,20 @@ describe("delay_impact_notify 规则", () => {
     };
     expect(rule.matches({ action: "task.rescheduled", entityType: "task", impact: worsened } as any, cfg)).toBe(false);
   });
+
+  it("消息优先使用任务完整标题", () => {
+    const msg = rule.buildMessage(
+      {
+        action: "task.rescheduled",
+        entityType: "task",
+        entityId: "c1",
+        after: { title: "市场调研与竞品分析" },
+        impact,
+      } as any,
+      rule.defaultConfig,
+      { projectName: "充气泵", entityTitle: "市场调研与竞品分析" },
+    );
+    expect(msg.text).toContain("任务「市场调研与竞品分析」改期");
+    expect(msg.text).not.toContain("任务「c1」");
+  });
 });

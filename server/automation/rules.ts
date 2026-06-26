@@ -522,7 +522,7 @@ function buildTaskBlockedMessage(event: AutomationEvent, ctx: AutomationMessageC
 function buildDelayImpactMessage(event: AutomationEvent, ctx: AutomationMessageContext): AutomationMessage {
   const impact = event.impact;
   const project = ctx.projectName ? `「${ctx.projectName}」` : "项目";
-  const taskId = String(event.entityId ?? "任务");
+  const title = ctx.entityTitle || String(event.after?.title ?? event.after?.taskId ?? event.entityId ?? "任务");
   const gateLine = (impact?.gateImpacts ?? []).map((g) => `${g.gateName ?? g.taskId} 滑 ${g.deltaDays} 天`).join("；");
   const tb = impact?.targetBreach;
   const targetLine = tb
@@ -530,7 +530,7 @@ function buildDelayImpactMessage(event: AutomationEvent, ctx: AutomationMessageC
     : "";
   const parts = [gateLine, targetLine].filter(Boolean).join("；");
   const messageTitle = "延期影响提醒";
-  const text = `${project}任务「${taskId}」改期 → ${parts || `顺延 ${impact?.shifted.length ?? 0} 个下游`}。`;
+  const text = `${project}任务「${title}」改期 → ${parts || `顺延 ${impact?.shifted.length ?? 0} 个下游`}。`;
   return { title: messageTitle, text, markdown: `#### ${messageTitle}\n${text}` };
 }
 
