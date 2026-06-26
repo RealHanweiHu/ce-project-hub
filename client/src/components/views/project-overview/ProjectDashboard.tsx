@@ -55,6 +55,7 @@ const TASK_STATUS_LABEL: Record<string, string> = {
   todo: '待开始', in_progress: '进行中', blocked: '阻塞', done: '已完成',
   skipped: '跳过', pending_approval: '待审批',
 };
+const SEV_ORDER: Record<string, number> = { P0: 0, P1: 1, P2: 2, P3: 3 };
 
 interface FlatTask {
   id: string; name: string; status: string; dueDate?: string | null; assigneeUserId?: number | null;
@@ -112,7 +113,6 @@ export function ProjectDashboard({
       if (issue.status === 'open' || issue.status === 'in_progress') openIssues.push(issue);
     }
   }
-  const SEV_ORDER: Record<string, number> = { P0: 0, P1: 1, P2: 2, P3: 3 };
   openIssues.sort((a, b) => (SEV_ORDER[a.severity] ?? 9) - (SEV_ORDER[b.severity] ?? 9));
 
   // ── changelog: recent entries ───────────────────────────────────────────────

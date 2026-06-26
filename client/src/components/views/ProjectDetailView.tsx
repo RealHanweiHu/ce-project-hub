@@ -4,7 +4,7 @@
 // gate review / deliverable review) and tab state are preserved unchanged.
 // ProjectDetailView: phase navigation, Gantt chart tab, task checklist, task details, file upload
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import {
   ArrowLeft, CheckCircle2, Circle, ChevronRight,
   Upload, Download, Trash2, Paperclip, FileText, Image as ImageIcon,
@@ -448,6 +448,26 @@ const ROLE_OPTIONS = [
   { value: 'owner',  label: '项目创建者' },
 ] as const;
 
+// O(1) role → label lookup (ROLE_OPTIONS is static, so this Map is module-level too).
+const ROLE_LABEL_BY_VALUE = new Map<string, string>(ROLE_OPTIONS.map((o) => [o.value, o.label]));
+
+// Static task-status / priority configs — hoisted out of TaskDetail so they aren't
+// re-created every render (no closure dependencies).
+const TASK_STATUS_CONFIG: Record<string, { label: string; className: string }> = {
+  todo: { label: '待开始', className: 'bg-secondary text-muted-foreground border-border' },
+  in_progress: { label: '进行中', className: 'bg-[color:var(--acc-soft)] text-primary border-[color:var(--acc-border)]' },
+  blocked: { label: '阻塞', className: 'bg-red-50 text-red-700 border-red-200' },
+  done: { label: '已完成', className: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  skipped: { label: '跳过', className: 'bg-secondary text-muted-foreground border-border' },
+  pending_approval: { label: '待审批', className: 'bg-[color:var(--acc-soft)] text-[color:var(--warning)] border-[color:var(--acc-border)]' },
+};
+const TASK_PRIORITY_OPTIONS = [
+  { value: 'critical', label: 'P0 紧急' },
+  { value: 'high', label: 'P1 高' },
+  { value: 'medium', label: 'P2 中' },
+  { value: 'low', label: 'P3 低' },
+];
+
 function isProductDefinitionTask(taskId: string) {
   return taskId.startsWith('pd_');
 }
@@ -824,7 +844,7 @@ function DeliverableReviewControls({
                       <option value="">— 选审核人 —</option>
                       {members.map((m) => (
                         <option key={m.userId} value={m.userId}>
-                          {m.userName ?? m.userEmail ?? `用户${m.userId}`} · {ROLE_OPTIONS.find((role) => role.value === m.role)?.label ?? m.role}
+                          {m.userName ?? m.userEmail ?? `用户${m.userId}`} · {ROLE_LABEL_BY_VALUE.get(m.role) ?? m.role}
                         </option>
                       ))}
                     </select>
@@ -1166,10 +1186,15 @@ function TaskDetail({
     { projectId },
     { staleTime: 60_000, enabled: !!projectId },
   );
-  const assignableUsers = projectMembers.map((m) => ({
-    id: m.userId,
-    name: m.userName || metaUsers.find((u) => u.id === m.userId)?.name || metaUsers.find((u) => u.id === m.userId)?.username || `用户#${m.userId}`,
-  }));
+  // O(1) user lookup by id (replaces repeated metaUsers.find(...) scans).
+  const metaUserById = useMemo(() => new Map(metaUsers.map((u) => [u.id, u])), [metaUsers]);
+  const assignableUsers = projectMembers.map((m) => {
+    const u = metaUserById.get(m.userId);
+    return {
+      id: m.userId,
+      name: m.userName || u?.name || u?.username || `用户#${m.userId}`,
+    };
+  });
   // Persist task meta (assignee / dueDate / priority) directly — same reliable path as
   // deliverables/files. The previous full-project diff route silently dropped these edits.
   const setMetaMut = trpc.tasks.setMeta.useMutation({
@@ -1197,22 +1222,8 @@ function TaskDetail({
     if (!phaseId) return;
     setApprovalMut.mutate({ projectId, phaseId, taskId, ...next });
   };
-  const TASK_STATUS_CONFIG: Record<string, { label: string; className: string }> = {
-    todo: { label: '待开始', className: 'bg-secondary text-muted-foreground border-border' },
-    in_progress: { label: '进行中', className: 'bg-[color:var(--acc-soft)] text-primary border-[color:var(--acc-border)]' },
-    blocked: { label: '阻塞', className: 'bg-red-50 text-red-700 border-red-200' },
-    done: { label: '已完成', className: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-    skipped: { label: '跳过', className: 'bg-secondary text-muted-foreground border-border' },
-    pending_approval: { label: '待审批', className: 'bg-[color:var(--acc-soft)] text-[color:var(--warning)] border-[color:var(--acc-border)]' },
-  };
   const taskStatus = taskDetails?.taskStatus ?? 'todo';
   const taskStatusCfg = TASK_STATUS_CONFIG[taskStatus] ?? TASK_STATUS_CONFIG.todo;
-  const TASK_PRIORITY_OPTIONS = [
-    { value: 'critical', label: 'P0 紧急' },
-    { value: 'high', label: 'P1 高' },
-    { value: 'medium', label: 'P2 中' },
-    { value: 'low', label: 'P3 低' },
-  ];
   // 权限收口：优先级仅管理/PM 可改；附件上传/删除限负责人或管理/PM。
   // 未显式传入时（如 legacy 'full' 布局）沿用 canEdit，行为不回归。
   const priorityEditable = (canEditPriority ?? canEdit) && canEdit;
@@ -1321,7 +1332,7 @@ function TaskDetail({
           <div className="text-[11px] text-foreground">
             {roles.length === 0
               ? <span className="text-muted-foreground">空 = 所有人可见</span>
-              : roles.map((r) => ROLE_OPTIONS.find((o) => o.value === r)?.label || r).join(' / ')}
+              : roles.map((r) => ROLE_LABEL_BY_VALUE.get(r) ?? r).join(' / ')}
           </div>
         )}
       </div>
@@ -1333,9 +1344,8 @@ function TaskDetail({
     if (!canEdit) {
       // Read-only for non-editors: show only when 需审批 is on.
       if (!requiresApproval) return null;
-      const approverName = metaUsers.find((u) => u.id === approverUserId)?.name
-        ?? metaUsers.find((u) => u.id === approverUserId)?.username
-        ?? '未指定';
+      const approver = approverUserId != null ? metaUserById.get(approverUserId) : undefined;
+      const approverName = approver?.name ?? approver?.username ?? '未指定';
       return (
         <div className="text-[11px] text-muted-foreground">
           需审批：是 · 审批人：<span className="text-foreground">{approverName}</span>
@@ -1425,9 +1435,10 @@ function TaskDetail({
         <div>
           <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">负责人</div>
           <div className="flex h-[30px] items-center px-1.5 text-xs text-foreground">
-            {metaUsers.find((u) => u.id === taskDetails?.assigneeUserId)?.name
-              ?? metaUsers.find((u) => u.id === taskDetails?.assigneeUserId)?.username
-              ?? '— 未指定 —'}
+            {(() => {
+              const a = taskDetails?.assigneeUserId != null ? metaUserById.get(taskDetails.assigneeUserId) : undefined;
+              return a?.name ?? a?.username ?? '— 未指定 —';
+            })()}
           </div>
         </div>
         <div>
@@ -1474,8 +1485,8 @@ function TaskDetail({
             // 任务编辑者（非 PM）：仅可「认领给自己」/「取消认领」，不可指派他人。
             (() => {
               const assignedToSelf = taskDetails?.assigneeUserId === currentUserId;
-              const assigneeName = metaUsers.find((u) => u.id === taskDetails?.assigneeUserId)?.name
-                ?? metaUsers.find((u) => u.id === taskDetails?.assigneeUserId)?.username;
+              const assignee = taskDetails?.assigneeUserId != null ? metaUserById.get(taskDetails.assigneeUserId) : undefined;
+              const assigneeName = assignee?.name ?? assignee?.username;
               return (
                 <div className="flex h-[30px] items-center justify-between gap-2 px-1.5 text-xs text-foreground">
                   <span className="truncate">{assigneeName ?? '— 未指定 —'}</span>
@@ -1504,9 +1515,10 @@ function TaskDetail({
           ) : (
             // 无编辑权限：只读负责人。
             <div className="flex h-[30px] items-center px-1.5 text-xs text-foreground">
-              {metaUsers.find((u) => u.id === taskDetails?.assigneeUserId)?.name
-                ?? metaUsers.find((u) => u.id === taskDetails?.assigneeUserId)?.username
-                ?? '— 未指定 —'}
+              {(() => {
+                const a = taskDetails?.assigneeUserId != null ? metaUserById.get(taskDetails.assigneeUserId) : undefined;
+                return a?.name ?? a?.username ?? '— 未指定 —';
+              })()}
             </div>
           )}
         </div>
