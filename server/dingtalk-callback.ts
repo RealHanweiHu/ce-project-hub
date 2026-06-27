@@ -100,6 +100,25 @@ function encryptDingtalkResponse(message: string, nonce: string): Record<string,
   };
 }
 
+export type CallbackAction =
+  | { kind: "verify" }
+  | { kind: "sync"; processInstanceId: string }
+  | { kind: "ignore" };
+
+/**
+ * 钉钉事件回调分类:
+ * - check_url 注册校验事件 → verify(回 ack,不要求 processInstanceId,否则回调 URL 注册握手失败)
+ * - 含 processInstanceId 的审批变更事件 → sync
+ * - 其余无关事件 → ignore(回 ack,避免钉钉重试风暴)
+ */
+export function classifyCallbackEvent(payload: Record<string, unknown>): CallbackAction {
+  const eventType = getString(payload?.EventType) || getString(payload?.eventType);
+  if (eventType === "check_url") return { kind: "verify" };
+  const processInstanceId = findProcessInstanceId(payload);
+  if (processInstanceId) return { kind: "sync", processInstanceId };
+  return { kind: "ignore" };
+}
+
 export function registerDingtalkCallbackRoute(app: Express) {
   app.post("/api/dingtalk/callback", async (req, res) => {
     let payload = req.body as Record<string, unknown>;
@@ -119,13 +138,14 @@ export function registerDingtalkCallbackRoute(app: Express) {
       }
     }
 
-    const processInstanceId = findProcessInstanceId(payload);
-    if (!processInstanceId) {
-      res.status(400).json({ success: false, error: "缺少 processInstanceId" });
+    const action = classifyCallbackEvent(payload);
+    // check_url 注册握手与无关事件:回 ack(加密则回加密 success),让钉钉认为已确认
+    if (action.kind !== "sync") {
+      res.json(encrypt ? encryptDingtalkResponse("success", nonce || "nonce") : { success: true });
       return;
     }
     try {
-      const approval = await syncExternalApprovalByProcessInstanceId(processInstanceId);
+      const approval = await syncExternalApprovalByProcessInstanceId(action.processInstanceId);
       if (encrypt) {
         res.json(encryptDingtalkResponse("success", nonce || "nonce"));
         return;
