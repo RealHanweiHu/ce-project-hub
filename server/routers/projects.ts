@@ -9,14 +9,11 @@ import {
   deleteProject,
   getPortfolio,
   createActivityLog,
-  getMeetingParticipants,
   ensureProjectMember,
   assignTasksByRole,
   getProjectTasks,
   upsertProjectTask,
   updateProjectMeetingConfig,
-  updateProjectDingtalkEvent,
-  setUserDingtalkId,
   getProductDefinitionByProductId,
   confirmProductDefinition,
   getLatestProductDefinitionSnapshot,
@@ -26,11 +23,8 @@ import {
 import { applyProjectSchedule } from "../services/schedule-service";
 import { TRPCError } from "@trpc/server";
 import { ROLE_PERMISSIONS } from "./members";
-import { syncProjectMeeting } from "../_core/meetingSync";
-import { resolveDingtalkUserId } from "../_core/dingtalk";
-import { upsertWeeklyMeeting } from "../_core/dingtalkCalendar";
 import { notifyUsersViaDingtalk, resolveCorpIdsForUsers } from "../_core/dingtalkMessage";
-import { createGroupChat, sendToGroupChat } from "../_core/dingtalkGroup";
+import { createGroupChat, disbandGroupChat, sendToGroupChat } from "../_core/dingtalkGroup";
 import { storageDelete } from "../storage";
 import { getProjectMembers } from "../db";
 import { taskDisplayTitle } from "../task-title";
@@ -38,9 +32,16 @@ import { getPhasesForCategory } from "../../shared/sop-templates";
 import { PROJECT_MEMBER_ROLES } from "../../drizzle/schema";
 import { getEffectiveProjectRoleById as getEffectiveRole } from "../project-access";
 import { isISODate } from "../../shared/scheduling";
+import { cancelAndRecordProjectMeeting, syncAndRecordProjectMeeting } from "../services/project-meeting-lifecycle";
 
 const DEFAULT_MEETING = { enabled: true, weekday: 3, time: "15:00", durationMin: 60, title: "项目周会" };
 const isoDateInput = z.string().refine(isISODate, "日期必须是有效的 YYYY-MM-DD");
+
+function getStoredMeetingConfig(project: { meetingConfig?: unknown }): typeof DEFAULT_MEETING | null {
+  const cfg = project.meetingConfig;
+  if (!cfg || typeof cfg !== "object") return null;
+  return cfg as typeof DEFAULT_MEETING;
+}
 
 /** 按角色分配未分配任务 + (可选)逐人发钉钉通知。assignByRole / kickoff 共用。 */
 async function assignAndNotify(
@@ -70,7 +71,11 @@ async function assignAndNotify(
         })
         .join("\n");
       const md = `### 项目「${project.name}」任务分配\n你被指派以下 ${items.length} 项任务：\n${lines}`;
-      try { await notifyUsersViaDingtalk([userId], "项目任务分配", md); notified += 1; }
+      try {
+        const result = await notifyUsersViaDingtalk([userId], "项目任务分配", md);
+        if (result.delivered > 0) notified += 1;
+        else if (result.failed > 0) console.warn("[assign] dingtalk notify failed (non-fatal):", result.error);
+      }
       catch (e) { console.warn("[assign] dingtalk notify failed (non-fatal):", e); }
     }
     // 同步发一份汇总到项目群(若已建群)
@@ -465,20 +470,11 @@ export const projectsRouter = router({
       try {
         await updateProjectMeetingConfig(input.id, DEFAULT_MEETING);
         const project = await getProjectById(input.id);
-        const members = await getMeetingParticipants(input.id, project?.pmUserId ?? null);
-        await syncProjectMeeting({
-          project: project as never,
+        if (project) await syncAndRecordProjectMeeting({
+          project,
           config: DEFAULT_MEETING,
-          members,
-          todayISO: new Date().toISOString().slice(0, 10),
-          deps: {
-            resolveUserId: (u) => resolveDingtalkUserId(u, setUserDingtalkId),
-            upsert: upsertWeeklyMeeting,
-            saveEventId: updateProjectDingtalkEvent,
-            // 建项目阶段静默降级（不推群），避免成员手机号还没配时每建一个项目就刷群；
-            // PM 之后在周会编辑器显式保存时才会走群推降级。
-            groupPush: async () => {},
-          },
+          // 建项目阶段静默尝试，不刷群；PM 之后在周会编辑器显式保存时才会走群推降级。
+          allowGroupFallback: false,
         });
       } catch (e) {
         console.warn("[meeting] create sync failed (non-fatal):", e);
@@ -515,11 +511,26 @@ export const projectsRouter = router({
         productDefinitionSnapshotId = null;
       }
 
+      const nextPmUserId = input.pmUserId ?? null;
+      const nextStartDate = input.startDate ?? null;
+      const nextTargetDate = input.targetDate ?? null;
+      const pmChanged = nextPmUserId !== (existing.pmUserId ?? null);
+      const meetingRelevantChanged =
+        pmChanged ||
+        nextStartDate !== (existing.startDate ?? null) ||
+        nextTargetDate !== (existing.targetDate ?? null);
+      const meetingConfig = getStoredMeetingConfig(existing);
+
+      if (pmChanged && existing.dingtalkEventId) {
+        try { await cancelAndRecordProjectMeeting(existing); }
+        catch (e) { console.warn("[meeting] cancel old pm event failed (non-fatal):", e); }
+      }
+
       await updateProject(input.id, {
         name: input.name,
         projectNumber: input.projectNumber,
         category: input.category,
-        pmUserId: input.pmUserId ?? null,
+        pmUserId: nextPmUserId,
         productId: input.productId ?? null,
         productDefinitionSnapshotId,
         description: input.description ?? null,
@@ -528,8 +539,9 @@ export const projectsRouter = router({
         value: input.value ?? null,
         currentPhase: input.currentPhase,
         progress: input.progress,
-        startDate: input.startDate ?? null,
-        targetDate: input.targetDate ?? null,
+        startDate: nextStartDate,
+        targetDate: nextTargetDate,
+        ...(pmChanged ? { dingtalkEventId: null } : {}),
         ...(riskOverrideTouched ? {
           riskOverrideRisk: nextRiskOverrideRisk,
           riskOverrideReason: nextRiskOverrideRisk ? nextRiskOverrideReason : null,
@@ -542,6 +554,12 @@ export const projectsRouter = router({
       if (input.pmUserId && input.pmUserId !== existing.pmUserId && input.pmUserId !== existing.createdBy) {
         try { await ensureProjectMember(input.id, input.pmUserId, "pm", ctx.user.id); }
         catch (e) { console.warn("[member] add pm on update failed (non-fatal):", e); }
+      }
+      if (meetingConfig?.enabled && meetingRelevantChanged) {
+        try {
+          const project = await getProjectById(input.id);
+          if (project) await syncAndRecordProjectMeeting({ project, config: meetingConfig });
+        } catch (e) { console.warn("[meeting] resync on project update failed (non-fatal):", e); }
       }
       await createActivityLog({
         projectId: input.id,
@@ -581,13 +599,27 @@ export const projectsRouter = router({
       if (input.currentPhase !== undefined) patch.currentPhase = input.currentPhase;
       if (input.pmUserId !== undefined) patch.pmUserId = input.pmUserId;
       if (input.productId !== undefined) patch.productId = input.productId;
+      const pmChanged = input.pmUserId !== undefined && input.pmUserId !== (existing.pmUserId ?? null);
+      const meetingConfig = getStoredMeetingConfig(existing);
+      if (pmChanged) patch.dingtalkEventId = null;
       if (Object.keys(patch).length === 0) return { success: true };
+
+      if (pmChanged && existing.dingtalkEventId) {
+        try { await cancelAndRecordProjectMeeting(existing); }
+        catch (e) { console.warn("[meeting] cancel old pm event on move failed (non-fatal):", e); }
+      }
 
       await updateProject(input.id, patch);
 
       if (input.pmUserId != null && input.pmUserId !== existing.pmUserId && input.pmUserId !== existing.createdBy) {
         try { await ensureProjectMember(input.id, input.pmUserId, "pm", ctx.user.id); }
         catch (e) { console.warn("[move] add pm failed (non-fatal):", e); }
+      }
+      if (pmChanged && meetingConfig?.enabled) {
+        try {
+          const project = await getProjectById(input.id);
+          if (project) await syncAndRecordProjectMeeting({ project, config: meetingConfig });
+        } catch (e) { console.warn("[meeting] resync on project move failed (non-fatal):", e); }
       }
 
       await createActivityLog({
@@ -764,9 +796,25 @@ export const projectsRouter = router({
         }
       }
       let result: Awaited<ReturnType<typeof deleteProject>>;
+      let dingtalkGroupDeleted = false;
       try {
+        if (existing.dingtalkEventId) {
+          try { await cancelAndRecordProjectMeeting(existing); }
+          catch (e) { console.warn("[meeting] cancel before project delete failed (non-fatal):", e); }
+        }
+        if (existing.dingtalkChatId) {
+          const groupResult = await disbandGroupChat(existing.dingtalkChatId);
+          if (!groupResult.ok) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: groupResult.error,
+            });
+          }
+          dingtalkGroupDeleted = true;
+        }
         result = await deleteProject(input.id);
       } catch (error) {
+        if (error instanceof TRPCError) throw error;
         if (error instanceof Error && /released project/i.test(error.message)) {
           throw new TRPCError({
             code: "BAD_REQUEST",
@@ -784,6 +832,11 @@ export const projectsRouter = router({
         }
       }));
 
-      return { success: true, projectName: existing.name, deletedFiles: result.storageKeys.length };
+      return {
+        success: true,
+        projectName: existing.name,
+        deletedFiles: result.storageKeys.length,
+        dingtalkGroupDeleted,
+      };
     }),
 });

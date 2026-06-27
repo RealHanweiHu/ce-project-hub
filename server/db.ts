@@ -20,6 +20,8 @@ import {
   productDefinitionChanges, ProductDefinitionChange, InsertProductDefinitionChange,
   productRevisions, InsertProductRevision, ProductRevision,
   mpReleases, InsertMpRelease,
+  dingtalkApprovalConfigs, DingtalkApprovalConfig, InsertDingtalkApprovalConfig,
+  externalApprovalInstances, ExternalApprovalInstance, InsertExternalApprovalInstance,
   customerVariants, CustomerVariant, InsertCustomerVariant,
   bomItems, BomItem, InsertBomItem,
   comments, Comment,
@@ -369,6 +371,208 @@ export async function updateProjectDingtalkEvent(projectId: string, dingtalkEven
   const db = await getDb();
   if (!db) return;
   await db.update(projects).set({ dingtalkEventId }).where(eq(projects.id, projectId));
+}
+
+export type ProjectDingtalkMeetingSyncStatus =
+  | "not_synced"
+  | "pending"
+  | "synced"
+  | "group_fallback"
+  | "failed"
+  | "canceled";
+
+/** 记录项目周会在钉钉侧的同步状态，供 UI 和后续重试/取消判断使用 */
+export async function updateProjectDingtalkMeetingSync(
+  projectId: string,
+  patch: {
+    dingtalkEventId?: string | null;
+    status?: ProjectDingtalkMeetingSyncStatus;
+    lastError?: string | null;
+    lastSyncedAt?: Date | null;
+  },
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const updateSet: Partial<InsertProject> = {};
+  if (patch.dingtalkEventId !== undefined) updateSet.dingtalkEventId = patch.dingtalkEventId;
+  if (patch.status !== undefined) updateSet.dingtalkMeetingSyncStatus = patch.status;
+  if (patch.lastError !== undefined) updateSet.dingtalkMeetingLastError = patch.lastError;
+  if (patch.lastSyncedAt !== undefined) updateSet.dingtalkMeetingLastSyncedAt = patch.lastSyncedAt;
+  if (Object.keys(updateSet).length === 0) return;
+  await db.update(projects).set(updateSet).where(eq(projects.id, projectId));
+}
+
+export const EXTERNAL_APPROVAL_STATUSES = [
+  "pending",
+  "approved",
+  "rejected",
+  "terminated",
+  "sync_failed",
+  "business_blocked",
+] as const;
+export type ExternalApprovalStatus = (typeof EXTERNAL_APPROVAL_STATUSES)[number];
+
+export async function listApprovalConfigs(): Promise<DingtalkApprovalConfig[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(dingtalkApprovalConfigs).orderBy(dingtalkApprovalConfigs.businessType);
+}
+
+export async function getApprovalConfig(businessType: string): Promise<DingtalkApprovalConfig | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const [row] = await db
+    .select()
+    .from(dingtalkApprovalConfigs)
+    .where(eq(dingtalkApprovalConfigs.businessType, businessType))
+    .limit(1);
+  return row;
+}
+
+export async function upsertApprovalConfig(input: {
+  businessType: string;
+  processCode: string | null;
+  enabled: boolean;
+  defaultDeptId?: number | null;
+}): Promise<DingtalkApprovalConfig> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const existing = await getApprovalConfig(input.businessType);
+  const values: InsertDingtalkApprovalConfig = {
+    businessType: input.businessType,
+    processCode: input.processCode?.trim() || null,
+    enabled: input.enabled,
+    defaultDeptId: input.defaultDeptId ?? null,
+  };
+  if (existing) {
+    const [row] = await db
+      .update(dingtalkApprovalConfigs)
+      .set(values)
+      .where(eq(dingtalkApprovalConfigs.businessType, input.businessType))
+      .returning();
+    return row;
+  }
+  const [row] = await db.insert(dingtalkApprovalConfigs).values(values).returning();
+  return row;
+}
+
+export async function getPendingExternalApproval(input: {
+  businessType: string;
+  entityType: string;
+  entityId: string;
+}): Promise<ExternalApprovalInstance | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const [row] = await db
+    .select()
+    .from(externalApprovalInstances)
+    .where(and(
+      eq(externalApprovalInstances.businessType, input.businessType),
+      eq(externalApprovalInstances.entityType, input.entityType),
+      eq(externalApprovalInstances.entityId, input.entityId),
+      eq(externalApprovalInstances.status, "pending"),
+    ))
+    .limit(1);
+  return row;
+}
+
+export async function createExternalApprovalInstance(input: {
+  provider?: string;
+  businessType: string;
+  entityType: string;
+  entityId: string;
+  projectId?: string | null;
+  processCode?: string | null;
+  processInstanceId?: string | null;
+  status?: ExternalApprovalStatus;
+  title?: string | null;
+  submittedBy: number;
+  originatorUserId?: number | null;
+  dingtalkOriginatorUserId?: string | null;
+  formSnapshot?: Record<string, unknown>;
+  requestSnapshot?: Record<string, unknown>;
+  responseSnapshot?: Record<string, unknown>;
+  lastError?: string | null;
+}): Promise<ExternalApprovalInstance> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const pending = await getPendingExternalApproval(input);
+  if (pending) throw new Error("该业务对象已有待处理的外部审批");
+  const [row] = await db.insert(externalApprovalInstances).values({
+    provider: input.provider ?? "dingtalk",
+    businessType: input.businessType,
+    entityType: input.entityType,
+    entityId: input.entityId,
+    projectId: input.projectId ?? null,
+    processCode: input.processCode ?? null,
+    processInstanceId: input.processInstanceId ?? null,
+    status: input.status ?? "pending",
+    title: input.title ?? null,
+    submittedBy: input.submittedBy,
+    originatorUserId: input.originatorUserId ?? null,
+    dingtalkOriginatorUserId: input.dingtalkOriginatorUserId ?? null,
+    formSnapshot: input.formSnapshot ?? {},
+    requestSnapshot: input.requestSnapshot ?? {},
+    responseSnapshot: input.responseSnapshot ?? {},
+    lastError: input.lastError ?? null,
+  }).returning();
+  return row;
+}
+
+export async function updateExternalApprovalInstance(
+  id: number,
+  patch: Partial<Pick<InsertExternalApprovalInstance,
+    | "processInstanceId"
+    | "status"
+    | "responseSnapshot"
+    | "requestSnapshot"
+    | "lastError"
+    | "approvedAt"
+    | "rejectedAt"
+    | "terminatedAt"
+    | "syncedAt"
+  >>,
+): Promise<ExternalApprovalInstance | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const [row] = await db
+    .update(externalApprovalInstances)
+    .set(patch)
+    .where(eq(externalApprovalInstances.id, id))
+    .returning();
+  return row;
+}
+
+export async function getExternalApprovalByProcessInstanceId(
+  processInstanceId: string,
+): Promise<ExternalApprovalInstance | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const [row] = await db
+    .select()
+    .from(externalApprovalInstances)
+    .where(eq(externalApprovalInstances.processInstanceId, processInstanceId))
+    .limit(1);
+  return row;
+}
+
+export async function listExternalApprovalsForEntity(input: {
+  businessType?: string;
+  entityType: string;
+  entityId: string;
+}): Promise<ExternalApprovalInstance[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const conditions = [
+    eq(externalApprovalInstances.entityType, input.entityType),
+    eq(externalApprovalInstances.entityId, input.entityId),
+  ];
+  if (input.businessType) conditions.push(eq(externalApprovalInstances.businessType, input.businessType));
+  return db
+    .select()
+    .from(externalApprovalInstances)
+    .where(and(...conditions))
+    .orderBy(desc(externalApprovalInstances.createdAt));
 }
 
 type DeleteProjectResult = { storageKeys: string[] };
@@ -3263,6 +3467,7 @@ export async function releaseProject(input: {
   actor: { id: number; role: string };
   notes?: string;
   override?: { overrideReason: string; followUpOwner: number; dueDate: string };
+  externalApprovalInstanceId?: number | null;
 }): Promise<{ revisionId: number; revisionLabel: string }> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -3347,6 +3552,7 @@ export async function releaseProject(input: {
 
     await tx.insert(mpReleases).values({
       productId, revisionId: rev.id, projectId: input.projectId,
+      externalApprovalInstanceId: input.externalApprovalInstanceId ?? null,
       snapshotBom: frozenBom as unknown[],
       snapshotChangelog: snapshotChangelog as unknown[],
       openIssues: open as unknown[], notes: input.notes ?? null,

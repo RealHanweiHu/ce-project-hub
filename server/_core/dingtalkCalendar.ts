@@ -117,16 +117,28 @@ export async function upsertSingleMeeting(params: {
   return upsertCalendarEvent(params);
 }
 
-export async function cancelMeeting(organizerUserId: string, eventId: string): Promise<void> {
-  if (!isDingtalkConfigured()) return;
+export async function cancelMeeting(organizerUserId: string, eventId: string): Promise<boolean> {
+  if (!isDingtalkConfigured()) return false;
   try {
     const token = await getAccessToken();
-    if (!token) return;
-    await fetch(`${CAL_BASE}/${encodeURIComponent(organizerUserId)}/calendars/primary/events/${encodeURIComponent(eventId)}`, {
+    if (!token) return false;
+    const resp = await fetch(`${CAL_BASE}/${encodeURIComponent(organizerUserId)}/calendars/primary/events/${encodeURIComponent(eventId)}`, {
       method: "DELETE",
       headers: { "x-acs-dingtalk-access-token": token },
     });
+    if (!resp.ok) return false;
+    const text = await resp.text().catch(() => "");
+    if (!text) return true;
+    try {
+      const data = JSON.parse(text) as { errcode?: number; code?: string | number };
+      if (data.errcode && data.errcode !== 0) return false;
+      if (data.code && String(data.code) !== "0") return false;
+    } catch {
+      // Some successful DingTalk delete responses are empty/plain text.
+    }
+    return true;
   } catch (e) {
     console.warn("[dingtalk] cancel event failed (non-fatal):", e);
+    return false;
   }
 }

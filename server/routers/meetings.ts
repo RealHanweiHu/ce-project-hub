@@ -2,15 +2,14 @@ import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import {
   getProjectById, getMeetingParticipants,
-  updateProjectMeetingConfig, setUserDingtalkId, updateProjectDingtalkEvent,
+  updateProjectMeetingConfig, setUserDingtalkId,
   createProjectCalendarEvent, updateProjectCalendarEventSync, createActivityLog,
 } from "../db";
 import { resolveDingtalkUserId } from "../_core/dingtalk";
-import { buildSingleEvent, upsertSingleMeeting, upsertWeeklyMeeting } from "../_core/dingtalkCalendar";
-import { syncProjectMeeting } from "../_core/meetingSync";
-import { pushWebhook } from "../_core/notify";
+import { buildSingleEvent, upsertSingleMeeting } from "../_core/dingtalkCalendar";
 import { sendToGroupChat } from "../_core/dingtalkGroup";
 import { assertProjectAccess, assertProjectPermission } from "../project-access";
+import { syncAndRecordProjectMeeting } from "../services/project-meeting-lifecycle";
 
 const cfgSchema = z.object({
   enabled: z.boolean(),
@@ -35,7 +34,13 @@ export const meetingsRouter = router({
     .input(z.object({ projectId: z.string() }))
     .query(async ({ ctx, input }) => {
       const { project } = await assertProjectAccess(input.projectId, ctx.user);
-      return (project as { meetingConfig?: unknown }).meetingConfig ?? null;
+      return {
+        config: (project as { meetingConfig?: unknown }).meetingConfig ?? null,
+        syncStatus: (project as { dingtalkMeetingSyncStatus?: string | null }).dingtalkMeetingSyncStatus ?? "not_synced",
+        lastError: (project as { dingtalkMeetingLastError?: string | null }).dingtalkMeetingLastError ?? null,
+        lastSyncedAt: (project as { dingtalkMeetingLastSyncedAt?: Date | null }).dingtalkMeetingLastSyncedAt ?? null,
+        eventId: (project as { dingtalkEventId?: string | null }).dingtalkEventId ?? null,
+      };
     }),
 
   setConfig: protectedProcedure
@@ -44,24 +49,12 @@ export const meetingsRouter = router({
       await assertProjectPermission(input.projectId, ctx.user, "canEditProjectInfo", "没有编辑周会配置的权限");
       await updateProjectMeetingConfig(input.projectId, input.config);
       const project = await getProjectById(input.projectId);
-      const members = await getMeetingParticipants(input.projectId, project?.pmUserId ?? null);
-      await syncProjectMeeting({
-        project: project as never,
+      if (!project) return { success: true, syncStatus: "failed" } as const;
+      const syncResult = await syncAndRecordProjectMeeting({
+        project,
         config: input.config,
-        members,
-        todayISO: new Date().toISOString().slice(0, 10),
-        deps: {
-          resolveUserId: (u) => resolveDingtalkUserId(u, setUserDingtalkId),
-          upsert: upsertWeeklyMeeting,
-          saveEventId: updateProjectDingtalkEvent,
-          // 有项目专属钉钉群 → 周会通知发到本项目群,否则回退全局机器人
-          groupPush: (t) => {
-            const chatId = (project as { dingtalkChatId?: string | null } | undefined)?.dingtalkChatId;
-            return chatId ? sendToGroupChat(chatId, "项目周会", t).then(() => undefined) : pushWebhook(t, { title: "项目周会" });
-          },
-        },
       });
-      return { success: true } as const;
+      return { success: true, syncStatus: syncResult.mode, error: syncResult.error ?? null } as const;
     }),
 
   createEvent: protectedProcedure
@@ -114,12 +107,12 @@ export const meetingsRouter = router({
 
         if (syncStatus === "failed" && project.dingtalkChatId) {
           try {
-            await sendToGroupChat(
+            const sentToGroup = await sendToGroupChat(
               project.dingtalkChatId,
               "项目日程",
               `### 【${project.name}】${input.title}\n时间：${input.date} ${input.time}（${input.durationMin} 分钟）${input.description ? `\n\n${input.description}` : ""}`,
             );
-            syncStatus = "group_push";
+            if (sentToGroup) syncStatus = "group_push";
           } catch {
             // keep failed status
           }

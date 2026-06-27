@@ -179,6 +179,12 @@ export const projects = pgTable("projects", {
   meetingConfig: jsonb("meetingConfig").$type<{ enabled: boolean; weekday: number; time: string; durationMin: number; title: string } | null>(),
   /** 已建钉钉日程 id（用于改/删） */
   dingtalkEventId: varchar("dingtalkEventId", { length: 128 }),
+  /** 项目周会钉钉同步状态：not_synced/pending/synced/group_fallback/failed/canceled */
+  dingtalkMeetingSyncStatus: varchar("dingtalkMeetingSyncStatus", { length: 24 }).notNull().default("not_synced"),
+  /** 最近一次项目周会钉钉同步错误 */
+  dingtalkMeetingLastError: text("dingtalkMeetingLastError"),
+  /** 最近一次项目周会成功同步/取消时间 */
+  dingtalkMeetingLastSyncedAt: timestamp("dingtalkMeetingLastSyncedAt"),
   /** 项目专属钉钉群会话 id（建群后回填，项目提醒发到此群） */
   dingtalkChatId: varchar("dingtalkChatId", { length: 128 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -1208,6 +1214,8 @@ export const mpReleases = pgTable("mp_releases", {
   productId: varchar("productId", { length: 32 }).notNull(),
   revisionId: integer("revisionId").notNull(),
   projectId: varchar("projectId", { length: 32 }).notNull(),
+  /** 外部审批实例 id（如钉钉 MP Release 审批），用于追溯审批来源 */
+  externalApprovalInstanceId: integer("externalApprovalInstanceId"),
   /** 冻结的 BOM 快照（第四刀填充） */
   snapshotBom: jsonb("snapshotBom").$type<unknown[]>().default([]),
   /** 冻结的受控文档快照（第四刀填充） */
@@ -1238,6 +1246,62 @@ export const mpReleases = pgTable("mp_releases", {
 });
 export type MpRelease = typeof mpReleases.$inferSelect;
 export type InsertMpRelease = typeof mpReleases.$inferInsert;
+
+export const dingtalkApprovalConfigs = pgTable(
+  "dingtalk_approval_configs",
+  {
+    id: serial("id").primaryKey(),
+    /** 业务类型，如 mp_release / gate_override */
+    businessType: varchar("businessType", { length: 64 }).notNull(),
+    processCode: varchar("processCode", { length: 128 }),
+    enabled: boolean("enabled").notNull().default(false),
+    /** 钉钉审批发起需要部门 id；为空时后端按 -1 发起 */
+    defaultDeptId: integer("defaultDeptId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    uniqBusinessType: uniqueIndex("uniq_dingtalk_approval_config_business").on(table.businessType),
+  }),
+);
+export type DingtalkApprovalConfig = typeof dingtalkApprovalConfigs.$inferSelect;
+export type InsertDingtalkApprovalConfig = typeof dingtalkApprovalConfigs.$inferInsert;
+
+export const externalApprovalInstances = pgTable(
+  "external_approval_instances",
+  {
+    id: serial("id").primaryKey(),
+    provider: varchar("provider", { length: 32 }).notNull().default("dingtalk"),
+    businessType: varchar("businessType", { length: 64 }).notNull(),
+    entityType: varchar("entityType", { length: 64 }).notNull(),
+    entityId: varchar("entityId", { length: 128 }).notNull(),
+    projectId: varchar("projectId", { length: 32 }),
+    processCode: varchar("processCode", { length: 128 }),
+    processInstanceId: varchar("processInstanceId", { length: 128 }),
+    status: varchar("status", { length: 32 }).notNull().default("pending"),
+    title: varchar("title", { length: 256 }),
+    submittedBy: integer("submittedBy").notNull(),
+    originatorUserId: integer("originatorUserId"),
+    dingtalkOriginatorUserId: varchar("dingtalkOriginatorUserId", { length: 128 }),
+    formSnapshot: jsonb("formSnapshot").$type<Record<string, unknown>>().default({}),
+    requestSnapshot: jsonb("requestSnapshot").$type<Record<string, unknown>>().default({}),
+    responseSnapshot: jsonb("responseSnapshot").$type<Record<string, unknown>>().default({}),
+    lastError: text("lastError"),
+    approvedAt: timestamp("approvedAt"),
+    rejectedAt: timestamp("rejectedAt"),
+    terminatedAt: timestamp("terminatedAt"),
+    syncedAt: timestamp("syncedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    uniqProcessInstance: uniqueIndex("uniq_external_approval_process_instance").on(table.processInstanceId),
+    idxEntity: index("idx_external_approval_entity").on(table.businessType, table.entityType, table.entityId),
+    idxProject: index("idx_external_approval_project").on(table.projectId),
+  }),
+);
+export type ExternalApprovalInstance = typeof externalApprovalInstances.$inferSelect;
+export type InsertExternalApprovalInstance = typeof externalApprovalInstances.$inferInsert;
 
 /**
  * OEM 客户版本 / Customer Revision = 同一产品型号下，各客户相对 Product Revision 的差异登记。

@@ -17,6 +17,7 @@ describe("syncProjectMeeting", () => {
       },
     });
     expect(res.mode).toBe("group_push");
+    expect(res.error).toMatch(/无法解析 PM/);
     expect(pushed.length).toBe(1);
   });
 
@@ -32,6 +33,7 @@ describe("syncProjectMeeting", () => {
       },
     });
     expect(res.mode).toBe("dingtalk");
+    expect(res.eventId).toBe("evt-1");
     expect(savedEvent).toBe("evt-1");
   });
 
@@ -41,5 +43,19 @@ describe("syncProjectMeeting", () => {
       deps: { resolveUserId: async () => null, upsert: async () => null, saveEventId: async () => {}, groupPush: async () => {} },
     });
     expect(res.mode).toBe("skipped");
+  });
+
+  it("returns failed when fallback push is not sent", async () => {
+    const res = await syncProjectMeeting({
+      project: baseProject, config, todayISO: "2026-06-15", members: [{ id: 1, dingtalkUserId: null, mobile: null }],
+      deps: {
+        resolveUserId: async () => null,
+        upsert: async () => "should-not-be-called",
+        saveEventId: async () => {},
+        groupPush: async () => false,
+      },
+    });
+    expect(res.mode).toBe("failed");
+    expect(res.error).toMatch(/无法解析 PM/);
   });
 });

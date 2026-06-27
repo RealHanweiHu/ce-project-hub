@@ -31,4 +31,7 @@ export const ENV = {
   dingtalkCorpId: process.env.DINGTALK_CORP_ID ?? "",
   /** 企业内部应用 AgentId（发送工作通知必需） */
   dingtalkAgentId: process.env.DINGTALK_AGENT_ID ?? "",
+  /** 钉钉事件回调 token / EncodingAESKey（审批回调解密验签） */
+  dingtalkCallbackToken: process.env.DINGTALK_CALLBACK_TOKEN ?? "",
+  dingtalkCallbackAesKey: process.env.DINGTALK_CALLBACK_AES_KEY ?? "",
 };

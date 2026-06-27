@@ -711,7 +711,7 @@ export default function Home() {
 
   const handleDeleteProject = async (id: string) => {
     try {
-      await deleteMutation.mutateAsync({ id });
+      const result = await deleteMutation.mutateAsync({ id });
       queryClient.removeQueries({
         predicate: (query) => JSON.stringify(query.queryKey).includes(id),
       });
@@ -722,8 +722,10 @@ export default function Home() {
         setView('projects');
         syncWorkbenchUrl('projects', null, null, 'replace');
       }
-    } catch {
+      toast.success(result.dingtalkGroupDeleted ? '项目已删除，钉钉项目群已同步删除' : '项目已删除');
+    } catch (error) {
       setSaveStatus('error');
+      toast.error(error instanceof Error ? error.message : '删除项目失败，请确认钉钉项目群可正常删除后再试');
     }
   };
 

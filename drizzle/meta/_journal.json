@@ -232,6 +232,20 @@
       "when": 1782395388602,
       "tag": "0032_unique_silk_fever",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1782544724721,
+      "tag": "0033_charming_vulture",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1782545245540,
+      "tag": "0034_amazing_malice",
+      "breakpoints": true
     }
   ]
 }

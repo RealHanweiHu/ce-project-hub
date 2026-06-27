@@ -6,6 +6,7 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerStorageProxy } from "./storageProxy";
 import { registerFileUploadRoute } from "../routers/files";
 import { registerSetupRoute } from "../setup";
+import { registerDingtalkCallbackRoute } from "../dingtalk-callback";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic } from "./static";
@@ -51,6 +52,7 @@ async function startServer() {
   registerStorageProxy(app);
   registerFileUploadRoute(app);
   registerSetupRoute(app);
+  registerDingtalkCallbackRoute(app);
   // tRPC API
   app.use(
     "/api/trpc",

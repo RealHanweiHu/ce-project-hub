@@ -21,9 +21,18 @@ import {
 import {
   Accordion, AccordionItem, AccordionTrigger, AccordionContent,
 } from '@/components/ui/accordion';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
 import { toast } from 'sonner';
 import { LinearCard, PageHeader, SegToggle } from '@/components/linear/primitives';
 import { cn } from '@/lib/utils';
+import {
+  findBestMatchingProductCategory,
+  normalizeProductCategory,
+  tidyProductCategory,
+  uniqueProductCategories,
+} from '@shared/product-categories';
 
 type ProductRow = {
   id: string;
@@ -250,12 +259,132 @@ function splitList(value: string) {
   return value.split(/[,，\n]+/).map((item) => item.trim()).filter(Boolean);
 }
 
+function resolveExistingCategory(value: string, categories: string[]) {
+  const normalized = normalizeProductCategory(value);
+  if (!normalized) return null;
+  return categories.find((category) => normalizeProductCategory(category) === normalized) ?? null;
+}
+
 function customerIdFromName(name: string) {
   return name.trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, "-").replace(/^-|-$/g, "");
 }
 
 function productModelCode(product: ProductRow) {
   return product.productNumber?.trim() || product.name;
+}
+
+function ProductCategoryField({
+  value,
+  onChange,
+  categories,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  categories: string[];
+}) {
+  const hasCategories = categories.length > 0;
+  const cleanValue = tidyProductCategory(value);
+  const exactCategory = resolveExistingCategory(cleanValue, categories);
+  const [mode, setMode] = useState<'existing' | 'custom'>(hasCategories ? 'existing' : 'custom');
+
+  useEffect(() => {
+    if (!hasCategories) {
+      setMode('custom');
+      return;
+    }
+    if (cleanValue && !exactCategory) setMode('custom');
+  }, [cleanValue, exactCategory, hasCategories]);
+
+  const similarCategory = !exactCategory
+    ? findBestMatchingProductCategory(cleanValue, categories)
+    : null;
+  const similarCategoryName = similarCategory
+    && normalizeProductCategory(similarCategory.category) !== normalizeProductCategory(cleanValue)
+    ? similarCategory.category
+    : null;
+
+  return (
+    <div className="space-y-2">
+      {hasCategories && (
+        <div className="flex overflow-hidden rounded-[7px] border border-border">
+          <button
+            type="button"
+            onClick={() => setMode('existing')}
+            className={cn(
+              'flex-1 py-2 text-xs',
+              mode === 'existing' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground',
+            )}
+          >
+            选择已有
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('custom')}
+            className={cn(
+              'flex-1 py-2 text-xs',
+              mode === 'custom' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground',
+            )}
+          >
+            新增品类
+          </button>
+        </div>
+      )}
+
+      {mode === 'existing' && hasCategories ? (
+        <Select value={exactCategory ?? undefined} onValueChange={onChange}>
+          <SelectTrigger className="h-9 w-full bg-white">
+            <SelectValue placeholder="选择已有品类" />
+          </SelectTrigger>
+          <SelectContent>
+            {categories.map((category) => (
+              <SelectItem key={category} value={category}>{category}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ) : (
+        <div className="space-y-2">
+          <Input
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            onBlur={() => onChange(tidyProductCategory(value))}
+            placeholder={hasCategories ? '输入新产品线名称' : '充气泵 / 风扇 …'}
+          />
+          {similarCategoryName && (
+            <div className="flex items-center justify-between gap-2 rounded-[7px] border border-[color:var(--acc-border)] bg-[color:var(--acc-soft)] px-3 py-2 text-[12px] text-primary">
+              <span>可能已存在：{similarCategoryName}</span>
+              <button
+                type="button"
+                onClick={() => {
+                  onChange(similarCategoryName);
+                  setMode('existing');
+                }}
+                className="shrink-0 font-semibold hover:underline"
+              >
+                使用此品类
+              </button>
+            </div>
+          )}
+          {hasCategories && (
+            <div className="flex flex-wrap gap-1.5">
+              {categories.slice(0, 6).map((category) => (
+                <button
+                  key={category}
+                  type="button"
+                  onClick={() => {
+                    onChange(category);
+                    setMode('existing');
+                  }}
+                  className="rounded-[6px] border border-border bg-secondary px-2 py-1 text-[11px] text-muted-foreground hover:border-[color:var(--acc-border)] hover:text-primary"
+                >
+                  {category}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function formatMainRevisionLabel(product: ProductRow, revisionLabel: string) {
@@ -363,6 +492,11 @@ export function ProductLibraryView() {
     return Array.from(set);
   }, [products]);
 
+  const productCategoryOptions = useMemo(
+    () => uniqueProductCategories((products as ProductRow[]).map((p) => p.category)),
+    [products],
+  );
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return (products as ProductRow[]).filter((p) => {
@@ -378,11 +512,15 @@ export function ProductLibraryView() {
 
   const handleCreate = () => {
     if (!name.trim()) { toast.error('请输入产品名称'); return; }
+    const cleanCategory = tidyProductCategory(category);
+    const matchingCategory = findBestMatchingProductCategory(cleanCategory, productCategoryOptions)?.category;
+    const categoryToSave = matchingCategory ?? cleanCategory;
+    if (!categoryToSave) { toast.error('请选择或新增品类'); return; }
     createMutation.mutate({
       name: name.trim(),
       productNumber: productNumber.trim(),
       type,
-      category: category.trim(),
+      category: categoryToSave,
       targetMarkets: markets.split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean),
     });
   };
@@ -545,8 +683,12 @@ export function ProductLibraryView() {
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label className="text-sm text-foreground">品类</Label>
-              <Input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="充气泵 / 风扇 …" />
+              <Label className="text-sm text-foreground">品类 <span className="text-[color:var(--destructive)]">*</span></Label>
+              <ProductCategoryField
+                value={category}
+                onChange={setCategory}
+                categories={productCategoryOptions}
+              />
             </div>
             <div className="space-y-1.5">
               <Label className="text-sm text-foreground">目标市场</Label>
@@ -1456,4 +1598,3 @@ function SpecRows({
     </div>
   );
 }
-

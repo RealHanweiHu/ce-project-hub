@@ -15,16 +15,21 @@ export function isDingtalkConfigured(): boolean {
 export async function getAccessToken(now = Date.now()): Promise<string | null> {
   if (!isDingtalkConfigured()) return null;
   if (tokenCache && tokenCache.expiresAt - 5 * 60_000 > now) return tokenCache.token;
-  const resp = await fetch("https://api.dingtalk.com/v1.0/oauth2/accessToken", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ appKey: cfg.appKey, appSecret: cfg.appSecret }),
-  });
-  if (!resp.ok) { console.warn("[dingtalk] token http", resp.status); return null; }
-  const j = (await resp.json()) as { accessToken?: string; expireIn?: number };
-  if (!j.accessToken) return null;
-  tokenCache = { token: j.accessToken, expiresAt: now + (j.expireIn ?? 7200) * 1000 };
-  return tokenCache.token;
+  try {
+    const resp = await fetch("https://api.dingtalk.com/v1.0/oauth2/accessToken", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ appKey: cfg.appKey, appSecret: cfg.appSecret }),
+    });
+    if (!resp.ok) { console.warn("[dingtalk] token http", resp.status); return null; }
+    const j = (await resp.json()) as { accessToken?: string; expireIn?: number };
+    if (!j.accessToken) return null;
+    tokenCache = { token: j.accessToken, expiresAt: now + (j.expireIn ?? 7200) * 1000 };
+    return tokenCache.token;
+  } catch (e) {
+    console.warn("[dingtalk] token failed (degrade):", e);
+    return null;
+  }
 }
 
 type MappableUser = { id: number; dingtalkUserId?: string | null; dingtalkCorpUserId?: string | null; mobile?: string | null };
@@ -38,17 +43,22 @@ export async function resolveDingtalkCorpUserId(
   if (!user.mobile) return null;
   const token = await getAccessToken();
   if (!token) return null;
-  const resp = await fetch(`https://oapi.dingtalk.com/topapi/v2/user/getbymobile?access_token=${encodeURIComponent(token)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mobile: user.mobile }),
-  });
-  if (!resp.ok) return null;
-  const j = (await resp.json()) as { errcode?: number; result?: { userid?: string } };
-  const userid = j.result?.userid;
-  if (j.errcode !== 0 || !userid) return null;
-  await cacheBack(user.id, userid);
-  return userid;
+  try {
+    const resp = await fetch(`https://oapi.dingtalk.com/topapi/v2/user/getbymobile?access_token=${encodeURIComponent(token)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mobile: user.mobile }),
+    });
+    if (!resp.ok) return null;
+    const j = (await resp.json()) as { errcode?: number; result?: { userid?: string } };
+    const userid = j.result?.userid;
+    if (j.errcode !== 0 || !userid) return null;
+    await cacheBack(user.id, userid);
+    return userid;
+  } catch (e) {
+    console.warn("[dingtalk] resolve corp userid failed (degrade):", e);
+    return null;
+  }
 }
 
 /**
@@ -65,28 +75,33 @@ export async function resolveDingtalkUserId(
   const token = await getAccessToken();
   if (!token) return null;
 
-  // 1) 手机号 → 通讯录 userid
-  const mResp = await fetch(`https://oapi.dingtalk.com/topapi/v2/user/getbymobile?access_token=${encodeURIComponent(token)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mobile: user.mobile }),
-  });
-  if (!mResp.ok) return null;
-  const mj = (await mResp.json()) as { errcode?: number; result?: { userid?: string } };
-  const userid = mj.result?.userid;
-  if (mj.errcode !== 0 || !userid) return null;
+  try {
+    // 1) 手机号 → 通讯录 userid
+    const mResp = await fetch(`https://oapi.dingtalk.com/topapi/v2/user/getbymobile?access_token=${encodeURIComponent(token)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mobile: user.mobile }),
+    });
+    if (!mResp.ok) return null;
+    const mj = (await mResp.json()) as { errcode?: number; result?: { userid?: string } };
+    const userid = mj.result?.userid;
+    if (mj.errcode !== 0 || !userid) return null;
 
-  // 2) userid → unionId
-  const gResp = await fetch(`https://oapi.dingtalk.com/topapi/v2/user/get?access_token=${encodeURIComponent(token)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ userid }),
-  });
-  if (!gResp.ok) return null;
-  const gj = (await gResp.json()) as { errcode?: number; result?: { unionid?: string } };
-  const unionid = gj.result?.unionid;
-  if (gj.errcode !== 0 || !unionid) return null;
+    // 2) userid → unionId
+    const gResp = await fetch(`https://oapi.dingtalk.com/topapi/v2/user/get?access_token=${encodeURIComponent(token)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userid }),
+    });
+    if (!gResp.ok) return null;
+    const gj = (await gResp.json()) as { errcode?: number; result?: { unionid?: string } };
+    const unionid = gj.result?.unionid;
+    if (gj.errcode !== 0 || !unionid) return null;
 
-  await cacheBack(user.id, unionid);
-  return unionid;
+    await cacheBack(user.id, unionid);
+    return unionid;
+  } catch (e) {
+    console.warn("[dingtalk] resolve user unionid failed (degrade):", e);
+    return null;
+  }
 }

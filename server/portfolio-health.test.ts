@@ -5,14 +5,23 @@ import {
 } from "./db";
 import { projects, projectTasks, automationRuns, calendarExceptions, projectRisks } from "../drizzle/schema";
 import { and, eq } from "drizzle-orm";
+import { addDays, addWorkingDays } from "../shared/scheduling";
 
 const PROJ = `pf-health-${Date.now()}`;
 const TODAY = "2026-06-16";
 
+function todayInShanghaiISO() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(new Date());
+}
+
 // 用同源测试专用的项目/假日，避免污染上面的聚合断言
 const CAL_PROJ = `pf-cal-${Date.now()}`;
-const CAL_HOLIDAY = "2026-06-25"; // 落在某未完成任务工期内
-const CAL_TODAY = "2026-06-16";
+const CAL_TODAY = todayInShanghaiISO();
+const CAL_C3_START = addWorkingDays(CAL_TODAY, 0);
+const CAL_HOLIDAY = addWorkingDays(CAL_C3_START, 1); // 落在某未完成任务工期内
+const CAL_C3_DUE = addWorkingDays(CAL_C3_START, 4);
 const SKIP_PROJ = `pf-skip-${Date.now()}`;
 const RISK_PROJ = `pf-risk-${Date.now()}`;
 
@@ -28,7 +37,10 @@ afterAll(async () => {
   await db.delete(projects).where(eq(projects.id, CAL_PROJ));
   await db.delete(projects).where(eq(projects.id, SKIP_PROJ));
   await db.delete(projects).where(eq(projects.id, RISK_PROJ));
-  await db.delete(calendarExceptions).where(eq(calendarExceptions.date, CAL_HOLIDAY));
+  await db.delete(calendarExceptions).where(and(
+    eq(calendarExceptions.date, CAL_HOLIDAY),
+    eq(calendarExceptions.name, "测试假日"),
+  ));
 });
 
 describe("getPortfolioHealthForDigest", () => {
@@ -67,9 +79,7 @@ describe("getPortfolioHealthForDigest", () => {
 
     // getPortfolio 用真实时钟（Asia/Shanghai），digest 取显式 todayISO；
     // 要可比，digest 必须传同一个 today。
-    const todayISO = new Intl.DateTimeFormat("en-CA", {
-      timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit",
-    }).format(new Date());
+    const todayISO = CAL_TODAY;
 
     await db.insert(projects).values({
       id: CAL_PROJ, name: "同源日历测试", projectNumber: CAL_PROJ, category: "npd",
@@ -80,12 +90,12 @@ describe("getPortfolioHealthForDigest", () => {
       date: CAL_HOLIDAY, type: "holiday", name: "测试假日", createdBy: 1,
     }).onConflictDoNothing();
 
-    await upsertProjectTask(CAL_PROJ, "concept", "c1", { dueDate: "2026-06-10", status: "done" });
-    await upsertProjectTask(CAL_PROJ, "concept", "c2", { dueDate: "2026-06-20", status: "in_progress" });
-    await upsertProjectTask(CAL_PROJ, "concept", "c3", { dueDate: "2026-06-30", status: "in_progress" });
+    await upsertProjectTask(CAL_PROJ, "concept", "c1", { dueDate: addDays(CAL_TODAY, -4), status: "done" });
+    await upsertProjectTask(CAL_PROJ, "concept", "c2", { dueDate: addDays(CAL_TODAY, -2), status: "done" });
+    await upsertProjectTask(CAL_PROJ, "concept", "c3", { dueDate: CAL_C3_DUE, status: "in_progress" });
     // c3 起始日单独写库（upsertProjectTask 的 patch 不含 startDate），让预测工期跨越假日
     await db.update(projectTasks)
-      .set({ startDate: "2026-06-23" })
+      .set({ startDate: CAL_C3_START })
       .where(and(eq(projectTasks.projectId, CAL_PROJ), eq(projectTasks.taskId, "c3")));
 
     // 含假日：两路必须同源、projectedEnd 一致

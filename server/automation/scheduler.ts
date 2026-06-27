@@ -1,5 +1,7 @@
 import { ENV } from "../_core/env";
 import {
+  createAutomationRun,
+  getAllActiveProjects,
   getAutomationCriticalIssues,
   getAutomationDueIssues,
   getAutomationDueTasks,
@@ -7,7 +9,10 @@ import {
   getApproachingGates,
   getBlockedTasks,
   getGateReadiness,
+  hasAutomationRunForEntity,
 } from "../db";
+import { pushWebhook } from "../_core/notify";
+import { sendToGroupChat } from "../_core/dingtalkGroup";
 import { taskDisplayTitle } from "../task-title";
 import { runAutomation } from "./engine";
 import { runHealthDigestScan } from "./healthDigest";
@@ -135,6 +140,12 @@ export async function runScheduledAutomationScan(now = new Date()): Promise<void
   } catch (error) {
     console.warn("[automation] health digest failed (non-fatal):", error);
   }
+
+  try {
+    await runWeeklyMeetingFallbackScan(now);
+  } catch (error) {
+    console.warn("[automation] weekly meeting fallback failed (non-fatal):", error);
+  }
 }
 
 export function startAutomationScheduler(): void {
@@ -171,4 +182,74 @@ function ageDays(todayISO: string, startISO: string): number {
   const start = new Date(`${startISO.slice(0, 10)}T00:00:00Z`);
   if (Number.isNaN(today.getTime()) || Number.isNaN(start.getTime())) return 0;
   return Math.max(0, Math.floor((today.getTime() - start.getTime()) / 86_400_000));
+}
+
+type MeetingConfig = { enabled: boolean; weekday: number; time: string; durationMin: number; title: string };
+
+function getMeetingConfig(value: unknown): MeetingConfig | null {
+  if (!value || typeof value !== "object") return null;
+  const cfg = value as Partial<MeetingConfig>;
+  if (!cfg.enabled || typeof cfg.weekday !== "number" || typeof cfg.time !== "string") return null;
+  return cfg as MeetingConfig;
+}
+
+function shanghaiWeekday(now: Date): number {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Shanghai", weekday: "short" }).format(now);
+  return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(parts);
+}
+
+function weekKey(now: Date): string {
+  const today = new Date(`${toShanghaiISODate(now)}T00:00:00Z`);
+  const day = today.getUTCDay();
+  const mondayOffset = day === 0 ? -6 : 1 - day;
+  today.setUTCDate(today.getUTCDate() + mondayOffset);
+  return today.toISOString().slice(0, 10);
+}
+
+async function runWeeklyMeetingFallbackScan(now: Date): Promise<void> {
+  const todayWeekday = shanghaiWeekday(now);
+  if (todayWeekday < 0) return;
+  const projects = await getAllActiveProjects();
+  for (const project of projects) {
+    const config = getMeetingConfig(project.meetingConfig);
+    if (!config?.enabled) continue;
+    if (config.weekday !== todayWeekday) continue;
+    if (project.dingtalkMeetingSyncStatus === "synced") continue;
+
+    const entityId = `${project.id}:${weekKey(now)}`;
+    const ruleKey = "weekly_meeting_reminder";
+    if (await hasAutomationRunForEntity({ ruleKey, entityId })) continue;
+
+    const title = "项目周会提醒";
+    const text = `【${project.name}】项目周会：今天 ${config.time}（${config.durationMin} 分钟）`;
+    const markdown = `### ${title}\n${text}`;
+    try {
+      let sentToProjectGroup = false;
+      if (project.dingtalkChatId) {
+        sentToProjectGroup = await sendToGroupChat(project.dingtalkChatId, title, markdown);
+      }
+      if (!sentToProjectGroup) await pushWebhook(text, { title, markdown });
+      await createAutomationRun({
+        ruleKey,
+        projectId: project.id,
+        eventType: "scheduled",
+        entityType: "task",
+        entityId,
+        status: "fired",
+        recipients: { group: project.dingtalkChatId ?? "webhook" },
+        detail: text,
+      });
+    } catch (error) {
+      await createAutomationRun({
+        ruleKey,
+        projectId: project.id,
+        eventType: "scheduled",
+        entityType: "task",
+        entityId,
+        status: "error",
+        recipients: [],
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 }

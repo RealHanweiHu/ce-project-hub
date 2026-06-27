@@ -170,7 +170,7 @@ export const appRouter = router({
           email: input.email ?? null,
           mobile: input.mobile?.trim() || null,
           role: input.role,
-          canCreateProject: input.canCreateProject,
+          canCreateProject: input.role === 'admin' || input.canCreateProject,
         });
         return { success: true } as const;
       }),
@@ -236,7 +236,12 @@ export const appRouter = router({
         const mobile = input.mobile && input.mobile.length > 0 ? input.mobile : null;
         const database = await getDb();
         if (!database) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });
-        await database.update(users).set({ name: input.name, mobile }).where(eq(users.id, user.id));
+        const mobileChanged = (user.mobile ?? null) !== mobile;
+        await database.update(users).set({
+          name: input.name,
+          mobile,
+          ...(mobileChanged ? { dingtalkUserId: null, dingtalkCorpUserId: null } : {}),
+        }).where(eq(users.id, user.id));
         return { success: true, name: input.name, mobile } as const;
       }),
   }),

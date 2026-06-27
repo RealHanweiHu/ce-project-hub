@@ -25,13 +25,31 @@ afterAll(async () => {
 
 describe("auth.updateProfile", () => {
   it("改自己 name + mobile 落库", async () => {
+    const db = await getDb();
+    await db!.update(users)
+      .set({ dingtalkUserId: "old-union", dingtalkCorpUserId: "old-corp" })
+      .where(eq(users.id, userId));
     const caller = appRouter.createCaller(ctx(OPENID));
     const r = await caller.auth.updateProfile({ name: "新名字", mobile: "13800000000" });
     expect(r.success).toBe(true);
-    const db = await getDb();
     const [row] = await db!.select().from(users).where(eq(users.id, userId));
     expect(row.name).toBe("新名字");
     expect(row.mobile).toBe("13800000000");
+    expect(row.dingtalkUserId).toBeNull();
+    expect(row.dingtalkCorpUserId).toBeNull();
+  });
+  it("仅改名字且手机号未变时保留钉钉缓存", async () => {
+    const db = await getDb();
+    await db!.update(users)
+      .set({ name: "旧名", mobile: "13900000000", dingtalkUserId: "keep-union", dingtalkCorpUserId: "keep-corp" })
+      .where(eq(users.id, userId));
+    const caller = appRouter.createCaller(ctx(OPENID));
+    await caller.auth.updateProfile({ name: "只改名字", mobile: "13900000000" });
+    const [row] = await db!.select().from(users).where(eq(users.id, userId));
+    expect(row.name).toBe("只改名字");
+    expect(row.mobile).toBe("13900000000");
+    expect(row.dingtalkUserId).toBe("keep-union");
+    expect(row.dingtalkCorpUserId).toBe("keep-corp");
   });
   it("空 name 被拒", async () => {
     const caller = appRouter.createCaller(ctx(OPENID));

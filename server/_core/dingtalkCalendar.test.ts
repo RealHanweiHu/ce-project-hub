@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { buildWeeklyEvent, upsertWeeklyMeeting } from "./dingtalkCalendar";
+import { buildWeeklyEvent, cancelMeeting, upsertWeeklyMeeting } from "./dingtalkCalendar";
 import { __setDingtalkConfigForTest, _resetTokenCacheForTest } from "./dingtalk";
 
 beforeEach(() => { _resetTokenCacheForTest(); vi.restoreAllMocks(); });
@@ -54,5 +54,24 @@ describe("upsertWeeklyMeeting", () => {
     });
     const res = await upsertWeeklyMeeting({ organizerUserId: "pm-1", existingEventId: null, event: sampleEvent });
     expect(res).toBe("evt-123");
+  });
+});
+
+describe("cancelMeeting", () => {
+  it("returns false when dingtalk not configured", async () => {
+    __setDingtalkConfigForTest({ appKey: "", appSecret: "" });
+    const res = await cancelMeeting("pm-1", "evt-1");
+    expect(res).toBe(false);
+  });
+
+  it("returns true when dingtalk delete succeeds", async () => {
+    __setDingtalkConfigForTest({ appKey: "k", appSecret: "s" });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.includes("oauth2/accessToken")) return new Response(JSON.stringify({ accessToken: "tok", expireIn: 7200 }), { status: 200 });
+      return new Response(JSON.stringify({ errcode: 0 }), { status: 200 });
+    });
+    const res = await cancelMeeting("pm-1", "evt-1");
+    expect(res).toBe(true);
   });
 });

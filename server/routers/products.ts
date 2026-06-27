@@ -16,8 +16,14 @@ import {
   getReleaseGateStatus, isReleaseOverrideAuthorized,
   createCustomerVariant, listVariantsByCustomer, listVariantsByParentProduct,
   getDownstreamVariantImpact,
+  getApprovalConfig, getExternalApprovalByProcessInstanceId,
 } from "../db";
 import { VARIANT_DIMENSIONS } from "../../shared/oem-variant";
+import {
+  findBestMatchingProductCategory,
+  tidyProductCategory,
+  uniqueProductCategories,
+} from "../../shared/product-categories";
 import {
   CHANGE_STATUSES, PRODUCT_DEFINITION_CHANGE_AREAS,
   products, projects, productDefinitions, productDefinitionSnapshots,
@@ -25,6 +31,13 @@ import {
 } from "../../drizzle/schema";
 import { emitAutomationEvent } from "../automation/events";
 import { assertProjectAccess, assertProjectPermission } from "../project-access";
+import { cancelAndRecordProjectMeeting } from "../services/project-meeting-lifecycle";
+import {
+  listReleaseApprovals,
+  MP_RELEASE_APPROVAL,
+  submitReleaseApproval,
+  syncExternalApprovalByProcessInstanceId,
+} from "../services/external-approval-service";
 
 const competitorSchema = z.object({
   brand: z.string().optional(),
@@ -102,6 +115,14 @@ const productDefinitionChangeUpdateSchema = productDefinitionChangeCreateSchema
 
 function canMaintainProductDefinition(user: { id: number; role: string; canCreateProject?: boolean | null }, product: { createdBy: number }) {
   return user.role === "admin" || user.canCreateProject === true || product.createdBy === user.id;
+}
+
+async function resolveProductCategoryName(value: string): Promise<string> {
+  const category = tidyProductCategory(value);
+  if (!category) return "";
+  const productRows = await listProductsByCategory();
+  const existingCategories = uniqueProductCategories(productRows.map((row) => row.category));
+  return findBestMatchingProductCategory(category, existingCategories)?.category ?? category;
 }
 
 export const productsRouter = router({
@@ -305,7 +326,8 @@ export const productsRouter = router({
     }))
     .mutation(async ({ ctx, input }) => {
       const id = nanoid();
-      await createProduct({ id, createdBy: ctx.user.id, ...input });
+      const category = await resolveProductCategoryName(input.category);
+      await createProduct({ id, createdBy: ctx.user.id, ...input, category });
       return { id };
     }),
 
@@ -343,7 +365,8 @@ export const productsRouter = router({
     }))
     .mutation(async ({ ctx, input }) => {
       const id = nanoid();
-      await createPlatform({ id, createdBy: ctx.user.id, ...input });
+      const category = await resolveProductCategoryName(input.category);
+      await createPlatform({ id, createdBy: ctx.user.id, ...input, category });
       return { id };
     }),
 
@@ -396,11 +419,17 @@ export const productsRouter = router({
       const downstreamVariants = project.productId
         ? await getDownstreamVariantImpact(project.productId, { onlyActive: true })
         : [];
+      const approvalInstances = await listReleaseApprovals(input.projectId);
+      const pendingApproval = approvalInstances.find((approval) => approval.status === "pending") ?? null;
+      const approvalConfig = await getApprovalConfig(MP_RELEASE_APPROVAL);
 
       return {
         hasProduct,
         productId: project.productId ?? null,
         downstreamVariants,
+        approvalRequired: !!approvalConfig?.enabled,
+        approvalInstances,
+        pendingApproval,
         openP0P1,
         releaseGate: gate.phaseId === null ? null : {
           phaseId: gate.phaseId, gateName: gate.gateName,
@@ -410,6 +439,45 @@ export const productsRouter = router({
         deliverables: gate.deliverables,
         blockers, canRelease, canForceRelease,
       };
+    }),
+
+  submitReleaseApproval: protectedProcedure
+    .input(z.object({
+      projectId: z.string(),
+      override: z.object({
+        overrideReason: z.string().min(1),
+        followUpOwner: z.number(),
+        dueDate: z.string().min(1),
+      }).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      await assertProjectPermission(input.projectId, ctx.user, "canEditProjectInfo", "没有发起发布审批的权限");
+      try {
+        const result = await submitReleaseApproval({
+          projectId: input.projectId,
+          actor: { id: ctx.user.id, role: ctx.user.role },
+          override: input.override,
+        });
+        return { success: true, approval: result.instance, alreadyPending: result.alreadyPending } as const;
+      } catch (e) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: (e as Error).message });
+      }
+    }),
+
+  syncReleaseApproval: protectedProcedure
+    .input(z.object({ projectId: z.string(), processInstanceId: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      await assertProjectAccess(input.projectId, ctx.user);
+      const existing = await getExternalApprovalByProcessInstanceId(input.processInstanceId);
+      if (!existing || existing.entityId !== input.projectId) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "审批实例不存在" });
+      }
+      try {
+        const approval = await syncExternalApprovalByProcessInstanceId(input.processInstanceId);
+        return { success: true, approval } as const;
+      } catch (e) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: (e as Error).message });
+      }
     }),
 
   release: protectedProcedure
@@ -425,6 +493,10 @@ export const productsRouter = router({
     .mutation(async ({ ctx, input }) => {
       await assertProjectPermission(input.projectId, ctx.user, "canEditProjectInfo", "没有量产发布权限");
       try {
+        const approvalConfig = await getApprovalConfig(MP_RELEASE_APPROVAL);
+        if (approvalConfig?.enabled) {
+          throw new Error("已启用钉钉发布审批，请先发起并通过 MP Release 审批");
+        }
         const project = await getProjectById(input.projectId);
         const product = project?.productId ? await getProductById(project.productId) : undefined;
         const result = await releaseProject({
@@ -433,6 +505,10 @@ export const productsRouter = router({
           notes: input.notes,
           override: input.override,
         });
+        if (project && (project.dingtalkEventId || (project.meetingConfig as { enabled?: boolean } | null)?.enabled)) {
+          try { await cancelAndRecordProjectMeeting(project); }
+          catch (error) { console.warn("[meeting] cancel on release failed (non-fatal):", error); }
+        }
         await emitAutomationEvent({
           action: "mp.release",
           projectId: input.projectId,

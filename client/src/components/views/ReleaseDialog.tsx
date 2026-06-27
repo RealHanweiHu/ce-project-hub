@@ -1,6 +1,6 @@
 // 量产发布对话框：前置校验（产品关联 + 无开放 P0/P1）→ 发布生成 Rev。
 import { useState } from 'react';
-import { Rocket, CheckCircle2, XCircle, Loader2, AlertTriangle } from 'lucide-react';
+import { Rocket, CheckCircle2, XCircle, Loader2, AlertTriangle, Send, RefreshCw } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -15,6 +15,13 @@ interface ReleaseDialogProps {
   onOpenChange: (open: boolean) => void;
   onReleased: () => void;
 }
+
+type ApprovalInstance = {
+  id: number;
+  status: string;
+  processInstanceId: string | null;
+  lastError: string | null;
+};
 
 // 模块级定义：纯展示组件，避免在父组件渲染体内重建组件类型。
 function Check({ ok, warn, children }: { ok: boolean; warn?: boolean; children: React.ReactNode }) {
@@ -64,6 +71,33 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
     onError: (e) => toast.error(e.message),
   });
 
+  const submitApprovalMutation = trpc.products.submitReleaseApproval.useMutation({
+    onSuccess: (res) => {
+      toast.success(res.alreadyPending ? '已有待处理审批' : '发布审批已发起');
+      utils.products.releasePrecheck.invalidate({ projectId });
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const syncApprovalMutation = trpc.products.syncReleaseApproval.useMutation({
+    onSuccess: (res) => {
+      utils.products.releasePrecheck.invalidate({ projectId });
+      utils.products.list.invalidate();
+      const status = res.approval?.status;
+      if (status === 'approved') {
+        toast.success('审批已通过，发布已完成');
+        onReleased();
+      } else if (status === 'business_blocked') {
+        toast.warning(`审批已通过，但发布被硬卡拦截：${res.approval?.lastError ?? ''}`);
+      } else if (status === 'rejected') {
+        toast.error('审批已驳回');
+      } else {
+        toast.success('审批状态已同步');
+      }
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   // Derived gate state
   const gateDecision = precheck?.releaseGate?.decision ?? null;
   const gateOk = gateDecision === 'approved';
@@ -85,6 +119,11 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
 
   const blockers = precheck?.blockers ?? [];
   const blockersText = blockers.join('；');
+  const approvalRequired = !!precheck?.approvalRequired;
+  const approvalInstances = ((precheck as { approvalInstances?: ApprovalInstance[] } | undefined)?.approvalInstances ?? []);
+  const pendingApproval = (precheck as { pendingApproval?: ApprovalInstance | null } | undefined)?.pendingApproval ?? null;
+  const latestApproval = approvalInstances[0] ?? null;
+  const approvalCanSubmit = approvalRequired && (precheck?.canRelease || precheck?.canForceRelease) && (!precheck?.canForceRelease || forceFormValid);
   const hardCardsSatisfied =
     !!precheck?.hasProduct &&
     (precheck?.openP0P1 ?? 0) === 0 &&
@@ -107,6 +146,24 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
         dueDate,
       },
     });
+  };
+
+  const handleSubmitApproval = () => {
+    submitApprovalMutation.mutate({
+      projectId,
+      override: precheck?.canForceRelease && followUpOwner !== ''
+        ? {
+            overrideReason: overrideReason.trim(),
+            followUpOwner: followUpOwner as number,
+            dueDate,
+          }
+        : undefined,
+    });
+  };
+
+  const handleSyncApproval = () => {
+    if (!pendingApproval?.processInstanceId) return;
+    syncApprovalMutation.mutate({ projectId, processInstanceId: pendingApproval.processInstanceId });
   };
 
   return (
@@ -179,6 +236,32 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
                 )}
               </div>
             </div>
+
+            {approvalRequired && (
+              <div className="space-y-2 border border-border rounded-[9px] p-3 bg-card">
+                <div className="text-[10px] uppercase tracking-widest text-muted-foreground">钉钉审批</div>
+                {latestApproval ? (
+                  <div className="text-sm text-foreground">
+                    当前状态：
+                    <span className="font-semibold">
+                      {latestApproval.status === 'pending' ? '待审批' :
+                        latestApproval.status === 'approved' ? '已通过' :
+                          latestApproval.status === 'rejected' ? '已驳回' :
+                            latestApproval.status === 'business_blocked' ? '业务硬卡阻断' :
+                              latestApproval.status === 'sync_failed' ? '同步失败' : latestApproval.status}
+                    </span>
+                    {latestApproval.processInstanceId && (
+                      <span className="text-[11px] text-muted-foreground ml-2 num">{latestApproval.processInstanceId}</span>
+                    )}
+                    {latestApproval.lastError && (
+                      <div className="text-[11px] text-destructive mt-1">{latestApproval.lastError}</div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="text-sm text-muted-foreground">尚未发起发布审批</div>
+                )}
+              </div>
+            )}
 
             {/* 未关联产品 → 关联 */}
             {!precheck?.hasProduct && (
@@ -294,8 +377,28 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => onOpenChange(false)}>取消</Button>
 
-            {/* 三态按钮：普通发布 / 强制发布 / 不可发布 */}
-            {precheck?.canRelease ? (
+            {approvalRequired ? (
+              pendingApproval?.processInstanceId ? (
+                <Button
+                  className="bg-primary hover:opacity-90 text-primary-foreground gap-1.5"
+                  disabled={syncApprovalMutation.isPending}
+                  onClick={handleSyncApproval}
+                >
+                  <RefreshCw size={14} />
+                  {syncApprovalMutation.isPending ? '同步中…' : '同步审批'}
+                </Button>
+              ) : (
+                <Button
+                  className="bg-primary hover:opacity-90 text-primary-foreground gap-1.5"
+                  disabled={!approvalCanSubmit || submitApprovalMutation.isPending}
+                  onClick={handleSubmitApproval}
+                  title={!approvalCanSubmit ? (blockersText || '审批条件未满足') : undefined}
+                >
+                  <Send size={14} />
+                  {submitApprovalMutation.isPending ? '发起中…' : '发起审批'}
+                </Button>
+              )
+            ) : precheck?.canRelease ? (
               <Button
                 className="bg-primary hover:opacity-90 text-primary-foreground gap-1.5"
                 disabled={releaseMutation.isPending}

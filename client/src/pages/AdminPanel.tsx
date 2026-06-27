@@ -1,13 +1,13 @@
 // AdminPanel: System admin page for managing users, roles, and permissions
 // Only accessible to users with role === 'admin'
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { trpc } from '@/lib/trpc';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { useLocation } from 'wouter';
 import {
   Shield, Users, CheckCircle2, XCircle, ChevronDown,
-  Crown, User, AlertTriangle, RefreshCw, Search, UserPlus, KeyRound,
+  Crown, User, AlertTriangle, RefreshCw, Search, UserPlus, KeyRound, Trash2, FileCheck2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -26,6 +26,16 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
 import { AutomationSettings } from '@/components/views/AutomationSettings';
 
@@ -39,6 +49,14 @@ type UserRow = {
   canCreateProject: boolean;
   createdAt: Date | null;
   lastSignedIn: Date | null;
+};
+
+type ApprovalConfigRow = {
+  id: number;
+  businessType: string;
+  processCode: string | null;
+  enabled: boolean;
+  defaultDeptId: number | null;
 };
 
 export default function AdminPanel() {
@@ -55,6 +73,7 @@ export default function AdminPanel() {
   const [newMobile, setNewMobile] = useState('');
   const [newRole, setNewRole] = useState<'user' | 'admin'>('user');
   const [newCanCreate, setNewCanCreate] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<UserRow | null>(null);
 
   // Reset password dialog state
   const [resetOpen, setResetOpen] = useState(false);
@@ -82,13 +101,22 @@ export default function AdminPanel() {
     onError: (err) => toast.error(err.message),
   });
 
-  const createUserMutation = trpc.auth.createUser.useMutation({
+  const createUserMutation = trpc.admin.createUser.useMutation({
     onSuccess: () => {
       refetch();
       toast.success('用户已创建');
       setCreateOpen(false);
       setNewUsername(''); setNewPassword(''); setNewName('');
       setNewRole('user'); setNewCanCreate(false); setNewEmail(''); setNewMobile('');
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const deleteUserMutation = trpc.admin.deleteUser.useMutation({
+    onSuccess: () => {
+      refetch();
+      toast.success('用户已删除');
+      setDeleteTarget(null);
     },
     onError: (err) => toast.error(err.message),
   });
@@ -114,6 +142,24 @@ export default function AdminPanel() {
   const removeCal = trpc.admin.calendarExceptions.remove.useMutation({ onSuccess: () => { void refetchCal(); } });
   const [calForm, setCalForm] = useState({ date: '', type: 'holiday' as 'holiday' | 'makeup_workday', name: '' });
 
+  const { data: approvalConfigs, refetch: refetchApprovalConfigs } = trpc.admin.approvalConfigs.list.useQuery(undefined, {
+    enabled: isAuthenticated && user?.role === 'admin',
+  });
+  const mpApprovalConfig = (approvalConfigs as ApprovalConfigRow[] | undefined)?.find((cfg) => cfg.businessType === 'mp_release');
+  const [approvalEnabled, setApprovalEnabled] = useState(false);
+  const [approvalProcessCode, setApprovalProcessCode] = useState('');
+  const [approvalDeptId, setApprovalDeptId] = useState('');
+  useEffect(() => {
+    if (!mpApprovalConfig) return;
+    setApprovalEnabled(mpApprovalConfig.enabled);
+    setApprovalProcessCode(mpApprovalConfig.processCode ?? '');
+    setApprovalDeptId(mpApprovalConfig.defaultDeptId == null ? '' : String(mpApprovalConfig.defaultDeptId));
+  }, [mpApprovalConfig?.businessType, mpApprovalConfig?.enabled, mpApprovalConfig?.processCode, mpApprovalConfig?.defaultDeptId]);
+  const saveApprovalConfig = trpc.admin.approvalConfigs.upsert.useMutation({
+    onSuccess: () => { void refetchApprovalConfigs(); toast.success('审批配置已更新'); },
+    onError: (err) => toast.error(err.message),
+  });
+
   const filteredUsers = (users as UserRow[] | undefined)?.filter((u) => {
     const q = search.toLowerCase();
     return (
@@ -124,7 +170,7 @@ export default function AdminPanel() {
   }) ?? [];
 
   const adminCount = (users as UserRow[] | undefined)?.filter((u) => u.role === 'admin').length ?? 0;
-  const canCreateCount = (users as UserRow[] | undefined)?.filter((u) => u.canCreateProject).length ?? 0;
+  const canCreateCount = (users as UserRow[] | undefined)?.filter((u) => u.role === 'admin' || u.canCreateProject).length ?? 0;
 
   return (
     <div className="min-h-screen bg-background">
@@ -188,6 +234,58 @@ export default function AdminPanel() {
 
         <AutomationSettings />
 
+        <div className="bg-card border border-border">
+          <div className="px-4 py-3 border-b border-border flex items-center gap-2">
+            <FileCheck2 size={14} className="text-primary" />
+            <h2 className="text-base text-foreground flex-1">钉钉审批配置</h2>
+            <Badge variant={approvalEnabled ? 'default' : 'secondary'} className="text-[10px]">
+              {approvalEnabled ? '已启用' : '未启用'}
+            </Badge>
+          </div>
+          <div className="p-4 grid grid-cols-1 md:grid-cols-[1fr_160px_auto] gap-3 items-end">
+            <div>
+              <Label className="text-xs text-muted-foreground">MP Release processCode</Label>
+              <Input
+                value={approvalProcessCode}
+                onChange={(e) => setApprovalProcessCode(e.target.value)}
+                placeholder="PROC-..."
+                className="mt-1 h-9 text-sm"
+              />
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">默认部门 ID</Label>
+              <Input
+                value={approvalDeptId}
+                onChange={(e) => setApprovalDeptId(e.target.value.replace(/[^\d-]/g, ''))}
+                placeholder="-1"
+                className="mt-1 h-9 text-sm"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setApprovalEnabled((v) => !v)}
+                className={`h-9 px-3 text-xs border transition-colors ${approvalEnabled ? 'bg-primary text-primary-foreground border-primary' : 'bg-secondary text-secondary-foreground border-border'}`}
+              >
+                {approvalEnabled ? '停用' : '启用'}
+              </button>
+              <Button
+                size="sm"
+                disabled={saveApprovalConfig.isPending}
+                onClick={() => saveApprovalConfig.mutate({
+                  businessType: 'mp_release',
+                  processCode: approvalProcessCode.trim() || null,
+                  enabled: approvalEnabled,
+                  defaultDeptId: approvalDeptId.trim() ? Number(approvalDeptId) : null,
+                })}
+                className="h-9 text-xs"
+              >
+                保存
+              </Button>
+            </div>
+          </div>
+        </div>
+
         {/* User Table */}
         <div className="bg-card border border-border">
           <div className="px-4 py-3 border-b border-border flex items-center gap-3">
@@ -237,7 +335,10 @@ export default function AdminPanel() {
                 </tr>
               </thead>
               <tbody>
-                {filteredUsers.map((u) => (
+                {filteredUsers.map((u) => {
+                  const effectiveCanCreate = u.role === 'admin' || u.canCreateProject;
+                  const cannotDelete = u.id === user?.id || (u.role === 'admin' && adminCount <= 1);
+                  return (
                   <tr key={u.id} className="border-b border-border hover:bg-secondary/50 transition-colors">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
@@ -307,13 +408,14 @@ export default function AdminPanel() {
                         onClick={() =>
                           setCanCreateMutation.mutate({
                             userId: u.id,
-                            canCreate: !u.canCreateProject,
+                            canCreate: !effectiveCanCreate,
                           })
                         }
+                        disabled={u.role === 'admin'}
                         className="flex items-center gap-1 mx-auto transition-colors"
-                        title={u.canCreateProject ? '点击撤销创建权限' : '点击授予创建权限'}
+                        title={u.role === 'admin' ? '管理员默认拥有项目创建权限' : effectiveCanCreate ? '点击撤销创建权限' : '点击授予创建权限'}
                       >
-                        {u.canCreateProject ? (
+                        {effectiveCanCreate ? (
                           <CheckCircle2 size={16} className="text-[color:var(--success)] hover:opacity-80" />
                         ) : (
                           <XCircle size={16} className="text-muted-foreground hover:text-[color:var(--destructive)]" />
@@ -345,10 +447,28 @@ export default function AdminPanel() {
                           <KeyRound size={11} />
                           重置密码
                         </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-6 text-xs px-2 gap-1 text-[color:var(--destructive)] hover:text-[color:var(--destructive)]"
+                          onClick={() => setDeleteTarget(u)}
+                          disabled={cannotDelete || deleteUserMutation.isPending}
+                          title={
+                            u.id === user?.id
+                              ? '不能删除自己的账号'
+                              : u.role === 'admin' && adminCount <= 1
+                                ? '不能删除最后一个管理员'
+                                : '删除用户'
+                          }
+                        >
+                          <Trash2 size={11} />
+                          删除
+                        </Button>
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           )}
@@ -530,7 +650,11 @@ export default function AdminPanel() {
                 <Label className="text-sm text-foreground">系统角色</Label>
                 <select
                   value={newRole}
-                  onChange={(e) => setNewRole(e.target.value as 'user' | 'admin')}
+                  onChange={(e) => {
+                    const role = e.target.value as 'user' | 'admin';
+                    setNewRole(role);
+                    if (role === 'admin') setNewCanCreate(true);
+                  }}
                   className="w-full h-9 border border-border rounded-md px-3 text-sm bg-card"
                 >
                   <option value="user">普通用户</option>
@@ -542,7 +666,8 @@ export default function AdminPanel() {
                 <div className="flex items-center h-9">
                   <input
                     type="checkbox"
-                    checked={newCanCreate}
+                    checked={newRole === 'admin' || newCanCreate}
+                    disabled={newRole === 'admin'}
                     onChange={(e) => setNewCanCreate(e.target.checked)}
                     className="w-4 h-4 accent-[var(--primary)]"
                   />
@@ -567,7 +692,7 @@ export default function AdminPanel() {
                   email: newEmail.trim() || undefined,
                   mobile: newMobile.trim() || undefined,
                   role: newRole,
-                  canCreateProject: newCanCreate,
+                  canCreateProject: newRole === 'admin' || newCanCreate,
                 });
               }}
             >
@@ -576,6 +701,33 @@ export default function AdminPanel() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+        <AlertDialogContent className="max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 text-[color:var(--destructive)]">
+              <Trash2 size={16} />
+              删除用户
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              确认删除「{deleteTarget?.name || deleteTarget?.username}」？系统会同步清理 RDS 中该用户的成员关系、通知、日志、评论，并解除或转交项目、任务、审核、产品等引用。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteUserMutation.isPending}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-[color:var(--destructive)] text-white hover:bg-[color:var(--destructive)]/90"
+              disabled={!deleteTarget || deleteUserMutation.isPending}
+              onClick={(event) => {
+                event.preventDefault();
+                if (deleteTarget) deleteUserMutation.mutate({ userId: deleteTarget.id });
+              }}
+            >
+              {deleteUserMutation.isPending ? '删除中...' : '确认删除'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Reset Password Dialog */}
       <Dialog open={resetOpen} onOpenChange={setResetOpen}>

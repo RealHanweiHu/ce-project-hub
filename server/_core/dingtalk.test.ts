@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
-  __setDingtalkConfigForTest, getAccessToken, _resetTokenCacheForTest, resolveDingtalkUserId,
+  __setDingtalkConfigForTest, getAccessToken, _resetTokenCacheForTest, resolveDingtalkCorpUserId, resolveDingtalkUserId,
 } from "./dingtalk";
 
 beforeEach(() => { _resetTokenCacheForTest(); vi.restoreAllMocks(); });
@@ -19,6 +19,12 @@ describe("dingtalk token", () => {
     expect(await getAccessToken()).toBe("tok-1");
     expect(await getAccessToken()).toBe("tok-1"); // 命中缓存
     expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns null instead of throwing when token fetch fails", async () => {
+    __setDingtalkConfigForTest({ appKey: "k", appSecret: "s" });
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network down"));
+    await expect(getAccessToken()).resolves.toBeNull();
   });
 });
 
@@ -50,5 +56,29 @@ describe("resolveDingtalkUserId", () => {
   it("returns null when no cache and no mobile", async () => {
     const id = await resolveDingtalkUserId({ id: 3, dingtalkUserId: null, mobile: null }, async () => {});
     expect(id).toBeNull();
+  });
+
+  it("returns null instead of throwing when mobile lookup fails", async () => {
+    __setDingtalkConfigForTest({ appKey: "k", appSecret: "s" });
+    _resetTokenCacheForTest();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.includes("oauth2/accessToken")) return new Response(JSON.stringify({ accessToken: "tok", expireIn: 7200 }), { status: 200 });
+      throw new Error("lookup failed");
+    });
+    await expect(resolveDingtalkUserId({ id: 4, dingtalkUserId: null, mobile: "13800000000" }, async () => {})).resolves.toBeNull();
+  });
+});
+
+describe("resolveDingtalkCorpUserId", () => {
+  it("returns null instead of throwing when corp userid lookup fails", async () => {
+    __setDingtalkConfigForTest({ appKey: "k", appSecret: "s" });
+    _resetTokenCacheForTest();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.includes("oauth2/accessToken")) return new Response(JSON.stringify({ accessToken: "tok", expireIn: 7200 }), { status: 200 });
+      throw new Error("lookup failed");
+    });
+    await expect(resolveDingtalkCorpUserId({ id: 5, dingtalkCorpUserId: null, mobile: "13800000000" }, async () => {})).resolves.toBeNull();
   });
 });

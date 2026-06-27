@@ -1174,6 +1174,7 @@ export function ProjectListView({
                     <li>所有问题记录和关门评审</li>
                     <li>所有附件文件（S3 存储）</li>
                     <li>变更日志和操作记录</li>
+                    <li>已绑定的钉钉项目群</li>
                   </ul>
                   <p className="mt-2 font-medium">此操作不可撤销。</p>
                 </div>
