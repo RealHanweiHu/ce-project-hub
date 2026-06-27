@@ -33,7 +33,7 @@ flowchart LR
 ```mermaid
 flowchart LR
   N0["开始<br/>新产品开发项目"] --> N1["P1 概念阶段<br/>2-4周<br/>Gate: 立项评审 / Project Charter<br/>交付物: 市场调研报告、产品概念书、商业可行性分析、立项申请书"]
-  N1 --> N2["P2 规划阶段<br/>3-4月<br/>Gate: Kickoff评审<br/>交付物: PRD、PSD、项目甘特图、BOM v0.1"]
+  N1 --> N2["P2 规划阶段<br/>3-4周<br/>Gate: Kickoff评审<br/>交付物: PRD、PSD、项目甘特图、BOM v0.1"]
   N2 --> N3["P3 设计阶段<br/>6-12周<br/>Gate: 设计冻结评审<br/>交付物: ID外观图、MD结构图、PCB原理图&Layout、SW架构文档、BOM v1.0"]
   N3 --> N4["P4 EVT 工程验证<br/>4-6周<br/>Gate: EVT评审<br/>交付物: EVT样机、功能测试报告、问题清单、PCB v2"]
   N4 --> N5["P5 DVT 设计验证<br/>4-8周<br/>Gate: DVT评审<br/>交付物: DVT样机、可靠性测试报告、认证报告、模具T1样品"]
@@ -98,7 +98,7 @@ flowchart TB
 ```mermaid
 flowchart LR
   E0["开始<br/>工程变更项目"] --> E1["P1 变更规划<br/>2-4周<br/>Gate: ECO Kickoff评审<br/>交付物: ECR、影响分析报告、BOM差异对比、变更时程"]
-  E1 --> E2["P2 变更设计<br/>3-6周<br/>Gate: 设计变更冻结<br/>交付物: ECN、更新原理图/PCB、更新BOM、变更设计评审报告"]
+  E1 --> E2["P2 变更设计<br/>3-6周<br/>Gate: 设计变更冻结<br/>交付物: ECN草案/变更设计包、更新原理图/PCB、更新BOM、变更设计评审报告"]
   E2 --> E3["P3 EVT 变更验证<br/>3-5周<br/>Gate: 变更验证评审<br/>交付物: 变更验证样机、变更验证报告、回归测试报告、问题清单"]
   E3 --> E4["P4 变更试产<br/>2-4周<br/>Gate: 变更量产切换评审<br/>交付物: 变更试产报告、更新SOP/WI、产线切换计划、库存处理方案"]
   E4 --> ERelease["MP Release<br/>服务端硬闸口<br/>以 P4 Gate 作为发布前置 Gate"]
