@@ -26,11 +26,11 @@ import { ROLE_PERMISSIONS } from "./members";
 import { notifyUsersViaDingtalk, resolveCorpIdsForUsers } from "../_core/dingtalkMessage";
 import { createGroupChat, disbandGroupChat, sendToGroupChat } from "../_core/dingtalkGroup";
 import { storageDelete } from "../storage";
-import { getProjectMembers } from "../db";
+import { getProjectMembers, getProjectRolesForUser } from "../db";
 import { taskDisplayTitle } from "../task-title";
 import { getPhasesForCategory } from "../../shared/sop-templates";
-import { PROJECT_MEMBER_ROLES } from "../../drizzle/schema";
-import { getEffectiveProjectRoleById as getEffectiveRole } from "../project-access";
+import { PROJECT_MEMBER_ROLES, type ProjectMemberRole } from "../../drizzle/schema";
+import { getEffectiveProjectRoleById as getEffectiveRole, pickHigherProjectRole } from "../project-access";
 import { isISODate } from "../../shared/scheduling";
 import { cancelAndRecordProjectMeeting, syncAndRecordProjectMeeting } from "../services/project-meeting-lifecycle";
 
@@ -271,16 +271,25 @@ export const projectsRouter = router({
     const all = await getAllActiveProjects();
     const portfolio = await getPortfolio(ctx.user.id);
     const autoRiskByProject = new Map(portfolio.map((p) => [p.id, p.risk]));
-    return Promise.all(all.map(async (row) => {
-      const role = await getEffectiveRole(row.id, ctx.user.id) ?? "viewer";
+    // Resolve every project's effective role from a single membership query +
+    // in-memory pm/owner/admin overrides, instead of an N+1 of getEffectiveRole
+    // (each of which re-fetched the project and ran a per-project member query).
+    const memberRoles = await getProjectRolesForUser(ctx.user.id);
+    const isAdmin = ctx.user.role === "admin";
+    return all.map((row) => {
+      let role: ProjectMemberRole | null = memberRoles.get(row.id) ?? null;
+      if (row.pmUserId === ctx.user.id) role = pickHigherProjectRole(role, "pm");
+      if (row.createdBy === ctx.user.id) role = pickHigherProjectRole(role, "owner");
+      if (!role && isAdmin) role = "manager";
+      const effectiveRole = role ?? "viewer";
       return {
         ...row,
         risk: autoRiskByProject.get(row.id) ?? "low",
-        accessRole: role,
-        canDeleteProject: ctx.user.role === "admin" || ROLE_PERMISSIONS[role].canDeleteProject,
-        canEditProjectInfo: ROLE_PERMISSIONS[role].canEditProjectInfo,
+        accessRole: effectiveRole,
+        canDeleteProject: isAdmin || ROLE_PERMISSIONS[effectiveRole].canDeleteProject,
+        canEditProjectInfo: ROLE_PERMISSIONS[effectiveRole].canEditProjectInfo,
       };
-    }));
+    });
   }),
 
   /** Get a single project by id (owner or member with canView) */

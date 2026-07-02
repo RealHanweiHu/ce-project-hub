@@ -1199,6 +1199,21 @@ export async function getProjectMember(projectId: string, userId: number): Promi
   return result[0];
 }
 
+/**
+ * All of a user's project memberships in one query, as projectId → role.
+ * Lets callers resolve effective roles for many projects without an N+1
+ * of per-project getProjectMember lookups (see projects.list).
+ */
+export async function getProjectRolesForUser(userId: number): Promise<Map<string, ProjectMemberRole>> {
+  const db = await getDb();
+  if (!db) return new Map();
+  const rows = await db
+    .select({ projectId: projectMembers.projectId, role: projectMembers.role })
+    .from(projectMembers)
+    .where(eq(projectMembers.userId, userId));
+  return new Map(rows.map((r) => [r.projectId, r.role as ProjectMemberRole]));
+}
+
 async function ensureProjectCalendarEventsTable(): Promise<void> {
   const db = await getDb();
   if (!db) return;
@@ -3748,9 +3763,11 @@ export async function listNotifications(userId: number, unreadOnly = false) {
 
 export async function unreadCount(userId: number): Promise<number> {
   const db = await getDb(); if (!db) return 0;
-  const r = await db.select({ id: notifications.id }).from(notifications)
+  // COUNT in SQL rather than fetching all unread rows to count them in JS —
+  // this is polled every 30s per user by the notification bell.
+  const [r] = await db.select({ c: drizzleSql<number>`count(*)::int` }).from(notifications)
     .where(and(eq(notifications.userId, userId), eq(notifications.read, false)));
-  return r.length;
+  return r?.c ?? 0;
 }
 
 export async function markRead(id: number): Promise<void> {
