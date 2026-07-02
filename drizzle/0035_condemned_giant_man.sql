@@ -1,0 +1,1 @@
+ALTER TABLE "project_deliverable_overrides" ADD COLUMN "reason" text;

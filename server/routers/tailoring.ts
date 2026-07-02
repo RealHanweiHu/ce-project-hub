@@ -158,6 +158,7 @@ export const tailoringRouter = router({
       nodePhaseId: z.string(),
       deliverableName: z.string().min(1),
       action: z.enum(["add", "remove", "clear"]),
+      reason: z.string().max(500).nullable().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       await assertCanProposeOrOverride(input.projectId, ctx.user);
@@ -167,6 +168,7 @@ export const tailoringRouter = router({
         deliverableName: input.deliverableName,
         action: input.action,
         createdBy: ctx.user.id,
+        reason: input.reason ?? null,
       });
       await createActivityLog({
         projectId: input.projectId,
@@ -174,7 +176,7 @@ export const tailoringRouter = router({
         action: "tailoring.deliverable_override",
         entityType: "deliverable",
         entityId: `${input.nodePhaseId}:${input.deliverableName}`,
-        meta: { action: input.action },
+        meta: { action: input.action, reason: input.reason ?? null },
       });
       return { success: true } as const;
     }),

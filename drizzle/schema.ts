@@ -406,6 +406,8 @@ export const projectDeliverableOverrides = pgTable(
     nodePhaseId: varchar("nodePhaseId", { length: 32 }).notNull(),
     deliverableName: varchar("deliverableName", { length: 256 }).notNull(),
     action: deliverableOverrideActionEnum("action").notNull(),
+    /** 豁免/裁剪理由：手动排除或存量 grandfather 时记录一次性说明，留审计痕迹 */
+    reason: text("reason"),
     createdBy: integer("createdBy").notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
