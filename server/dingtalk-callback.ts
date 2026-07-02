@@ -144,6 +144,13 @@ export function registerDingtalkCallbackRoute(app: Express) {
       res.json(encrypt ? encryptDingtalkResponse("success", nonce || "nonce") : { success: true });
       return;
     }
+    // sync 会依据 processInstanceId 拉取并落库审批状态,属于写操作。真实钉钉回调始终
+    // 加密+签名(encrypt 存在时上面的 decrypt 已校验签名);未加密的 sync 请求一律拒绝,
+    // 避免未签名方触发审批同步。握手/无关事件的 ack 路径不受影响。
+    if (!encrypt) {
+      res.status(401).json({ success: false, error: "signature required" });
+      return;
+    }
     try {
       const approval = await syncExternalApprovalByProcessInstanceId(action.processInstanceId);
       if (encrypt) {
