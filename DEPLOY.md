@@ -49,9 +49,17 @@ docker compose run --rm -T app node -e '
 #    托管 OSS 请预先在控制台建好桶（应用凭据通常无 CreateBucket 权限）。
 ```
 
-> **一次性：本版含 2026-07-02 Gate 收紧** —— 迁移后请再跑一次存量 grandfather（见下方
-> 「五、Aliyun RDS…」小节的注记，或 `pnpm tsx scripts/migrate-0035-grandfather-gates.ts --apply`），
-> 否则在途项目会被追溯打成 blocked。
+> **一次性：本版含 2026-07-02 Gate 收紧** —— schema 迁移（含 0035 加 `reason` 列）之后，
+> 必须再跑一次存量 grandfather，否则在途 NPD/JDM/OBT 项目会因新增硬性交付物被追溯打成 blocked。
+>
+> 该脚本用 `tsx` 且引用 `shared/` 源码，**生产镜像（`--prod`，无 tsx/无源码）跑不了**。
+> 在**能连生产 DATABASE_URL 的开发/构建机**上执行（与手动 RDS 迁移同一路径；RDS 用公网端点 …5ujvo）：
+> ```bash
+> DATABASE_URL="<生产库连接串>" pnpm tsx scripts/migrate-0035-grandfather-gates.ts        # 先 dry-run 看将豁免什么
+> DATABASE_URL="<生产库连接串>" pnpm tsx scripts/migrate-0035-grandfather-gates.ts --apply # 确认后落库
+> ```
+> 脚本只读 `projects`/`project_gate_reviews`、写 `project_deliverable_overrides`（幂等，可重跑）。
+> 豁免会显示在项目详情「资源库管理」里（“已豁免 + 理由”），可随时撤销恢复严格要求。
 
 ## 三、初始化管理员
 
