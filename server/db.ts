@@ -903,6 +903,21 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
     role: projectMembers.role,
   }).from(projectMembers).where(inArray(projectMembers.projectId, ids));
 
+  // 当前用户在每个项目的成员角色（用于总览决定其视角：管理层大盘 / PM 工作台 / 我的任务）
+  const myMemberRows = await db.select({
+    projectId: projectMembers.projectId,
+    role: projectMembers.role,
+  }).from(projectMembers).where(and(eq(projectMembers.userId, userId), inArray(projectMembers.projectId, ids)));
+  const myRoleMap = new Map<string, ProjectMemberRole>(myMemberRows.map((r) => [r.projectId, r.role]));
+  const viewer = await getUserById(userId);
+  const viewerIsAdmin = viewer?.role === "admin";
+  const rank: Record<string, number> = {
+    viewer: 0, rd_hw: 1, rd_sw: 1, rd_mech: 1, qa: 1, scm: 1, pe: 1, mfg: 1, sales: 1, cert: 1, battery_safety: 1,
+    pm: 2, manager: 3, owner: 4,
+  };
+  const higher = (a: ProjectMemberRole | null, b: ProjectMemberRole | null): ProjectMemberRole | null =>
+    !a ? b : !b ? a : (rank[b] > rank[a] ? b : a);
+
   const pmIds = Array.from(new Set(Array.from(projById.values()).map((p) => p.pmUserId).filter((x): x is number => !!x)));
   const pmRows = pmIds.length ? await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, pmIds)) : [];
   const pmName = new Map(pmRows.map((r) => [r.id, r.name]));
@@ -982,6 +997,14 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
       currentPhase: p.currentPhase, startDate: p.startDate, targetDate: p.targetDate,
       pmUserId: p.pmUserId ?? null,
       pmName: p.pmUserId ? (pmName.get(p.pmUserId) ?? null) : null,
+      // 当前用户对本项目的有效角色（成员角色 ∪ pm/owner/admin 兜底），供前端定视角
+      myRole: (() => {
+        let r: ProjectMemberRole | null = myRoleMap.get(p.id) ?? null;
+        if (p.pmUserId === userId) r = higher(r, "pm");
+        if (p.createdBy === userId) r = higher(r, "owner");
+        if (viewerIsAdmin) r = higher(r, "manager");
+        return r;
+      })(),
       taskTotal: t?.total ?? 0, taskDone: t?.done ?? 0, taskInProgress: t?.inProgress ?? 0, overdueTasks: t?.overdue ?? 0, blockedTasks: t?.blocked ?? 0,
       openIssues: i?.open ?? 0, criticalIssues: i?.critical ?? 0,
       openRisks, highRisks, mediumRisks,
@@ -1441,6 +1464,14 @@ export async function seedProjectPhasesAndTasks(
 
 // ── Project Issues helpers ────────────────────────────────────────────────────
 
+/** Get a single issue by global id (用于评论等按实体反查项目归属) */
+export async function getIssueById(id: number): Promise<ProjectIssue | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db.select().from(projectIssues).where(eq(projectIssues.id, id)).limit(1);
+  return row ?? null;
+}
+
 /** Get all issues for a project (optionally filtered by phase) */
 export async function getProjectIssues(projectId: string, phaseId?: string): Promise<ProjectIssue[]> {
   const db = await getDb();
@@ -1860,6 +1891,14 @@ export async function deleteProjectGateReview(id: number): Promise<void> {
 }
 
 // ── Changelog helpers ─────────────────────────────────────────────────────────
+
+/** Get a single change record by global id (用于评论等按实体反查项目归属) */
+export async function getChangelogRecordById(id: number): Promise<ProjectChangeRecord | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db.select().from(projectChangelog).where(eq(projectChangelog.id, id)).limit(1);
+  return row ?? null;
+}
 
 /** Get all changelog records for a project */
 export async function getProjectChangelog(projectId: string): Promise<ProjectChangeRecord[]> {
@@ -2701,6 +2740,7 @@ export async function setDeliverableOverride(input: {
   deliverableName: string;
   action: "add" | "remove" | "clear";
   createdBy: number;
+  reason?: string | null;
 }): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -2738,7 +2778,7 @@ export async function setDeliverableOverride(input: {
   if (existing[0]) {
     await db
       .update(projectDeliverableOverrides)
-      .set({ action: input.action })
+      .set({ action: input.action, ...(input.reason !== undefined ? { reason: input.reason } : {}) })
       .where(eq(projectDeliverableOverrides.id, existing[0].id));
     return;
   }
@@ -2748,8 +2788,46 @@ export async function setDeliverableOverride(input: {
     nodePhaseId: input.nodePhaseId,
     deliverableName: input.deliverableName,
     action: input.action,
+    reason: input.reason ?? null,
     createdBy: input.createdBy,
   });
+}
+
+/**
+ * 存量 grandfather：把已过会 Gate 上本次新增的必备交付物，写成一次性豁免
+ * （remove override + reason）。幂等：已存在同键 override 则跳过（不覆盖用户已有裁剪）。
+ * 返回实际新增的豁免条数。SYSTEM_ACTOR 作为 createdBy 记录来源。
+ */
+export async function applyGrandfatherExemptions(
+  exemptions: { projectId: string; nodePhaseId: string; deliverableName: string }[],
+  reason: string,
+  createdBy = 0,
+): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  let inserted = 0;
+  for (const ex of exemptions) {
+    const res = await db
+      .insert(projectDeliverableOverrides)
+      .values({
+        projectId: ex.projectId,
+        nodePhaseId: ex.nodePhaseId,
+        deliverableName: ex.deliverableName,
+        action: "remove",
+        reason,
+        createdBy,
+      })
+      .onConflictDoNothing({
+        target: [
+          projectDeliverableOverrides.projectId,
+          projectDeliverableOverrides.nodePhaseId,
+          projectDeliverableOverrides.deliverableName,
+        ],
+      })
+      .returning({ id: projectDeliverableOverrides.id });
+    inserted += res.length;
+  }
+  return inserted;
 }
 
 export async function getProjectEffectiveProcess(projectId: string): Promise<EffectiveProcess | null> {
@@ -3654,6 +3732,42 @@ export async function freezeBomToRevision(projectId: string, revisionId: number,
     });
   }
   return rows;
+}
+
+/** 用户是否有权看某产品线的商业数据：管理员，或该产品下任一项目的成员/创建者/PM */
+export async function userCanSeeProductCommercials(userId: number, isAdmin: boolean, productId: string | null | undefined): Promise<boolean> {
+  if (isAdmin) return true;
+  if (!productId) return false;
+  const db = await getDb();
+  if (!db) return false;
+  const rows = await db
+    .select({ id: projects.id })
+    .from(projects)
+    .leftJoin(projectMembers, eq(projectMembers.projectId, projects.id))
+    .where(
+      and(
+        eq(projects.productId, productId),
+        or(
+          eq(projects.createdBy, userId),
+          eq(projects.pmUserId, userId),
+          eq(projectMembers.userId, userId),
+        ),
+      ),
+    )
+    .limit(1);
+  return rows.length > 0;
+}
+
+/** 某冻结版本所属的产品 id */
+export async function getProductIdByRevisionId(revisionId: number): Promise<string | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db
+    .select({ productId: productRevisions.productId })
+    .from(productRevisions)
+    .where(eq(productRevisions.id, revisionId))
+    .limit(1);
+  return row?.productId ?? null;
 }
 
 /** where-used：某零部件产品被哪些整机产品的冻结 BOM 引用 */

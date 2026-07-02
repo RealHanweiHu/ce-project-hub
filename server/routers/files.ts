@@ -36,10 +36,11 @@ import type { Express, Request, Response } from "express";
 import { createContext } from "../_core/context";
 import { getEffectiveProjectRoleById as getEffectiveRole } from "../project-access";
 import { normalizeFileType, normalizeFileVersion } from "../../shared/file-types";
+import { canMutateFileForProject } from "../deliverable-access";
 
 // ── Permission helper ─────────────────────────────────────────────────────────
 
-function canMutateFile(role: keyof typeof ROLE_PERMISSIONS, taskScoped: boolean) {
+function canDeleteFile(role: keyof typeof ROLE_PERMISSIONS, taskScoped: boolean) {
   const permissions = ROLE_PERMISSIONS[role];
   return permissions.canEditProjectInfo || (taskScoped && permissions.canEditTasks);
 }
@@ -101,7 +102,7 @@ export const filesRouter = router({
       if (!file || file.projectId !== input.projectId) {
         throw new TRPCError({ code: "NOT_FOUND", message: "File not found" });
       }
-      if (!role || !canMutateFile(role, !!file.taskId)) {
+      if (!role || !canDeleteFile(role, !!file.taskId)) {
         throw new TRPCError({ code: "FORBIDDEN" });
       }
 
@@ -182,7 +183,20 @@ export function registerFileUploadRoute(app: Express) {
 
         // Permission check
         const role = await getEffectiveRole(projectId, ctx.user.id);
-        if (!role || !canMutateFile(role, !!taskId)) {
+        if (!role) {
+          res.status(403).json({ error: "Forbidden" });
+          return;
+        }
+        const canUpload = await canMutateFileForProject({
+          projectId,
+          actorId: ctx.user.id,
+          role,
+          permissions: ROLE_PERMISSIONS[role],
+          phaseId: phaseId || null,
+          taskId: taskId || null,
+          deliverableName: deliverableName || null,
+        });
+        if (!canUpload) {
           res.status(403).json({ error: "Forbidden" });
           return;
         }

@@ -99,6 +99,10 @@ export const gateReviewsRouter = router({
       const { id, projectId, ...patch } = input;
       const reviews = await getProjectGateReviews(projectId);
       const beforeReview = reviews.find((review) => review.id === id);
+      // 评审必须属于鉴权所用的 projectId，否则可用自己项目的角色改写他人项目的评审（IDOR）
+      if (!beforeReview) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "评审记录不存在" });
+      }
       await updateProjectGateReview(id, patch);
       await createActivityLog({
         projectId,
@@ -198,6 +202,11 @@ export const gateReviewsRouter = router({
       const role = await getEffectiveRole(input.projectId, ctx.user.id);
       if (!role || !ROLE_PERMISSIONS[role].canGateReview) {
         throw new TRPCError({ code: "FORBIDDEN", message: "只有管理层可以删除门评审" });
+      }
+      // 同 update：评审必须属于鉴权所用的 projectId（防跨项目 IDOR 删除）
+      const reviews = await getProjectGateReviews(input.projectId);
+      if (!reviews.some((review) => review.id === input.id)) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "评审记录不存在" });
       }
       await deleteProjectGateReview(input.id);
       await createActivityLog({
