@@ -11,13 +11,13 @@ ECS="$ECS_USER@$ECS_HOST"
 SSH_COMMON=(-o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=2)
 SSH_CMD=(ssh -p "$ECS_PORT" "${SSH_COMMON[@]}" "$ECS")
 
-echo "==> 检查 SSH 连接 $ECS:$ECS_PORT"
+echo "==> 检查 SSH 连接 ${ECS}:${ECS_PORT}"
 if ! "${SSH_CMD[@]}" "mkdir -p '$DIR'"; then
   cat <<EOF
-无法通过 SSH 连接到 $ECS:$ECS_PORT，部署尚未开始。
+无法通过 SSH 连接到 ${ECS}:${ECS_PORT}，部署尚未开始。
 
 请先在 ECS 控制台/Workbench 检查：
-  - 安全组是否放行本机出口 IP 到 $ECS_PORT 端口
+  - 安全组是否放行本机出口 IP 到 ${ECS_PORT} 端口
   - sshd 是否正在运行，且没有被 fail2ban/sshguard 拦截
   - root 登录是否仍允许，或部署用户/端口是否已变更
 
