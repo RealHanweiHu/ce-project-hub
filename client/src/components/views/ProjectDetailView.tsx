@@ -49,6 +49,7 @@ import { trpc } from '@/lib/trpc';
 import { toast } from 'sonner';
 import { getTaskDeliverables } from '@shared/task-deliverables';
 import { FILE_TYPES } from '@shared/file-types';
+import { canRoleContributeToDeliverable, canRoleReviewDeliverables, preferredDeliverableReviewerRoles } from '@shared/deliverable-permissions';
 import { Users } from 'lucide-react';
 
 const MAX_FILE_SIZE = 16 * 1024 * 1024;
@@ -199,9 +200,9 @@ function dedupeRelatedIssues(issues: Issue[]): RelatedIssueDisplay[] {
 }
 
 function EditableText({
-  value, onChange, className = '', placeholder = '点击编辑', inputClassName = '',
+  value, onChange, className = '', placeholder = '点击编辑', inputClassName = '', readOnly = false,
 }: {
-  value: string; onChange: (v: string) => void; className?: string; placeholder?: string; inputClassName?: string;
+  value: string; onChange: (v: string) => void; className?: string; placeholder?: string; inputClassName?: string; readOnly?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value || '');
@@ -211,6 +212,11 @@ function EditableText({
     setEditing(false);
     if (draft !== value) onChange(draft);
   };
+
+  // 无编辑权限：纯展示，不进入编辑态，避免「看似可编辑、改完 blur 丢弃/报权限错」
+  if (readOnly) {
+    return <span className={className}>{value || <span className="text-muted-foreground italic">{placeholder}</span>}</span>;
+  }
 
   if (editing) {
     return (
@@ -450,6 +456,28 @@ const ROLE_OPTIONS = [
 
 // O(1) role → label lookup (ROLE_OPTIONS is static, so this Map is module-level too).
 const ROLE_LABEL_BY_VALUE = new Map<string, string>(ROLE_OPTIONS.map((o) => [o.value, o.label]));
+
+function canSubmitDeliverableFromUi({
+  deliverableName,
+  role,
+  canEditTasks,
+  canEditProjectInfo,
+  isTaskAssignee,
+  taskVisibleRoles,
+}: {
+  deliverableName: string;
+  role: string;
+  canEditTasks: boolean;
+  canEditProjectInfo: boolean;
+  isTaskAssignee: boolean;
+  taskVisibleRoles: string[];
+}) {
+  if (canEditProjectInfo || canEditTasks) return true;
+  if (!role || role === 'viewer') return false;
+  if (isTaskAssignee) return true;
+  if (taskVisibleRoles.length > 0 && taskVisibleRoles.includes(role)) return true;
+  return canRoleContributeToDeliverable(role, deliverableName);
+}
 
 // Static task-status / priority configs — hoisted out of TaskDetail so they aren't
 // re-created every render (no closure dependencies).
@@ -714,30 +742,99 @@ function pickDeliverableReviewer(
   deliverableName: string,
   members: Array<{ userId: number; role: string; isOwner?: boolean | null }>,
 ) {
-  const lower = deliverableName.toLowerCase();
-  const rolePreference =
-    /电池|battery|bms|cell|pack/.test(lower)
-      ? ['battery_safety', 'cert', 'qa']
-      : /认证|安规|合规|cert|compliance|emc|fcc|ce\b|ul\b|rohs|safety/.test(lower)
-        ? ['cert', 'battery_safety', 'qa']
-        : /测试|验证|可靠|报告|检验|品质|test|qa|reliability|evt|dvt|pvt/.test(lower)
-          ? ['qa']
-          : /bom|物料|供应|采购|成本|替代料|supplier|supply|cost|material/.test(lower)
-            ? ['scm']
-            : [];
+  const rolePreference = preferredDeliverableReviewerRoles(deliverableName);
   return rolePreference
     .map((role) => members.find((member) => member.role === role))
     .find(Boolean);
 }
 
+function DeliverableEvidenceUploadButton({
+  projectId,
+  phaseId,
+  taskId,
+  deliverableName,
+  hasFile,
+  onUploaded,
+}: {
+  projectId: string;
+  phaseId: string;
+  taskId?: string;
+  deliverableName: string;
+  hasFile: boolean;
+  onUploaded: () => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+
+  const handleFiles = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0 || uploading) return;
+    setUploading(true);
+    let uploaded = 0;
+    try {
+      for (const file of Array.from(fileList)) {
+        if (file.size > MAX_FILE_SIZE) {
+          toast.error(`文件 "${file.name}" 超出 ${formatBytes(MAX_FILE_SIZE)} 限制`);
+          continue;
+        }
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('projectId', projectId);
+        formData.append('phaseId', phaseId);
+        if (taskId) formData.append('taskId', taskId);
+        formData.append('deliverableName', deliverableName);
+        const resp = await fetch('/api/files/upload', {
+          method: 'POST',
+          body: formData,
+          credentials: 'include',
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({ error: resp.statusText }));
+          toast.error(`上传 "${file.name}" 失败: ${(err as any).error || resp.statusText}`);
+          continue;
+        }
+        uploaded += 1;
+      }
+      if (uploaded > 0) {
+        toast.success(uploaded === 1 ? '证据已上传' : `已上传 ${uploaded} 个证据文件`);
+        onUploaded();
+      }
+    } finally {
+      setUploading(false);
+      if (inputRef.current) inputRef.current.value = '';
+    }
+  };
+
+  return (
+    <>
+      <input
+        ref={inputRef}
+        type="file"
+        multiple
+        className="hidden"
+        disabled={uploading}
+        onChange={(e) => handleFiles(e.target.files)}
+      />
+      <button
+        type="button"
+        disabled={uploading}
+        onClick={() => inputRef.current?.click()}
+        className="text-[10px] rounded px-1.5 py-0.5 bg-secondary text-muted-foreground border border-border hover:text-foreground hover:bg-secondary/80 disabled:opacity-50 transition-colors"
+      >
+        {uploading ? '上传中' : hasFile ? '补充证据' : '上传证据'}
+      </button>
+    </>
+  );
+}
+
 function DeliverableReviewControls({
-  projectId, phaseId, deliverableNames, canEditTasks, currentUserId, isAdmin,
+  projectId, phaseId, deliverableNames, canEditTasks, canSubmitDeliverable, currentUserId, isAdmin,
   gateTaskId, pmUserId,
 }: {
   projectId: string;
   phaseId: string;
   deliverableNames: string[];
   canEditTasks: boolean;
+  canSubmitDeliverable: (deliverableName: string) => boolean;
   currentUserId: number | undefined;
   isAdmin: boolean;
   gateTaskId?: string;
@@ -783,7 +880,8 @@ function DeliverableReviewControls({
   const uploadedNames = new Set(files.map((f) => (f as { deliverableName?: string | null }).deliverableName).filter((n): n is string => !!n));
 
   // Type-aware reviewer default, then PM/Owner fallback.
-  const pmMember = members.find((m) => m.userId === pmUserId) ?? members.find((m) => m.role === 'pm' || m.isOwner);
+  const reviewableMembers = members.filter((m) => canRoleReviewDeliverables(m.role) || m.isOwner);
+  const pmMember = reviewableMembers.find((m) => m.userId === pmUserId) ?? reviewableMembers.find((m) => m.role === 'pm' || m.isOwner);
 
   return (
     <div className="mt-3 pt-3 border-t border-border space-y-2">
@@ -798,9 +896,10 @@ function DeliverableReviewControls({
 
         // can the current user act as reviewer?
         const isReviewer = !!record && (isAdmin || record.reviewerUserId === currentUserId);
+        const canSubmitName = canSubmitDeliverable(name);
 
         // reviewer select state for submit
-        const defaultReviewer = pickDeliverableReviewer(name, members) ?? pmMember;
+        const defaultReviewer = pickDeliverableReviewer(name, reviewableMembers) ?? pmMember;
         const selReviewer = reviewerSelections[name] !== undefined ? reviewerSelections[name] : (defaultReviewer?.userId ?? '');
 
         return (
@@ -833,8 +932,22 @@ function DeliverableReviewControls({
                   </span>
                 )}
 
-                {/* Submit action: canEditTasks && (no record || rejected) */}
-                {canEditTasks && (!record || record.status === 'rejected') && (
+                {canSubmitName && record?.status !== 'approved' && (
+                  <DeliverableEvidenceUploadButton
+                    projectId={projectId}
+                    phaseId={phaseId}
+                    taskId={gateTaskId}
+                    deliverableName={name}
+                    hasFile={hasFile}
+                    onUploaded={() => {
+                      utils.files.list.invalidate({ projectId, phaseId });
+                      if (gateTaskId) utils.gateReviews.readiness.invalidate({ projectId, phaseId });
+                    }}
+                  />
+                )}
+
+                {/* Submit action: deliverable evidence submitter && (no record || rejected) */}
+                {canSubmitName && hasFile && (!record || record.status === 'rejected') && (
                   <div className="flex items-center gap-1">
                     <select
                       value={selReviewer}
@@ -842,7 +955,7 @@ function DeliverableReviewControls({
                       className="text-[10px] rounded border border-border bg-card text-muted-foreground px-1 py-0.5 focus:outline-none focus:border-[color:var(--acc-border)]"
                     >
                       <option value="">— 选审核人 —</option>
-                      {members.map((m) => (
+                      {reviewableMembers.map((m) => (
                         <option key={m.userId} value={m.userId}>
                           {m.userName ?? m.userEmail ?? `用户${m.userId}`} · {ROLE_LABEL_BY_VALUE.get(m.role) ?? m.role}
                         </option>
@@ -938,6 +1051,10 @@ function GateDeliverableOverridePanel({
   const { data: overrides = [] } = trpc.tailoring.deliverableOverrides.useQuery({ projectId });
 
   const overrideMut = trpc.tailoring.setDeliverableOverride.useMutation({
+    onError: (e) => {
+      // 服务端仅允许 PM/管理员裁剪；失败要给出可读提示而不是静默不变
+      toast.error(e.data?.code === 'FORBIDDEN' ? '仅项目 PM 或管理员可调整流程裁剪' : `裁剪失败：${e.message}`);
+    },
     onSettled: () => {
       utils.tailoring.effectiveProcess.invalidate({ projectId });
       utils.tailoring.deliverableOverrides.invalidate({ projectId });
@@ -958,6 +1075,12 @@ function GateDeliverableOverridePanel({
       .filter((o) => o.nodePhaseId === phaseId && o.action === 'remove')
       .map((o) => o.deliverableName)
   );
+  // 排除项的豁免理由（存量 grandfather 或手动豁免时记录），用于展示审计痕迹
+  const reasonByName = new Map(
+    overrides
+      .filter((o) => o.nodePhaseId === phaseId && o.action === 'remove' && o.reason)
+      .map((o) => [o.deliverableName, o.reason as string])
+  );
 
   const effectiveSet = new Set(effectiveDeliverables);
 
@@ -972,8 +1095,16 @@ function GateDeliverableOverridePanel({
   };
 
   const handleRemoveOverride = (name: string, action: 'clear' | 'remove') => {
+    // 排除(豁免)必备交付物时要求记录理由，留审计痕迹（撤销/添加不需要）
+    let reason: string | null = null;
+    if (action === 'remove') {
+      const input = window.prompt(`排除（豁免）「${name}」的理由（必填，将记录在案）：`, '');
+      if (input == null) return;            // 取消
+      if (!input.trim()) { toast.error('请填写豁免理由'); return; }
+      reason = input.trim();
+    }
     setPending(name);
-    overrideMut.mutate({ projectId, nodePhaseId: phaseId, deliverableName: name, action });
+    overrideMut.mutate({ projectId, nodePhaseId: phaseId, deliverableName: name, action, reason });
   };
 
   // 只要有可添加条目、有手动项或有已排除项，就渲染面板
@@ -1038,12 +1169,17 @@ function GateDeliverableOverridePanel({
         </div>
       ))}
 
-      {/* 已被排除的项（action=remove）→ 显示并提供恢复 */}
+      {/* 已被排除/豁免的项（action=remove）→ 显示理由并提供恢复 */}
       {Array.from(removedNames).map((name) => (
-        <div key={name} className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-          <span className="flex items-center gap-1 min-w-0">
-            <span className="text-[9px] text-muted-foreground bg-secondary border border-border rounded px-1 py-0.5 shrink-0">已排除</span>
-            <span className="truncate line-through">{name}</span>
+        <div key={name} className="flex items-start justify-between gap-2 text-xs text-muted-foreground">
+          <span className="flex flex-col gap-0.5 min-w-0">
+            <span className="flex items-center gap-1 min-w-0">
+              <span className="text-[9px] text-muted-foreground bg-secondary border border-border rounded px-1 py-0.5 shrink-0">已豁免</span>
+              <span className="truncate line-through">{name}</span>
+            </span>
+            {reasonByName.has(name) && (
+              <span className="text-[10px] text-muted-foreground/80 pl-1 line-clamp-2">理由：{reasonByName.get(name)}</span>
+            )}
           </span>
           <button
             disabled={pending === name || overrideMut.isPending}
@@ -1736,8 +1872,13 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
       detailUtils.tasks.list.invalidate({ projectId: project.id });
       detailUtils.projects.get.invalidate({ id: project.id });
     },
+    onError: (e) => {
+      toast.error(e.data?.code === 'FORBIDDEN' ? '没有撤回此任务的权限' : `撤回失败：${e.message}`);
+    },
   });
   const withdrawTaskApproval = (taskId: string) => {
+    // 无编辑权者点了也会被服务端拒；提前拦一下给出明确反馈
+    if (!canActOnTask(taskId)) { toast.error('没有撤回此任务的权限（仅任务负责人或对应岗位）'); return; }
     withdrawApprovalMut.mutate({ projectId: project.id, phaseId: activePhaseId, taskId, completed: false });
   };
   const { data: effectiveProcess } = trpc.tailoring.effectiveProcess.useQuery(
@@ -1871,6 +2012,18 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
   const selectedTaskRoles = selectedTask
     ? project.taskVisibleRoles?.[selectedTask.id] ?? (selectedTask.visibleRoles || [])
     : [];
+  // 任务当事人：被指派人，或任务对其角色可见（viewer 除外）。与服务端 taskAllowsEvidence
+  // 判定一致——qa/scm/sales/cert/battery_safety 没有 canEditTasks，这是他们完成自己任务的通道。
+  const canActOnTask = (taskId: string) => {
+    if (perms.canEditTasks) return true;
+    if (!perms.role || perms.role === 'viewer') return false;
+    const assignee = activePhaseData?.taskDetails?.[taskId]?.assigneeUserId;
+    if (assignee != null && assignee === currentUser?.id) return true;
+    const effectiveRoles = project.taskVisibleRoles?.[taskId]
+      ?? (activePhase?.tasks.find((t) => t.id === taskId)?.visibleRoles || []);
+    return effectiveRoles.length > 0 && effectiveRoles.includes(perms.role);
+  };
+  const canActOnSelectedTask = selectedTask ? canActOnTask(selectedTask.id) : false;
   const compactTaskDetail = isExecutionRole(perms.role) && !selectedTaskIsGate;
   // P2: 执行角色(如结构工程师)收敛项目详情标签——只保留 总览/任务/问题/BOM/文件,
   // 隐藏 PM/管理层导向的 度量/看板/需求池/甘特/变更,减少干扰(内容仍按 mainTab 渲染,不影响深链)。
@@ -1927,7 +2080,11 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
   const toggleTask = (taskId: string) => {
     // Gate lock check: if this phase is locked, disallow toggling
     if (!isPhaseUnlocked(project, activePhaseId)) return;
-    if (!perms.canEditTasks) return;
+    // 无权限时给出明确反馈，不做静默 no-op（用户点了没反应会反复点）
+    if (!canActOnTask(taskId)) {
+      toast.error('没有编辑此任务的权限（仅任务负责人或对应岗位可完成）');
+      return;
+    }
     const newProject = { ...project };
     newProject.phases = { ...project.phases };
     newProject.phases[activePhaseId] = {
@@ -2112,7 +2269,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
-              <EditableText value={project.code} onChange={perms.canEditProjectInfo ? (v) => updateField('code', v) : () => {}} className="text-[10px] num uppercase tracking-widest text-muted-foreground" />
+              <EditableText value={project.code} onChange={perms.canEditProjectInfo ? (v) => updateField('code', v) : () => {}} readOnly={!perms.canEditProjectInfo} className="text-[10px] num uppercase tracking-widest text-muted-foreground" />
               {catConfig && (
                 <span className={`text-[9px] uppercase tracking-wider rounded px-1.5 py-0.5 ${catConfig.color} ${catConfig.textColor} border ${catConfig.borderColor}`}>
                   {catConfig.badge}
@@ -2123,6 +2280,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
               <EditableText
                 value={project.name}
                 onChange={perms.canEditProjectInfo ? (v) => updateField('name', v) : () => {}}
+                readOnly={!perms.canEditProjectInfo}
                 className="text-3xl lg:text-4xl font-bold tracking-[-0.4px] text-foreground leading-tight"
                 inputClassName="text-3xl lg:text-4xl font-bold tracking-[-0.4px] text-foreground leading-tight w-full"
               />
@@ -2130,12 +2288,17 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
             <div className="flex flex-wrap items-center gap-x-6 gap-y-2 mt-3 text-xs text-muted-foreground">
               <div className="flex items-center gap-1.5">
                 <span className="text-[10px] uppercase tracking-wider text-muted-foreground">类型</span>
-                <EditableSelect
-                  value={project.type}
-                  options={['汽车充气泵', '自行车充气泵', '户外充气泵', '车载吸尘器', '暴力风扇', '胎压计', '机械式打气筒', '组件']}
-                  onChange={(v) => updateField('type', v)}
-                  className="text-xs text-foreground"
-                />
+                {perms.canEditProjectInfo ? (
+                  <EditableSelect
+                    value={project.type}
+                    options={['汽车充气泵', '自行车充气泵', '户外充气泵', '车载吸尘器', '暴力风扇', '胎压计', '机械式打气筒', '组件']}
+                    // 产品类型持久化到 customFields.productType（无独立列），并同步 type 供即时显示
+                    onChange={(v) => onUpdate({ ...project, type: v, customFields: { ...(project.customFields ?? {}), productType: v } })}
+                    className="text-xs text-foreground"
+                  />
+                ) : (
+                  <span className="text-xs text-foreground">{project.type || '—'}</span>
+                )}
               </div>
               <div className="flex items-center gap-1.5">
                 <span className="text-[10px] uppercase tracking-wider text-muted-foreground">PM</span>
@@ -2147,9 +2310,9 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
               </div>
               <div className="flex items-center gap-1.5">
                 <Calendar size={12} className="text-muted-foreground" />
-                <EditableText value={project.startDate} onChange={(v) => updateField('startDate', v)} className="text-xs num text-foreground" placeholder="开始日期" />
+                <EditableText value={project.startDate} onChange={perms.canEditProjectInfo ? (v) => updateField('startDate', v) : () => {}} readOnly={!perms.canEditProjectInfo} className="text-xs num text-foreground" placeholder="开始日期" />
                 <span className="text-muted-foreground">→</span>
-                <EditableText value={project.targetDate} onChange={(v) => updateField('targetDate', v)} className="text-xs num text-foreground" placeholder="目标日期" />
+                <EditableText value={project.targetDate} onChange={perms.canEditProjectInfo ? (v) => updateField('targetDate', v) : () => {}} readOnly={!perms.canEditProjectInfo} className="text-xs num text-foreground" placeholder="目标日期" />
               </div>
               <div className="flex items-center gap-1.5">
                 <button
@@ -2937,7 +3100,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                                 : getTaskDeliverables(selectedTask.id, activePhase?.deliverables || [])
                             }
                             status={selectedTaskDetails?.deliverables || {}}
-                            canEdit={perms.canEditTasks && isCurrentPhaseUnlocked}
+                            canEdit={canActOnSelectedTask && isCurrentPhaseUnlocked}
                             carried={selectedTaskIsGate ? activeGateCarriedMap : undefined}
                           />
                           {selectedTaskIsGate && (
@@ -2945,7 +3108,8 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                               projectId={project.id}
                               phaseId={activePhaseId}
                               effectiveDeliverables={activeGateDeliverables}
-                              canEdit={perms.canEditTasks}
+                              /* 与服务端一致：仅管理员 / 项目 PM(pmUserId 或 pm 角色) 可裁剪，避免 owner/rd_* 看到必失败的按钮 */
+                              canEdit={currentUser?.role === 'admin' || project.pmUserId === currentUser?.id || perms.role === 'pm'}
                             />
                           )}
                           {selectedTaskIsGate && activeGateDeliverables.length > 0 && (
@@ -2954,6 +3118,15 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                               phaseId={activePhaseId}
                               deliverableNames={activeGateDeliverables}
                               canEditTasks={perms.canEditTasks}
+                              canSubmitDeliverable={(name) => canSubmitDeliverableFromUi({
+                                deliverableName: name,
+                                role: perms.role,
+                                canEditTasks: perms.canEditTasks,
+                                canEditProjectInfo: perms.canEditProjectInfo,
+                                isTaskAssignee: selectedTaskDetails?.assigneeUserId != null
+                                  && selectedTaskDetails.assigneeUserId === currentUser?.id,
+                                taskVisibleRoles: selectedTaskRoles,
+                              })}
                               currentUserId={currentUser?.id}
                               isAdmin={currentUser?.role === 'admin'}
                               gateTaskId={activePhase?.gateTaskId}
@@ -3103,7 +3276,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                           taskId={selectedTask.id}
                           taskDetails={selectedTaskDetails || { instructions: '', files: [] }}
                           onUpdate={(details) => updateTaskDetails(selectedTask.id, details)}
-                          canEdit={perms.canEditTasks && isCurrentPhaseUnlocked}
+                          canEdit={canActOnSelectedTask && isCurrentPhaseUnlocked}
                           compact={compactTaskDetail}
                           projectId={project.id}
                           phaseId={activePhaseId}
@@ -3216,7 +3389,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                           }}
                           canEditRoles={perms.canEditProjectInfo}
                           currentUserId={currentUser?.id}
-                          canEdit={perms.canEditTasks && isCurrentPhaseUnlocked}
+                          canEdit={canActOnSelectedTask && isCurrentPhaseUnlocked}
                           /* 优先级仅管理/PM 可改 */
                           canEditPriority={perms.canEditProjectInfo}
                           /* 文件上传/删除限负责人本人或管理/PM */
@@ -3342,8 +3515,13 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
           existingReviews={activePhaseData?.gateReviews}
           projectId={project.id}
           gateTaskId={activePhase?.gateTaskId}
+          /* 就绪清单上传/删除按钮：viewer 隐藏，避免点了就 403 */
+          canEditDeliverables={perms.role !== 'viewer' && (perms.canEditProjectInfo || perms.canEditTasks)}
           blockers={computeGateReadiness(activePhase, activePhaseData, activeGateDeliverables, serverDelivSatisfiedSet).blockers}
-          onConfirm={perms.canGateReview ? handleGateReviewConfirm : () => {}}
+          onConfirm={perms.canGateReview
+            ? handleGateReviewConfirm
+            // readOnly 下表单不会渲染；这里兜底报错而不是静默丢弃，防止未来回归
+            : () => toast.error('只有管理层可以提交 Gate 评审结论')}
           onCancel={() => setGateReviewPending(null)}
           readOnly={!perms.canGateReview}
         />

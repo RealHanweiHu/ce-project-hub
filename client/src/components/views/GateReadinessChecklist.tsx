@@ -17,8 +17,8 @@ type FileRow = { id: number; name: string; deliverableName: string | null; stora
  * 交付物维度可逐项展开上传（多版本），上传/删除自动刷新就绪度。
  */
 export function GateReadinessChecklist({
-  projectId, phaseId, gateTaskId,
-}: { projectId: string; phaseId: string; gateTaskId: string }) {
+  projectId, phaseId, gateTaskId, canEdit = true,
+}: { projectId: string; phaseId: string; gateTaskId: string; canEdit?: boolean }) {
   const utils = trpc.useUtils();
   const { data: readiness, isLoading } = trpc.gateReviews.readiness.useQuery({ projectId, phaseId });
   const { data: files = [] } = trpc.files.list.useQuery({ projectId, phaseId, taskId: gateTaskId });
@@ -43,7 +43,10 @@ export function GateReadinessChecklist({
     await refresh();
   };
 
-  const del = trpc.files.delete.useMutation({ onSuccess: refresh, onError: (e) => toast.error(e.message) });
+  const del = trpc.files.delete.useMutation({
+    onSuccess: refresh,
+    onError: (e) => toast.error(e.data?.code === 'FORBIDDEN' ? '没有权限删除该文件' : (e.message || '删除失败')),
+  });
 
   if (isLoading || !readiness) {
     return <div className="text-xs text-muted-foreground p-3 border border-border rounded-[9px] mb-4">就绪度加载中…</div>;
@@ -72,6 +75,7 @@ export function GateReadinessChecklist({
             <DeliverableRows
               missing={deliverablesDim?.blockers ?? []}
               files={files as FileRow[]}
+              canEdit={canEdit}
               onUpload={uploadFor}
               onDelete={(id) => del.mutate({ id, projectId })}
             />
@@ -88,10 +92,11 @@ export function GateReadinessChecklist({
 }
 
 function DeliverableRows({
-  missing, files, onUpload, onDelete,
+  missing, files, canEdit, onUpload, onDelete,
 }: {
   missing: string[];
   files: FileRow[];
+  canEdit: boolean;
   onUpload: (name: string, file: File) => void;
   onDelete: (id: number) => void;
 }) {
@@ -109,16 +114,18 @@ function DeliverableRows({
             <div className="flex items-center gap-2">
               {has ? <CheckCircle2 size={12} className="text-[color:var(--success)] shrink-0" /> : <XCircle size={12} className="text-destructive shrink-0" />}
               <span className={has ? "text-foreground" : "text-muted-foreground"}>{name}</span>
-              <UploadButton onPick={(f) => onUpload(name, f)} />
+              {canEdit && <UploadButton onPick={(f) => onUpload(name, f)} />}
             </div>
             {versions.map((v, idx) => (
               <div key={v.id} className="flex items-center gap-1 ml-5 mt-0.5 text-muted-foreground">
                 <FileText size={11} className="shrink-0" />
                 <a href={v.storageUrl} target="_blank" rel="noreferrer" className="hover:underline truncate max-w-[180px]">{v.name}</a>
                 {idx === 0 && <span className="text-[10px] text-[color:var(--success)]">最新</span>}
-                <button onClick={() => onDelete(v.id)} className="text-muted-foreground hover:text-destructive" title="删除该版本">
-                  <Trash2 size={11} />
-                </button>
+                {canEdit && (
+                  <button onClick={() => onDelete(v.id)} className="text-muted-foreground hover:text-destructive" title="删除该版本">
+                    <Trash2 size={11} />
+                  </button>
+                )}
               </div>
             ))}
           </div>

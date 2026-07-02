@@ -23,8 +23,13 @@ export function OverviewPage({ onSelectProject, onSelectView }: { onSelectProjec
 
   const isAdmin = user?.role === "admin";
   const isPM = useMemo(() => portfolio.some((r) => r.pmUserId === user?.id), [portfolio, user?.id]);
-  // 视角由角色自动决定：admin → 管理层大盘；PM → PM 工作台；其他 → null（空状态）
-  const activeLens: Lens | null = isAdmin ? "exec" : isPM ? "pm" : null;
+  // 项目角色 manager/owner（非全局 admin）也应有管理视角，而不是落到空状态
+  const isProjectManager = useMemo(
+    () => portfolio.some((r) => r.myRole === "manager" || r.myRole === "owner"),
+    [portfolio],
+  );
+  // 视角由角色自动决定：admin/项目管理层/owner → 管理层大盘；PM → PM 工作台；其他 → null（空状态）
+  const activeLens: Lens | null = (isAdmin || isProjectManager) ? "exec" : isPM ? "pm" : null;
 
   const [drill, setDrill] = useState<"overdue" | "blocked" | null>(null);
   const dashboardRows = useMemo(() => (

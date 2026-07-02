@@ -290,15 +290,18 @@ interface GateReviewModalProps {
   /** 提供 projectId + gateTaskId 时，改用服务端就绪度清单（4 维 + 交付物上传），取代源错的客户端 blockers 展示 */
   projectId?: string;
   gateTaskId?: string;
+  /** 是否允许在就绪清单里上传/删除交付物证据（viewer 等无权者隐藏按钮） */
+  canEditDeliverables?: boolean;
   onConfirm: (review: GateReview) => void;
   onCancel: () => void;
   readOnly?: boolean;
 }
 
 export function GateReviewModal({
-  open, phaseId, phaseName, gateName, gateStandard, existingReviews = [], blockers = [], projectId, gateTaskId, onConfirm, onCancel, readOnly = false,
+  open, phaseId, phaseName, gateName, gateStandard, existingReviews = [], blockers = [], projectId, gateTaskId, canEditDeliverables = false, onConfirm, onCancel, readOnly = false,
 }: GateReviewModalProps) {
-  const [showForm, setShowForm] = useState(existingReviews.length === 0);
+  // readOnly（无 canGateReview 权限）绝不能进表单：否则用户填完提交被静默丢弃
+  const [showForm, setShowForm] = useState(existingReviews.length === 0 && !readOnly);
   const latestReview = existingReviews[existingReviews.length - 1];
   const nextRound = existingReviews.length + 1;
 
@@ -347,7 +350,7 @@ export function GateReviewModal({
 
         {/* 就绪度：有 projectId+gateTaskId 时用服务端清单（4 维 + 交付物上传），否则回退到传入的 blockers */}
         {projectId && gateTaskId ? (
-          <GateReadinessChecklist projectId={projectId} phaseId={phaseId} gateTaskId={gateTaskId} />
+          <GateReadinessChecklist projectId={projectId} phaseId={phaseId} gateTaskId={gateTaskId} canEdit={canEditDeliverables} />
         ) : blockers.length > 0 ? (
           <div className="border border-[color:var(--warning)] bg-[color:var(--warning-soft)] rounded-[9px] p-3 mb-4">
             <div className="text-[11px] font-semibold text-[color:var(--warning)] mb-1">⚠ 就绪检查未通过</div>
@@ -382,7 +385,7 @@ export function GateReviewModal({
         )}
 
         {/* Add new review or show button */}
-        {showForm ? (
+        {showForm && !readOnly ? (
           <NewReviewForm
             roundNumber={nextRound}
             onSubmit={handleSubmit}
@@ -405,8 +408,15 @@ export function GateReviewModal({
                 {latestReview?.decision === 'rejected' ? '发起重新评审' : '新增评审记录'}
               </button>
             )}
-            {readOnly && existingReviews.length === 0 && (
-              <p className="text-xs text-muted-foreground text-center py-3">暂无评审记录</p>
+            {readOnly && (
+              <div className="flex items-start gap-2 p-3 rounded-[9px] bg-secondary border border-border text-xs text-muted-foreground">
+                <AlertCircle size={13} className="shrink-0 mt-0.5" />
+                <span>
+                  仅管理层（manager/owner/管理员）可填写 Gate 评审结论。
+                  {existingReviews.length === 0 ? '暂无评审记录——' : ''}
+                  请准备好就绪度与交付物后，通知管理层进行评审。
+                </span>
+              </div>
             )}
             <button
               onClick={onCancel}

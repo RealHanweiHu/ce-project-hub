@@ -13,7 +13,7 @@
 import { useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { getQueryKey } from '@trpc/react-query';
-import { Search, Flag, Check, List as ListIcon, LayoutGrid } from 'lucide-react';
+import { Search, Flag, Check, List as ListIcon, LayoutGrid, ClipboardCheck } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { toast } from 'sonner';
 import { cn, toLocalISODate, localISODatePlus } from '@/lib/utils';
@@ -124,6 +124,8 @@ function DueText({ task, className }: { task: Task; className?: string }) {
 export function MyTasksView({ onSelectProject }: { onSelectProject: (id: string, focus?: TaskFocus) => void }) {
   const queryClient = useQueryClient();
   const { data: workbench } = trpc.workbench.mine.useQuery();
+  // 待你审核的交付物——被选为审核人的 qa/cert/scm 等角色的复核入口（此前只在 PM 视角可见）
+  const { data: pendingReviews = [] } = trpc.deliverableReviews.myPending.useQuery();
   const setCompleted = trpc.tasks.setCompleted.useMutation({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: getQueryKey(trpc.workbench.mine) });
@@ -220,6 +222,31 @@ export function MyTasksView({ onSelectProject }: { onSelectProject: (id: string,
           我 · <span className="num">{openCount}</span> 项进行中 · <span className="num">{overCount}</span> 项逾期
         </div>
       </div>
+
+      {/* 待你审核的交付物 —— 复核闭环入口 */}
+      {pendingReviews.length > 0 && (
+        <div className="mb-4 overflow-hidden rounded-[11px] border border-[color:var(--warning)] bg-[color:var(--warning-soft)]">
+          <div className="flex items-center gap-1.5 border-b border-[color:var(--warning)] px-4 py-2">
+            <ClipboardCheck size={13} className="text-[color:var(--warning)]" />
+            <span className="text-[12.5px] font-semibold text-[color:var(--warning)]">待你审核的交付物</span>
+            <span className="num text-[12px] text-[color:var(--warning)]">{pendingReviews.length}</span>
+          </div>
+          {pendingReviews.map((r) => (
+            <div
+              key={r.id}
+              onClick={() => onSelectProject(r.projectId, { tab: 'tasks', phaseId: r.phaseId })}
+              className="flex cursor-pointer items-center gap-3 border-b border-[color:var(--warning)]/40 px-4 py-2.5 transition-colors last:border-none hover:bg-[color:var(--warning-soft)]"
+            >
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[color:var(--warning)]" />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[13.5px] font-medium text-foreground">{r.deliverableName}</div>
+                <div className="num mt-0.5 truncate text-[11px] text-muted-foreground">项目 {r.projectId} · {r.phaseId}</div>
+              </div>
+              <span className="shrink-0 text-[11px] font-medium text-[color:var(--warning)]">去审核 →</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {groups.length === 0 ? (
         <div className="flex flex-col items-center justify-center gap-2 rounded-[11px] border border-border bg-card py-16 text-center">
