@@ -15,6 +15,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { getQueryKey } from '@trpc/react-query';
 import { Search, Flag, Check, List as ListIcon, LayoutGrid } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
+import { toast } from 'sonner';
 import { cn, toLocalISODate, localISODatePlus } from '@/lib/utils';
 import { PageHeader, SegToggle } from '@/components/linear/primitives';
 import type { TaskStatus, TaskPriority } from '@shared/const';
@@ -125,6 +126,11 @@ export function MyTasksView({ onSelectProject }: { onSelectProject: (id: string,
   const { data: workbench } = trpc.workbench.mine.useQuery();
   const setCompleted = trpc.tasks.setCompleted.useMutation({
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: getQueryKey(trpc.workbench.mine) });
+    },
+    onError: (e) => {
+      // 失败时列表会回滚到未完成态,不提示的话用户会误以为已完成。
+      toast.error(`更新任务状态失败：${e.message}`);
       queryClient.invalidateQueries({ queryKey: getQueryKey(trpc.workbench.mine) });
     },
   });

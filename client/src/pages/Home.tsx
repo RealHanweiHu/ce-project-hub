@@ -520,21 +520,45 @@ function ProjectDetailWrapper({
           }
         }
 
-        await Promise.all(ops);
-        invalidate();
-        onSaveStatus('saved', new Date());
+        // 用 allSettled 而非 Promise.all：Promise.all 首个失败即抛出，会把「部分成功」
+        // 误报成整体失败;更糟的是失败时不 invalidate,已成功的「新建」项仍带临时 id 留在
+        // 本地,下次保存又被当成新建 → 重复入库。这里按结果分三种情形处理。
+        const results = await Promise.allSettled(ops);
+        const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+        const succeeded = results.length - failures.length;
+
+        if (failures.length === 0) {
+          invalidate();
+          onSaveStatus('saved', new Date());
+        } else if (succeeded > 0) {
+          // 部分成功:必须 invalidate 拉取服务器真值,否则已成功的新建项(临时 id)会在
+          // 下次保存被重复创建。代价是失败项会被刷新覆盖,故明确提示用户重填。
+          console.error('[handleUpdate] partial failure:', failures.map((f) => f.reason));
+          invalidate();
+          onSaveStatus('error');
+          toast.error(
+            `部分内容保存失败（${failures.length}/${results.length} 项）。页面已刷新为服务器最新状态，请重新填写未保存的部分。`,
+            { duration: 10000 },
+          );
+        } else {
+          // 整体失败:没有任何写入落库,保留用户已填内容,重试安全(不会产生重复)。
+          console.error('[handleUpdate] all failed:', failures.map((f) => f.reason));
+          onSaveStatus('error');
+          const err = failures[0]?.reason;
+          const msg = err instanceof Error ? err.message : String(err);
+          const status = (err as { data?: { httpStatus?: number }; shape?: { data?: { httpStatus?: number } } })?.data?.httpStatus
+            ?? (err as { shape?: { data?: { httpStatus?: number } } })?.shape?.data?.httpStatus;
+          const isAuth = status === 401 || status === 403 || /unauthorized|forbidden|401|403|登录|session|未授权|过期/i.test(msg);
+          toast.error(
+            isAuth ? '登录已过期，请重新登录后重试（你填的内容仍在页面上，未丢失）' : '保存失败，请检查网络后重试（你填的内容仍在页面上，未丢失）',
+            { duration: 8000 },
+          );
+        }
       } catch (err) {
+        // 兜底:构建 ops 阶段的意外异常(非 mutation 拒绝)。
         console.error('[handleUpdate] error:', err);
         onSaveStatus('error');
-        // 明确告知用户保存失败（旧版仅侧栏一行小字，窄屏不可见、易误以为已存）。
-        const msg = err instanceof Error ? err.message : String(err);
-        const status = (err as { data?: { httpStatus?: number }; shape?: { data?: { httpStatus?: number } } })?.data?.httpStatus
-          ?? (err as { shape?: { data?: { httpStatus?: number } } })?.shape?.data?.httpStatus;
-        const isAuth = status === 401 || status === 403 || /unauthorized|forbidden|401|403|登录|session|未授权|过期/i.test(msg);
-        toast.error(
-          isAuth ? '登录已过期，请重新登录后重试（你填的内容仍在页面上，未丢失）' : '保存失败，请检查网络后重试（你填的内容仍在页面上，未丢失）',
-          { duration: 8000 },
-        );
+        toast.error('保存失败，请检查网络后重试（你填的内容仍在页面上，未丢失）', { duration: 8000 });
       }
     }, 600);
   }, [
