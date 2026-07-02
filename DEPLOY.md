@@ -32,11 +32,26 @@ cp .env.example .env
 docker compose up -d --build
 
 # 4. 应用数据库迁移（首次/每次 schema 变更后）
-docker compose run --rm app sh -c "npx drizzle-kit migrate"
+#    生产镜像用 `pnpm install --prod` 不含 drizzle-kit（devDependency），
+#    所以用 drizzle-orm 的 runtime migrator（读 ./drizzle 下的 SQL，幂等）：
+docker compose run --rm -T app node -e '
+  const {drizzle}=require("drizzle-orm/node-postgres");
+  const {migrate}=require("drizzle-orm/node-postgres/migrator");
+  const {Pool}=require("pg");
+  const p=new Pool({connectionString:process.env.DATABASE_URL});
+  migrate(drizzle(p),{migrationsFolder:"./drizzle"})
+    .then(()=>{console.log("migrated OK");return p.end()})
+    .catch(e=>{console.error(e.message);process.exit(1)});
+'
+#    （scripts/deploy-ecs.sh 已自动执行同样的 runtime migrator，无需手动跑。）
 
-# 5. 创建 MinIO bucket（仅用内置 MinIO 时需要，首次一次）
-docker compose exec minio mkdir -p /data/cehub
+# 5. MinIO bucket 无需手动创建：应用启动时自动建桶（见 server/storage.ts ensureBucket）。
+#    托管 OSS 请预先在控制台建好桶（应用凭据通常无 CreateBucket 权限）。
 ```
+
+> **一次性：本版含 2026-07-02 Gate 收紧** —— 迁移后请再跑一次存量 grandfather（见下方
+> 「五、Aliyun RDS…」小节的注记，或 `pnpm tsx scripts/migrate-0035-grandfather-gates.ts --apply`），
+> 否则在途项目会被追溯打成 blocked。
 
 ## 三、初始化管理员
 
@@ -95,8 +110,18 @@ DNS 切换（在域名注册商处）：
      -c "CREATE DATABASE cehub OWNER ce_hub;"
    ```
 2. `cp .env.production .env`，compose 中删除（或忽略）`db` 服务。
-3. **应用迁移**：`docker compose run --rm app sh -c "npx drizzle-kit migrate"`。
+3. **应用迁移**：用上面「四 步骤 4」的 runtime migrator（生产镜像无 drizzle-kit）。
 4. ECS 上若与 RDS 同 VPC，可把 DATABASE_URL 的主机换成 RDS **内网地址**（更快且不走公网）。
+
+> **一次性：2026-07-02 Gate 收紧的存量 grandfather（升级到含该批改动的版本时必跑一次）**
+> 本批给 NPD/JDM/OBT 的 Gate 新增了电池安全/认证等必备交付物。**不做处理会让所有在途项目一部署就被打成 blocked**。跑这支幂等迁移，对「已过会」的 Gate 写入一次性豁免（`remove` override + 记录理由），使存量项目不被追溯打回；未过会/新项目按新严格标准执行：
+> ```bash
+> # 先 dry-run 看将豁免哪些项目/交付物
+> docker compose run --rm app node -e "require('child_process')" # 见下：脚本走 tsx
+> pnpm tsx scripts/migrate-0035-grandfather-gates.ts            # dry-run（默认）
+> pnpm tsx scripts/migrate-0035-grandfather-gates.ts --apply    # 确认后落库
+> ```
+> 生产镜像不含 tsx 时，可在能连生产 DATABASE_URL 的开发机上运行该脚本（它只读 projects/gate_reviews、写 project_deliverable_overrides）。豁免会显示在项目详情「资源库管理」里（“已豁免 + 理由”），可随时撤销恢复严格要求。
 
 - **OSS（可选替代 MinIO）**：开通 S3 兼容访问，`S3_ENDPOINT` 用**内网** endpoint（应用与 OSS 同地域时，如 `https://oss-cn-shenzhen-internal.aliyuncs.com`），`S3_FORCE_PATH_STYLE=false`；compose 中删除 `minio` 服务。当前默认方案是 compose 内置 MinIO，文件存 ECS 磁盘卷。
 

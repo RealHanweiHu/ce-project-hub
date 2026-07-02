@@ -1,23 +1,24 @@
-import { drizzle } from "drizzle-orm/mysql2";
-import { sql } from "drizzle-orm";
-import dotenv from "dotenv";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
+// 确保所有系统管理员(role='admin')都拥有 canCreateProject=true。
+// PostgreSQL 版（此前是 MySQL 时代死代码，导入 drizzle-orm/mysql2 直接崩）。
+// 幂等，可反复执行。容器内：node scripts/fix-admin-permissions.mjs
+import pg from "pg";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: join(__dirname, "../.env") });
+const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
+await client.connect();
+try {
+  // PG 列名大小写敏感，必须加引号
+  const upd = await client.query(
+    `UPDATE users SET "canCreateProject" = true WHERE role = 'admin' AND "canCreateProject" = false`,
+  );
+  console.log(`已更新 ${upd.rowCount} 个管理员账号的建项目权限。`);
 
-const db = drizzle(process.env.DATABASE_URL);
-
-// All admin users should automatically have canCreateProject = true
-const result = await db.execute(
-  sql`UPDATE users SET canCreateProject = true WHERE role = 'admin'`
-);
-console.log("Updated admin users:", result[0]);
-
-// Verify
-const [rows] = await db.execute(
-  sql`SELECT id, name, role, canCreateProject FROM users`
-);
-console.log("Current users:", JSON.stringify(rows, null, 2));
-process.exit(0);
+  const { rows } = await client.query(
+    `SELECT id, name, role, "canCreateProject" FROM users WHERE role = 'admin' ORDER BY id`,
+  );
+  console.log("当前管理员：", JSON.stringify(rows, null, 2));
+} catch (e) {
+  console.error("FAILED:", e.message);
+  process.exit(1);
+} finally {
+  await client.end();
+}

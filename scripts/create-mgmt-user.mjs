@@ -9,6 +9,13 @@ const PASSWORD = "Test123456";
 const USERNAME = "mgmt";
 const NAME = "管理层";
 
+// ⚠ 仅供测试/演示：固定弱密码 Test123456，且会重置同名已有账号的密码。
+// 防止误跑生产：NODE_ENV=production 时必须显式 --force 才执行。
+if (process.env.NODE_ENV === "production" && !process.argv.includes("--force")) {
+  console.error("拒绝执行：生产环境创建固定弱密码账号。确需请加 --force。");
+  process.exit(1);
+}
+
 const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
 await client.connect();
 try {
