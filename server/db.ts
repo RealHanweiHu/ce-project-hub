@@ -2846,7 +2846,7 @@ export async function getOverdueTasks(projectIds?: string[]): Promise<TaskWithCo
   const db = await getDb();
   if (!db) return [];
   if (projectIds && projectIds.length === 0) return [];
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayInShanghaiISO();
   const baseConditions = [
     eq(projects.archived, false),
     drizzleSql`${projectTasks.dueDate} IS NOT NULL`,

@@ -3,6 +3,7 @@ import { useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { PHASE_MAP } from "@/lib/data";
+import { toLocalISODate, localISODatePlus } from "@/lib/utils";
 import { TaskListView, resolveTaskName, type TaskRow, type TaskFocus } from "../TaskListView";
 import type { TaskStatus, TaskPriority } from "@shared/const";
 import { isProjectedOverdue, type RagLevel } from "@shared/health";
@@ -158,7 +159,7 @@ function PmCockpit({ myRows, tasks, reviews, onSelectProject }: {
   reviews: WorkbenchReview[];
   onSelectProject: (id: string, focus?: TaskFocus) => void;
 }) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = toLocalISODate();
   const todayItems = useMemo(() => buildTodayItems(tasks, myRows, today), [tasks, myRows, today]);
   const coordItems = useMemo(() => buildCoordinationQueue(reviews, myRows), [reviews, myRows]);
 
@@ -383,9 +384,9 @@ function priorityScore(priority: string | null) {
 }
 
 function dueScore(dueDate: string) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = toLocalISODate();
   if (dueDate < today) return 35;
-  const soon = new Date(Date.now() + 3 * 864e5).toISOString().slice(0, 10);
+  const soon = localISODatePlus(3);
   if (dueDate <= soon) return 20;
   return 0;
 }

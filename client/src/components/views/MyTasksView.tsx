@@ -15,7 +15,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { getQueryKey } from '@trpc/react-query';
 import { Search, Flag, Check, List as ListIcon, LayoutGrid } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
-import { cn } from '@/lib/utils';
+import { cn, toLocalISODate, localISODatePlus } from '@/lib/utils';
 import { PageHeader, SegToggle } from '@/components/linear/primitives';
 import type { TaskStatus, TaskPriority } from '@shared/const';
 import { resolveTaskName, type TaskFocus } from './TaskListView';
@@ -46,13 +46,13 @@ const PRIORITY: Record<TaskPriority, { label: string; color: string; dot: string
   low:      { label: '低',   color: 'var(--muted-foreground)', dot: 'var(--muted-foreground)' },
 };
 
-const TODAY = new Date().toISOString().slice(0, 10);
+const TODAY = toLocalISODate();
 function isOverdue(t: Task): boolean {
   return !t.completed && !!t.dueDate && t.dueDate < TODAY;
 }
 function isSoon(t: Task): boolean {
   if (t.completed || !t.dueDate || isOverdue(t)) return false;
-  const soon = new Date(Date.now() + 6 * 864e5).toISOString().slice(0, 10);
+  const soon = localISODatePlus(6);
   return t.dueDate <= soon;
 }
 

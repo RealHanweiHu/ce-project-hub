@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { getPhasesForCategory } from '@/lib/sop-templates';
+import { toLocalISODate } from '@/lib/utils';
 import { type TaskStatus, type TaskPriority } from '@shared/const';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -94,7 +95,7 @@ function resolvePhaseLabel(phaseId: string, category: string): string {
 
 function isOverdue(dueDate: string | null): boolean {
   if (!dueDate) return false;
-  return dueDate < new Date().toISOString().slice(0, 10);
+  return dueDate < toLocalISODate();
 }
 
 // ─── Status Badge ─────────────────────────────────────────────────────────────

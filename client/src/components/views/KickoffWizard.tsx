@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { trpc } from '@/lib/trpc';
 import { toast } from 'sonner';
 import { X, ChevronLeft, ChevronRight, Rocket, CalendarRange, Users, CheckCircle2, Loader2, MessagesSquare, CalendarClock } from 'lucide-react';
+import { toLocalISODate } from '@/lib/utils';
 
 const KEY_ROLES = [
   { role: 'pm', label: '产品经理', hint: 'PM · 立项 / Gate / 协调' },
@@ -42,7 +43,7 @@ export function KickoffWizard({ project, onClose }: {
   const members = membersQuery.data ?? [];
   const userRows = users as UserRow[];
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = toLocalISODate();
   const [step, setStep] = useState(1);
   const [startDate, setStartDate] = useState(project.startDate || today);
   const [staff, setStaff] = useState<Record<string, string>>({});

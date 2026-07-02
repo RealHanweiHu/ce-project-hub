@@ -8,6 +8,7 @@ import {
   FileText, ClipboardCheck, Plus, ChevronDown, ChevronRight, RotateCcw,
 } from 'lucide-react';
 import { GateReview } from '@/lib/data';
+import { toLocalISODate } from '@/lib/utils';
 import { GateReadinessChecklist } from './GateReadinessChecklist';
 import type { SOPGateStandard } from '@/lib/sop-templates';
 import { GateStandardPanel } from '@/components/shared/GateStandardPanel';
@@ -126,7 +127,7 @@ function NewReviewForm({
   onSubmit: (form: ReviewFormState) => void;
   onCancel: () => void;
 }) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = toLocalISODate();
   const [form, setForm] = useState<ReviewFormState>({
     reviewDate: today,
     participants: '',
