@@ -53,6 +53,24 @@ describe("SOP templates", () => {
     expect(planningRoles).toContain("项目经理/PMO 负责里程碑");
   });
 
+  it("front-loads battery safety, certification, FMEA, and PVT EOL gates in NPD", () => {
+    expect(phase(NPD_PHASES, "concept").deliverables).toContain("认证路线图初判");
+    expect(phase(NPD_PHASES, "planning").deliverables).toContain("认证路线图");
+    expect(phase(NPD_PHASES, "planning").deliverables).toContain("电芯复用/定点与二供策略");
+
+    expect(task(NPD_PHASES, "planning", "p5a").name).toBe("电芯复用/定点与二供策略");
+    expect(task(NPD_PHASES, "planning", "p6a").name).toBe("认证路线图");
+    expect(task(NPD_PHASES, "design", "d6a").name).toBe("安全 FMEA 与危害分析");
+    expect(task(NPD_PHASES, "design", "d7a").name).toBe("电芯厂质量审核/复用资质确认");
+    expect(task(NPD_PHASES, "design", "d7b").name).toBe("保护电路设计评审/复用确认");
+
+    const designRequired = phase(NPD_PHASES, "design").gateStandard.requiredDeliverables;
+    expect(designRequired).toEqual(expect.arrayContaining(["安全FMEA与危害分析", "电芯厂质量审核或复用资质确认", "保护电路设计评审或复用确认"]));
+
+    const pvtRequired = phase(NPD_PHASES, "pvt").gateStandard.requiredDeliverables;
+    expect(pvtRequired).toEqual(expect.arrayContaining(["EOL 100%测试能力验收记录", "UN38.3运输测试报告或复用确认", "MSDS", "电芯/电池包安全认证报告或复用确认"]));
+  });
+
   it("keeps formal ECN release after ECO validation and trial run readiness", () => {
     const design = phase(ECO_PHASES, "design");
     expect(design.deliverables).toContain("ECN草案/变更设计包");

@@ -121,3 +121,7 @@ client/public/__manus__/version.json
 backups/
 artifacts/
 skills/
+
+# 本地规划 / 代理草稿（临时，勿随 `git add .` 带入）
+.planning/
+docs/agents/

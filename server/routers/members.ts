@@ -13,6 +13,7 @@ import {
   createActivityLog,
 } from "../db";
 import { PROJECT_MEMBER_ROLES, ProjectMemberRole } from "../../drizzle/schema";
+import { getEffectiveProjectRoleById } from "../project-access";
 
 /**
  * Permission matrix for project roles.
@@ -215,19 +216,14 @@ export const ROLE_PERMISSIONS: Record<ProjectMemberRole, {
   },
 };
 
-/** Determine a user's effective role in a project (owner if they created it) */
+/**
+ * Determine a user's effective role in a project.
+ * Delegates to the canonical resolver so all three call sites (project-access,
+ * this router, and tasks/gate routers) agree on rank-based upgrades and the
+ * admin floor — see P1-10.
+ */
 async function getUserProjectRole(projectId: string, userId: number): Promise<ProjectMemberRole | null> {
-  const project = await getProjectById(projectId);
-  if (!project) return null;
-  const member = await getProjectMember(projectId, userId);
-  let role: ProjectMemberRole | null = member?.role ?? null;
-  if (project.pmUserId === userId && (!role || role === "viewer")) role = "pm";
-  if (project.createdBy === userId) role = "owner";
-  if (!role) {
-    const user = await getUserById(userId);
-    if (user?.role === "admin") role = "manager";
-  }
-  return role;
+  return getEffectiveProjectRoleById(projectId, userId);
 }
 
 export const membersRouter = router({

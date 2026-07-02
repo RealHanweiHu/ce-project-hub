@@ -46,12 +46,13 @@ export async function getEffectiveProjectRole(
   let role: ProjectMemberRole | null = member?.role ?? null;
   if (project.pmUserId === userId) role = pickHigherProjectRole(role, "pm");
   if (project.createdBy === userId) role = pickHigherProjectRole(role, "owner");
-  // System admins can view/manage any project even without explicit membership,
-  // so portfolio drill-in works for managers (mirrors assertProjectAccess admin bypass).
-  if (!role) {
-    const u = await getUserById(userId);
-    if (u?.role === "admin") role = "manager";
-  }
+  // System admins get at least manager on ANY project — even when explicitly added
+  // as a low role (e.g. viewer). Using pickHigher (not "only when null") keeps admin
+  // consistent across every resolver and mirrors assertProjectAccess's admin bypass;
+  // otherwise an admin-as-viewer could create issues (assert-based routers) yet be
+  // FORBIDDEN from completing tasks (getEffectiveRole-based routers).
+  const u = await getUserById(userId);
+  if (u?.role === "admin") role = pickHigherProjectRole(role, "manager");
   return role;
 }
 

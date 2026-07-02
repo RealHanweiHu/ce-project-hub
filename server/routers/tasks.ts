@@ -28,8 +28,27 @@ import { emitAutomationEvent } from "../automation/events";
 import { isISODate } from "../../shared/scheduling";
 import { getEffectiveProjectRoleById as getEffectiveRole } from "../project-access";
 import { taskDisplayTitle } from "../task-title";
+import { taskAllowsEvidence } from "../deliverable-access";
+import type { ProjectMemberRole } from "../../drizzle/schema";
 
 const isoDateInput = z.string().refine(isISODate, "日期必须是有效的 YYYY-MM-DD");
+
+/**
+ * 完成任务/勾交付物的权限：canEditTasks，或任务当事人
+ * （被指派人 / 任务对其角色可见，viewer 除外）。
+ * 后者是 qa/scm/sales/cert/battery_safety 的唯一执行通道——SOP 自动把任务派给
+ * 他们，但这五个角色没有 canEditTasks。
+ */
+async function assertCanCompleteTask(
+  projectId: string, phaseId: string, taskId: string, userId: number,
+): Promise<void> {
+  const role = await getEffectiveRole(projectId, userId);
+  if (!role) throw new TRPCError({ code: "FORBIDDEN", message: "没有编辑任务的权限" });
+  if (ROLE_PERMISSIONS[role].canEditTasks) return;
+  const task = (await getProjectTasks(projectId, phaseId)).find((t) => t.taskId === taskId);
+  if (taskAllowsEvidence(task, userId, role as ProjectMemberRole)) return;
+  throw new TRPCError({ code: "FORBIDDEN", message: "没有编辑任务的权限" });
+}
 
 export const tasksRouter = router({
   /** List all tasks for a project (optionally filtered by phase) */
@@ -55,10 +74,7 @@ export const tasksRouter = router({
       completed: z.boolean(),
     }))
     .mutation(async ({ ctx, input }) => {
-      const role = await getEffectiveRole(input.projectId, ctx.user.id);
-      if (!role || !ROLE_PERMISSIONS[role].canEditTasks) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "没有编辑任务的权限" });
-      }
+      await assertCanCompleteTask(input.projectId, input.phaseId, input.taskId, ctx.user.id);
       await setTaskCompletion(input.projectId, input.phaseId, input.taskId, input.completed, ctx.user.id);
       // 完成 / 待审提交 / 取消 的活动日志由 setTaskCompletion 单写（按 outcome），
       // 此处不再盲写，避免「待审提交」被错记为「完成」。
@@ -250,10 +266,7 @@ export const tasksRouter = router({
       done: z.boolean(),
     }))
     .mutation(async ({ ctx, input }) => {
-      const role = await getEffectiveRole(input.projectId, ctx.user.id);
-      if (!role || !ROLE_PERMISSIONS[role].canEditTasks) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "没有编辑任务的权限" });
-      }
+      await assertCanCompleteTask(input.projectId, input.phaseId, input.taskId, ctx.user.id);
       const deliverables = await setTaskDeliverable(
         input.projectId, input.phaseId, input.taskId, input.name, input.done, ctx.user.id,
       );

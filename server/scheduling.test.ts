@@ -215,6 +215,10 @@ describe("scheduleForCategory (IPD graph)", () => {
     }
     // 阶段串联：p1 不早于 c6 完成
     expect(s.p1.start >= s.c6.due).toBe(true);
+    expect(s.p7.start >= s.p5a.due).toBe(true);
+    expect(s.d8.start >= s.d6a.due).toBe(true);
+    expect(s.d8.start >= s.d7a.due).toBe(true);
+    expect(s.d8.start >= s.d7b.due).toBe(true);
     // 量产 gate 在最后、晚于概念
     expect(s.mp6.due > s.c6.due).toBe(true);
   });

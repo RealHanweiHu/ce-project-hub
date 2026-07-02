@@ -253,7 +253,8 @@ export function useProjectData(projectId: string | null) {
       currentPhase: projectRow.currentPhase ?? 'concept',
       startDate: projectRow.startDate ?? '',
       targetDate: projectRow.targetDate ?? '',
-      type: '',
+      // 产品类型无独立列，持久化在 customFields.productType（此前恒为 '' 导致编辑不落库）
+      type: String((projectRow as { customFields?: Record<string, unknown> }).customFields?.productType ?? ''),
       phases,
       phaseDates: Object.keys(phaseDates).length > 0 ? phaseDates : undefined,
       taskVisibleRoles: Object.keys(taskVisibleRoles).length > 0 ? taskVisibleRoles : undefined,

@@ -548,9 +548,13 @@ function ProjectDetailWrapper({
           const msg = err instanceof Error ? err.message : String(err);
           const status = (err as { data?: { httpStatus?: number }; shape?: { data?: { httpStatus?: number } } })?.data?.httpStatus
             ?? (err as { shape?: { data?: { httpStatus?: number } } })?.shape?.data?.httpStatus;
-          const isAuth = status === 401 || status === 403 || /unauthorized|forbidden|401|403|登录|session|未授权|过期/i.test(msg);
+          // 401=登录过期；403=有权限问题（不是过期，别再误导用户去重新登录）
+          const isExpired = status === 401 || /unauthorized|401|登录|session|未授权|过期/i.test(msg);
+          const isForbidden = status === 403 || /forbidden|403|权限|无操作权限/i.test(msg);
           toast.error(
-            isAuth ? '登录已过期，请重新登录后重试（你填的内容仍在页面上，未丢失）' : '保存失败，请检查网络后重试（你填的内容仍在页面上，未丢失）',
+            isExpired ? '登录已过期，请重新登录后重试（你填的内容仍在页面上，未丢失）'
+            : isForbidden ? (msg && !/forbidden|403/i.test(msg) ? msg : '没有权限执行此操作（你填的内容仍在页面上，未丢失）')
+            : '保存失败，请检查网络后重试（你填的内容仍在页面上，未丢失）',
             { duration: 8000 },
           );
         }
@@ -1002,7 +1006,7 @@ export default function Home() {
               </kbd>
             </button>
 
-            <NotificationBell />
+            <NotificationBell onNavigate={(projectId) => handleSelectProject(projectId)} />
           </div>
         </header>
 

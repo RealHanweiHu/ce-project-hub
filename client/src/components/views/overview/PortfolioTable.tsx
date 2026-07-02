@@ -12,6 +12,8 @@ export type PortfolioTableRow = {
   ragReasons: string[];
   customer: string | null;
   currentPhase: string; startDate: string | null; targetDate: string | null; pmUserId: number | null; pmName: string | null;
+  /** 当前用户对本项目的有效角色（成员角色 ∪ pm/owner/admin 兜底）；用于总览定视角 */
+  myRole?: string | null;
   taskTotal: number; taskDone: number; taskInProgress: number; overdueTasks: number; blockedTasks: number;
   openIssues: number; criticalIssues: number; plannedEnd: string | null; projectedEnd: string | null;
   progressBehindPct: number | null;

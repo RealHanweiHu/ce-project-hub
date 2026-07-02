@@ -5,26 +5,32 @@ import { getDb, getProjectFiles, getProjectEffectiveProcess, getProjectMembers }
 import { projectDeliverableReviews } from "../../drizzle/schema";
 import { and, eq } from "drizzle-orm";
 import { listDeliverableReviews, getMyPendingReviews, submitDeliverableReview, reviewDeliverable } from "../deliverable-review-service";
-import { assertProjectAccess, assertProjectAnyPermission } from "../project-access";
+import { assertProjectAccess } from "../project-access";
+import { canSubmitDeliverableEvidence } from "../deliverable-access";
+import { canRoleReviewDeliverables, preferredDeliverableReviewerRoles } from "../../shared/deliverable-permissions";
 
 function preferredReviewerRoles(deliverableName: string) {
-  const lower = deliverableName.toLowerCase();
-  if (/电池|battery|bms|cell|pack/.test(lower)) return ["battery_safety", "cert", "qa"];
-  if (/认证|安规|合规|cert|compliance|emc|fcc|ce\b|ul\b|rohs|safety/.test(lower)) return ["cert", "battery_safety", "qa"];
-  if (/测试|验证|可靠|报告|检验|品质|test|qa|reliability|evt|dvt|pvt/.test(lower)) return ["qa"];
-  if (/bom|物料|供应|采购|成本|替代料|supplier|supply|cost|material/.test(lower)) return ["scm"];
-  return [];
+  return preferredDeliverableReviewerRoles(deliverableName);
 }
 
-async function pickDefaultReviewer(projectId: string, deliverableName: string, pmUserId: number | null) {
+async function pickDefaultReviewer(
+  projectId: string,
+  deliverableName: string,
+  pmUserId: number | null,
+  excludeUserId: number | null = null,
+) {
   const members = await getProjectMembers(projectId);
+  const notExcluded = (id: number | null | undefined) => id != null && id !== excludeUserId;
+  // 优先匹配角色成员（回避提交人），再退到 PM，再退到任一非只读成员——始终不落到提交人自己
   const preferred = preferredReviewerRoles(deliverableName)
-    .map((role) => members.find((member) => member.role === role))
+    .map((role) => members.find((member) => member.role === role && member.userId !== excludeUserId))
     .find(Boolean);
-  return preferred?.userId
-    ?? pmUserId
-    ?? members.find((member) => member.role === "pm" || member.role === "owner")?.userId
-    ?? null;
+  if (notExcluded(preferred?.userId)) return preferred!.userId;
+  if (notExcluded(pmUserId)) return pmUserId;
+  const fallback = members.find(
+    (member) => member.userId !== excludeUserId && member.role !== "viewer",
+  );
+  return fallback?.userId ?? null;
 }
 
 export const deliverableReviewsRouter = router({
@@ -36,16 +42,13 @@ export const deliverableReviewsRouter = router({
   submit: protectedProcedure
     .input(z.object({ projectId: z.string(), phaseId: z.string(), deliverableName: z.string().min(1), reviewerUserId: z.number().optional() }))
     .mutation(async ({ ctx, input }) => {
-      const { project } = await assertProjectAnyPermission(
-        input.projectId,
-        ctx.user,
-        ["canEditTasks", "canEditProjectInfo"],
-        "无提交交付物审核权限",
-      );
+      const access = await assertProjectAccess(input.projectId, ctx.user);
+      const { project } = access;
 
       // Validation 1: there must be ≥1 file for (projectId, phaseId, deliverableName)
       const phaseFiles = await getProjectFiles(input.projectId, input.phaseId);
-      const hasFile = phaseFiles.some((f) => f.deliverableName === input.deliverableName);
+      const matchingFiles = phaseFiles.filter((f) => f.deliverableName === input.deliverableName);
+      const hasFile = matchingFiles.length > 0;
       if (!hasFile) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "该交付物尚未上传文件，无法提交审核" });
       }
@@ -56,9 +59,34 @@ export const deliverableReviewsRouter = router({
       if (!effPhase || !effPhase.submittedDeliverables.includes(input.deliverableName)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "该交付物不在本节点的有效提交集内" });
       }
+      const canSubmit = await canSubmitDeliverableEvidence({
+        projectId: input.projectId,
+        actorId: ctx.user.id,
+        role: access.role,
+        permissions: access.permissions,
+        phaseId: input.phaseId,
+        deliverableName: input.deliverableName,
+        files: matchingFiles,
+      });
+      if (!canSubmit) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "无提交交付物审核权限" });
+      }
 
-      const reviewerUserId = input.reviewerUserId ?? await pickDefaultReviewer(input.projectId, input.deliverableName, project.pmUserId ?? null);
-      if (!reviewerUserId) throw new TRPCError({ code: "BAD_REQUEST", message: "未指定审核人，且项目未配置匹配角色或 PM" });
+      // 显式指定自己为审核人 → 拒绝（安全/电池等硬证据不得自审自批，须第二人复核）
+      if (input.reviewerUserId != null && input.reviewerUserId === ctx.user.id) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "不能指定自己为审核人，需第二人复核" });
+      }
+      const reviewerUserId = input.reviewerUserId
+        ?? await pickDefaultReviewer(input.projectId, input.deliverableName, project.pmUserId ?? null, ctx.user.id);
+      if (!reviewerUserId) throw new TRPCError({ code: "BAD_REQUEST", message: "未指定审核人，且项目内无其他可复核成员" });
+      const members = await getProjectMembers(input.projectId);
+      const reviewerRole =
+        reviewerUserId === project.createdBy ? "owner"
+        : reviewerUserId === project.pmUserId ? "pm"
+        : members.find((member) => member.userId === reviewerUserId)?.role ?? null;
+      if (!canRoleReviewDeliverables(reviewerRole)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "审核人必须是项目内非只读角色" });
+      }
       await submitDeliverableReview({ projectId: input.projectId, phaseId: input.phaseId, deliverableName: input.deliverableName, reviewerUserId, submittedBy: ctx.user.id });
       return { success: true } as const;
     }),
