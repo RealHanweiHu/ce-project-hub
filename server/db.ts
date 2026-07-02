@@ -1935,6 +1935,22 @@ export async function getProjectFileById(id: number): Promise<ProjectFile | unde
 }
 
 /**
+ * Resolve the owning projectId for a stored object by its storage key.
+ * Used by the /storage proxy to authorize downloads. Returns null if no
+ * file record references this key.
+ */
+export async function getProjectIdByStorageKey(storageKey: string): Promise<string | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db
+    .select({ projectId: projectFiles.projectId })
+    .from(projectFiles)
+    .where(eq(projectFiles.storageKey, storageKey))
+    .limit(1);
+  return row?.projectId ?? null;
+}
+
+/**
  * Delete a file metadata record.
  * Returns the storageKey so the caller can invalidate the S3 object.
  * Returns null if the record was not found.

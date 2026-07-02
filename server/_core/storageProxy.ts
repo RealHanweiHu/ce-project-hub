@@ -1,5 +1,10 @@
 import type { Express } from "express";
+import type { CreateExpressContextOptions } from "@trpc/server/adapters/express";
 import { storageGetObject } from "../storage";
+import { getProjectIdByStorageKey } from "../db";
+import { getEffectiveProjectRoleById } from "../project-access";
+import { resolveStorageAuthorization } from "../storage-access";
+import { createContext } from "./context";
 
 /**
  * Serve stored objects through the app at /storage/{key}.
@@ -7,6 +12,10 @@ import { storageGetObject } from "../storage";
  * Streams from the S3-compatible backend instead of redirecting to a
  * presigned URL, so the storage endpoint (compose-internal MinIO or an
  * Aliyun OSS internal endpoint) never needs to be reachable from browsers.
+ *
+ * Access is authorized against the owning project's membership: the caller
+ * must be logged in and be a member of the project that owns the object.
+ * Without this any file could be downloaded by anyone who knows its key.
  */
 export function registerStorageProxy(app: Express) {
   app.get("/storage/*", async (req, res) => {
@@ -21,6 +30,26 @@ export function registerStorageProxy(app: Express) {
       res.status(400).send("Missing storage key");
       return;
     }
+
+    // Authorize: reuse the tRPC context factory to resolve the session user.
+    const ctx = await createContext(
+      { req, res } as CreateExpressContextOptions
+    );
+    const auth = await resolveStorageAuthorization(key, ctx.user?.id, {
+      getFileProjectId: getProjectIdByStorageKey,
+      getRole: getEffectiveProjectRoleById,
+    });
+    if (auth === "unauthorized") {
+      res.status(401).send("Unauthorized");
+      return;
+    }
+    // Collapse notfound/forbidden to 404 so authorized-elsewhere users can't
+    // probe which storage keys exist in projects they can't access.
+    if (auth !== "ok") {
+      res.status(404).send("Not found");
+      return;
+    }
+
     try {
       const obj = await storageGetObject(key);
       if (obj.contentType) res.set("Content-Type", obj.contentType);
