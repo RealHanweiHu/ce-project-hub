@@ -26,10 +26,12 @@ import { ROLE_PERMISSIONS } from "./members";
 import { TASK_STATUSES, TASK_PRIORITIES } from "../../drizzle/schema";
 import { emitAutomationEvent } from "../automation/events";
 import { isISODate } from "../../shared/scheduling";
+import { isSystemAdminRole } from "../../shared/system-roles";
 import { getEffectiveProjectRoleById as getEffectiveRole } from "../project-access";
 import { taskDisplayTitle } from "../task-title";
 import { taskAllowsEvidence } from "../deliverable-access";
 import type { ProjectMemberRole } from "../../drizzle/schema";
+import { canRoleViewInternalWorkspace } from "../file-visibility";
 
 const isoDateInput = z.string().refine(isISODate, "日期必须是有效的 YYYY-MM-DD");
 
@@ -62,6 +64,7 @@ export const tasksRouter = router({
       if (!role || !ROLE_PERMISSIONS[role].canView) {
         throw new TRPCError({ code: "FORBIDDEN" });
       }
+      if (!canRoleViewInternalWorkspace(role)) return [];
       return getProjectTasks(input.projectId, input.phaseId);
     }),
 
@@ -116,9 +119,16 @@ export const tasksRouter = router({
     .mutation(async ({ ctx, input }) => {
       const tasks = await getProjectTasks(input.projectId, input.phaseId);
       const task = tasks.find((t) => t.taskId === input.taskId);
-      const isAdmin = ctx.user.role === "admin";
+      const isAdmin = isSystemAdminRole(ctx.user.role);
       if (!(task?.approverUserId === ctx.user.id || isAdmin)) {
         throw new TRPCError({ code: "FORBIDDEN", message: "仅审批人或管理员可裁决" });
+      }
+      // 审批人被移出项目后不应保留否决权：裁决时必须仍是在册成员（admin 例外）。
+      if (!isAdmin) {
+        const role = await getEffectiveRole(input.projectId, ctx.user.id);
+        if (!role || !ROLE_PERMISSIONS[role].canView) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "审批人已不在项目成员中，请项目经理改派审批人" });
+        }
       }
       const isProxy = task?.approverUserId !== ctx.user.id;
       await decideTaskApproval(
@@ -136,6 +146,7 @@ export const tasksRouter = router({
       if (!role || !ROLE_PERMISSIONS[role].canView) {
         throw new TRPCError({ code: "FORBIDDEN" });
       }
+      if (!canRoleViewInternalWorkspace(role)) return [];
       return getTaskActivityLogs(input.projectId, input.phaseId, input.taskId);
     }),
 
@@ -341,7 +352,7 @@ export const tasksRouter = router({
    */
   overdue: protectedProcedure
     .query(async ({ ctx }) => {
-      if (ctx.user.role === "admin") {
+      if (isSystemAdminRole(ctx.user.role)) {
         return getOverdueTasks();
       }
       const userProjects = await getProjectsByUser(ctx.user.id);
@@ -355,7 +366,7 @@ export const tasksRouter = router({
    */
   blocked: protectedProcedure
     .query(async ({ ctx }) => {
-      if (ctx.user.role === "admin") {
+      if (isSystemAdminRole(ctx.user.role)) {
         return getBlockedTasks();
       }
       const userProjects = await getProjectsByUser(ctx.user.id);

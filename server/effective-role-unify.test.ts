@@ -8,7 +8,7 @@ import type { TrpcContext } from "./_core/context";
 
 /**
  * P1-10：三处 effective-role 解析必须一致。
- * - pmUserId 用 rank 取高：qa 兼 PM → pm（原 members.ts 只在 viewer/null 时升）。
+ * - pmUserId 用 rank 取高：qa 兼项目经理 → project_manager（原 members.ts 只在 viewer/null 时升）。
  * - 系统 admin 即使被显式加为低角色成员，也不得被降到该低角色之下（至少 manager）。
  */
 const PROJECT = `role-unify-${Date.now()}`;
@@ -54,15 +54,15 @@ afterAll(async () => {
 });
 
 describe("effective-role 三处一致", () => {
-  it("qa 兼 pmUserId → 解析为 pm（rank 取高）", async () => {
+  it("qa 兼 pmUserId → 解析为 project_manager（rank 取高）", async () => {
     const project = await getProjectById(PROJECT);
-    await expect(getEffectiveProjectRole(project!, QA_PM)).resolves.toBe("pm");
+    await expect(getEffectiveProjectRole(project!, QA_PM)).resolves.toBe("project_manager");
   });
 
-  it("members.myRole 对 qa 兼 pmUserId 也返回 pm（第三处解析一致）", async () => {
+  it("members.myRole 对 qa 兼 pmUserId 也返回 project_manager（第三处解析一致）", async () => {
     const caller = appRouter.createCaller(makeCtx(QA_PM));
     const res = await caller.members.myRole({ projectId: PROJECT });
-    expect(res.role).toBe("pm");
+    expect(res.role).toBe("project_manager");
   });
 
   it("admin 即使是 viewer 成员，也至少为 manager（不被降级）", async () => {

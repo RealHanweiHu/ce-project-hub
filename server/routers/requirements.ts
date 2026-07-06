@@ -23,6 +23,8 @@ import {
 } from "../../drizzle/schema";
 import { ROLE_PERMISSIONS } from "./members";
 import { getEffectiveProjectRoleById as getEffectiveRole } from "../project-access";
+import { canRoleViewInternalWorkspace } from "../file-visibility";
+import { isSystemAdminRole } from "../../shared/system-roles";
 
 /** 鉴权:项目内需求按项目角色;无项目(产品/全局 backlog)归 admin 或创建人。 */
 async function assertCanEditRequirement(
@@ -34,7 +36,7 @@ async function assertCanEditRequirement(
     if (!role || !ROLE_PERMISSIONS[role].canEditRequirements) {
       throw new TRPCError({ code: "FORBIDDEN", message: "没有维护需求池的权限" });
     }
-  } else if (user.role !== "admin" && req.creatorId !== user.id) {
+  } else if (!isSystemAdminRole(user.role) && req.creatorId !== user.id) {
     throw new TRPCError({ code: "FORBIDDEN", message: "仅管理员或创建人可维护该需求" });
   }
 }
@@ -78,6 +80,7 @@ export const requirementsRouter = router({
         if (!project) throw new TRPCError({ code: "NOT_FOUND" });
         const role = await getEffectiveRole(input.projectId, ctx.user.id);
         if (!role || !ROLE_PERMISSIONS[role].canView) throw new TRPCError({ code: "FORBIDDEN" });
+        if (!canRoleViewInternalWorkspace(role)) return [];
         return getRequirements({ scope: "project", projectId: input.projectId, productId: project.productId ?? null });
       }
       if (scope === "product") {

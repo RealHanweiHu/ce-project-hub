@@ -8,7 +8,7 @@ import {
 } from "./rules";
 
 describe("built-in automation rule matching", () => {
-  it("keeps exactly the MVP built-in rule keys", () => {
+  it("keeps exactly the built-in rule keys (MVP + NPD 生命周期三事件)", () => {
     expect(AUTOMATION_RULES.map((rule) => rule.key)).toEqual([
       "overdue_reminder",
       "due_soon_reminder",
@@ -19,6 +19,9 @@ describe("built-in automation rule matching", () => {
       "mp_release_broadcast",
       "delay_impact_notify",
       "exception_escalation",
+      "definition_confirmed_notify",
+      "gate_decision_notify",
+      "phase_advanced_notify",
     ]);
   });
 

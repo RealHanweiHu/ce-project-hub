@@ -9,6 +9,7 @@ import {
   createActivityLog,
 } from "../db";
 import { assertProjectAccess, assertProjectPermission } from "../project-access";
+import { canRoleViewInternalWorkspace } from "../file-visibility";
 import {
   ISSUE_SEVERITIES,
   ISSUE_STATUSES,
@@ -24,7 +25,8 @@ export const issuesRouter = router({
       phaseId: z.string().optional(),
     }))
     .query(async ({ ctx, input }) => {
-      await assertProjectAccess(input.projectId, ctx.user);
+      const access = await assertProjectAccess(input.projectId, ctx.user);
+      if (!canRoleViewInternalWorkspace(access.role)) return [];
       return getProjectIssues(input.projectId, input.phaseId);
     }),
 
@@ -105,7 +107,31 @@ export const issuesRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "只有问题创建者或有管理权限的角色可以编辑" });
       }
 
-      const { id, projectId, ...patch } = input;
+      // P0/P1 降级会使问题退出 Gate 的 critical_issues 阻塞集，等价于绕过 QA 关闭
+      // 确认——与关闭同权：只有 canCloseIssues（QA/管理层）可以降级。升级不受限。
+      if (input.severity && input.severity !== issue.severity) {
+        const rank: Record<string, number> = { P0: 0, P1: 1, P2: 2, P3: 3 };
+        const isCriticalDowngrade =
+          (issue.severity === "P0" || issue.severity === "P1") &&
+          rank[input.severity] > rank[issue.severity];
+        if (isCriticalDowngrade && !access.isAdmin && !access.permissions.canCloseIssues) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "P0/P1 降级会解除 Gate 阻塞，只有 QA/管理层可以降级" });
+        }
+      }
+
+      const { id, projectId, ...inputPatch } = input;
+      const patch: Parameters<typeof updateProjectIssue>[1] = { ...inputPatch };
+      if (patch.status === "closed" && issue.status !== "closed") {
+        if (!access.isAdmin && !access.permissions.canCloseIssues) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "只有 QA/管理层可以确认问题关闭" });
+        }
+        patch.verifiedBy = ctx.user.id;
+        patch.verifiedAt = new Date();
+        patch.closedDate = patch.closedDate ?? new Date().toISOString().slice(0, 10);
+      } else if (patch.status && patch.status !== "closed") {
+        patch.verifiedBy = null;
+        patch.verifiedAt = null;
+      }
       await updateProjectIssue(id, patch);
       const afterIssue = { ...issue, ...patch };
       await createActivityLog({

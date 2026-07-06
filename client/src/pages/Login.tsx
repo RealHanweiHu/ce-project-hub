@@ -328,7 +328,7 @@ export default function Login() {
 
         {mode === 'register' && (
           <p className="text-center text-xs text-muted-foreground mt-4 leading-relaxed">
-            注册后默认为普通用户，项目创建及其他权限<br />由管理员在后台授权
+            注册后默认为成员，项目创建及其他权限<br />由管理员在后台授权
           </p>
         )}
       </div>

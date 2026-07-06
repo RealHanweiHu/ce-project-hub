@@ -14,6 +14,7 @@ import {
   date,
 } from "drizzle-orm/pg-core";
 import type { VariantDelta } from "../shared/oem-variant";
+import { SYSTEM_ROLES, type SystemRole } from "../shared/system-roles";
 
 export type ProductDefinitionCompetitor = {
   brand?: string;
@@ -87,7 +88,9 @@ export type ProductDefinitionChangeArea = (typeof PRODUCT_DEFINITION_CHANGE_AREA
 // Users
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const userRoleEnum = pgEnum("user_role", ["user", "admin"]);
+export const USER_ROLES = SYSTEM_ROLES;
+export type UserRole = SystemRole;
+export const userRoleEnum = pgEnum("user_role", USER_ROLES);
 
 /**
  * Core user table backing auth flow.
@@ -103,11 +106,11 @@ export const users = pgTable("users", {
   name: text("name"),
   email: varchar("email", { length: 320 }),
   loginMethod: varchar("loginMethod", { length: 64 }),
-  role: userRoleEnum("role").default("user").notNull(),
+  role: userRoleEnum("role").default("member").notNull(),
   /**
    * Whether this user can create new projects.
    * Granted by admin. Typically given to PM, managers, and project leads.
-   * System admin (role='admin') always has this permission regardless of this field.
+   * Workspace owner/admin always have this permission regardless of this field.
    */
   canCreateProject: boolean("canCreateProject").notNull().default(false),
   /** 手机号（与钉钉一致）；自动映射钉钉 userId 的查询键 */
@@ -204,7 +207,8 @@ export type InsertProject = typeof projects.$inferInsert;
  * Permission levels (high → low):
  *   owner      - 项目创建者，全部权限，不可被移除
  *   manager    - 管理层/决策层，可通过 Gate 评审，可管理成员
- *   pm         - 产品经理，可编辑项目信息、任务、问题、变更记录
+ *   project_manager - 项目经理/PMO，可维护计划、成员、任务和项目执行信息
+ *   pm         - 产品经理，可维护产品需求、范围和产品定义输入
  *   rd_hw      - 硬件研发，可编辑任务和问题
  *   rd_sw      - 软件研发，可编辑任务和问题
  *   rd_mech    - 结构/ID 研发，可编辑任务和问题
@@ -215,6 +219,7 @@ export type InsertProject = typeof projects.$inferInsert;
 export const PROJECT_MEMBER_ROLES = [
   "owner",
   "manager",
+  "project_manager",
   "pm",
   "rd_hw",
   "rd_sw",
@@ -226,6 +231,8 @@ export const PROJECT_MEMBER_ROLES = [
   "sales",
   "cert",
   "battery_safety",
+  "external_customer",
+  "supplier",
   "viewer",
 ] as const;
 
@@ -585,6 +592,9 @@ export const projectIssues = pgTable(
     relatedTaskId: varchar("relatedTaskId", { length: 32 }),
     /** User id of the creator (for permission checks) */
     creatorId: integer("creatorId"),
+    /** QA/test verifier who confirmed the issue is truly closed */
+    verifiedBy: integer("verifiedBy"),
+    verifiedAt: timestamp("verifiedAt"),
     /** 溯源：问题挂在产品上（永久），projectId 为来源项目（可空，量产后客诉无项目） */
     productId: varchar("productId", { length: 32 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -653,6 +663,285 @@ export const projectRisks = pgTable(
 
 export type ProjectRisk = typeof projectRisks.$inferSelect;
 export type InsertProjectRisk = typeof projectRisks.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Gate Blockers
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const GATE_BLOCKER_TYPES = ["quality", "npi"] as const;
+export const GATE_BLOCKER_STATUSES = ["open", "resolved"] as const;
+
+export type GateBlockerType = (typeof GATE_BLOCKER_TYPES)[number];
+export type GateBlockerStatus = (typeof GATE_BLOCKER_STATUSES)[number];
+
+export const gateBlockerTypeEnum = pgEnum("gate_blocker_type", GATE_BLOCKER_TYPES);
+export const gateBlockerStatusEnum = pgEnum("gate_blocker_status", GATE_BLOCKER_STATUSES);
+
+export const projectGateBlockers = pgTable(
+  "project_gate_blockers",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 }).notNull(),
+    phaseId: varchar("phaseId", { length: 32 }).notNull(),
+    blockerType: gateBlockerTypeEnum("blockerType").notNull(),
+    title: varchar("title", { length: 512 }).notNull(),
+    description: text("description"),
+    status: gateBlockerStatusEnum("status").notNull().default("open"),
+    createdBy: integer("createdBy").notNull(),
+    resolvedBy: integer("resolvedBy"),
+    resolvedAt: timestamp("resolvedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    idxProjectPhaseStatus: index("idx_gate_blockers_project_phase_status").on(
+      table.projectId,
+      table.phaseId,
+      table.status
+    ),
+  })
+);
+
+export type ProjectGateBlocker = typeof projectGateBlockers.$inferSelect;
+export type InsertProjectGateBlocker = typeof projectGateBlockers.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Test Plans / Reports
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const TEST_PLAN_STATUSES = ["draft", "active", "completed"] as const;
+export const TEST_CASE_STATUSES = ["planned", "passed", "failed", "blocked", "waived"] as const;
+export const TEST_REPORT_RESULTS = ["pass", "fail", "conditional"] as const;
+export const TEST_REPORT_REVIEW_STATUSES = ["pending", "approved", "rejected"] as const;
+export const NPI_READINESS_CATEGORIES = [
+  "dfm",
+  "process_flow",
+  "sop_wi",
+  "fixture",
+  "test_program",
+  "trial_run",
+  "yield",
+  "packaging",
+  "other",
+] as const;
+export const NPI_READINESS_STATUSES = ["pending", "ready", "blocked", "waived"] as const;
+export const SAMPLE_SIGNOFF_TYPES = [
+  "evt_sample",
+  "dvt_sample",
+  "pvt_sample",
+  "golden_sample",
+  "first_article",
+  "other",
+] as const;
+export const SAMPLE_SIGNOFF_AUDIENCES = ["customer", "supplier", "internal"] as const;
+export const SAMPLE_SIGNOFF_STATUSES = ["pending", "approved", "rejected", "waived"] as const;
+
+export type TestPlanStatus = (typeof TEST_PLAN_STATUSES)[number];
+export type TestCaseStatus = (typeof TEST_CASE_STATUSES)[number];
+export type TestReportResult = (typeof TEST_REPORT_RESULTS)[number];
+export type TestReportReviewStatus = (typeof TEST_REPORT_REVIEW_STATUSES)[number];
+export type NpiReadinessCategory = (typeof NPI_READINESS_CATEGORIES)[number];
+export type NpiReadinessStatus = (typeof NPI_READINESS_STATUSES)[number];
+export type SampleSignoffType = (typeof SAMPLE_SIGNOFF_TYPES)[number];
+export type SampleSignoffAudience = (typeof SAMPLE_SIGNOFF_AUDIENCES)[number];
+export type SampleSignoffStatus = (typeof SAMPLE_SIGNOFF_STATUSES)[number];
+
+export const testPlanStatusEnum = pgEnum("test_plan_status", TEST_PLAN_STATUSES);
+export const testCaseStatusEnum = pgEnum("test_case_status", TEST_CASE_STATUSES);
+export const testReportResultEnum = pgEnum("test_report_result", TEST_REPORT_RESULTS);
+export const testReportReviewStatusEnum = pgEnum("test_report_review_status", TEST_REPORT_REVIEW_STATUSES);
+export const npiReadinessCategoryEnum = pgEnum("npi_readiness_category", NPI_READINESS_CATEGORIES);
+export const npiReadinessStatusEnum = pgEnum("npi_readiness_status", NPI_READINESS_STATUSES);
+export const sampleSignoffTypeEnum = pgEnum("sample_signoff_type", SAMPLE_SIGNOFF_TYPES);
+export const sampleSignoffAudienceEnum = pgEnum("sample_signoff_audience", SAMPLE_SIGNOFF_AUDIENCES);
+export const sampleSignoffStatusEnum = pgEnum("sample_signoff_status", SAMPLE_SIGNOFF_STATUSES);
+
+/**
+ * project_test_plans table - QA-owned validation plan per EVT/DVT/PVT phase.
+ * It is separate from deliverable files so Gate readiness can reason about
+ * whether the factory has an intentional validation scope, not just an upload.
+ */
+export const projectTestPlans = pgTable(
+  "project_test_plans",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 }).notNull(),
+    phaseId: varchar("phaseId", { length: 32 }).notNull(),
+    title: varchar("title", { length: 256 }).notNull(),
+    scope: text("scope"),
+    sampleSize: varchar("sampleSize", { length: 64 }),
+    ownerUserId: integer("ownerUserId"),
+    status: testPlanStatusEnum("status").notNull().default("active"),
+    createdBy: integer("createdBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    idxProjectPhaseStatus: index("idx_test_plans_project_phase_status").on(
+      table.projectId,
+      table.phaseId,
+      table.status
+    ),
+  })
+);
+
+export type ProjectTestPlan = typeof projectTestPlans.$inferSelect;
+export type InsertProjectTestPlan = typeof projectTestPlans.$inferInsert;
+
+/**
+ * project_test_cases table - executable validation item with sample/SN context.
+ * Failed or blocked cases must be resolved through an Issue before Gate readiness clears.
+ */
+export const projectTestCases = pgTable(
+  "project_test_cases",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 }).notNull(),
+    phaseId: varchar("phaseId", { length: 32 }).notNull(),
+    planId: integer("planId"),
+    title: varchar("title", { length: 256 }).notNull(),
+    category: varchar("category", { length: 64 }).notNull().default("functional"),
+    acceptanceCriteria: text("acceptanceCriteria"),
+    method: text("method"),
+    sampleSerials: jsonb("sampleSerials").$type<string[]>(),
+    severity: issueSeverityEnum("severity").notNull().default("P2"),
+    status: testCaseStatusEnum("status").notNull().default("planned"),
+    resultNotes: text("resultNotes"),
+    evidenceFileId: integer("evidenceFileId"),
+    relatedIssueId: integer("relatedIssueId"),
+    ownerUserId: integer("ownerUserId"),
+    createdBy: integer("createdBy").notNull(),
+    updatedBy: integer("updatedBy"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    idxProjectPhaseStatus: index("idx_test_cases_project_phase_status").on(
+      table.projectId,
+      table.phaseId,
+      table.status
+    ),
+    idxPlan: index("idx_test_cases_plan").on(table.planId),
+    idxIssue: index("idx_test_cases_issue").on(table.relatedIssueId),
+  })
+);
+
+export type ProjectTestCase = typeof projectTestCases.$inferSelect;
+export type InsertProjectTestCase = typeof projectTestCases.$inferInsert;
+
+/**
+ * project_test_reports table - formal QA validation report and review outcome.
+ * Gate readiness only accepts QA-reviewed pass/conditional reports for EVT/DVT/PVT.
+ */
+export const projectTestReports = pgTable(
+  "project_test_reports",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 }).notNull(),
+    phaseId: varchar("phaseId", { length: 32 }).notNull(),
+    planId: integer("planId"),
+    title: varchar("title", { length: 256 }).notNull(),
+    reportNo: varchar("reportNo", { length: 64 }),
+    result: testReportResultEnum("result").notNull().default("conditional"),
+    reviewStatus: testReportReviewStatusEnum("reviewStatus").notNull().default("pending"),
+    summary: text("summary"),
+    fileId: integer("fileId"),
+    submittedBy: integer("submittedBy").notNull(),
+    reviewedBy: integer("reviewedBy"),
+    reviewedAt: timestamp("reviewedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    idxProjectPhaseReview: index("idx_test_reports_project_phase_review").on(
+      table.projectId,
+      table.phaseId,
+      table.reviewStatus,
+      table.result
+    ),
+    idxPlan: index("idx_test_reports_plan").on(table.planId),
+  })
+);
+
+export type ProjectTestReport = typeof projectTestReports.$inferSelect;
+export type InsertProjectTestReport = typeof projectTestReports.$inferInsert;
+
+/**
+ * project_npi_readiness_checks table - PE/MFG-owned manufacturability and MP readiness checks.
+ * This is separate from deliverables because Gate readiness must know whether PVT/MP is truly ready,
+ * not only whether a SOP or report file exists.
+ */
+export const projectNpiReadinessChecks = pgTable(
+  "project_npi_readiness_checks",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 }).notNull(),
+    phaseId: varchar("phaseId", { length: 32 }).notNull(),
+    title: varchar("title", { length: 256 }).notNull(),
+    category: npiReadinessCategoryEnum("category").notNull().default("other"),
+    status: npiReadinessStatusEnum("status").notNull().default("pending"),
+    ownerUserId: integer("ownerUserId"),
+    dueDate: date("dueDate", { mode: "string" }),
+    evidenceFileId: integer("evidenceFileId"),
+    relatedIssueId: integer("relatedIssueId"),
+    notes: text("notes"),
+    createdBy: integer("createdBy").notNull(),
+    updatedBy: integer("updatedBy"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    idxProjectPhaseStatus: index("idx_npi_readiness_project_phase_status").on(
+      table.projectId,
+      table.phaseId,
+      table.status
+    ),
+    idxIssue: index("idx_npi_readiness_issue").on(table.relatedIssueId),
+    idxFile: index("idx_npi_readiness_file").on(table.evidenceFileId),
+  })
+);
+
+export type ProjectNpiReadinessCheck = typeof projectNpiReadinessChecks.$inferSelect;
+export type InsertProjectNpiReadinessCheck = typeof projectNpiReadinessChecks.$inferInsert;
+
+/**
+ * project_sample_signoffs table - controlled customer/supplier confirmation items.
+ * External users only see rows for their audience and never see internal-only signoff items.
+ */
+export const projectSampleSignoffs = pgTable(
+  "project_sample_signoffs",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 }).notNull(),
+    phaseId: varchar("phaseId", { length: 32 }).notNull(),
+    title: varchar("title", { length: 256 }).notNull(),
+    signoffType: sampleSignoffTypeEnum("signoffType").notNull().default("other"),
+    audience: sampleSignoffAudienceEnum("audience").notNull().default("customer"),
+    status: sampleSignoffStatusEnum("status").notNull().default("pending"),
+    sampleSerials: jsonb("sampleSerials").$type<string[]>(),
+    fileId: integer("fileId"),
+    dueDate: date("dueDate", { mode: "string" }),
+    requestedBy: integer("requestedBy").notNull(),
+    respondedBy: integer("respondedBy"),
+    respondedAt: timestamp("respondedAt"),
+    notes: text("notes"),
+    responseNote: text("responseNote"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    idxProjectPhaseAudienceStatus: index("idx_sample_signoffs_project_phase_audience_status").on(
+      table.projectId,
+      table.phaseId,
+      table.audience,
+      table.status
+    ),
+    idxFile: index("idx_sample_signoffs_file").on(table.fileId),
+  })
+);
+
+export type ProjectSampleSignoff = typeof projectSampleSignoffs.$inferSelect;
+export type InsertProjectSampleSignoff = typeof projectSampleSignoffs.$inferInsert;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Requirements Pool
@@ -765,6 +1054,103 @@ export type GateDecision = (typeof GATE_DECISIONS)[number];
 
 export const gateDecisionEnum = pgEnum("gate_decision", GATE_DECISIONS);
 
+export type GateReviewTraceSnapshot = {
+  capturedAt: string;
+  projectId: string;
+  phaseId: string;
+  gateName: string;
+  product: {
+    id: string;
+    productNumber: string;
+    name: string;
+    lifecycleState: string;
+  } | null;
+  baseRevision: {
+    id: number;
+    revisionLabel: string;
+    status: string;
+  } | null;
+  resultRevision: {
+    id: number;
+    revisionLabel: string;
+    status: string;
+  } | null;
+  workingBom: {
+    lineCount: number;
+    rows: Array<{
+      partNumber: string;
+      name: string;
+      spec: string;
+      quantity: number;
+      refDesignator: string;
+      componentProductId: string | null;
+      componentRevisionId: number | null;
+      sortOrder: number;
+    }>;
+  };
+  customerVariants: Array<{
+    id: number;
+    variantCode: string;
+    customerSku: string | null;
+    customerId: string;
+    customerName: string;
+    baseRevision: string;
+    status: string;
+    customerBomRevision: string | null;
+    customerApproved: boolean;
+    goldenSampleRef: string | null;
+  }>;
+  testEvidence?: {
+    planCount: number;
+    reportCount: number;
+    approvedReportCount: number;
+    failedCaseCount: number;
+    unresolvedFailedCaseCount: number;
+    reports: Array<{
+      id: number;
+      title: string;
+      reportNo: string | null;
+      result: string;
+      reviewStatus: string;
+      fileId: number | null;
+    }>;
+    failedCases: Array<{
+      id: number;
+      title: string;
+      status: string;
+      severity: string;
+      sampleSerials: string[];
+      relatedIssueId: number | null;
+    }>;
+  };
+  npiEvidence?: {
+    checkCount: number;
+    openCheckCount: number;
+    checks: Array<{
+      id: number;
+      title: string;
+      category: string;
+      status: string;
+      evidenceFileId: number | null;
+      relatedIssueId: number | null;
+    }>;
+  };
+  sampleSignoffs?: {
+    signoffCount: number;
+    openSignoffCount: number;
+    signoffs: Array<{
+      id: number;
+      title: string;
+      signoffType: string;
+      audience: string;
+      status: string;
+      sampleSerials: string[];
+      fileId: number | null;
+      respondedAt: string | null;
+    }>;
+  };
+};
+
 /**
  * project_gate_reviews table - gate review records per project/phase.
  */
@@ -785,6 +1171,12 @@ export const projectGateReviews = pgTable(
     notes: text("notes"),
     /** Review round number (1 = first, 2 = re-review, etc.) */
     roundNumber: integer("roundNumber").notNull().default(1),
+    /** Product/revision pointers captured when the Gate decision was made */
+    productId: varchar("productId", { length: 32 }),
+    baseRevisionId: integer("baseRevisionId"),
+    resultRevisionId: integer("resultRevisionId"),
+    /** Immutable Gate-time trace context: BOM structure and customer variants, without commercial fields */
+    traceSnapshot: jsonb("traceSnapshot").$type<GateReviewTraceSnapshot | null>(),
     createdBy: integer("createdBy"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
@@ -795,6 +1187,7 @@ export const projectGateReviews = pgTable(
       table.projectId,
       table.phaseId
     ),
+    idxProduct: index("idx_gate_reviews_product").on(table.productId),
   })
 );
 
@@ -880,6 +1273,9 @@ export type InsertProjectChangeRecord = typeof projectChangelog.$inferInsert;
 // Project Files (object storage metadata)
 // ─────────────────────────────────────────────────────────────────────────────
 
+export const PROJECT_FILE_VISIBILITIES = ["internal", "customer", "supplier", "public"] as const;
+export type ProjectFileVisibility = (typeof PROJECT_FILE_VISIBILITIES)[number];
+
 /**
  * project_files table - metadata for files uploaded to object storage.
  * Actual file bytes live in S3-compatible storage; this table stores the reference.
@@ -899,6 +1295,8 @@ export const projectFiles = pgTable(
     fileType: varchar("fileType", { length: 64 }),
     /** 版本标签（可空，≤32），如 V1.0 / T1 / Rev.B */
     fileVersion: varchar("fileVersion", { length: 32 }),
+    /** Visibility boundary for internal vs customer/supplier-facing files */
+    visibility: varchar("visibility", { length: 32 }).notNull().default("internal"),
     /** Original file name as uploaded */
     name: varchar("name", { length: 256 }).notNull(),
     mimeType: varchar("mimeType", { length: 128 }).notNull().default("application/octet-stream"),
@@ -955,6 +1353,12 @@ export const ACTIVITY_ACTIONS = [
   "gate.create",
   "gate.update",
   "gate.delete",
+  "npi_readiness.create",
+  "npi_readiness.update",
+  "npi_readiness.issue_create",
+  "sample_signoff.create",
+  "sample_signoff.respond",
+  "sample_signoff.update",
   // Changelog
   "change.create",
   "change.update",
@@ -1060,6 +1464,8 @@ export const products = pgTable("products", {
   targetMarkets: jsonb("targetMarkets").$type<string[]>().default([]),
   /** concept | development | mass_production | maintenance | eol */
   lifecycleState: varchar("lifecycleState", { length: 32 }).notNull().default("concept"),
+  /** Product manager / product owner for PRD and product version decisions */
+  productManagerUserId: integer("productManagerUserId"),
   /** 当前生产版本（FK product_revisions.id，可空） */
   currentRevisionId: integer("currentRevisionId"),
   createdBy: integer("createdBy").notNull(),

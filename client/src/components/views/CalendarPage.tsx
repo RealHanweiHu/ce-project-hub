@@ -8,6 +8,7 @@ import { trpc } from "@/lib/trpc";
 import { getPhasesForCategory } from "@/lib/sop-templates";
 import { LinearCard, PageHeader, SegToggle } from "@/components/linear/primitives";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem } from "@/components/ui/dropdown-menu";
+import { isSystemAdminRole } from "@shared/system-roles";
 
 type CalendarEvent = {
   date: string;
@@ -198,9 +199,9 @@ export function CalendarPage({ projects, onSelectProject }: { projects: ProjectO
   }, [fromDate, toDate, workbenchData?.tasks]);
 
   const creatableProjectIds = useMemo(() => {
-    if (workbenchData?.systemRole === "admin") return new Set(projects.map((project) => project.id));
+    if (isSystemAdminRole(workbenchData?.systemRole)) return new Set(projects.map((project) => project.id));
     return new Set((workbenchData?.roles ?? [])
-      .filter((role) => ["owner", "manager", "pm"].includes(role.role))
+      .filter((role) => ["owner", "manager", "project_manager"].includes(role.role))
       .map((role) => role.projectId));
   }, [projects, workbenchData]);
   const creatableProjects = useMemo(
@@ -210,12 +211,12 @@ export function CalendarPage({ projects, onSelectProject }: { projects: ProjectO
 
   const roleProjectIds = useMemo(() => new Set((workbenchData?.roles ?? []).map((role) => role.projectId)), [workbenchData?.roles]);
   const pmProjectIds = useMemo(() => new Set((workbenchData?.roles ?? [])
-    .filter((role) => ["owner", "pm"].includes(role.role))
+    .filter((role) => ["owner", "project_manager", "pm"].includes(role.role))
     .map((role) => role.projectId)), [workbenchData?.roles]);
   const taskProjectIds = useMemo(() => new Set(taskEvents.map((event) => event.projectId)), [taskEvents]);
   const availableLenses = useMemo<Lens[]>(() => {
     const list: Lens[] = [];
-    if (workbenchData?.systemRole === "admin" || (workbenchData?.roles ?? []).some((role) => role.role === "manager")) list.push("manager");
+    if (isSystemAdminRole(workbenchData?.systemRole) || (workbenchData?.roles ?? []).some((role) => role.role === "manager" || role.role === "project_manager")) list.push("manager");
     if (pmProjectIds.size > 0 || creatableProjectIds.size > 0) list.push("pm");
     list.push("rd");
     return Array.from(new Set(list));

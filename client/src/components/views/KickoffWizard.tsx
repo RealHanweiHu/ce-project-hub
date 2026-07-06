@@ -6,7 +6,8 @@ import { X, ChevronLeft, ChevronRight, Rocket, CalendarRange, Users, CheckCircle
 import { toLocalISODate } from '@/lib/utils';
 
 const KEY_ROLES = [
-  { role: 'pm', label: '产品经理', hint: 'PM · 立项 / Gate / 协调' },
+  { role: 'project_manager', label: '项目经理 / PMO', hint: 'PMO · 计划 / Gate / 协调' },
+  { role: 'pm', label: '产品经理', hint: '产品 · PRD / 范围 / 成本' },
   { role: 'rd_hw', label: '硬件研发', hint: 'EE · 原理图 / PCB' },
   { role: 'rd_mech', label: '结构 / ID', hint: 'MD/ID · 结构 / 外观' },
   { role: 'rd_sw', label: '软件研发', hint: 'SW · 固件 / APP' },
@@ -61,7 +62,7 @@ export function KickoffWizard({ project, onClose }: {
       const m = (members as Array<{ userId: number; role: string }>).find((x) => x.role === r.role);
       if (m) init[r.role] = String(m.userId);
     }
-    if (project.pmUserId) init['pm'] = init['pm'] ?? String(project.pmUserId);
+    if (project.pmUserId) init['project_manager'] = init['project_manager'] ?? String(project.pmUserId);
     if (Object.keys(init).length) setStaff(init);
     setSeeded(true);
   }, [members, membersQuery.isSuccess, project.pmUserId, seeded]);

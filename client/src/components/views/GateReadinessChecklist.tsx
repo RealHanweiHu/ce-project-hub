@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { CheckCircle2, XCircle, Upload, Trash2, FileText } from "lucide-react";
 import { toast } from "sonner";
@@ -6,27 +6,45 @@ import { toast } from "sonner";
 const DIM_LABEL: Record<string, string> = {
   prereq: "前置任务",
   deliverables: "必需交付物",
+  test_reports: "测试计划 / 报告",
   critical_issues: "本阶段 P0/P1",
+  role_blocks: "QA / PE 阻断",
   review_conditions: "遗留评审条件",
 };
 
 type FileRow = { id: number; name: string; deliverableName: string | null; storageUrl: string };
+type GateBlockerRow = {
+  id: number;
+  blockerType: "quality" | "npi";
+  title: string;
+  description: string | null;
+  status: "open" | "resolved";
+};
 
 /**
- * Gate 就绪清单（服务端 gateReviews.readiness 驱动，4 维）。
+ * Gate 就绪清单（服务端 gateReviews.readiness 驱动，含测试报告与 QA/PE 阻断维度）。
  * 交付物维度可逐项展开上传（多版本），上传/删除自动刷新就绪度。
  */
 export function GateReadinessChecklist({
-  projectId, phaseId, gateTaskId, canEdit = true,
-}: { projectId: string; phaseId: string; gateTaskId: string; canEdit?: boolean }) {
+  projectId, phaseId, gateTaskId, canEdit = true, canQualityGateBlock = false, canNpiGateBlock = false,
+}: {
+  projectId: string;
+  phaseId: string;
+  gateTaskId: string;
+  canEdit?: boolean;
+  canQualityGateBlock?: boolean;
+  canNpiGateBlock?: boolean;
+}) {
   const utils = trpc.useUtils();
   const { data: readiness, isLoading } = trpc.gateReviews.readiness.useQuery({ projectId, phaseId });
   const { data: files = [] } = trpc.files.list.useQuery({ projectId, phaseId, taskId: gateTaskId });
+  const { data: gateBlockers = [] } = trpc.gateBlockers.list.useQuery({ projectId, phaseId });
 
   const refresh = async () => {
     await Promise.all([
       utils.gateReviews.readiness.invalidate({ projectId, phaseId }),
       utils.files.list.invalidate({ projectId, phaseId, taskId: gateTaskId }),
+      utils.gateBlockers.list.invalidate({ projectId, phaseId }),
     ]);
   };
 
@@ -87,6 +105,107 @@ export function GateReadinessChecklist({
           )}
         </div>
       ))}
+      <GateBlockerControls
+        projectId={projectId}
+        phaseId={phaseId}
+        blockers={gateBlockers as GateBlockerRow[]}
+        canQualityGateBlock={canQualityGateBlock}
+        canNpiGateBlock={canNpiGateBlock}
+        onChanged={refresh}
+      />
+    </div>
+  );
+}
+
+function GateBlockerControls({
+  projectId, phaseId, blockers, canQualityGateBlock, canNpiGateBlock, onChanged,
+}: {
+  projectId: string;
+  phaseId: string;
+  blockers: GateBlockerRow[];
+  canQualityGateBlock: boolean;
+  canNpiGateBlock: boolean;
+  onChanged: () => Promise<void>;
+}) {
+  const [blockerType, setBlockerType] = useState<"quality" | "npi">(canQualityGateBlock ? "quality" : "npi");
+  const [title, setTitle] = useState("");
+  const canCreate = canQualityGateBlock || canNpiGateBlock;
+  const availableTypes = [
+    ...(canQualityGateBlock ? [{ value: "quality" as const, label: "质量阻断" }] : []),
+    ...(canNpiGateBlock ? [{ value: "npi" as const, label: "NPI/工艺阻断" }] : []),
+  ];
+  const create = trpc.gateBlockers.create.useMutation({
+    onSuccess: async () => { setTitle(""); await onChanged(); toast.success("已添加 Gate 阻断项"); },
+    onError: (e) => toast.error(e.message || "添加失败"),
+  });
+  const resolve = trpc.gateBlockers.resolve.useMutation({
+    onSuccess: async () => { await onChanged(); toast.success("已解除 Gate 阻断项"); },
+    onError: (e) => toast.error(e.message || "解除失败"),
+  });
+  const canResolve = (row: GateBlockerRow) =>
+    row.status === "open" && (row.blockerType === "quality" ? canQualityGateBlock : canNpiGateBlock);
+
+  if (blockers.length === 0 && !canCreate) return null;
+
+  return (
+    <div className="mt-3 border-t border-border pt-3 space-y-2">
+      <div className="text-[10px] uppercase tracking-widest text-muted-foreground">QA / PE Gate 阻断</div>
+      {blockers.length > 0 && (
+        <div className="space-y-1">
+          {blockers.map((row) => (
+            <div key={row.id} className="flex items-start justify-between gap-2 rounded-[7px] border border-border bg-card px-2 py-1.5">
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] rounded bg-secondary px-1.5 py-0.5 text-muted-foreground">
+                    {row.blockerType === "quality" ? "QA" : "PE/NPI"}
+                  </span>
+                  <span className={row.status === "open" ? "text-xs font-medium text-foreground" : "text-xs text-muted-foreground line-through"}>
+                    {row.title}
+                  </span>
+                </div>
+                {row.description && <div className="mt-0.5 text-xs text-muted-foreground">{row.description}</div>}
+              </div>
+              {canResolve(row) && (
+                <button
+                  type="button"
+                  onClick={() => resolve.mutate({ id: row.id })}
+                  disabled={resolve.isPending}
+                  className="shrink-0 text-xs text-primary hover:opacity-80 disabled:opacity-40"
+                >
+                  解除
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {canCreate && (
+        <div className="flex flex-col gap-2 sm:flex-row">
+          {availableTypes.length > 1 && (
+            <select
+              value={blockerType}
+              onChange={(event) => setBlockerType(event.target.value as "quality" | "npi")}
+              className="h-8 rounded-[7px] border border-border bg-card px-2 text-xs"
+            >
+              {availableTypes.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
+            </select>
+          )}
+          <input
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            placeholder="输入阻断原因，如 EVT 跌落失效未复测"
+            className="h-8 min-w-0 flex-1 rounded-[7px] border border-border bg-card px-2 text-xs"
+          />
+          <button
+            type="button"
+            disabled={!title.trim() || create.isPending}
+            onClick={() => create.mutate({ projectId, phaseId, blockerType, title: title.trim() })}
+            className="h-8 rounded-[7px] bg-primary px-3 text-xs font-medium text-primary-foreground disabled:opacity-40"
+          >
+            阻断 Gate
+          </button>
+        </div>
+      )}
     </div>
   );
 }

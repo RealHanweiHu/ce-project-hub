@@ -1,9 +1,10 @@
 import type { Express } from "express";
 import type { CreateExpressContextOptions } from "@trpc/server/adapters/express";
 import { storageGetObject } from "../storage";
-import { getProjectIdByStorageKey } from "../db";
+import { getProjectFileAccessByStorageKey } from "../db";
 import { getEffectiveProjectRoleById } from "../project-access";
 import { resolveStorageAuthorization } from "../storage-access";
+import { canRoleViewFileVisibility } from "../file-visibility";
 import { createContext } from "./context";
 
 /**
@@ -36,8 +37,9 @@ export function registerStorageProxy(app: Express) {
       { req, res } as CreateExpressContextOptions
     );
     const auth = await resolveStorageAuthorization(key, ctx.user?.id, {
-      getFileProjectId: getProjectIdByStorageKey,
+      getFileAccess: getProjectFileAccessByStorageKey,
       getRole: getEffectiveProjectRoleById,
+      canRoleViewFile: canRoleViewFileVisibility,
     });
     if (auth === "unauthorized") {
       res.status(401).send("Unauthorized");

@@ -22,6 +22,7 @@ import { useAuth } from '@/_core/hooks/useAuth';
 import { getLoginUrl } from '@/const';
 import { useQueryClient } from '@tanstack/react-query';
 import { getQueryKey } from '@trpc/react-query';
+import { isSystemAdminRole } from '@shared/system-roles';
 import { useProjectData } from '@/hooks/useProjectData';
 import { NotificationBell } from '@/components/NotificationBell';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
@@ -609,7 +610,7 @@ function ProjectDetailWrapper({
 export default function Home() {
   const { user, loading: authLoading } = useAuth();
   const [, navigate] = useLocation();
-  const isAdmin = (user as (typeof user & { role?: string }) | null)?.role === 'admin';
+  const isAdmin = isSystemAdminRole((user as (typeof user & { role?: string }) | null)?.role);
   const canCreateProject = !!(user as (typeof user & { canCreateProject?: boolean }) | null)?.canCreateProject;
   const queryClient = useQueryClient();
   const initialLocationRef = useRef(readWorkbenchLocation());

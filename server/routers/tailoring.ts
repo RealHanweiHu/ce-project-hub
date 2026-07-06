@@ -16,6 +16,7 @@ import { protectedProcedure, router } from "../_core/trpc";
 import { ROLE_PERMISSIONS } from "./members";
 import { getDeliverableLibrary } from "../../shared/effective-process";
 import { getEffectiveProjectRoleById as getUserProjectRole } from "../project-access";
+import { isSystemAdminRole } from "../../shared/system-roles";
 
 const tailoringTargetSchema = z.union([
   z.object({ scope: z.literal("phase"), phaseId: z.string().min(1) }),
@@ -25,7 +26,7 @@ const tailoringTargetSchema = z.union([
 async function assertCanView(projectId: string, user: { id: number; role: string }) {
   const project = await getProjectById(projectId);
   if (!project) throw new TRPCError({ code: "NOT_FOUND", message: "项目不存在" });
-  if (user.role === "admin") return project;
+  if (isSystemAdminRole(user.role)) return project;
   const role = await getUserProjectRole(projectId, user.id);
   if (!role || !ROLE_PERMISSIONS[role].canView) {
     throw new TRPCError({ code: "FORBIDDEN", message: "无访问权限" });
@@ -35,14 +36,14 @@ async function assertCanView(projectId: string, user: { id: number; role: string
 
 async function assertCanProposeOrOverride(projectId: string, user: { id: number; role: string }) {
   const project = await assertCanView(projectId, user);
-  if (user.role === "admin" || project.pmUserId === user.id) return project;
+  if (isSystemAdminRole(user.role) || project.pmUserId === user.id) return project;
   const role = await getUserProjectRole(projectId, user.id);
-  if (role === "pm") return project;
-  throw new TRPCError({ code: "FORBIDDEN", message: "仅项目 PM 或管理员可调整流程裁剪" });
+  if (role === "project_manager") return project;
+  throw new TRPCError({ code: "FORBIDDEN", message: "仅项目经理/PMO 或管理员可调整流程裁剪" });
 }
 
 function assertAdmin(user: { role: string }) {
-  if (user.role !== "admin") {
+  if (!isSystemAdminRole(user.role)) {
     throw new TRPCError({ code: "FORBIDDEN", message: "仅管理员可审批流程裁剪" });
   }
 }

@@ -4,6 +4,8 @@ import {
   setProjectProduct, getOpenP0P1Count, releaseProject,
   getProductById, getProjectById, listProductRevisions,
   createProjectGateReview, createProjectFile, upsertProjectTask,
+  createProjectTestPlan, createProjectTestReport, reviewProjectTestReport,
+  createProjectNpiReadinessCheck,
 } from "./db";
 import { getReleaseGatePhase } from "../shared/sop-templates";
 import { submitDeliverableReview, reviewDeliverable } from "./deliverable-review-service";
@@ -19,6 +21,10 @@ async function cleanup() {
   await db.execute(sql`DELETE FROM mp_releases WHERE "productId" = ${PID}`);
   await db.execute(sql`DELETE FROM product_revisions WHERE "productId" = ${PID}`);
   await db.execute(sql`DELETE FROM project_deliverable_reviews WHERE "projectId" = ${PRJ}`);
+  await db.execute(sql`DELETE FROM project_test_reports WHERE "projectId" = ${PRJ}`);
+  await db.execute(sql`DELETE FROM project_test_cases WHERE "projectId" = ${PRJ}`);
+  await db.execute(sql`DELETE FROM project_test_plans WHERE "projectId" = ${PRJ}`);
+  await db.execute(sql`DELETE FROM project_npi_readiness_checks WHERE "projectId" = ${PRJ}`);
   await db.execute(sql`DELETE FROM project_files WHERE "projectId" = ${PRJ}`);
   await db.execute(sql`DELETE FROM project_gate_reviews WHERE "projectId" = ${PRJ}`);
   await db.execute(sql`DELETE FROM project_tasks WHERE "projectId" = ${PRJ}`);
@@ -52,6 +58,76 @@ async function completeDeliverables(projectId: string = PRJ) {
     await submitDeliverableReview({ projectId, phaseId: phase.id, deliverableName: name, reviewerUserId: 1, submittedBy: 1 }, deps);
     await reviewDeliverable({ projectId, phaseId: phase.id, deliverableName: name, decision: "approved", reviewedBy: 1, note: null }, deps);
   }
+  await completePvtTestReports(projectId);
+  await completePvtNpiReadiness(projectId);
+}
+
+async function completePvtTestReports(projectId: string = PRJ) {
+  const db = await getDb(); const { sql } = await import("drizzle-orm");
+  await db!.execute(sql`DELETE FROM project_test_reports WHERE "projectId"=${projectId} AND "phaseId"='pvt'`);
+  await db!.execute(sql`DELETE FROM project_test_cases WHERE "projectId"=${projectId} AND "phaseId"='pvt'`);
+  await db!.execute(sql`DELETE FROM project_test_plans WHERE "projectId"=${projectId} AND "phaseId"='pvt'`);
+  const planId = await createProjectTestPlan({
+    projectId,
+    phaseId: "pvt",
+    title: "PVT 量产验证测试计划",
+    scope: "试产整机功能、可靠性、安规、电池温升、包装运输",
+    sampleSize: "PVT x 50",
+    status: "active",
+    createdBy: 1,
+  });
+  const reportFileId = await createProjectFile({
+    projectId,
+    phaseId: "pvt",
+    taskId: getReleaseGatePhase("npd")?.gateTaskId ?? "pvt_gate",
+    deliverableName: "PVT 量产验证测试报告",
+    name: `${projectId}-pvt-report.pdf`,
+    mimeType: "application/pdf",
+    size: 1,
+    storageKey: `${projectId}/pvt-report`,
+    storageUrl: `/storage/${projectId}/pvt-report`,
+    uploadedBy: 1,
+  });
+  const reportId = await createProjectTestReport({
+    projectId,
+    phaseId: "pvt",
+    planId,
+    title: "PVT 量产验证测试报告",
+    reportNo: `${projectId}-PVT-RPT`,
+    result: "pass",
+    reviewStatus: "pending",
+    summary: "PVT 关键测试项通过，QA 确认可进入 MP 发布",
+    fileId: reportFileId,
+    submittedBy: 1,
+  });
+  await reviewProjectTestReport(reportId, 1, "approved");
+}
+
+async function completePvtNpiReadiness(projectId: string = PRJ) {
+  const db = await getDb(); const { sql } = await import("drizzle-orm");
+  await db!.execute(sql`DELETE FROM project_npi_readiness_checks WHERE "projectId"=${projectId} AND "phaseId"='pvt'`);
+  const evidenceFileId = await createProjectFile({
+    projectId,
+    phaseId: "pvt",
+    taskId: getReleaseGatePhase("npd")?.gateTaskId ?? "pvt_gate",
+    deliverableName: "PVT PE/NPI readiness checklist",
+    name: `${projectId}-pvt-npi-readiness.pdf`,
+    mimeType: "application/pdf",
+    size: 1,
+    storageKey: `${projectId}/pvt-npi-readiness`,
+    storageUrl: `/storage/${projectId}/pvt-npi-readiness`,
+    uploadedBy: 1,
+  });
+  await createProjectNpiReadinessCheck({
+    projectId,
+    phaseId: "pvt",
+    title: "PVT 工艺、治具、测试程序与良率 readiness",
+    category: "process_flow",
+    status: "ready",
+    evidenceFileId,
+    createdBy: 1,
+    updatedBy: 1,
+  });
 }
 
 describe("MP Release 硬闸口", () => {
@@ -131,6 +207,10 @@ async function cleanup2() {
   await db.execute(sql`DELETE FROM mp_releases WHERE "productId" = ${PID2}`);
   await db.execute(sql`DELETE FROM product_revisions WHERE "productId" = ${PID2}`);
   await db.execute(sql`DELETE FROM project_deliverable_reviews WHERE "projectId" = ${PRJ2}`);
+  await db.execute(sql`DELETE FROM project_test_reports WHERE "projectId" = ${PRJ2}`);
+  await db.execute(sql`DELETE FROM project_test_cases WHERE "projectId" = ${PRJ2}`);
+  await db.execute(sql`DELETE FROM project_test_plans WHERE "projectId" = ${PRJ2}`);
+  await db.execute(sql`DELETE FROM project_npi_readiness_checks WHERE "projectId" = ${PRJ2}`);
   await db.execute(sql`DELETE FROM project_files WHERE "projectId" = ${PRJ2}`);
   await db.execute(sql`DELETE FROM project_gate_reviews WHERE "projectId" = ${PRJ2}`);
   await db.execute(sql`DELETE FROM project_tasks WHERE "projectId" = ${PRJ2}`);
@@ -185,6 +265,10 @@ async function cleanup3() {
   await db.execute(sql`DELETE FROM product_revisions WHERE "productId" = ${PID3}`);
   await db.execute(sql`DELETE FROM project_changelog WHERE "projectId" = ${PRJ3}`);
   await db.execute(sql`DELETE FROM project_deliverable_reviews WHERE "projectId" = ${PRJ3}`);
+  await db.execute(sql`DELETE FROM project_test_reports WHERE "projectId" = ${PRJ3}`);
+  await db.execute(sql`DELETE FROM project_test_cases WHERE "projectId" = ${PRJ3}`);
+  await db.execute(sql`DELETE FROM project_test_plans WHERE "projectId" = ${PRJ3}`);
+  await db.execute(sql`DELETE FROM project_npi_readiness_checks WHERE "projectId" = ${PRJ3}`);
   await db.execute(sql`DELETE FROM project_files WHERE "projectId" = ${PRJ3}`);
   await db.execute(sql`DELETE FROM project_gate_reviews WHERE "projectId" = ${PRJ3}`);
   await db.execute(sql`DELETE FROM project_tasks WHERE "projectId" = ${PRJ3}`);

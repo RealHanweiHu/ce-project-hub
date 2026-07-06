@@ -253,6 +253,62 @@
       "when": 1783010346965,
       "tag": "0035_condemned_giant_man",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1783232464224,
+      "tag": "0036_cehub_phase1_roles_visibility",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1783255956885,
+      "tag": "0037_cehub_phase2_gate_blockers",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1783256358082,
+      "tag": "0038_cehub_phase2_gate_traceability",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1783261604291,
+      "tag": "0039_cehub_phase3a_test_plans",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1783262583644,
+      "tag": "0040_cehub_phase3bc_test_execution_traceability",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1783274220329,
+      "tag": "0041_cehub_phase3de_npi_sample_signoff",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1783275000000,
+      "tag": "0042_system_roles_enum",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1783275001000,
+      "tag": "0043_system_roles_member_default",
+      "breakpoints": true
     }
   ]
 }

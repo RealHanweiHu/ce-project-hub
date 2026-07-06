@@ -5,12 +5,14 @@
 // (风险预警 / 组合进度 on the left, 即将 Gate / 阶段分布 on the right).
 import type React from "react";
 import { useMemo } from "react";
-import { AlertTriangle, CalendarClock, Gauge } from "lucide-react";
+import { AlertTriangle, CalendarClock, Gauge, TrendingDown, ShieldAlert, Factory, Users } from "lucide-react";
+import { trpc } from "@/lib/trpc";
 import { getPhasesForCategory } from "@/lib/sop-templates";
 import { PHASE_MAP } from "@/lib/data";
 import { isProjectedOverdue, type RagLevel } from "@shared/health";
 import { LinearCard, LinearBar, StatusDot } from "@/components/linear/primitives";
 import type { PortfolioTableRow } from "./PortfolioTable";
+import type { ManagementKpis } from "@shared/management-kpis";
 
 type DrillKind = "overdue" | "blocked";
 
@@ -75,6 +77,9 @@ export function PortfolioDashboard({
   onDrill: (kind: DrillKind) => void;
 }) {
   const data = useMemo(() => buildDashboard(rows), [rows]);
+  const managementKpis = trpc.analytics.managementKpis.useQuery(undefined, {
+    staleTime: 60_000,
+  });
 
   if (rows.length === 0) {
     return (
@@ -111,6 +116,12 @@ export function PortfolioDashboard({
 
       {/* 今日聚焦 / Today's Focus — full-width, 3 items */}
       <FocusBand items={data.focusItems} onSelectProject={onSelectProject} onDrill={onDrill} />
+
+      <ManagementKpiBoard
+        data={managementKpis.data}
+        isLoading={managementKpis.isLoading}
+        onSelectProject={onSelectProject}
+      />
 
       {/* Two balanced, equal-height columns — boards keep a fixed height so adding/removing
           content never changes the overall page length (content overflows + scrolls in place). */}
@@ -280,6 +291,226 @@ function buildFocusItems(rows: PortfolioTableRow[], scored: ScoredProject[]): Fo
 
 function normalizePieColor(color: string | undefined, index: number) {
   return color && color.startsWith("#") ? color : PIE_FALLBACK_COLORS[index % PIE_FALLBACK_COLORS.length];
+}
+
+function ManagementKpiBoard({
+  data,
+  isLoading,
+  onSelectProject,
+}: {
+  data?: ManagementKpis;
+  isLoading: boolean;
+  onSelectProject: (id: string) => void;
+}) {
+  if (isLoading && !data) {
+    return (
+      <LinearCard className="p-4 text-sm text-muted-foreground">
+        正在计算管理层 KPI...
+      </LinearCard>
+    );
+  }
+  if (!data) return null;
+
+  const avgAge = data.p0p1Aging.averageAgeDays;
+  const closure = data.validationClosure.byPhase;
+  const closureTotal = closure.reduce((sum, row) => sum + row.total, 0);
+  const closureClosed = closure.reduce((sum, row) => sum + row.closed, 0);
+  const closureRate = closureTotal > 0 ? Math.round((closureClosed / closureTotal) * 100) : null;
+  const topCustomerRisk = data.customerRiskRanking.rows[0];
+
+  const kpis: KpiSpec[] = [
+    {
+      label: "延期预测",
+      value: data.delayPrediction.delayedCount,
+      sub: `${fmtPct(data.delayPrediction.delayedRatePct)} · 最大 ${data.delayPrediction.maxSlipDays ?? 0} 天`,
+      tone: data.delayPrediction.delayedCount > 0 ? "red" : "green",
+    },
+    {
+      label: "Gate 一次通过",
+      value: fmtPct(data.gateFirstPass.ratePct),
+      sub: `${data.gateFirstPass.firstPassCount}/${data.gateFirstPass.reviewedGateCount}`,
+      tone: data.gateFirstPass.ratePct != null && data.gateFirstPass.ratePct < 70 ? "amber" : "green",
+    },
+    {
+      label: "P0/P1 Aging",
+      value: avgAge == null ? "—" : `${avgAge}d`,
+      sub: `${data.p0p1Aging.openCount} open · >14d ${data.p0p1Aging.over14Days}`,
+      tone: data.p0p1Aging.over14Days > 0 ? "red" : data.p0p1Aging.openCount > 0 ? "amber" : "green",
+    },
+    {
+      label: "EVT/DVT/PVT 关闭",
+      value: fmtPct(closureRate),
+      sub: `${closureClosed}/${closureTotal} test case`,
+      tone: closureRate != null && closureRate < 80 ? "amber" : "green",
+    },
+    {
+      label: "BOM 超目标",
+      value: data.bomCostDelta.overTargetCount,
+      sub: `${data.bomCostDelta.trackedProjectCount} 个有成本数据`,
+      tone: data.bomCostDelta.overTargetCount > 0 ? "amber" : "neutral",
+    },
+    {
+      label: "客户项目风险",
+      value: topCustomerRisk ? topCustomerRisk.score : 0,
+      sub: topCustomerRisk ? `${topCustomerRisk.customer} · ${topCustomerRisk.projectName}` : "暂无客户风险",
+      tone: topCustomerRisk && topCustomerRisk.score > 0 ? "red" : "green",
+    },
+  ];
+
+  return (
+    <div className="space-y-[18px]">
+      <Panel title="管理层决策 KPI" sub="Phase 3F">
+        <div className="grid grid-cols-2 gap-[13px] p-4 sm:grid-cols-3 lg:grid-cols-6">
+          {kpis.map((kpi) => <KpiCard key={kpi.label} {...kpi} />)}
+        </div>
+      </Panel>
+
+      <div className="grid grid-cols-1 gap-[18px] xl:grid-cols-3">
+        <Panel title="客户项目风险排行" sub="Customer Risk" className="min-h-[280px]">
+          <div className="divide-y divide-border">
+            {data.customerRiskRanking.rows.slice(0, 5).map((row) => (
+              <button key={row.projectId} onClick={() => onSelectProject(row.projectId)}
+                className="w-full px-4 py-3 text-left transition-colors hover:bg-secondary">
+                <div className="flex items-start gap-3">
+                  <Users size={14} className="mt-0.5 text-primary" />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium text-foreground">{row.projectName}</div>
+                    <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                      {row.customer} · {PHASE_MAP[row.currentPhase]?.name ?? row.currentPhase}
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {row.criticalIssues > 0 && <Tag tone="rose">P0/P1 {row.criticalIssues}</Tag>}
+                      {row.slipDays != null && row.slipDays > 0 && <Tag tone="amber">晚 {row.slipDays}d</Tag>}
+                      {row.highRisks > 0 && <Tag tone="rose">高风险 {row.highRisks}</Tag>}
+                    </div>
+                  </div>
+                  <span className="num text-sm font-semibold text-foreground">{row.score}</span>
+                </div>
+              </button>
+            ))}
+            {data.customerRiskRanking.rows.length === 0 && (
+              <EmptyPanelLine text="暂无客户项目风险排行。" />
+            )}
+          </div>
+        </Panel>
+
+        <Panel title="BOM Cost Delta" sub="Target vs Working" className="min-h-[280px]">
+          <div className="divide-y divide-border">
+            {data.bomCostDelta.rows.slice(0, 5).map((row) => (
+              <button key={row.projectId} onClick={() => onSelectProject(row.projectId)}
+                className="w-full px-4 py-3 text-left transition-colors hover:bg-secondary">
+                <div className="flex items-start gap-3">
+                  <Factory size={14} className="mt-0.5 text-primary" />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium text-foreground">{row.projectName}</div>
+                    <div className="mt-0.5 text-[11px] text-muted-foreground">
+                      BOM {fmtMoney(row.workingBomCost)} · Target {fmtMoney(row.targetCost)}
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      <Tag tone={(row.delta ?? 0) > 0 ? "amber" : "emerald"}>
+                        {row.delta == null ? "缺口径" : `${row.delta > 0 ? "+" : ""}${fmtMoney(row.delta)} (${fmtPct(row.deltaPct)})`}
+                      </Tag>
+                      <Tag tone="stone">{row.lineCount} lines</Tag>
+                    </div>
+                  </div>
+                </div>
+              </button>
+            ))}
+            {data.bomCostDelta.rows.length === 0 && (
+              <EmptyPanelLine text="暂无 BOM 成本与目标成本对比数据。" />
+            )}
+          </div>
+        </Panel>
+
+        <Panel title="验证关闭率" sub="EVT / DVT / PVT" className="min-h-[280px]">
+          <div className="space-y-3 p-4">
+            {closure.map((row) => (
+              <div key={row.phaseId} className="space-y-1.5">
+                <div className="flex items-center justify-between gap-3 text-xs">
+                  <span className="font-medium text-foreground">{row.phaseId.toUpperCase()}</span>
+                  <span className="num text-muted-foreground">
+                    {row.closureRatePct == null ? "—" : `${row.closureRatePct}%`} · {row.closed}/{row.total}
+                  </span>
+                </div>
+                <LinearBar
+                  value={row.closureRatePct ?? 0}
+                  className={row.closureRatePct != null && row.closureRatePct < 80
+                    ? "[&>div]:bg-[color:var(--warning)]"
+                    : "[&>div]:bg-[color:var(--success)]"}
+                />
+              </div>
+            ))}
+            <div className="mt-4 rounded-md border border-border bg-secondary/40 p-3">
+              <div className="flex items-center gap-2 text-xs font-medium text-foreground">
+                <ShieldAlert size={13} className="text-primary" />
+                P0/P1 老化 Top
+              </div>
+              <div className="mt-2 divide-y divide-border">
+                {data.p0p1Aging.rows.slice(0, 3).map((issue) => (
+                  <button key={`${issue.projectId}-${issue.title}`} onClick={() => onSelectProject(issue.projectId)}
+                    className="w-full py-2 text-left">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate text-xs text-foreground">{issue.title}</span>
+                      <Tag tone={issue.ageDays > 14 ? "rose" : "amber"}>{issue.ageDays}d</Tag>
+                    </div>
+                    <div className="mt-0.5 truncate text-[11px] text-muted-foreground">{issue.projectName}</div>
+                  </button>
+                ))}
+                {data.p0p1Aging.rows.length === 0 && (
+                  <div className="py-2 text-xs text-muted-foreground">暂无开放 P0/P1。</div>
+                )}
+              </div>
+            </div>
+          </div>
+        </Panel>
+      </div>
+
+      {data.delayPrediction.rows.length > 0 && (
+        <Panel title="延期预测 Top" sub="Projected Delay">
+          <div className="grid grid-cols-1 divide-y divide-border lg:grid-cols-2 lg:divide-x lg:divide-y-0">
+            {data.delayPrediction.rows.slice(0, 6).map((row) => (
+              <button key={row.projectId} onClick={() => onSelectProject(row.projectId)}
+                className="px-4 py-3 text-left transition-colors hover:bg-secondary">
+                <div className="flex items-start gap-3">
+                  <TrendingDown size={14} className="mt-0.5 text-[color:var(--destructive)]" />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium text-foreground">{row.projectName}</div>
+                    <div className="mt-0.5 text-[11px] text-muted-foreground">
+                      目标 {row.targetDate ?? "—"} · 预测 {row.projectedEnd ?? "未排期"}
+                    </div>
+                  </div>
+                  <Tag tone={(row.slipDays ?? 0) > 7 ? "rose" : "amber"}>
+                    {row.slipDays == null ? "红灯" : `晚 ${row.slipDays}d`}
+                  </Tag>
+                </div>
+              </button>
+            ))}
+          </div>
+        </Panel>
+      )}
+    </div>
+  );
+}
+
+function EmptyPanelLine({ text }: { text: string }) {
+  return <div className="px-4 py-8 text-sm text-muted-foreground">{text}</div>;
+}
+
+function fmtPct(value: number | null | undefined): string {
+  return value == null ? "—" : `${value}%`;
+}
+
+function fmtMoney(value: number | null | undefined): string {
+  return value == null ? "—" : Number(value).toFixed(2);
+}
+
+function Tag({ tone, children }: { tone: "rose" | "amber" | "emerald" | "stone"; children: React.ReactNode }) {
+  const style: React.CSSProperties =
+    tone === "rose" ? { background: "color-mix(in srgb, var(--destructive) 10%, transparent)", color: "var(--destructive)", borderColor: "color-mix(in srgb, var(--destructive) 30%, transparent)" } :
+    tone === "amber" ? { background: "color-mix(in srgb, var(--warning) 12%, transparent)", color: "var(--warning)", borderColor: "color-mix(in srgb, var(--warning) 30%, transparent)" } :
+    tone === "emerald" ? { background: "color-mix(in srgb, var(--success) 12%, transparent)", color: "var(--success)", borderColor: "color-mix(in srgb, var(--success) 30%, transparent)" } :
+    { background: "var(--secondary)", color: "var(--secondary-foreground)", borderColor: "var(--border)" };
+  return <span className="num whitespace-nowrap rounded-[5px] border px-1.5 py-0.5 text-[10px]" style={style}>{children}</span>;
 }
 
 // ── KPI card ──────────────────────────────────────────────────────────────────

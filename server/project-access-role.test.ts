@@ -118,18 +118,18 @@ afterAll(async () => {
 });
 
 describe("project access role resolution", () => {
-  it("pmUserId 不会把已有 manager 降成 pm", async () => {
+  it("pmUserId 不会把已有 manager 降成 project_manager", async () => {
     const project = await getProjectById(MANAGER_PROJECT);
     expect(project).not.toBeNull();
 
     await expect(getEffectiveProjectRole(project!, MANAGER_PM)).resolves.toBe("manager");
   });
 
-  it("pmUserId 只在成员角色更低时补成 pm", async () => {
+  it("pmUserId 只在成员角色更低时补成 project_manager", async () => {
     const project = await getProjectById(VIEWER_PROJECT);
     expect(project).not.toBeNull();
 
-    await expect(getEffectiveProjectRole(project!, VIEWER_PM)).resolves.toBe("pm");
+    await expect(getEffectiveProjectRole(project!, VIEWER_PM)).resolves.toBe("project_manager");
   });
 
   it("同时是 pmUserId 的 manager 仍可创建 Gate 评审", async () => {
@@ -142,7 +142,7 @@ describe("project access role resolution", () => {
         phaseName: "Design",
         gateName: "Design Gate",
         reviewDate: "2026-06-18",
-        decision: "approved",
+        decision: "rejected",
       }),
     ).resolves.toMatchObject({ success: true });
   });

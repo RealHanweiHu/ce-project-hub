@@ -24,10 +24,10 @@ export function deliverableContributorRoles(deliverableName: string): string[] {
 }
 
 export function canRoleContributeToDeliverable(role: string | null | undefined, deliverableName: string): boolean {
-  if (!role || role === "viewer") return false;
+  if (!role || ["viewer", "external_customer", "supplier"].includes(role)) return false;
   return deliverableContributorRoles(deliverableName).includes(role);
 }
 
 export function canRoleReviewDeliverables(role: string | null | undefined): boolean {
-  return !!role && role !== "viewer";
+  return !!role && !["viewer", "external_customer", "supplier"].includes(role);
 }

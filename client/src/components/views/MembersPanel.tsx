@@ -5,7 +5,7 @@ import { useState, useRef, useEffect } from 'react';
 import {
   Users, UserPlus, Shield, Trash2, Crown,
   Eye, Edit3, CheckCircle2, X, AlertCircle, Loader2, Search, UserCheck,
-  Wrench, Factory, Megaphone, BadgeCheck, BatteryCharging,
+  Wrench, Factory, Megaphone, BadgeCheck, BatteryCharging, BriefcaseBusiness, Handshake,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { useQueryClient } from '@tanstack/react-query';
@@ -33,11 +33,17 @@ const ROLE_META: Record<string, {
     icon: <Shield size={11} />,
     description: '可通过 Gate 评审、管理成员、编辑所有内容',
   },
+  project_manager: {
+    label: '项目经理/PMO', labelEn: 'Project Manager',
+    color: 'text-primary', bg: 'bg-[color:var(--acc-soft)]', border: 'border-[color:var(--acc-border)]',
+    icon: <BriefcaseBusiness size={11} />,
+    description: '负责计划、成员、任务推进和 Gate 组织',
+  },
   pm: {
     label: '产品经理', labelEn: 'PM',
     color: 'text-primary', bg: 'bg-[color:var(--acc-soft)]', border: 'border-[color:var(--acc-border)]',
     icon: <Edit3 size={11} />,
-    description: '可编辑项目信息、任务、问题、变更记录，可管理成员',
+    description: '负责产品定义、需求范围、目标成本和产品变更',
   },
   rd_hw: {
     label: '硬件研发', labelEn: 'HW Eng',
@@ -99,6 +105,18 @@ const ROLE_META: Record<string, {
     icon: <BatteryCharging size={11} />,
     description: '电池/安全合规，Gate 会签责任人',
   },
+  external_customer: {
+    label: '外部客户', labelEn: 'Customer',
+    color: 'text-primary', bg: 'bg-[color:var(--acc-soft)]', border: 'border-[color:var(--acc-border)]',
+    icon: <Handshake size={11} />,
+    description: '仅可访问授权的客户可见文件',
+  },
+  supplier: {
+    label: '外部供应商', labelEn: 'Supplier',
+    color: 'text-primary', bg: 'bg-[color:var(--acc-soft)]', border: 'border-[color:var(--acc-border)]',
+    icon: <Factory size={11} />,
+    description: '仅可访问授权的供应商可见文件',
+  },
   viewer: {
     label: '只读', labelEn: 'Viewer',
     color: 'text-primary', bg: 'bg-[color:var(--acc-soft)]', border: 'border-[color:var(--acc-border)]',
@@ -108,15 +126,15 @@ const ROLE_META: Record<string, {
 };
 
 const ASSIGNABLE_ROLES = [
-  'manager', 'pm',                                                  // 可编辑项目
+  'manager', 'project_manager', 'pm',                               // 管理/产品
   'rd_hw', 'rd_sw', 'rd_mech', 'qa', 'scm', 'pe', 'mfg', 'cert', 'battery_safety', 'sales', // 负责/会签
-  'viewer',
+  'external_customer', 'supplier', 'viewer',
 ] as const;
 /** 角色按职能分组,便于选人时区分「能编辑项目」与「负责/会签任务」 */
 const ROLE_GROUPS: Array<{ title: string; roles: AssignableRole[] }> = [
-  { title: '可编辑项目', roles: ['manager', 'pm'] },
+  { title: '项目 / 产品管理', roles: ['manager', 'project_manager', 'pm'] },
   { title: '负责 / 会签任务', roles: ['rd_hw', 'rd_sw', 'rd_mech', 'qa', 'scm', 'pe', 'mfg', 'cert', 'battery_safety', 'sales'] },
-  { title: '只读', roles: ['viewer'] },
+  { title: '外部协作 / 只读', roles: ['external_customer', 'supplier', 'viewer'] },
 ];
 type AssignableRole = typeof ASSIGNABLE_ROLES[number];
 

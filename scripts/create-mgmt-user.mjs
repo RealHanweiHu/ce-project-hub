@@ -1,4 +1,4 @@
-// 生成 1 个管理层账号(系统级 admin,自动在所有项目获得 manager 权限,可看 portfolio 组合视图)。
+// 生成 1 个管理层账号(系统级 admin,可看 portfolio 组合视图)。
 // 密码 Test123456,手机号 19548809999(沿用测试约定)。
 // 幂等:已存在则更新角色/密码/姓名/手机号。容器内执行:node scripts/create-mgmt-user.mjs
 import pg from "pg";

@@ -76,6 +76,8 @@ export interface FileAttachment {
   fileType?: string | null;
   /** 版本标签，可空 */
   fileVersion?: string | null;
+  /** Audience boundary enforced by the server. */
+  visibility?: 'internal' | 'customer' | 'supplier' | 'public';
 }
 
 // ── Issue Tracking ───────────────────────────────────────────────────────────
@@ -102,6 +104,54 @@ export interface Issue {
   creatorId?: string;          // userId of the person who created this issue
 }
 
+export interface GateReviewTraceSnapshot {
+  capturedAt: string;
+  projectId: string;
+  phaseId: string;
+  gateName: string;
+  product: {
+    id: string;
+    productNumber: string;
+    name: string;
+    lifecycleState: string;
+  } | null;
+  baseRevision: {
+    id: number;
+    revisionLabel: string;
+    status: string;
+  } | null;
+  resultRevision: {
+    id: number;
+    revisionLabel: string;
+    status: string;
+  } | null;
+  workingBom: {
+    lineCount: number;
+    rows: Array<{
+      partNumber: string;
+      name: string;
+      spec: string;
+      quantity: number;
+      refDesignator: string;
+      componentProductId: string | null;
+      componentRevisionId: number | null;
+      sortOrder: number;
+    }>;
+  };
+  customerVariants: Array<{
+    id: number;
+    variantCode: string;
+    customerSku: string | null;
+    customerId: string;
+    customerName: string;
+    baseRevision: string;
+    status: string;
+    customerBomRevision: string | null;
+    customerApproved: boolean;
+    goldenSampleRef: string | null;
+  }>;
+}
+
 // ── Gate Review Record ──────────────────────────────────────────────────────
 export interface GateReview {
   id: string;
@@ -115,6 +165,10 @@ export interface GateReview {
   notes: string;            // meeting notes / decision rationale
   createdAt: string;        // ISO timestamp
   roundNumber?: number;     // review round (1 = first, 2 = re-review, etc.)
+  productId?: string | null;
+  baseRevisionId?: number | null;
+  resultRevisionId?: number | null;
+  traceSnapshot?: GateReviewTraceSnapshot | null;
 }
 
 export interface PhaseData {

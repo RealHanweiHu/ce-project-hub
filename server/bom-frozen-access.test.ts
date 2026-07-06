@@ -7,13 +7,13 @@ import type { TrpcContext } from "./_core/context";
 
 /**
  * P1-11：冻结 BOM 结构（料件/数量）随产品库全员可读，但商业字段
- * unitCost / supplierName 只对该产品线的项目成员或管理员可见——否则任何
+ * unitCost / supplierName 只对该产品线的商业授权角色或管理员可见——否则任何
  * 登录用户遍历 revisionId 即可拿到成本与供应商。
  */
 const PRODUCT = `bomacl-prod-${Date.now()}`;
 const PROJECT = `bomacl-proj-${Date.now()}`;
 const OWNER = 984001;
-const MEMBER = 984002;
+const COMMERCIAL_MEMBER = 984002;
 const OUTSIDER = 984003;
 let revisionId: number;
 
@@ -42,7 +42,7 @@ beforeAll(async () => {
     id: PROJECT, name: "BOM ACL 项目", projectNumber: PROJECT, category: "npd",
     risk: "low", currentPhase: "design", createdBy: OWNER, productId: PRODUCT,
   });
-  await db.insert(projectMembers).values({ projectId: PROJECT, userId: MEMBER, role: "qa", invitedBy: OWNER });
+  await db.insert(projectMembers).values({ projectId: PROJECT, userId: COMMERCIAL_MEMBER, role: "scm", invitedBy: OWNER });
   await db.insert(bomItems).values({
     revisionId, projectId: null, partNumber: "PN-1", name: "电芯", spec: "18650",
     quantity: 2, refDesignator: "BT1", supplierName: "供应商机密", unitCost: "12.50", sortOrder: 0,
@@ -60,8 +60,8 @@ afterAll(async () => {
 });
 
 describe("冻结 BOM 商业字段脱敏", () => {
-  it("产品线项目成员可见成本与供应商", async () => {
-    const caller = appRouter.createCaller(makeCtx(MEMBER));
+  it("产品线商业授权角色可见成本与供应商", async () => {
+    const caller = appRouter.createCaller(makeCtx(COMMERCIAL_MEMBER));
     const rows = await caller.bom.frozen({ revisionId });
     expect(rows[0].name).toBe("电芯");
     expect(rows[0].unitCost).toBe("12.50");

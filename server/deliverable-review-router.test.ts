@@ -8,6 +8,7 @@ import { ROLE_PERMISSIONS } from "./routers/members";
 
 const PROJ = `drr-${Date.now()}`;
 const PM = 930001, REVIEWER = 930002, OUTSIDER = 930003, BATTERY = 930004, PE = 930005, SCM = 930006, SALES = 930007, VIEWER = 930008;
+const SCM_REVIEWER = 930009, SALES_REVIEWER = 930010;
 const makeCtx = (id: number, role: string) => ({ user: { id, role, name: "x", email: "x", canCreateProject: true, mobile: null, dingtalkUserId: null, dingtalkCorpUserId: null, passwordHash: null, username: null } });
 const caller = (id: number, role: string) => deliverableReviewsRouter.createCaller(makeCtx(id, role) as any);
 
@@ -19,7 +20,9 @@ beforeAll(async () => {
   await db!.insert(projectMembers).values({ projectId: PROJ, userId: BATTERY, role: "battery_safety", invitedBy: PM });
   await db!.insert(projectMembers).values({ projectId: PROJ, userId: PE, role: "pe", invitedBy: PM });
   await db!.insert(projectMembers).values({ projectId: PROJ, userId: SCM, role: "scm", invitedBy: PM });
+  await db!.insert(projectMembers).values({ projectId: PROJ, userId: SCM_REVIEWER, role: "scm", invitedBy: PM });
   await db!.insert(projectMembers).values({ projectId: PROJ, userId: SALES, role: "sales", invitedBy: PM });
+  await db!.insert(projectMembers).values({ projectId: PROJ, userId: SALES_REVIEWER, role: "sales", invitedBy: PM });
   await db!.insert(projectMembers).values({ projectId: PROJ, userId: VIEWER, role: "viewer", invitedBy: PM });
   await createProjectFile({ projectId: PROJ, phaseId: "concept", taskId: "c6", deliverableName: "市场调研报告", name: "market.pdf", mimeType: "application/pdf", size: 1, storageKey: "k/market", storageUrl: "/storage/k/market", uploadedBy: SALES });
   await createProjectFile({ projectId: PROJ, phaseId: "design", taskId: "d8", deliverableName: "ID外观图", name: "id.pdf", mimeType: "application/pdf", size: 1, storageKey: "k/id", storageUrl: "/storage/k/id", uploadedBy: PM });
@@ -57,9 +60,9 @@ describe("deliverableReviews 权限", () => {
     await expect(caller(PM, "user").submit({ projectId: PROJ, phaseId: "design", deliverableName: "ID外观图", reviewerUserId: REVIEWER })).resolves.toBeTruthy();
   });
   it("专业角色无任务编辑权也可提交匹配交付物", async () => {
-    await expect(caller(SCM, "user").submit({ projectId: PROJ, phaseId: "design", deliverableName: "BOM v1.0", reviewerUserId: PM })).resolves.toBeTruthy();
-    await expect(caller(SALES, "user").submit({ projectId: PROJ, phaseId: "concept", deliverableName: "市场调研报告", reviewerUserId: PM })).resolves.toBeTruthy();
-    await expect(caller(BATTERY, "user").submit({ projectId: PROJ, phaseId: "design", deliverableName: "安全FMEA与危害分析", reviewerUserId: PM })).resolves.toBeTruthy();
+    await expect(caller(SCM, "user").submit({ projectId: PROJ, phaseId: "design", deliverableName: "BOM v1.0", reviewerUserId: SCM_REVIEWER })).resolves.toBeTruthy();
+    await expect(caller(SALES, "user").submit({ projectId: PROJ, phaseId: "concept", deliverableName: "市场调研报告", reviewerUserId: SALES_REVIEWER })).resolves.toBeTruthy();
+    await expect(caller(BATTERY, "user").submit({ projectId: PROJ, phaseId: "design", deliverableName: "安全FMEA与危害分析", reviewerUserId: REVIEWER })).resolves.toBeTruthy();
   });
   it("专业角色可上传匹配交付物证据，viewer 不可上传", async () => {
     await expect(canMutateFileForProject({

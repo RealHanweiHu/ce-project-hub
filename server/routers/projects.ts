@@ -2,6 +2,7 @@ import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import {
   getAllActiveProjects,
+  getProjectsByMember,
   getProjectById,
   getProductById,
   createProjectWithSeed,
@@ -29,6 +30,7 @@ import { storageDelete } from "../storage";
 import { getProjectMembers, getProjectRolesForUser } from "../db";
 import { taskDisplayTitle } from "../task-title";
 import { getPhasesForCategory } from "../../shared/sop-templates";
+import { isSystemAdminRole, systemRoleCanCreateProject } from "../../shared/system-roles";
 import { PROJECT_MEMBER_ROLES, type ProjectMemberRole } from "../../drizzle/schema";
 import { getEffectiveProjectRoleById as getEffectiveRole, pickHigherProjectRole } from "../project-access";
 import { isISODate } from "../../shared/scheduling";
@@ -140,7 +142,8 @@ const HANDOFF_ROLE_LABELS: Record<string, string> = {
   pe: "工艺 / PE",
   mfg: "制造",
   sales: "销售 / 客户",
-  pm: "产品 / 项目",
+  pm: "产品经理",
+  project_manager: "项目经理 / PMO",
   other: "未分配",
 };
 
@@ -156,7 +159,8 @@ function inferHandoffRole(...parts: Array<string | null | undefined>): string {
   if (/工艺|pe|制程|夹具|治具|process/.test(text)) return "pe";
   if (/制造|生产|装配|量产|mfg|manufactur/.test(text)) return "mfg";
   if (/客户|销售|市场|渠道|sales|customer|market/.test(text)) return "sales";
-  if (/产品|项目|pm|prd|定位|卖点/.test(text)) return "pm";
+  if (/项目|进度|里程碑|资源|关键路径|排期|计划|project|schedule|milestone|kickoff|pmo/.test(text)) return "project_manager";
+  if (/产品|prd|定位|卖点|product|positioning/.test(text)) return "pm";
   return "other";
 }
 
@@ -268,23 +272,31 @@ export const projectsRouter = router({
 
   /** List all projects for the current user (owned + member) */
   list: protectedProcedure.query(async ({ ctx }) => {
-    const all = await getAllActiveProjects();
+    const isAdmin = isSystemAdminRole(ctx.user.role);
+    const all = isAdmin ? await getAllActiveProjects() : await getProjectsByMember(ctx.user.id);
     const portfolio = await getPortfolio(ctx.user.id);
     const autoRiskByProject = new Map(portfolio.map((p) => [p.id, p.risk]));
     // Resolve every project's effective role from a single membership query +
     // in-memory pm/owner/admin overrides, instead of an N+1 of getEffectiveRole
     // (each of which re-fetched the project and ran a per-project member query).
     const memberRoles = await getProjectRolesForUser(ctx.user.id);
-    const isAdmin = ctx.user.role === "admin";
     return all.map((row) => {
       let role: ProjectMemberRole | null = memberRoles.get(row.id) ?? null;
-      if (row.pmUserId === ctx.user.id) role = pickHigherProjectRole(role, "pm");
+      if (row.pmUserId === ctx.user.id) role = pickHigherProjectRole(role, "project_manager");
       if (row.createdBy === ctx.user.id) role = pickHigherProjectRole(role, "owner");
       if (!role && isAdmin) role = "manager";
       const effectiveRole = role ?? "viewer";
+      const isExternal = effectiveRole === "external_customer" || effectiveRole === "supplier";
       return {
         ...row,
-        risk: autoRiskByProject.get(row.id) ?? "low",
+        risk: isExternal ? "low" : autoRiskByProject.get(row.id) ?? "low",
+        riskOverrideRisk: isExternal ? null : row.riskOverrideRisk,
+        riskOverrideReason: isExternal ? null : row.riskOverrideReason,
+        riskOverrideUpdatedAt: isExternal ? null : row.riskOverrideUpdatedAt,
+        riskOverrideUpdatedBy: isExternal ? null : row.riskOverrideUpdatedBy,
+        background: isExternal ? null : row.background,
+        value: isExternal ? null : row.value,
+        customFields: isExternal ? {} : row.customFields,
         accessRole: effectiveRole,
         canDeleteProject: isAdmin || ROLE_PERMISSIONS[effectiveRole].canDeleteProject,
         canEditProjectInfo: ROLE_PERMISSIONS[effectiveRole].canEditProjectInfo,
@@ -302,7 +314,19 @@ export const projectsRouter = router({
       if (!role || !ROLE_PERMISSIONS[role].canView) throw new TRPCError({ code: "FORBIDDEN" });
       const portfolio = await getPortfolio(ctx.user.id);
       const health = portfolio.find((item) => item.id === input.id);
-      return health ? { ...row, risk: health.risk } : row;
+      const isExternal = role === "external_customer" || role === "supplier";
+      const safeRow = isExternal ? {
+        ...row,
+        risk: "low" as const,
+        riskOverrideRisk: null,
+        riskOverrideReason: null,
+        riskOverrideUpdatedAt: null,
+        riskOverrideUpdatedBy: null,
+        background: null,
+        value: null,
+        customFields: {},
+      } : row;
+      return health && !isExternal ? { ...safeRow, risk: health.risk } : safeRow;
     }),
 
   productHandoff: protectedProcedure
@@ -387,7 +411,7 @@ export const projectsRouter = router({
         const phaseId = getHandoffTaskPhaseId(project.category, bucket.role);
         const taskId = `pd_${bucket.role}`.slice(0, 32);
         const assigneeUserId = roleToUser.get(bucket.role) ?? null;
-        const visibleRoles = Array.from(new Set([bucket.role, "pm", "manager", "owner"]));
+        const visibleRoles = Array.from(new Set([bucket.role, "pm", "project_manager", "manager", "owner"]));
         await upsertProjectTask(project.id, phaseId, taskId, {
           instructions: buildHandoffTaskInstructions({
             productName: product?.name ?? project.productId,
@@ -423,7 +447,7 @@ export const projectsRouter = router({
     .input(projectInputSchema)
     .mutation(async ({ ctx, input }) => {
       // Check if user has permission to create projects
-      const canCreate = ctx.user.role === 'admin' || ctx.user.canCreateProject;
+      const canCreate = systemRoleCanCreateProject(ctx.user);
       if (!canCreate) {
         throw new TRPCError({
           code: 'FORBIDDEN',
@@ -453,9 +477,9 @@ export const projectsRouter = router({
         createdBy: ctx.user.id,
         archived: false,
       }, input.category, ctx.user.id);
-      // 选了 PM 且不是创建者本人 → 自动加入项目成员并赋 pm 角色（否则 PM 看不到项目）
+      // 选了项目经理且不是创建者本人 → 自动加入项目成员并赋 project_manager 角色（否则对方看不到项目）
       if (input.pmUserId && input.pmUserId !== ctx.user.id) {
-        try { await ensureProjectMember(input.id, input.pmUserId, "pm", ctx.user.id); }
+        try { await ensureProjectMember(input.id, input.pmUserId, "project_manager", ctx.user.id); }
         catch (e) { console.warn("[member] add pm on create failed (non-fatal):", e); }
       }
       // 有开始日 → 按 IPD 依赖图自动生成整套任务起止日（非阻断）
@@ -559,9 +583,9 @@ export const projectsRouter = router({
         } : {}),
         ...(input.customFields !== undefined ? { customFields: input.customFields } : {}),
       });
-      // PM 变更 → 确保新 PM 是成员(否则换了 PM 后对方看不到项目)
+      // 项目经理变更 → 确保新项目经理是成员(否则换了负责人后对方看不到项目)
       if (input.pmUserId && input.pmUserId !== existing.pmUserId && input.pmUserId !== existing.createdBy) {
-        try { await ensureProjectMember(input.id, input.pmUserId, "pm", ctx.user.id); }
+        try { await ensureProjectMember(input.id, input.pmUserId, "project_manager", ctx.user.id); }
         catch (e) { console.warn("[member] add pm on update failed (non-fatal):", e); }
       }
       if (meetingConfig?.enabled && meetingRelevantChanged) {
@@ -601,7 +625,7 @@ export const projectsRouter = router({
       const existing = await getProjectById(input.id);
       if (!existing) throw new TRPCError({ code: "NOT_FOUND" });
       const role = await getEffectiveRole(input.id, ctx.user.id);
-      const allowed = ctx.user.role === "admin" || (role && ROLE_PERMISSIONS[role].canEditProjectInfo);
+      const allowed = isSystemAdminRole(ctx.user.role) || (role && ROLE_PERMISSIONS[role].canEditProjectInfo);
       if (!allowed) throw new TRPCError({ code: "FORBIDDEN" });
 
       const patch: Record<string, unknown> = {};
@@ -621,7 +645,7 @@ export const projectsRouter = router({
       await updateProject(input.id, patch);
 
       if (input.pmUserId != null && input.pmUserId !== existing.pmUserId && input.pmUserId !== existing.createdBy) {
-        try { await ensureProjectMember(input.id, input.pmUserId, "pm", ctx.user.id); }
+        try { await ensureProjectMember(input.id, input.pmUserId, "project_manager", ctx.user.id); }
         catch (e) { console.warn("[move] add pm failed (non-fatal):", e); }
       }
       if (pmChanged && meetingConfig?.enabled) {
@@ -794,7 +818,7 @@ export const projectsRouter = router({
         });
       }
       // System admins can delete any project regardless of membership
-      const isSystemAdmin = ctx.user.role === 'admin';
+      const isSystemAdmin = isSystemAdminRole(ctx.user.role);
       if (!isSystemAdmin) {
         const role = await getEffectiveRole(input.id, ctx.user.id);
         if (!role || !ROLE_PERMISSIONS[role].canDeleteProject) {

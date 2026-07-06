@@ -1,6 +1,24 @@
 // SOP Templates for different project categories.
 // Shared by frontend display code and backend project seeding.
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Gate 不通过（rejected）的唯一语义 —— 2026-07-05 拍板（CEH-16）
+//
+// 「停留本阶段整改重审」：Gate rejected 时项目停留在当前阶段，本阶段 Gate task
+// 置 blocked，整改完成后发起下一轮评审（roundNumber+1），全部轮次留痕。
+// 系统【不提供】「打回上一阶段」动作：currentPhase 既不前进也不回退，已过 Gate
+// 的评审记录、交付物审核态、测试报告一律不级联失效。
+// DVT 发现设计问题的正确表达 = DVT 停留 + 发起设计整改任务 / ECO，而非回退 design。
+// 用例集 RISK-08「交付物随阶段回退」预期按此语义对齐（不再适用）。
+// ─────────────────────────────────────────────────────────────────────────────
+export const GATE_REJECTION_SEMANTICS = {
+  policy: 'stay-and-rework' as const,
+  /** 供被锁阶段整改横幅等 UI 复用的标准文案 */
+  banner: '本阶段 Gate 未通过，项目停留在当前阶段整改，不回退。整改完成后请发起重审。',
+  detail:
+    'Gate 不通过时：停留本阶段、Gate 任务置 blocked、整改后重审（多轮留痕）。系统不提供打回上一阶段的动作，已通过的 Gate 与交付物审核结果不会级联失效。',
+};
+
 export interface SOPTask {
   id: string;
   name: string;

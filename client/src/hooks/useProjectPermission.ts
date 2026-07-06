@@ -9,8 +9,19 @@ export type ProjectPermissions = {
   canEditChangelog: boolean;
   canEditProjectInfo: boolean;
   canGateReview: boolean;
+  canConveneGateReview: boolean;
   canManageMembers: boolean;
   canDeleteProject: boolean;
+  canCloseIssues: boolean;
+  canViewInternalWorkspace: boolean;
+  canViewInternalFiles: boolean;
+  canViewCustomerFiles: boolean;
+  canViewSupplierFiles: boolean;
+  canViewCommercials: boolean;
+  canQualityGateBlock: boolean;
+  canNpiGateBlock: boolean;
+  /** 结构性 BOM 编辑（工程师）；服务端仅在 rd_hw/rd_mech 上带该键 */
+  canEditBomStructure?: boolean;
 };
 
 const FULL_PERMISSIONS: ProjectPermissions = {
@@ -22,8 +33,18 @@ const FULL_PERMISSIONS: ProjectPermissions = {
   canEditChangelog: true,
   canEditProjectInfo: true,
   canGateReview: true,
+  canConveneGateReview: true,
   canManageMembers: true,
   canDeleteProject: true,
+  canCloseIssues: true,
+  canViewInternalWorkspace: true,
+  canViewInternalFiles: true,
+  canViewCustomerFiles: true,
+  canViewSupplierFiles: true,
+  canViewCommercials: true,
+  canQualityGateBlock: true,
+  canNpiGateBlock: true,
+  canEditBomStructure: true,
 };
 
 const NO_PERMISSIONS: ProjectPermissions = {
@@ -35,8 +56,18 @@ const NO_PERMISSIONS: ProjectPermissions = {
   canEditChangelog: false,
   canEditProjectInfo: false,
   canGateReview: false,
+  canConveneGateReview: false,
   canManageMembers: false,
   canDeleteProject: false,
+  canCloseIssues: false,
+  canViewInternalWorkspace: false,
+  canViewInternalFiles: false,
+  canViewCustomerFiles: false,
+  canViewSupplierFiles: false,
+  canViewCommercials: false,
+  canQualityGateBlock: false,
+  canNpiGateBlock: false,
+  canEditBomStructure: false,
 };
 
 /**

@@ -84,18 +84,18 @@ export function KanbanBoard({ project, phaseFilter }: { project: Project; onUpda
           return (
             <div
               key={col.key}
-              className="flex w-72 shrink-0 flex-col rounded-[12px] border border-border bg-[color:var(--secondary)]"
+              className="flex w-72 shrink-0 flex-col rounded-[10px] border border-border bg-card shadow-[0_1px_2px_rgb(0_0_0/0.03)]"
             >
               <div className="flex items-center justify-between border-b border-border px-3 py-2.5">
                 <span className="flex items-center gap-2 text-xs font-semibold text-foreground">
                   <span className="h-[9px] w-[9px] rounded-full" style={{ background: col.tone }} />
                   {col.label}
                 </span>
-                <span className="num rounded-full border border-border bg-card px-2 py-px text-[11px] text-muted-foreground">
+                <span className="num rounded-full border border-border bg-secondary px-2 py-px text-[11px] text-muted-foreground">
                   {colCards.length}
                 </span>
               </div>
-              <div className="max-h-[560px] space-y-2 overflow-y-auto p-2">
+              <div className="max-h-[560px] space-y-2 overflow-y-auto bg-secondary/40 p-2">
                 {colCards.map((c) => {
                   const badge = STATUS_BADGE[c.status];
                   const assigneeName = c.assigneeUserId != null ? nameById.get(c.assigneeUserId) : undefined;
@@ -103,7 +103,7 @@ export function KanbanBoard({ project, phaseFilter }: { project: Project; onUpda
                   return (
                     <div
                       key={`${c.phaseId}/${c.taskId}`}
-                      className="rounded-[9px] border border-border bg-card p-2.5 text-sm shadow-[0_1px_2px_rgb(0_0_0/0.03)]"
+                      className="rounded-[10px] border border-border bg-card p-3 text-sm shadow-[0_1px_2px_rgb(0_0_0/0.03)] transition-colors hover:border-[color:var(--acc-border)] hover:bg-secondary/40"
                     >
                       <div className="flex items-start gap-1.5">
                         {badge && (
@@ -116,6 +116,7 @@ export function KanbanBoard({ project, phaseFilter }: { project: Project; onUpda
                         )}
                         <span className="leading-snug text-foreground">{c.name}</span>
                       </div>
+                      <div className="mt-1 text-[10px] num uppercase tracking-wider text-muted-foreground">{c.phaseName} · {c.taskId}</div>
                       <div className="mt-2 flex items-center justify-between gap-2">
                         {assigneeName ? (
                           <span className="flex min-w-0 items-center gap-1.5">

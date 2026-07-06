@@ -30,6 +30,7 @@ import {
 } from '@/components/linear/primitives';
 import { cn } from '@/lib/utils';
 import { useBoardPrefs } from '@/hooks/useBoardPrefs';
+import { isSystemAdminRole } from '@shared/system-roles';
 
 interface ProjectListViewProps {
   projects: Project[];
@@ -189,7 +190,7 @@ export function ProjectListView({
 
   // ── Drag-to-advance/regress (PM/admin override) ──
   const { user } = useAuth();
-  const isAdmin = (user as (typeof user & { role?: string }) | null)?.role === 'admin';
+  const isAdmin = isSystemAdminRole((user as (typeof user & { role?: string }) | null)?.role);
   const moveMut = trpc.projects.move.useMutation();
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
   // WIP 上限（per-stage，跨泳道共享，持久化在 localStorage）。
@@ -494,7 +495,7 @@ export function ProjectListView({
               新建项目
             </button>
           ) : (
-            <div className="inline-flex h-[30px] cursor-not-allowed items-center gap-1.5 rounded-[7px] border border-border bg-secondary px-3 text-[11px] font-medium text-muted-foreground" title="仅管理员、管理层和 PM 可创建项目">
+            <div className="inline-flex h-[30px] cursor-not-allowed items-center gap-1.5 rounded-[7px] border border-border bg-secondary px-3 text-[11px] font-medium text-muted-foreground" title="仅拥有创建权限的成员可创建项目">
               <Lock size={12} />
               无创建权限
             </div>

@@ -7,14 +7,14 @@ import { appRouter } from "./routers";
 const OPENID = `acct-test-${Date.now()}`;
 let userId = 0;
 const ctx = (openId: string | null) => ({
-  user: openId ? { id: userId, openId, role: "user", name: "旧名", email: null, username: openId,
+  user: openId ? { id: userId, openId, role: "member", name: "旧名", email: null, username: openId,
     passwordHash: null, canCreateProject: false, mobile: null, dingtalkUserId: null, dingtalkCorpUserId: null } : null,
 }) as any;
 
 beforeAll(async () => {
   const db = await getDb(); if (!db) throw new Error("no db");
   const [row] = await db.insert(users).values({
-    openId: OPENID, username: OPENID, name: "旧名", mobile: null, role: "user", loginMethod: "password",
+    openId: OPENID, username: OPENID, name: "旧名", mobile: null, role: "member", loginMethod: "password",
   }).returning();
   userId = row.id;
 });

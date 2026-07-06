@@ -7,6 +7,14 @@ import {
   listNotifications, unreadCount, markRead, markAllRead,
 } from "../db";
 import { assertProjectAccess } from "../project-access";
+import { canRoleViewFileVisibility, canRoleViewInternalWorkspace } from "../file-visibility";
+
+const externalCommentAudienceSchema = z.enum(["customer", "supplier"]);
+type ExternalCommentAudience = z.infer<typeof externalCommentAudienceSchema>;
+
+function externalCommentEntityType(audience: ExternalCommentAudience) {
+  return audience === "customer" ? "ext_customer" : "ext_supplier";
+}
 
 /**
  * 评论按实体反查项目归属，用于成员鉴权。
@@ -50,7 +58,22 @@ async function assertCommentAccess(
     throw new TRPCError({ code: "FORBIDDEN", message: "不支持的评论对象" });
   }
   const access = await assertProjectAccess(projectId, actor);
+  if (!canRoleViewInternalWorkspace(access.role)) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "外部协作评论需使用授权的外部频道" });
+  }
   return { projectId, access };
+}
+
+async function assertExternalCommentAccess(
+  projectId: string,
+  audience: ExternalCommentAudience,
+  actor: { id: number; role: string },
+) {
+  const access = await assertProjectAccess(projectId, actor);
+  if (!canRoleViewFileVisibility(access.role, audience)) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "无权访问此外部协作频道" });
+  }
+  return access;
 }
 
 export const commentsRouter = router({
@@ -77,6 +100,33 @@ export const commentsRouter = router({
       return addComment({
         entityType: input.entityType, entityId: input.entityId,
         projectId, authorId: ctx.user.id, body: input.body,
+      });
+    }),
+
+  externalList: protectedProcedure
+    .input(z.object({
+      projectId: z.string(),
+      audience: externalCommentAudienceSchema,
+    }))
+    .query(async ({ ctx, input }) => {
+      await assertExternalCommentAccess(input.projectId, input.audience, ctx.user);
+      return listComments(externalCommentEntityType(input.audience), input.projectId);
+    }),
+
+  externalAdd: protectedProcedure
+    .input(z.object({
+      projectId: z.string(),
+      audience: externalCommentAudienceSchema,
+      body: z.string().min(1),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      await assertExternalCommentAccess(input.projectId, input.audience, ctx.user);
+      return addComment({
+        entityType: externalCommentEntityType(input.audience),
+        entityId: input.projectId,
+        projectId: input.projectId,
+        authorId: ctx.user.id,
+        body: input.body,
       });
     }),
 });

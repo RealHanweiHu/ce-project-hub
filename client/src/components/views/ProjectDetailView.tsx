@@ -40,8 +40,11 @@ import { FilesPanel } from './FilesPanel';
 import { RisksPanel } from './RisksPanel';
 import { FilePreviewModal, canPreview } from './FilePreviewModal';
 import { MetricsView } from './MetricsView';
+import { TestPlanPanel } from './TestPlanPanel';
+import { NpiReadinessPanel } from './NpiReadinessPanel';
+import { SampleSignoffPanel } from './SampleSignoffPanel';
 import { RescheduleConfirmDialog } from './RescheduleConfirmDialog';
-import { CommentThread } from '@/components/CommentThread';
+import { CommentThread, ExternalCommentThread } from '@/components/CommentThread';
 import { useProjectPermission } from '@/hooks/useProjectPermission';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { useAuth } from '@/_core/hooks/useAuth';
@@ -50,6 +53,7 @@ import { toast } from 'sonner';
 import { getTaskDeliverables } from '@shared/task-deliverables';
 import { FILE_TYPES } from '@shared/file-types';
 import { canRoleContributeToDeliverable, canRoleReviewDeliverables, preferredDeliverableReviewerRoles } from '@shared/deliverable-permissions';
+import { isSystemAdminRole } from '@shared/system-roles';
 import { Users } from 'lucide-react';
 
 const MAX_FILE_SIZE = 16 * 1024 * 1024;
@@ -136,6 +140,7 @@ function defaultTabForRole(role?: string | null): LegacyMainTab {
   if (role === 'qa') return 'issues';
   if (role === 'scm') return 'bom';
   if (role === 'sales') return 'requirements';
+  if (role === 'external_customer' || role === 'supplier') return 'files';
   if (role === 'cert' || role === 'battery_safety') return 'files';
   if (role === 'rd_hw' || role === 'rd_sw' || role === 'rd_mech' || role === 'pe' || role === 'mfg') return 'tasks';
   return 'overview';
@@ -291,6 +296,7 @@ function FileUploadArea({
   const [previewFile, setPreviewFile] = useState<FileAttachment | null>(null);
   const [selectedType, setSelectedType] = useState('');
   const [version, setVersion] = useState('');
+  const [visibility, setVisibility] = useState<'internal' | 'customer' | 'supplier'>('internal');
 
   const handleFiles = async (fileList: FileList) => {
     if (readOnly) return;
@@ -310,6 +316,7 @@ function FileUploadArea({
         if (taskId) formData.append('taskId', taskId);
         formData.append('fileType', selectedType);
         formData.append('fileVersion', version);
+        formData.append('visibility', visibility);
         const resp = await fetch('/api/files/upload', {
           method: 'POST',
           body: formData,
@@ -324,6 +331,7 @@ function FileUploadArea({
           id: number; name: string; mimeType: string; size: number;
           storageKey: string; storageUrl: string;
           fileType?: string | null; fileVersion?: string | null;
+          visibility?: 'internal' | 'customer' | 'supplier' | 'public';
         };
         newFiles.push({
           id: String(result.id),
@@ -336,6 +344,7 @@ function FileUploadArea({
           storageKey: result.storageKey,
           fileType: result.fileType ?? null,
           fileVersion: result.fileVersion ?? null,
+          visibility: result.visibility ?? visibility,
         });
       } catch (e: any) {
         setError(`上传 "${file.name}" 失败: ${e.message || '网络错误'}`);
@@ -374,6 +383,16 @@ function FileUploadArea({
             placeholder="版本 如 V1.0 / T1 / Rev.B"
             className="flex-1 text-xs rounded-md bg-transparent px-1.5 py-1 text-foreground outline-none border-b border-transparent hover:border-border focus:border-[color:var(--acc-border)] transition-colors"
           />
+          <select
+            value={visibility}
+            onChange={(e) => setVisibility(e.target.value as 'internal' | 'customer' | 'supplier')}
+            className="text-xs rounded-md bg-transparent px-1.5 py-1 text-foreground outline-none hover:bg-secondary focus:bg-secondary transition-colors"
+            title="文件可见范围"
+          >
+            <option value="internal">内部</option>
+            <option value="customer">客户可见</option>
+            <option value="supplier">供应商可见</option>
+          </select>
         </div>
       )}
       <div
@@ -411,6 +430,7 @@ function FileUploadArea({
                   <span className={`text-sm text-foreground truncate ${previewable ? 'group-hover:text-primary' : ''}`}>{file.name}</span>
                   {file.fileType && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground">{file.fileType}</span>}
                   {file.fileVersion && <span className="shrink-0 text-[10px] num text-primary">{file.fileVersion}</span>}
+                  {file.visibility && file.visibility !== 'internal' && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-border text-muted-foreground">{file.visibility === 'customer' ? '客户可见' : file.visibility === 'supplier' ? '供应商可见' : '公开'}</span>}
                 </div>
                 <div className="text-[10px] num text-muted-foreground">{formatBytes(file.size)}</div>
               </div>
@@ -449,6 +469,7 @@ const ROLE_OPTIONS = [
   { value: 'sales',  label: '销售/渠道' },
   { value: 'cert',   label: '认证' },
   { value: 'battery_safety', label: '电池安全' },
+  { value: 'project_manager', label: '项目经理/PMO' },
   { value: 'pm',     label: '产品经理' },
   { value: 'manager', label: '管理层' },
   { value: 'owner',  label: '项目创建者' },
@@ -509,7 +530,7 @@ function handoffTaskTitle(taskId: string, details?: TaskDetails) {
 }
 
 function handoffTaskOwner(taskId: string, roles: string[]) {
-  const role = roles.find((item) => !['pm', 'manager', 'owner'].includes(item)) ?? taskId.replace(/^pd_/, '');
+  const role = roles.find((item) => !['pm', 'project_manager', 'manager', 'owner'].includes(item)) ?? taskId.replace(/^pd_/, '');
   return ROLE_OPTIONS.find((option) => option.value === role)?.label || role;
 }
 
@@ -881,7 +902,7 @@ function DeliverableReviewControls({
 
   // Type-aware reviewer default, then PM/Owner fallback.
   const reviewableMembers = members.filter((m) => canRoleReviewDeliverables(m.role) || m.isOwner);
-  const pmMember = reviewableMembers.find((m) => m.userId === pmUserId) ?? reviewableMembers.find((m) => m.role === 'pm' || m.isOwner);
+  const pmMember = reviewableMembers.find((m) => m.userId === pmUserId) ?? reviewableMembers.find((m) => m.role === 'project_manager' || m.role === 'pm' || m.isOwner);
 
   return (
     <div className="mt-3 pt-3 border-t border-border space-y-2">
@@ -1835,6 +1856,71 @@ function PhaseStepper({
   );
 }
 
+function TaskPhaseFilterRail({
+  project,
+  phases,
+  value,
+  onChange,
+}: {
+  project: Project;
+  phases: SOPPhase[];
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  return (
+    <LinearCard className="overflow-x-auto">
+      <div className="flex min-w-max">
+        <button
+          type="button"
+          onClick={() => onChange('all')}
+          className={`flex-1 min-w-[96px] p-3 text-left transition-all border-b-2 ${
+            value === 'all' ? 'border-b-primary bg-secondary' : 'border-b-transparent hover:bg-secondary'
+          }`}
+        >
+          <div className="mb-0.5 text-[9px] num uppercase tracking-widest text-muted-foreground">ALL</div>
+          <div className={`text-xs font-medium ${value === 'all' ? 'text-primary' : 'text-muted-foreground'}`}>
+            全部阶段
+          </div>
+          <div className="mt-1.5 flex items-center gap-1">
+            <ListChecks size={10} className="shrink-0 text-muted-foreground" />
+          </div>
+        </button>
+        {phases.map((phase) => {
+          const status = getPhaseStatus(project, phase.id);
+          const isActive = value === phase.id;
+          const unlocked = isPhaseUnlocked(project, phase.id);
+          return (
+            <button
+              key={phase.id}
+              type="button"
+              onClick={() => onChange(phase.id)}
+              className={`flex-1 min-w-[96px] p-3 text-left transition-all border-b-2 ${
+                isActive ? 'border-b-primary bg-secondary' : 'border-b-transparent hover:bg-secondary'
+              } ${!unlocked ? 'opacity-60' : ''}`}
+            >
+              <div className="mb-0.5 text-[9px] num uppercase tracking-widest text-muted-foreground">{phase.code}</div>
+              <div className={`text-xs font-medium ${isActive ? 'text-primary' : 'text-muted-foreground'}`}>
+                {phase.nameEn}
+              </div>
+              <div className="mt-1.5 flex items-center gap-1">
+                {!unlocked ? (
+                  <Lock size={10} className="shrink-0 text-muted-foreground" />
+                ) : status === 'completed' ? (
+                  <CheckCircle2 size={10} className="shrink-0 text-emerald-500" />
+                ) : status === 'active' ? (
+                  <Zap size={10} className="shrink-0 text-primary" />
+                ) : (
+                  <Circle size={10} className="shrink-0 text-muted-foreground" />
+                )}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </LinearCard>
+  );
+}
+
 export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, initialTaskId, initialTab }: ProjectDetailViewProps) {
   const [activePhaseId, setActivePhaseId] = useState(initialPhaseId ?? project.currentPhase);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(initialTaskId ?? null);
@@ -1856,16 +1942,25 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
   const roleDefaultAppliedRef = useRef(!!initialTaskId || !!initialTab);
   const issueDeepLinkPhaseAppliedRef = useRef(false);
   const [ganttMode, setGanttMode] = useState<'task' | 'phase'>('task');
-  // 任务 tab 的阶段筛选器：'all' 看全部，或某 phaseId 只看该阶段（统一作用看板/列表/甘特）。
+  // 任务 tab 的阶段筛选器：'all' 看全部，或某 phaseId 只看该阶段。
+  // 列表子视图本身只展示 activePhaseId，对应阶段切换交给下方阶段轴。
   const [taskPhaseFilter, setTaskPhaseFilter] = useState<string>('all');
   const perms = useProjectPermission(project.id);
   const { user: currentUser } = useAuth();
+  const isSystemAdmin = isSystemAdminRole(currentUser?.role);
+  const externalCommentChannels = useMemo(() => {
+    const channels: Array<{ audience: 'customer' | 'supplier'; label: string }> = [];
+    if (perms.canViewCustomerFiles) channels.push({ audience: 'customer', label: '客户协作' });
+    if (perms.canViewSupplierFiles) channels.push({ audience: 'supplier', label: '供应商协作' });
+    return channels;
+  }, [perms.canViewCustomerFiles, perms.canViewSupplierFiles]);
   // 任务详情弹窗：左栏底部四标签
   const [taskTab, setTaskTab] = useState<'comments' | 'activity' | 'flow' | 'approval'>('comments');
   // 活动/流转/审批标签里把 userId 解析为人名用
   const { data: detailUsers = [] } = trpc.admin.listUsersForSelect.useQuery(undefined, { staleTime: 60_000 });
   const detailUtils = trpc.useUtils();
   const confirmGateMutation = trpc.gateReviews.confirmAndAdvance.useMutation();
+  const conveneGateMutation = trpc.gateReviews.create.useMutation();
   // 撤回待审批：直接以 completed=false 调用，避免本地 toggle 误发 completed=true（=重复提交）。
   const withdrawApprovalMut = trpc.tasks.setCompleted.useMutation({
     onSuccess: () => {
@@ -2000,7 +2095,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
     if (assignee != null && assignee === currentUser?.id) return true;
     const effectiveRoles = project.taskVisibleRoles?.[task.id] ?? (task.visibleRoles || []);
     if (!effectiveRoles || effectiveRoles.length === 0) return true;
-    if (perms.role === 'owner') return true;
+    if (['owner', 'manager', 'project_manager'].includes(perms.role)) return true;
     return effectiveRoles.includes(perms.role);
   }) || [];
   const selectedTask = selectedTaskId
@@ -2233,6 +2328,32 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
       else toast.success(review.decision === 'conditional' ? 'Gate 有条件通过，已推进' : 'Gate 已通过，已推进');
     } catch (e) {
       toast.error(`Gate 评审保存失败，请重试${e instanceof Error ? `：${e.message}` : ''}`);
+    }
+  };
+
+  /** 召集权路径（项目经理）：只记录「不通过」的评审会议，不动 gate task、不推进阶段。 */
+  const handleGateReviewConvene = async (review: GateReview) => {
+    const phaseId = activePhaseId;
+    setGateReviewPending(null);
+    try {
+      await conveneGateMutation.mutateAsync({
+        projectId: project.id,
+        phaseId,
+        phaseName: activePhase?.name ?? phaseId,
+        gateName: activePhase?.gate ?? 'Gate 评审',
+        reviewDate: review.reviewDate,
+        participants: review.participants || null,
+        decision: 'rejected',
+        conditions: review.conditions || null,
+        notes: review.notes || null,
+      });
+      await Promise.all([
+        detailUtils.gateReviews.list.invalidate({ projectId: project.id }),
+        detailUtils.gateReviews.readiness.invalidate({ projectId: project.id, phaseId }),
+      ]);
+      toast.error('已记录：本阶段 Gate 未通过，整改后请管理层重新评审');
+    } catch (e) {
+      toast.error(`Gate 评审记录失败，请重试${e instanceof Error ? `：${e.message}` : ''}`);
     }
   };
 
@@ -2677,6 +2798,32 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
               );
             })()}
           </LinearCard>
+          <TestPlanPanel
+            projectId={project.id}
+            phaseId={activePhaseId}
+            phaseName={activePhase?.name || activePhaseId}
+            canManage={perms.canQualityGateBlock}
+          />
+          <NpiReadinessPanel
+            projectId={project.id}
+            phaseId={activePhaseId}
+            phaseName={activePhase?.name || activePhaseId}
+            canManage={perms.canNpiGateBlock}
+          />
+          <SampleSignoffPanel
+            projectId={project.id}
+            phaseId={activePhaseId}
+            phaseName={activePhase?.name || activePhaseId}
+            role={perms.role}
+            canManage={
+              perms.canManageMembers
+              || perms.canEditProjectInfo
+              || perms.role === 'project_manager'
+              || perms.role === 'pm'
+              || perms.role === 'sales'
+              || perms.role === 'scm'
+            }
+          />
         </div>
       )}
 
@@ -2708,13 +2855,26 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
 
       {mainTab === 'materials' && materialsView === 'bom' && (
         <div className="p-6">
-          <BomPanel projectId={project.id} canEdit={perms.canEditProjectInfo || perms.canEditChangelog} />
+          <BomPanel
+            projectId={project.id}
+            canEdit={perms.canEditProjectInfo || perms.canEditChangelog || !!perms.canEditBomStructure}
+            canEditCommercials={perms.canEditProjectInfo || perms.canEditChangelog}
+          />
         </div>
       )}
 
       {mainTab === 'materials' && materialsView === 'files' && (
-        <div className="p-6">
+        <div className="space-y-5 p-6">
           <FilesPanel project={project} role={perms.role} />
+          {externalCommentChannels.length > 0 && (
+            <div className={`grid gap-4 ${externalCommentChannels.length > 1 ? 'lg:grid-cols-2' : ''}`}>
+              {externalCommentChannels.map((channel) => (
+                <LinearCard key={channel.audience} className="p-4">
+                  <ExternalCommentThread projectId={project.id} audience={channel.audience} />
+                </LinearCard>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -2742,7 +2902,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
           onUpdate={onUpdate}
           canEdit={perms.canEditProjectInfo}
           canManageMembers={perms.canManageMembers}
-          isAdmin={currentUser?.role === 'admin'}
+          isAdmin={isSystemAdmin}
           onOpenRiskOverride={perms.canEditProjectInfo ? openRiskOverrideEditor : undefined}
         />
       </ProjectSettingsDrawer>
@@ -2775,27 +2935,19 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
             </div>
           </div>
 
-          {/* 阶段筛选器：全部 + 各阶段，统一作用看板/列表/甘特；阶段多时横向滚动 */}
-          <div className="-mx-1 overflow-x-auto px-1">
-            <div className="flex w-max items-center gap-1.5">
-              {([{ id: 'all', name: '全部' }, ...projectPhases] as { id: string; name: string }[]).map((p) => {
-                const isActive = taskPhaseFilter === p.id;
-                return (
-                  <button
-                    key={p.id}
-                    onClick={() => setTaskPhaseFilter(p.id)}
-                    className={`shrink-0 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                      isActive
-                        ? 'bg-primary text-white'
-                        : 'border border-border text-muted-foreground hover:bg-secondary hover:text-foreground'
-                    }`}
-                  >
-                    {p.name}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+          {/* 阶段筛选器：列表子视图已有下方阶段轴，避免重复；其他任务视图保留同风格筛选能力。 */}
+          {taskView !== 'list' && (
+            <TaskPhaseFilterRail
+              project={project}
+              phases={projectPhases}
+              value={taskPhaseFilter}
+              onChange={(id) => {
+                setTaskPhaseFilter(id);
+                if (id !== 'all') setActivePhaseId(id);
+                setSelectedTaskId(null);
+              }}
+            />
+          )}
 
           {/* ── 列表 sub-view ──────────────────────────────────────────────── */}
           {taskView === 'list' && (
@@ -2812,6 +2964,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                     key={phase.id}
                     onClick={() => {
                       setActivePhaseId(phase.id);
+                      setTaskPhaseFilter(phase.id);
                       setSelectedTaskId(null);
                     }}
                     className={`flex-1 min-w-[80px] p-3 text-left transition-all border-b-2 relative ${
@@ -3108,8 +3261,8 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                               projectId={project.id}
                               phaseId={activePhaseId}
                               effectiveDeliverables={activeGateDeliverables}
-                              /* 与服务端一致：仅管理员 / 项目 PM(pmUserId 或 pm 角色) 可裁剪，避免 owner/rd_* 看到必失败的按钮 */
-                              canEdit={currentUser?.role === 'admin' || project.pmUserId === currentUser?.id || perms.role === 'pm'}
+                              /* 与服务端一致：仅管理员 / 项目经理(pmUserId 或 project_manager 角色) 可裁剪，避免其他角色看到必失败按钮 */
+                              canEdit={isSystemAdmin || project.pmUserId === currentUser?.id || perms.role === 'project_manager'}
                             />
                           )}
                           {selectedTaskIsGate && activeGateDeliverables.length > 0 && (
@@ -3128,7 +3281,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                                 taskVisibleRoles: selectedTaskRoles,
                               })}
                               currentUserId={currentUser?.id}
-                              isAdmin={currentUser?.role === 'admin'}
+                              isAdmin={isSystemAdmin}
                               gateTaskId={activePhase?.gateTaskId}
                               pmUserId={project.pmUserId ?? null}
                             />
@@ -3341,7 +3494,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                                 approvalNote={selectedTaskDetails?.approvalNote ?? null}
                                 canDecide={
                                   selectedTaskDetails?.approverUserId === currentUser?.id ||
-                                  currentUser?.role === 'admin'
+                                  isSystemAdmin
                                 }
                               />
                             )}
@@ -3476,14 +3629,14 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
           {/* ── 甘特 sub-view ──────────────────────────────────────────────── */}
           {taskView === 'gantt' && !execLens && (
             <div className="space-y-3">
-              <div className="flex items-center gap-0 rounded-md border border-border w-fit overflow-hidden">
-                {([['task', '任务视图'], ['phase', '阶段视图']] as const).map(([m, label]) => (
-                  <button key={m} onClick={() => setGanttMode(m)}
-                    className={`px-3 py-1.5 text-xs font-medium transition-colors ${ganttMode === m ? 'bg-primary text-white' : 'text-muted-foreground hover:bg-secondary'}`}>
-                    {label}
-                  </button>
-                ))}
-              </div>
+              <SegToggle<'task' | 'phase'>
+                value={ganttMode}
+                onChange={setGanttMode}
+                options={[
+                  { value: 'task', label: '任务视图' },
+                  { value: 'phase', label: '阶段视图' },
+                ]}
+              />
               {ganttMode === 'task' ? (
                 <TaskGanttView project={project} phaseFilter={taskPhaseFilter} onTaskClick={(phaseId, taskId) => { setActivePhaseId(phaseId); setSelectedTaskId(taskId); setTaskView('list'); setMainTab('tasks'); }} />
               ) : (
@@ -3492,6 +3645,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                   onUpdate={onUpdate}
                   onPhaseClick={handleGanttPhaseClick}
                   readOnly={!perms.canEditProjectInfo}
+                  phaseFilter={taskPhaseFilter}
                 />
               )}
             </div>
@@ -3499,7 +3653,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
 
           {/* ── 度量 sub-view ──────────────────────────────────────────────── */}
           {taskView === 'metrics' && !execLens && (
-            <MetricsView project={project} />
+            <MetricsView project={project} phaseFilter={taskPhaseFilter} />
           )}
         </div>
       )}
@@ -3517,13 +3671,18 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
           gateTaskId={activePhase?.gateTaskId}
           /* 就绪清单上传/删除按钮：viewer 隐藏，避免点了就 403 */
           canEditDeliverables={perms.role !== 'viewer' && (perms.canEditProjectInfo || perms.canEditTasks)}
+          canQualityGateBlock={perms.canQualityGateBlock}
+          canNpiGateBlock={perms.canNpiGateBlock}
           blockers={computeGateReadiness(activePhase, activePhaseData, activeGateDeliverables, serverDelivSatisfiedSet).blockers}
           onConfirm={perms.canGateReview
             ? handleGateReviewConfirm
-            // readOnly 下表单不会渲染；这里兜底报错而不是静默丢弃，防止未来回归
-            : () => toast.error('只有管理层可以提交 Gate 评审结论')}
+            : perms.canConveneGateReview
+              ? handleGateReviewConvene
+              // readOnly 下表单不会渲染；这里兜底报错而不是静默丢弃，防止未来回归
+              : () => toast.error('只有管理层可以提交 Gate 评审结论')}
           onCancel={() => setGateReviewPending(null)}
-          readOnly={!perms.canGateReview}
+          readOnly={!perms.canGateReview && !perms.canConveneGateReview}
+          canDecide={perms.canGateReview}
         />
       )}
       {releaseOpen && (

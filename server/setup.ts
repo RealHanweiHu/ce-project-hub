@@ -4,7 +4,7 @@
  * Security rules:
  * 1. Only works when the users table is EMPTY (no existing users)
  * 2. Once any user exists, this endpoint returns 403 immediately
- * 3. Creates the first admin user with username + password
+ * 3. Creates the first workspace owner with username + password
  */
 import { Router } from "express";
 import { hashPassword } from "./_core/password";
@@ -68,12 +68,12 @@ export function registerSetupRoute(app: Router) {
         username,
         passwordHash,
         name: name.trim(),
-        role: "admin",
+        role: "owner",
         canCreateProject: true,
       });
 
-      console.log(`[Setup] First admin account created: ${username}`);
-      res.json({ success: true, message: "管理员账号创建成功，请前往登录页面登录" });
+      console.log(`[Setup] First owner account created: ${username}`);
+      res.json({ success: true, message: "拥有者账号创建成功，请前往登录页面登录" });
     } catch (err) {
       console.error("[Setup] Failed to create admin:", err);
       res.status(500).json({ error: "创建失败，请重试" });

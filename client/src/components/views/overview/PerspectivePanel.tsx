@@ -13,11 +13,13 @@ import {
 } from "@shared/pm-workbench";
 import {
   AlertTriangle, Ban, Bug, CalendarClock, CheckCircle2, ChevronRight,
-  ClipboardCheck, FileCheck, Flag, Inbox, ListChecks, Rocket, UserMinus,
+  ClipboardCheck, Cpu, FileCheck, Flag, Handshake, Inbox, ListChecks,
+  PackageCheck, Rocket, ShieldCheck, UserMinus, Wrench,
 } from "lucide-react";
 import type { PortfolioTableRow } from "./PortfolioTable";
+import type { RoleDashboardLens } from "@shared/role-dashboard";
 
-export type Lens = "exec" | "pm" | "mine";
+export type Lens = RoleDashboardLens;
 
 type ScoredRow = { row: PortfolioTableRow; level: RagLevel; reasons: string[] };
 
@@ -32,24 +34,36 @@ export function PerspectivePanel({ lens, rows, onSelectProject }: { lens: Lens; 
   const { user } = useAuth();
   const { data: workbench, isLoading: workbenchLoading, refetch: refetchWorkbench } = trpc.workbench.mine.useQuery();
   const scored = useMemo(() => rows.map(scoreRow), [rows]);
-  const myProjects = useMemo(() => rows.filter((r) => r.pmUserId === user?.id), [rows, user?.id]);
 
   if (lens === "exec") {
     return <ExecutiveDecisionBoard rows={rows} scored={scored} onSelectProject={onSelectProject} />;
   }
 
-  if (lens === "pm") {
+  if (lens === "project_manager") {
     return (
-      <PmCockpit
-        myRows={myProjects}
+      <ProjectManagerCockpit
+        myRows={rows.filter((r) => r.pmUserId === user?.id || r.myRole === "project_manager")}
         tasks={workbench?.tasks ?? []}
+        roleTasks={workbench?.roleTasks ?? []}
         reviews={workbench?.reviews ?? []}
         onSelectProject={onSelectProject}
       />
     );
   }
 
-  return <RoleWorkbench workbench={workbench} isLoading={workbenchLoading} onRefetch={() => refetchWorkbench()} onSelectProject={onSelectProject} />;
+  if (lens === "product_manager") {
+    return (
+      <ProductManagerWorkbench
+        rows={rows.filter((r) => r.myRole === "pm")}
+        tasks={workbench?.tasks ?? []}
+        roleTasks={workbench?.roleTasks ?? []}
+        issues={workbench?.issues ?? []}
+        onSelectProject={onSelectProject}
+      />
+    );
+  }
+
+  return <RoleWorkbench lens={lens} workbench={workbench} isLoading={workbenchLoading} onRefetch={() => refetchWorkbench()} onSelectProject={onSelectProject} />;
 }
 
 function ExecutiveDecisionBoard({
@@ -153,27 +167,28 @@ const COORD_ICON: Record<CoordItem["kind"], React.ReactNode> = {
   blocked: <Ban size={14} />,
 };
 
-function PmCockpit({ myRows, tasks, reviews, onSelectProject }: {
+function ProjectManagerCockpit({ myRows, tasks, roleTasks, reviews, onSelectProject }: {
   myRows: PortfolioTableRow[];
   tasks: MyTaskApiRow[];
+  roleTasks: MyTaskApiRow[];
   reviews: WorkbenchReview[];
   onSelectProject: (id: string, focus?: TaskFocus) => void;
 }) {
   const today = toLocalISODate();
-  const todayItems = useMemo(() => buildTodayItems(tasks, myRows, today), [tasks, myRows, today]);
+  const todayItems = useMemo(() => buildTodayItems([...tasks, ...roleTasks], myRows, today), [tasks, roleTasks, myRows, today]);
   const coordItems = useMemo(() => buildCoordinationQueue(reviews, myRows), [reviews, myRows]);
 
   if (myRows.length === 0) {
     return (
-      <Panel title="我的项目工作台" icon={<ListChecks size={15} />}>
-        <div className="text-sm text-muted-foreground">你当前不是任何项目的 PM。</div>
+      <Panel title="项目经理驾驶舱" icon={<ListChecks size={15} />}>
+        <div className="text-sm text-muted-foreground">你当前不是任何项目的项目经理。</div>
       </Panel>
     );
   }
 
   return (
     <div className="space-y-4">
-      <Panel title="TODAY · 今天要做" icon={<CalendarClock size={15} />}>
+      <Panel title="TODAY · 项目推进" icon={<CalendarClock size={15} />}>
         {todayItems.length === 0 ? (
           <div className="text-sm text-muted-foreground">今天没有紧急事项。</div>
         ) : (
@@ -187,7 +202,7 @@ function PmCockpit({ myRows, tasks, reviews, onSelectProject }: {
       </Panel>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <Panel title="待我协调 / 拍板" icon={<Inbox size={15} />}>
+        <Panel title="待我协调 / 推动" icon={<Inbox size={15} />}>
           {coordItems.length === 0 ? (
             <div className="text-sm text-muted-foreground">暂无待你协调或拍板的事项。</div>
           ) : (
@@ -254,6 +269,8 @@ type MyTaskApiRow = {
   projectName: string; projectNumber: string; projectCategory: string;
   status: string; priority: string | null; dueDate: string | null;
   assigneeUserId: number | null; completed: boolean;
+  instructions?: string | null;
+  visibleRoles?: string[] | null;
 };
 
 type WorkbenchRole = {
@@ -269,12 +286,19 @@ type WorkbenchIssue = {
   category: string; owner: string | null; reporter: string | null; targetDate: string | null;
   relatedTaskId: string | null; projectName: string; projectNumber: string;
 };
+type WorkbenchGateBlocker = {
+  id: number; projectId: string; phaseId: string; blockerType: "quality" | "npi"; title: string;
+  description: string | null; status: "open" | "resolved"; createdAt: string | Date;
+  projectName: string; projectNumber: string;
+};
 type WorkbenchData = {
   systemRole: string;
   roles: WorkbenchRole[];
   tasks: MyTaskApiRow[];
+  roleTasks: MyTaskApiRow[];
   reviews: WorkbenchReview[];
   issues: WorkbenchIssue[];
+  gateBlockers: WorkbenchGateBlocker[];
   portfolio: PortfolioTableRow[];
   admin: null | {
     rulesTotal: number; rulesEnabled: number; recentRuns: number; failedRuns: number;
@@ -294,14 +318,17 @@ type QueueItem = {
   icon: React.ReactNode;
 };
 
-function RoleWorkbench({ workbench, isLoading, onRefetch, onSelectProject }: {
-  workbench?: WorkbenchData; isLoading: boolean; onRefetch: () => void; onSelectProject: (id: string, focus?: TaskFocus) => void;
+function RoleWorkbench({ lens, workbench, isLoading, onRefetch, onSelectProject }: {
+  lens: Lens; workbench?: WorkbenchData; isLoading: boolean; onRefetch: () => void; onSelectProject: (id: string, focus?: TaskFocus) => void;
 }) {
   const tasks = workbench?.tasks ?? [];
+  const roleTasks = workbench?.roleTasks ?? [];
   const reviews = workbench?.reviews ?? [];
   const issues = workbench?.issues ?? [];
-  const queue = useMemo(() => buildWorkbenchQueue(tasks, reviews, issues), [tasks, reviews, issues]);
-  const rows: TaskRow[] = tasks.map((t) => ({
+  const gateBlockers = workbench?.gateBlockers ?? [];
+  const portfolio = workbench?.portfolio ?? [];
+  const queue = useMemo(() => buildWorkbenchQueue(tasks, roleTasks, reviews, issues), [tasks, roleTasks, reviews, issues]);
+  const rows: TaskRow[] = mergeTasks(tasks, roleTasks).map((t) => ({
     id: t.id, projectId: t.projectId, phaseId: t.phaseId, taskId: t.taskId,
     projectName: t.projectName, projectNumber: t.projectNumber, projectCategory: t.projectCategory,
     status: t.status as TaskStatus, priority: (t.priority ?? "medium") as TaskPriority,
@@ -314,6 +341,22 @@ function RoleWorkbench({ workbench, isLoading, onRefetch, onSelectProject }: {
         <div className="text-sm text-muted-foreground">正在聚合你的任务、审核、质量和提醒...</div>
       </Panel>
     );
+  }
+
+  if (lens === "quality") {
+    return <QualityWorkbench tasks={tasks} roleTasks={roleTasks} reviews={reviews} issues={issues} gateBlockers={gateBlockers} onSelectProject={onSelectProject} />;
+  }
+  if (lens === "npi") {
+    return <NpiWorkbench tasks={tasks} roleTasks={roleTasks} issues={issues} gateBlockers={gateBlockers} portfolio={portfolio} onSelectProject={onSelectProject} />;
+  }
+  if (lens === "engineering") {
+    return <EngineeringWorkbench roles={workbench?.roles ?? []} tasks={tasks} roleTasks={roleTasks} issues={issues} onSelectProject={onSelectProject} />;
+  }
+  if (lens === "sales") {
+    return <SalesWorkbench portfolio={portfolio} tasks={tasks} roleTasks={roleTasks} onSelectProject={onSelectProject} />;
+  }
+  if (lens === "external") {
+    return <ExternalWorkbench portfolio={portfolio} onSelectProject={onSelectProject} />;
   }
 
   return (
@@ -331,23 +374,46 @@ function RoleWorkbench({ workbench, isLoading, onRefetch, onSelectProject }: {
   );
 }
 
-function buildWorkbenchQueue(tasks: MyTaskApiRow[], reviews: WorkbenchReview[], issues: WorkbenchIssue[]): QueueItem[] {
-  const taskKeys = new Set(tasks.map((task) => `${task.projectId}:${task.taskId}`));
-  const taskItems = tasks.map((task) => ({
-    key: `task-${task.id}`,
+function mergeTasks(...groups: MyTaskApiRow[][]): MyTaskApiRow[] {
+  const byId = new Map<number, MyTaskApiRow>();
+  for (const task of groups.flat()) byId.set(task.id, task);
+  return Array.from(byId.values());
+}
+
+function makeTaskItems(tasks: MyTaskApiRow[], tag: string, priorityBoost = 0): QueueItem[] {
+  return tasks.map((task) => ({
+    key: `task-${tag}-${task.id}`,
     projectId: task.projectId,
     phaseId: task.phaseId,
     taskId: task.taskId,
     title: resolveTaskName(task.taskId, task.phaseId, task.projectCategory),
     detail: `${task.projectName} · ${task.dueDate ? `截止 ${task.dueDate}` : "未设截止日"}`,
-    tag: task.priority === "critical" ? "P0任务" : task.priority === "high" ? "P1任务" : "我的任务",
-    tone: task.status === "blocked" ? "rose" : task.priority === "critical" || task.priority === "high" ? "amber" : "stone",
-    priority: (task.status === "blocked" ? 100 : 0) + priorityScore(task.priority) + (task.dueDate ? dueScore(task.dueDate) : 0),
+    tag,
+    tone: task.status === "blocked" ? "rose" : task.assigneeUserId == null ? "amber" : "stone",
+    priority: priorityBoost + (task.status === "blocked" ? 100 : 0) + priorityScore(task.priority) + (task.dueDate ? dueScore(task.dueDate) : 0),
     icon: task.status === "blocked" ? <Ban size={14} /> : <ListChecks size={14} />,
   } satisfies QueueItem));
-  const reviewItems = reviews.map((review) => ({
+}
+
+function makeIssueItems(issues: WorkbenchIssue[], tagForResolved = "待复测"): QueueItem[] {
+  return issues.map((issue) => ({
+    key: `issue-${issue.id}`,
+    projectId: issue.projectId,
+    phaseId: issue.phaseId,
+    title: issue.title,
+    detail: `${issue.projectName} · ${issue.owner ? `责任人 ${issue.owner}` : issue.targetDate ? `目标 ${issue.targetDate}` : "质量关注项"}`,
+    tag: issue.status === "resolved" ? tagForResolved : `${issue.severity} Issue`,
+    tone: issue.status === "resolved" ? "amber" : issue.severity === "P0" || issue.severity === "P1" ? "rose" : "stone",
+    priority: issue.status === "resolved" ? 95 : issue.severity === "P0" ? 98 : issue.severity === "P1" ? 88 : 45,
+    icon: <Bug size={14} />,
+  } satisfies QueueItem));
+}
+
+function makeReviewItems(reviews: WorkbenchReview[]): QueueItem[] {
+  return reviews.map((review) => ({
     key: `review-${review.id}`,
     projectId: review.projectId,
+    phaseId: review.phaseId,
     title: review.deliverableName,
     detail: `${review.projectName} · 交付物待审核`,
     tag: "审核",
@@ -355,6 +421,281 @@ function buildWorkbenchQueue(tasks: MyTaskApiRow[], reviews: WorkbenchReview[], 
     priority: 92,
     icon: <FileCheck size={14} />,
   } satisfies QueueItem));
+}
+
+function makeBlockerItems(blockers: WorkbenchGateBlocker[], type?: "quality" | "npi"): QueueItem[] {
+  return blockers
+    .filter((blocker) => !type || blocker.blockerType === type)
+    .map((blocker) => ({
+      key: `blocker-${blocker.id}`,
+      projectId: blocker.projectId,
+      phaseId: blocker.phaseId,
+      title: blocker.title,
+      detail: `${blocker.projectName} · ${blocker.phaseId.toUpperCase()} Gate 阻断项`,
+      tag: blocker.blockerType === "quality" ? "QA阻断" : "NPI阻断",
+      tone: "rose",
+      priority: blocker.blockerType === "quality" ? 96 : 94,
+      icon: <Flag size={14} />,
+    } satisfies QueueItem));
+}
+
+function QualityWorkbench({ tasks, roleTasks, reviews, issues, gateBlockers, onSelectProject }: {
+  tasks: MyTaskApiRow[]; roleTasks: MyTaskApiRow[]; reviews: WorkbenchReview[];
+  issues: WorkbenchIssue[]; gateBlockers: WorkbenchGateBlocker[];
+  onSelectProject: (id: string, focus?: TaskFocus) => void;
+}) {
+  const qualityTasks = mergeTasks(tasks, roleTasks).filter((task) =>
+    ["evt", "dvt", "pvt"].includes(task.phaseId) || /test|qa|quality|cert|battery|safety|report/i.test(`${task.taskId} ${task.instructions ?? ""}`)
+  );
+  const closureIssues = issues.filter((issue) =>
+    issue.status === "resolved" || issue.severity === "P0" || issue.severity === "P1" ||
+    ["reliability", "safety", "performance", "thermal"].includes(issue.category)
+  );
+  const queue = [
+    ...makeBlockerItems(gateBlockers, "quality"),
+    ...makeIssueItems(closureIssues),
+    ...makeReviewItems(reviews),
+    ...makeTaskItems(qualityTasks, "测试任务", 8),
+  ].sort((a, b) => b.priority - a.priority);
+
+  return (
+    <div className="space-y-4">
+      <MetricStrip items={[
+        { label: "待复测 Issue", value: issues.filter((issue) => issue.status === "resolved").length, tone: "amber" },
+        { label: "P0/P1 开放", value: issues.filter((issue) => issue.status !== "resolved" && (issue.severity === "P0" || issue.severity === "P1")).length, tone: "rose" },
+        { label: "待审报告", value: reviews.length, tone: "amber" },
+        { label: "QA 阻断", value: gateBlockers.filter((blocker) => blocker.blockerType === "quality").length, tone: "rose" },
+      ]} />
+      <Panel title="质量 / 测试行动队列" icon={<ShieldCheck size={15} />}>
+        <QueueRows items={queue.slice(0, 12)} onSelectProject={onSelectProject} />
+      </Panel>
+      <Panel title="EVT / DVT / PVT 测试与报告" icon={<ClipboardCheck size={15} />}>
+        <QueueRows items={makeTaskItems(qualityTasks, "测试交付").slice(0, 8)} onSelectProject={onSelectProject} />
+      </Panel>
+    </div>
+  );
+}
+
+function NpiWorkbench({ tasks, roleTasks, issues, gateBlockers, portfolio, onSelectProject }: {
+  tasks: MyTaskApiRow[]; roleTasks: MyTaskApiRow[]; issues: WorkbenchIssue[];
+  gateBlockers: WorkbenchGateBlocker[]; portfolio: PortfolioTableRow[];
+  onSelectProject: (id: string, focus?: TaskFocus) => void;
+}) {
+  const npiTasks = mergeTasks(tasks, roleTasks).filter((task) =>
+    ["pvt", "mp"].includes(task.phaseId) || /sop|fixture|process|trial|pilot|manufactur|npi|pvt|mp/i.test(`${task.taskId} ${task.instructions ?? ""}`)
+  );
+  const readinessRows = portfolio
+    .filter((row) => ["pvt", "mp"].includes(row.currentPhase) || row.releaseHardBlockers > 0 || row.deliverableGap > 0)
+    .sort((a, b) => b.releaseHardBlockers - a.releaseHardBlockers || b.deliverableGap - a.deliverableGap);
+  const queue = [
+    ...makeBlockerItems(gateBlockers, "npi"),
+    ...makeTaskItems(npiTasks, "NPI任务", 10),
+    ...makeIssueItems(issues.filter((issue) => ["P0", "P1"].includes(issue.severity) || ["mechanical", "hardware", "reliability"].includes(issue.category)), "待确认"),
+  ].sort((a, b) => b.priority - a.priority);
+
+  return (
+    <div className="space-y-4">
+      <MetricStrip items={[
+        { label: "PVT/MP 项目", value: readinessRows.length, tone: readinessRows.length ? "amber" : "stone" },
+        { label: "NPI 阻断", value: gateBlockers.filter((blocker) => blocker.blockerType === "npi").length, tone: "rose" },
+        { label: "工艺任务", value: npiTasks.length, tone: "amber" },
+        { label: "发布硬卡", value: readinessRows.reduce((sum, row) => sum + row.releaseHardBlockers, 0), tone: "rose" },
+      ]} />
+      <Panel title="PE / NPI 行动队列" icon={<Wrench size={15} />}>
+        <QueueRows items={queue.slice(0, 12)} onSelectProject={onSelectProject} />
+      </Panel>
+      <Panel title="PVT / MP Readiness" icon={<PackageCheck size={15} />}>
+        <DecisionRows
+          rows={readinessRows.slice(0, 8)}
+          empty="暂无 PVT/MP readiness 风险"
+          onSelectProject={onSelectProject}
+          renderMeta={(row) => (
+            <>
+              {row.releaseHardBlockers > 0 && <Tag tone="rose">硬卡 {row.releaseHardBlockers}</Tag>}
+              {row.deliverableGap > 0 && <Tag tone="amber">交付物缺 {row.deliverableGap}</Tag>}
+              <Tag tone="stone">{PHASE_MAP[row.currentPhase]?.name ?? row.currentPhase}</Tag>
+            </>
+          )}
+          renderDetail={(row) => row.releaseConditions || `Gate ${row.releaseGateName ?? row.gateName ?? "未定义"} · MP 准备状态`}
+        />
+      </Panel>
+    </div>
+  );
+}
+
+function EngineeringWorkbench({ roles, tasks, roleTasks, issues, onSelectProject }: {
+  roles: WorkbenchRole[]; tasks: MyTaskApiRow[]; roleTasks: MyTaskApiRow[];
+  issues: WorkbenchIssue[]; onSelectProject: (id: string, focus?: TaskFocus) => void;
+}) {
+  const roleSet = new Set(roles.map((role) => role.role));
+  const categories = roleSet.has("rd_mech") ? ["mechanical", "reliability"] :
+    roleSet.has("rd_sw") ? ["software", "performance"] :
+    roleSet.has("battery_safety") ? ["safety", "thermal", "hardware"] :
+    ["hardware", "thermal", "performance", "safety"];
+  const engineeringIssues = issues.filter((issue) => categories.includes(issue.category) || issue.severity === "P0" || issue.severity === "P1");
+  const designTasks = mergeTasks(tasks, roleTasks);
+  const queue = [
+    ...makeIssueItems(engineeringIssues, "待验证"),
+    ...makeTaskItems(designTasks, roleTasks.length ? "角色任务" : "设计任务", 6),
+  ].sort((a, b) => b.priority - a.priority);
+  const icon = roleSet.has("rd_mech") ? <Wrench size={15} /> : <Cpu size={15} />;
+
+  return (
+    <div className="space-y-4">
+      <MetricStrip items={[
+        { label: "设计任务", value: designTasks.length, tone: "amber" },
+        { label: "EVT/DVT 问题", value: engineeringIssues.length, tone: engineeringIssues.some((issue) => issue.severity === "P0" || issue.severity === "P1") ? "rose" : "amber" },
+        { label: "未分配角色任务", value: roleTasks.length, tone: roleTasks.length ? "amber" : "stone" },
+        { label: "阻塞任务", value: designTasks.filter((task) => task.status === "blocked").length, tone: "rose" },
+      ]} />
+      <Panel title="工程研发行动队列" icon={icon}>
+        <QueueRows items={queue.slice(0, 12)} onSelectProject={onSelectProject} />
+      </Panel>
+    </div>
+  );
+}
+
+function ProductManagerWorkbench({ rows, tasks, roleTasks, issues, onSelectProject }: {
+  rows: PortfolioTableRow[]; tasks: MyTaskApiRow[]; roleTasks: MyTaskApiRow[]; issues: WorkbenchIssue[];
+  onSelectProject: (id: string, focus?: TaskFocus) => void;
+}) {
+  const productTasks = mergeTasks(tasks, roleTasks).filter((task) => /prd|require|spec|product|pd_|cost|benchmark/i.test(`${task.taskId} ${task.instructions ?? ""}`));
+  const customerIssues = issues.filter((issue) => issue.reporter || ["performance", "safety", "other"].includes(issue.category));
+  const queue = [
+    ...makeTaskItems(productTasks, "产品定义", 10),
+    ...makeIssueItems(customerIssues, "需求确认"),
+    ...rows
+      .filter((row) => row.gateBlockers > 0 || row.deliverableGap > 0 || row.criticalIssues > 0)
+      .map((row) => ({
+        key: `product-risk-${row.id}`,
+        projectId: row.id,
+        title: row.name,
+        detail: row.customer ? `${row.customer} · 规格/风险需产品判断` : "规格/风险需产品判断",
+        tag: row.criticalIssues > 0 ? "P0/P1" : "Gate输入",
+        tone: row.criticalIssues > 0 ? "rose" : "amber",
+        priority: row.criticalIssues > 0 ? 90 : 60,
+        icon: <Flag size={14} />,
+      } satisfies QueueItem)),
+  ].sort((a, b) => b.priority - a.priority);
+
+  return (
+    <div className="space-y-4">
+      <MetricStrip items={[
+        { label: "产品项目", value: rows.length, tone: "stone" },
+        { label: "产品定义任务", value: productTasks.length, tone: "amber" },
+        { label: "客户/规格问题", value: customerIssues.length, tone: customerIssues.length ? "amber" : "stone" },
+        { label: "重大规格风险", value: rows.reduce((sum, row) => sum + row.criticalIssues, 0), tone: "rose" },
+      ]} />
+      <Panel title="产品定义 / 客户需求队列" icon={<Flag size={15} />}>
+        <QueueRows items={queue.slice(0, 12)} onSelectProject={onSelectProject} />
+      </Panel>
+      <Panel title="关联产品项目" icon={<ListChecks size={15} />}>
+        <DecisionRows
+          rows={rows.slice(0, 8)}
+          empty="暂无关联产品项目"
+          onSelectProject={onSelectProject}
+          renderMeta={(row) => (
+            <>
+              {row.customer && <Tag tone="stone">{row.customer}</Tag>}
+              {row.gateBlockers > 0 && <Tag tone="amber">Gate缺口 {row.gateBlockers}</Tag>}
+            </>
+          )}
+          renderDetail={(row) => row.ragReasons[0] ?? "关注产品定义冻结、规格偏离与客户输入"}
+        />
+      </Panel>
+    </div>
+  );
+}
+
+function SalesWorkbench({ portfolio, tasks, roleTasks, onSelectProject }: {
+  portfolio: PortfolioTableRow[]; tasks: MyTaskApiRow[]; roleTasks: MyTaskApiRow[];
+  onSelectProject: (id: string, focus?: TaskFocus) => void;
+}) {
+  const customerRows = portfolio
+    .filter((row) => row.customer || row.gateDueDate || row.projectedEnd || row.targetDate)
+    .sort((a, b) => (a.gateDueDate ?? a.targetDate ?? "9999").localeCompare(b.gateDueDate ?? b.targetDate ?? "9999"));
+  const sampleTasks = mergeTasks(tasks, roleTasks).filter((task) => /sample|customer|delivery|ship|confirm|客户|样品|交付/i.test(`${task.taskId} ${task.instructions ?? ""}`));
+
+  return (
+    <div className="space-y-4">
+      <MetricStrip items={[
+        { label: "客户项目", value: customerRows.length, tone: "stone" },
+        { label: "样品/交付任务", value: sampleTasks.length, tone: "amber" },
+        { label: "延期风险", value: customerRows.filter((row) => isProjectedOverdue(row.projectedEnd, row.targetDate)).length, tone: "rose" },
+        { label: "本周 Gate", value: customerRows.filter((row) => row.gateDueDate && row.gateDueDate <= localISODatePlus(7)).length, tone: "amber" },
+      ]} />
+      <Panel title="客户 / 样品交付风险" icon={<Handshake size={15} />}>
+        <DecisionRows
+          rows={customerRows.slice(0, 10)}
+          empty="暂无客户交付风险"
+          onSelectProject={onSelectProject}
+          renderMeta={(row) => (
+            <>
+              {row.customer && <Tag tone="stone">{row.customer}</Tag>}
+              {isProjectedOverdue(row.projectedEnd, row.targetDate) && <Tag tone="rose">延期</Tag>}
+              {row.gateDueDate && <Tag tone="amber">Gate {row.gateDueDate}</Tag>}
+            </>
+          )}
+          renderDetail={(row) => row.gateName ? `${row.gateName} · 销售只处理客户侧确认与交付风险` : "跟踪客户需求、样品状态与客户可见文件"}
+        />
+      </Panel>
+      <Panel title="销售待办" icon={<ListChecks size={15} />}>
+        <QueueRows items={makeTaskItems(sampleTasks, "客户任务").slice(0, 8)} onSelectProject={onSelectProject} />
+      </Panel>
+    </div>
+  );
+}
+
+function ExternalWorkbench({ portfolio, onSelectProject }: {
+  portfolio: PortfolioTableRow[]; onSelectProject: (id: string, focus?: TaskFocus) => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <MetricStrip items={[
+        { label: "授权项目", value: portfolio.length, tone: "stone" },
+        { label: "可见风险", value: 0, tone: "stone" },
+        { label: "内部任务", value: 0, tone: "stone" },
+        { label: "内部成本", value: 0, tone: "stone" },
+      ]} />
+      <Panel title="授权协作项目" icon={<Handshake size={15} />}>
+        <DecisionRows
+          rows={portfolio}
+          empty="暂无授权项目"
+          onSelectProject={onSelectProject}
+          renderMeta={(row) => (
+            <>
+              {row.customer && <Tag tone="stone">{row.customer}</Tag>}
+              <Tag tone="emerald">授权可见</Tag>
+            </>
+          )}
+          renderDetail={() => "仅查看授权文件、评论、样品与确认事项；内部成本/供应商/工程讨论不会显示"}
+        />
+      </Panel>
+    </div>
+  );
+}
+
+function MetricStrip({ items }: { items: Array<{ label: string; value: number; tone: "rose" | "amber" | "emerald" | "stone" }> }) {
+  return (
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      {items.map((item) => (
+        <div key={item.label} className="rounded-[10px] border border-border bg-card p-3">
+          <div className="text-[10px] uppercase tracking-[0.06em] text-muted-foreground">{item.label}</div>
+          <div className="num mt-1 text-2xl font-semibold text-foreground">{item.value}</div>
+          <div className="mt-2"><Tag tone={item.tone}>{item.tone === "stone" ? "当前" : item.value > 0 ? "需要关注" : "无异常"}</Tag></div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function buildWorkbenchQueue(tasks: MyTaskApiRow[], roleTasks: MyTaskApiRow[], reviews: WorkbenchReview[], issues: WorkbenchIssue[]): QueueItem[] {
+  const taskKeys = new Set(tasks.map((task) => `${task.projectId}:${task.taskId}`));
+  const taskItems = [
+    ...makeTaskItems(tasks, "我的任务"),
+    ...makeTaskItems(roleTasks, "角色待分配", 12),
+  ];
+  const reviewItems = makeReviewItems(reviews);
   const issueItems = issues
     .filter((issue) =>
       issue.status === "resolved" ||
@@ -362,17 +703,7 @@ function buildWorkbenchQueue(tasks: MyTaskApiRow[], reviews: WorkbenchReview[], 
       issue.severity === "P1" ||
       (issue.relatedTaskId ? taskKeys.has(`${issue.projectId}:${issue.relatedTaskId}`) : false)
     )
-    .map((issue) => ({
-      key: `issue-${issue.id}`,
-      projectId: issue.projectId,
-      phaseId: issue.phaseId,
-      title: issue.title,
-      detail: `${issue.projectName} · ${issue.owner ? `责任人 ${issue.owner}` : issue.targetDate ? `目标 ${issue.targetDate}` : "质量关注项"}`,
-      tag: issue.status === "resolved" ? "待复测" : `${issue.severity} Issue`,
-      tone: issue.status === "resolved" ? "amber" : issue.severity === "P0" || issue.severity === "P1" ? "rose" : "stone",
-      priority: issue.status === "resolved" ? 95 : issue.severity === "P0" ? 98 : issue.severity === "P1" ? 88 : 45,
-      icon: <Bug size={14} />,
-    } satisfies QueueItem));
+    .map((issue) => makeIssueItems([issue])[0]);
   return [...reviewItems, ...issueItems, ...taskItems].sort((a, b) => b.priority - a.priority);
 }
 

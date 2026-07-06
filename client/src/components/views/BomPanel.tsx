@@ -29,7 +29,12 @@ function BomCell({ r, field, type = 'text', w, disabled, onCommit }: {
   );
 }
 
-export function BomPanel({ projectId, canEdit }: { projectId: string; canEdit: boolean }) {
+export function BomPanel({ projectId, canEdit, canEditCommercials = canEdit }: {
+  projectId: string;
+  canEdit: boolean;
+  /** 商业字段（供应商/单价）编辑权：结构编辑权（工程师）为 false，由 SCM/PM 维护 */
+  canEditCommercials?: boolean;
+}) {
   const utils = trpc.useUtils();
   const { data: rows = [], isLoading } = trpc.bom.working.useQuery({ projectId });
   const { data: products = [] } = trpc.products.list.useQuery();
@@ -54,6 +59,7 @@ export function BomPanel({ projectId, canEdit }: { projectId: string; canEdit: b
         <div>
           <div className="text-[11px] num text-muted-foreground">工作态 BOM · {rows.length} 行 · 估算成本 {totalCost.toFixed(2)}</div>
           {!canEdit && <div className="text-[11px] text-muted-foreground mt-1">当前角色仅可查看 BOM，编辑请联系 PM / Manager / SCM。</div>}
+          {canEdit && !canEditCommercials && <div className="text-[11px] text-muted-foreground mt-1">你可维护结构字段（料号/规格/用量/位号）；供应商与单价由 SCM / PM 维护。</div>}
         </div>
       </div>
       {rows.length === 0 && (
@@ -84,8 +90,8 @@ export function BomPanel({ projectId, canEdit }: { projectId: string; canEdit: b
                 <td><BomCell r={r} field="spec" w="w-32" disabled={!canEdit} onCommit={commitCell} /></td>
                 <td><BomCell r={r} field="quantity" type="number" w="w-14" disabled={!canEdit} onCommit={commitCell} /></td>
                 <td><BomCell r={r} field="refDesignator" w="w-20" disabled={!canEdit} onCommit={commitCell} /></td>
-                <td><BomCell r={r} field="supplierName" w="w-24" disabled={!canEdit} onCommit={commitCell} /></td>
-                <td><BomCell r={r} field="unitCost" w="w-16" disabled={!canEdit} onCommit={commitCell} /></td>
+                <td><BomCell r={r} field="supplierName" w="w-24" disabled={!canEditCommercials} onCommit={commitCell} /></td>
+                <td><BomCell r={r} field="unitCost" w="w-16" disabled={!canEditCommercials} onCommit={commitCell} /></td>
                 <td className="px-2">
                   {r.componentProductId
                     ? <span className="text-[11px] text-primary flex items-center gap-1"><Boxes size={11} />{components.find((c) => c.id === r.componentProductId)?.name || '零部件'}</span>
@@ -107,8 +113,8 @@ export function BomPanel({ projectId, canEdit }: { projectId: string; canEdit: b
                 <td><input value={draft.spec} onChange={(e) => setDraft({ ...draft, spec: e.target.value })} placeholder="规格" className="w-32 px-1.5 py-1.5 text-sm bg-transparent" /></td>
                 <td><input type="number" value={draft.quantity} onChange={(e) => setDraft({ ...draft, quantity: parseInt(e.target.value) || 1 })} className="w-14 px-1.5 py-1.5 text-sm bg-transparent" /></td>
                 <td><input value={draft.refDesignator} onChange={(e) => setDraft({ ...draft, refDesignator: e.target.value })} placeholder="位号" className="w-20 px-1.5 py-1.5 text-sm bg-transparent" /></td>
-                <td><input value={draft.supplierName} onChange={(e) => setDraft({ ...draft, supplierName: e.target.value })} placeholder="供应商" className="w-24 px-1.5 py-1.5 text-sm bg-transparent" /></td>
-                <td><input value={draft.unitCost} onChange={(e) => setDraft({ ...draft, unitCost: e.target.value })} placeholder="单价" className="w-16 px-1.5 py-1.5 text-sm bg-transparent" /></td>
+                <td><input value={draft.supplierName} onChange={(e) => setDraft({ ...draft, supplierName: e.target.value })} placeholder={canEditCommercials ? '供应商' : 'SCM 维护'} disabled={!canEditCommercials} className="w-24 px-1.5 py-1.5 text-sm bg-transparent disabled:opacity-50" /></td>
+                <td><input value={draft.unitCost} onChange={(e) => setDraft({ ...draft, unitCost: e.target.value })} placeholder={canEditCommercials ? '单价' : 'SCM 维护'} disabled={!canEditCommercials} className="w-16 px-1.5 py-1.5 text-sm bg-transparent disabled:opacity-50" /></td>
                 <td>
                   <select value={draft.componentProductId} onChange={(e) => setDraft({ ...draft, componentProductId: e.target.value })} className="w-28 px-1 py-1.5 text-xs rounded-md bg-card border border-border">
                     <option value="">无</option>

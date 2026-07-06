@@ -17,8 +17,10 @@ import {
   createCustomerVariant, listVariantsByCustomer, listVariantsByParentProduct,
   getDownstreamVariantImpact,
   getApprovalConfig, getExternalApprovalByProcessInstanceId,
+  getProjectRolesForUser, getProjectsByProductId,
 } from "../db";
 import { VARIANT_DIMENSIONS } from "../../shared/oem-variant";
+import { isSystemAdminRole, isSystemExternalRole, systemRoleCanCreateProject } from "../../shared/system-roles";
 import {
   findBestMatchingProductCategory,
   tidyProductCategory,
@@ -113,8 +115,26 @@ const productDefinitionChangeUpdateSchema = productDefinitionChangeCreateSchema
     productId: z.string(),
   });
 
-function canMaintainProductDefinition(user: { id: number; role: string; canCreateProject?: boolean | null }, product: { createdBy: number }) {
-  return user.role === "admin" || user.canCreateProject === true || product.createdBy === user.id;
+function canMaintainProductDefinition(
+  user: { id: number; role: string; canCreateProject?: boolean | null },
+  product: { createdBy: number; productManagerUserId?: number | null },
+) {
+  return isSystemAdminRole(user.role) ||
+    user.canCreateProject === true ||
+    product.createdBy === user.id ||
+    product.productManagerUserId === user.id;
+}
+
+async function assertProductLibraryAccess(user: { id: number; role: string; canCreateProject?: boolean | null }) {
+  if (isSystemAdminRole(user.role) || user.canCreateProject === true) return;
+  if (isSystemExternalRole(user.role)) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "外部协作账号不能访问内部产品库" });
+  }
+  const roles = await getProjectRolesForUser(user.id);
+  const hasInternalRole = Array.from(roles.values()).some((role) => role !== "external_customer" && role !== "supplier");
+  if (!hasInternalRole) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "外部协作账号不能访问内部产品库" });
+  }
 }
 
 async function resolveProductCategoryName(value: string): Promise<string> {
@@ -128,26 +148,44 @@ async function resolveProductCategoryName(value: string): Promise<string> {
 export const productsRouter = router({
   list: protectedProcedure
     .input(z.object({ category: z.string().optional() }).optional())
-    .query(({ input }) => listProductsByCategory(input?.category)),
+    .query(async ({ ctx, input }) => {
+      await assertProductLibraryAccess(ctx.user);
+      return listProductsByCategory(input?.category);
+    }),
 
   get: protectedProcedure
     .input(z.object({ id: z.string() }))
-    .query(({ input }) => getProductById(input.id)),
+    .query(async ({ ctx, input }) => {
+      await assertProductLibraryAccess(ctx.user);
+      return getProductById(input.id);
+    }),
 
   revisions: protectedProcedure
     .input(z.object({ productId: z.string() }))
-    .query(({ input }) => listProductRevisions(input.productId)),
+    .query(async ({ ctx, input }) => {
+      await assertProductLibraryAccess(ctx.user);
+      return listProductRevisions(input.productId);
+    }),
 
   definition: protectedProcedure
     .input(z.object({ productId: z.string() }))
-    .query(async ({ input }) => (await getProductDefinitionByProductId(input.productId)) ?? null),
+    .query(async ({ ctx, input }) => {
+      await assertProductLibraryAccess(ctx.user);
+      return (await getProductDefinitionByProductId(input.productId)) ?? null;
+    }),
 
   definitionStatuses: protectedProcedure
-    .query(() => listProductDefinitionStatuses()),
+    .query(async ({ ctx }) => {
+      await assertProductLibraryAccess(ctx.user);
+      return listProductDefinitionStatuses();
+    }),
 
   definitionSnapshots: protectedProcedure
     .input(z.object({ productId: z.string() }))
-    .query(({ input }) => listProductDefinitionSnapshots(input.productId)),
+    .query(async ({ ctx, input }) => {
+      await assertProductLibraryAccess(ctx.user);
+      return listProductDefinitionSnapshots(input.productId);
+    }),
 
   saveDefinition: protectedProcedure
     .input(z.object({
@@ -184,16 +222,39 @@ export const productsRouter = router({
       if (!existing.positioning?.trim() || !existing.prdSummary?.trim() || existing.specs.length === 0) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "定位、PRD 摘要和至少 1 条目标规格是确认产品定义的必填项" });
       }
-      return confirmProductDefinition(input.productId, ctx.user.id);
+      const definition = await confirmProductDefinition(input.productId, ctx.user.id);
+      // 定义冻结 → 按派生项目扇出通知各项目 PM（旧行为无任何事件，交接靠口头传达）
+      const [linkedProjects, snapshots] = await Promise.all([
+        getProjectsByProductId(input.productId),
+        listProductDefinitionSnapshots(input.productId),
+      ]);
+      const versionNumber = snapshots.reduce((max, s) => Math.max(max, s.versionNumber), 0) || null;
+      for (const linked of linkedProjects) {
+        await emitAutomationEvent({
+          action: "product.definition_confirmed",
+          projectId: linked.id,
+          entityType: "product_definition",
+          entityId: input.productId,
+          actorId: ctx.user.id,
+          after: { projectId: linked.id, productName: product.name, versionNumber },
+        });
+      }
+      return definition;
     }),
 
   definitionChanges: protectedProcedure
     .input(z.object({ productId: z.string() }))
-    .query(async ({ input }) => listProductDefinitionChanges(input.productId)),
+    .query(async ({ ctx, input }) => {
+      await assertProductLibraryAccess(ctx.user);
+      return listProductDefinitionChanges(input.productId);
+    }),
 
   definitionDeviation: protectedProcedure
     .input(z.object({ productId: z.string() }))
-    .query(async ({ input }) => getProductDefinitionDeviation(input.productId)),
+    .query(async ({ ctx, input }) => {
+      await assertProductLibraryAccess(ctx.user);
+      return getProductDefinitionDeviation(input.productId);
+    }),
 
   createDefinitionChange: protectedProcedure
     .input(productDefinitionChangeCreateSchema)
@@ -252,11 +313,17 @@ export const productsRouter = router({
   // ── OEM 客户版本 / Customer Revision（PLM 侧登记） ─────────────────────────
   variantsByCustomer: protectedProcedure
     .input(z.object({ customerId: z.string() }))
-    .query(({ input }) => listVariantsByCustomer(input.customerId)),
+    .query(async ({ ctx, input }) => {
+      await assertProductLibraryAccess(ctx.user);
+      return listVariantsByCustomer(input.customerId);
+    }),
 
   variantsByProduct: protectedProcedure
     .input(z.object({ parentProductId: z.string() }))
-    .query(({ input }) => listVariantsByParentProduct(input.parentProductId)),
+    .query(async ({ ctx, input }) => {
+      await assertProductLibraryAccess(ctx.user);
+      return listVariantsByParentProduct(input.parentProductId);
+    }),
 
   /** 主版本 / BOM Revision 一改即列出受影响客户版本与 SKU（自有 ECO Gate 数据源） */
   downstreamImpact: protectedProcedure
@@ -265,10 +332,13 @@ export const productsRouter = router({
       onlyActive: z.boolean().optional(),
       changedBomLines: z.array(z.string()).optional(),
     }))
-    .query(({ input }) => getDownstreamVariantImpact(input.parentProductId, {
-      onlyActive: input.onlyActive,
-      changedBomLines: input.changedBomLines,
-    })),
+    .query(async ({ ctx, input }) => {
+      await assertProductLibraryAccess(ctx.user);
+      return getDownstreamVariantImpact(input.parentProductId, {
+        onlyActive: input.onlyActive,
+        changedBomLines: input.changedBomLines,
+      });
+    }),
 
   createVariant: protectedProcedure
     .input(z.object({
@@ -298,6 +368,7 @@ export const productsRouter = router({
       introducedAt: z.string().nullable().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      await assertProductLibraryAccess(ctx.user);
       const product = await getProductById(input.parentProductId);
       if (!product) throw new TRPCError({ code: "NOT_FOUND", message: "产品型号不存在" });
       const hasCustomerBomRevision = input.deltas.some((delta) => delta.note === "customer_bom_revision" && delta.variantValue.trim());
@@ -325,9 +396,12 @@ export const productsRouter = router({
       targetMarkets: z.array(z.string()).default([]),
     }))
     .mutation(async ({ ctx, input }) => {
+      if (!systemRoleCanCreateProject(ctx.user)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "没有创建产品的权限" });
+      }
       const id = nanoid();
       const category = await resolveProductCategoryName(input.category);
-      await createProduct({ id, createdBy: ctx.user.id, ...input, category });
+      await createProduct({ id, createdBy: ctx.user.id, productManagerUserId: ctx.user.id, ...input, category });
       return { id };
     }),
 
@@ -338,7 +412,7 @@ export const productsRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [product] = await db.select().from(products).where(eq(products.id, input.id));
       if (!product) throw new TRPCError({ code: "NOT_FOUND", message: "产品不存在" });
-      const allowed = ctx.user.role === "admin" || product.createdBy === ctx.user.id;
+      const allowed = isSystemAdminRole(ctx.user.role) || product.createdBy === ctx.user.id;
       if (!allowed) throw new TRPCError({ code: "FORBIDDEN" });
 
       const refs = await db.select({ id: projects.id }).from(projects).where(eq(projects.productId, input.id));
@@ -364,6 +438,7 @@ export const productsRouter = router({
       description: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      await assertProductLibraryAccess(ctx.user);
       const id = nanoid();
       const category = await resolveProductCategoryName(input.category);
       await createPlatform({ id, createdBy: ctx.user.id, ...input, category });

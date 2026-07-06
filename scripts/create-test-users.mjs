@@ -29,7 +29,7 @@ try {
   for (const [username, name] of USERS) {
     await client.query(
       `INSERT INTO users ("openId","username","passwordHash","name","mobile","loginMethod","role","canCreateProject")
-       VALUES ($1,$1,$2,$3,$4,'password','user',false)
+       VALUES ($1,$1,$2,$3,$4,'password','member',false)
        ON CONFLICT ("username") DO UPDATE
          SET "passwordHash"=EXCLUDED."passwordHash",
              "name"=EXCLUDED."name",

@@ -9,11 +9,32 @@ import {
   deleteProjectGateReview,
   createActivityLog,
   getGateReadiness,
+  getProjectById,
 } from "../db";
+import { getPhasesForCategory } from "../../shared/sop-templates";
 import { ROLE_PERMISSIONS } from "./members";
 import { GATE_DECISIONS } from "../../drizzle/schema";
 import { emitAutomationEvent } from "../automation/events";
 import { getEffectiveProjectRoleById as getEffectiveRole } from "../project-access";
+import { canRoleViewInternalWorkspace } from "../file-visibility";
+
+async function assertGateCanProceed(projectId: string, phaseId: string, decision: string) {
+  if (decision === "rejected") return;
+  const readiness = await getGateReadiness(projectId, phaseId);
+  if (!readiness) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "无法计算 Gate 就绪度，不能通过评审" });
+  }
+  if (readiness.ready) return;
+  const blockerText = readiness.dimensions
+    .filter((dimension) => !dimension.ok)
+    .flatMap((dimension) => dimension.blockers.map((blocker) => `${dimension.summary}: ${blocker}`))
+    .slice(0, 8)
+    .join("；");
+  throw new TRPCError({
+    code: "BAD_REQUEST",
+    message: `Gate 未就绪，不能通过或推进。请先关闭阻塞项${blockerText ? `：${blockerText}` : ""}`,
+  });
+}
 
 export const gateReviewsRouter = router({
   /** List all gate reviews for a project (optionally filtered by phase) */
@@ -27,6 +48,7 @@ export const gateReviewsRouter = router({
       if (!role || !ROLE_PERMISSIONS[role].canView) {
         throw new TRPCError({ code: "FORBIDDEN" });
       }
+      if (!canRoleViewInternalWorkspace(role)) return [];
       return getProjectGateReviews(input.projectId, input.phaseId);
     }),
 
@@ -45,9 +67,20 @@ export const gateReviewsRouter = router({
     }))
     .mutation(async ({ ctx, input }) => {
       const role = await getEffectiveRole(input.projectId, ctx.user.id);
-      if (!role || !ROLE_PERMISSIONS[role].canGateReview) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "只有管理层可以进行门评审" });
+      const perms = role ? ROLE_PERMISSIONS[role] : null;
+      // 决策权/召集权拆分：approved/conditional 是管理层签字；rejected 只是
+      // 「会开了、没过」的会议记录，项目经理（召集人）可以记录。
+      if (!perms || (input.decision !== "rejected"
+        ? !perms.canGateReview
+        : !(perms.canGateReview || perms.canConveneGateReview))) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: input.decision !== "rejected"
+            ? "只有管理层可以给出通过/有条件通过的 Gate 决策"
+            : "只有管理层或项目经理可以记录门评审",
+        });
       }
+      await assertGateCanProceed(input.projectId, input.phaseId, input.decision);
       const id = await createProjectGateReview({
         ...input,
         createdBy: ctx.user.id,
@@ -93,8 +126,9 @@ export const gateReviewsRouter = router({
     }))
     .mutation(async ({ ctx, input }) => {
       const role = await getEffectiveRole(input.projectId, ctx.user.id);
-      if (!role || !ROLE_PERMISSIONS[role].canGateReview) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "只有管理层可以修改门评审" });
+      const perms = role ? ROLE_PERMISSIONS[role] : null;
+      if (!perms || !(perms.canGateReview || perms.canConveneGateReview)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "只有管理层或项目经理可以修改门评审" });
       }
       const { id, projectId, ...patch } = input;
       const reviews = await getProjectGateReviews(projectId);
@@ -102,6 +136,19 @@ export const gateReviewsRouter = router({
       // 评审必须属于鉴权所用的 projectId，否则可用自己项目的角色改写他人项目的评审（IDOR）
       if (!beforeReview) {
         throw new TRPCError({ code: "NOT_FOUND", message: "评审记录不存在" });
+      }
+      const decisionChanged = patch.decision != null && patch.decision !== beforeReview.decision;
+      if (decisionChanged) {
+        // 改决策 = 决策权。升级（rejected→conditional/approved、conditional→approved）
+        // 是放宽通过条件，必须过就绪度——否则可先建 rejected 再经 update 改 approved，
+        // 绕开 create/confirmAndAdvance 的校验；降级（补条件/驳回）是收紧，不受限。
+        if (!perms.canGateReview) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "只有管理层可以修改 Gate 决策" });
+        }
+        const decisionRank: Record<string, number> = { rejected: 0, conditional: 1, approved: 2 };
+        if (decisionRank[patch.decision!] > decisionRank[beforeReview.decision]) {
+          await assertGateCanProceed(projectId, beforeReview.phaseId, patch.decision!);
+        }
       }
       await updateProjectGateReview(id, patch);
       await createActivityLog({
@@ -149,6 +196,7 @@ export const gateReviewsRouter = router({
       if (!role || !ROLE_PERMISSIONS[role].canGateReview) {
         throw new TRPCError({ code: "FORBIDDEN", message: "只有管理层可以进行门评审" });
       }
+      await assertGateCanProceed(input.projectId, input.phaseId, input.decision);
       const { reviewId, roundNumber, advancedTo } = await confirmGateReview({
         projectId: input.projectId,
         phaseId: input.phaseId,
@@ -178,10 +226,31 @@ export const gateReviewsRouter = router({
         actorId: ctx.user.id,
         after: { ...input, roundNumber, id: reviewId, createdBy: ctx.user.id },
       });
+      if (advancedTo) {
+        // Gate 通过推进阶段 → 通知项目群与 PM，下一阶段角色启动任务（旧行为静默推进）
+        const project = await getProjectById(input.projectId);
+        const nextPhase = project
+          ? getPhasesForCategory(project.category).find((phase) => phase.id === advancedTo)
+          : undefined;
+        await emitAutomationEvent({
+          action: "phase.advanced",
+          projectId: input.projectId,
+          entityType: "phase",
+          entityId: `${input.projectId}:${advancedTo}`,
+          actorId: ctx.user.id,
+          after: {
+            projectId: input.projectId,
+            fromPhaseId: input.phaseId,
+            fromPhaseName: input.phaseName || input.phaseId,
+            phaseId: advancedTo,
+            phaseName: nextPhase?.name ?? advancedTo,
+          },
+        });
+      }
       return { success: true, id: reviewId, roundNumber, advancedTo };
     }),
 
-  /** Gate 就绪度（4 维：前置/交付物/本阶段P0P1/遗留评审条件） */
+  /** Gate 就绪度：前置/交付物/本阶段P0P1/QA-PE阻断/遗留评审条件 */
   readiness: protectedProcedure
     .input(z.object({ projectId: z.string(), phaseId: z.string() }))
     .query(async ({ ctx, input }) => {
@@ -189,6 +258,7 @@ export const gateReviewsRouter = router({
       if (!role || !ROLE_PERMISSIONS[role].canView) {
         throw new TRPCError({ code: "FORBIDDEN" });
       }
+      if (!canRoleViewInternalWorkspace(role)) return null;
       return getGateReadiness(input.projectId, input.phaseId);
     }),
 

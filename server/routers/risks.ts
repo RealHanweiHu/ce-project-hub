@@ -14,6 +14,7 @@ import {
 } from "../db";
 import { protectedProcedure, router } from "../_core/trpc";
 import { assertProjectAccess, assertProjectPermission } from "../project-access";
+import { canRoleViewInternalWorkspace } from "../file-visibility";
 
 const nullableText = z.string().optional().nullable();
 
@@ -32,7 +33,8 @@ export const risksRouter = router({
   list: protectedProcedure
     .input(z.object({ projectId: z.string() }))
     .query(async ({ ctx, input }) => {
-      await assertProjectAccess(input.projectId, ctx.user);
+      const access = await assertProjectAccess(input.projectId, ctx.user);
+      if (!canRoleViewInternalWorkspace(access.role)) return [];
       return getProjectRisks(input.projectId);
     }),
 

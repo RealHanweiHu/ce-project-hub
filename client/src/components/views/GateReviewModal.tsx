@@ -52,6 +52,41 @@ export function GateReviewBadge({ review, size = 'sm' }: { review: GateReview; s
   );
 }
 
+function ReviewTraceSummary({ review }: { review: GateReview }) {
+  const trace = review.traceSnapshot;
+  if (!trace) return null;
+  const productLabel = trace.product
+    ? `${trace.product.productNumber || trace.product.id} · ${trace.product.name}`
+    : '未关联产品';
+  const baseRevision = trace.baseRevision?.revisionLabel || '无基准版本';
+  const customerLabels = trace.customerVariants
+    .slice(0, 3)
+    .map((variant) => `${variant.customerName || variant.customerId || variant.variantCode}${variant.customerBomRevision ? ` ${variant.customerBomRevision}` : ''}`);
+  return (
+    <div className="rounded-[7px] border border-border bg-secondary/40 p-2 text-xs">
+      <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-muted-foreground">
+        <ClipboardCheck size={11} />
+        Gate Trace
+      </div>
+      <div className="mt-1 grid gap-1 text-muted-foreground sm:grid-cols-2">
+        <div className="truncate">
+          <span className="text-foreground">产品：</span>{productLabel}
+        </div>
+        <div>
+          <span className="text-foreground">基准版本：</span>{baseRevision}
+        </div>
+        <div>
+          <span className="text-foreground">工作 BOM：</span>{trace.workingBom.lineCount} 行
+        </div>
+        <div className="truncate">
+          <span className="text-foreground">客户版本：</span>
+          {trace.customerVariants.length > 0 ? `${trace.customerVariants.length} 个${customerLabels.length ? ` · ${customerLabels.join(' / ')}` : ''}` : '无'}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Review History Item ───────────────────────────────────────────────────────
 function ReviewHistoryItem({ review, index, total }: { review: GateReview; index: number; total: number }) {
   const [expanded, setExpanded] = useState(false);
@@ -103,6 +138,7 @@ function ReviewHistoryItem({ review, index, total }: { review: GateReview; index
           {review.notes && (
             <div className="text-xs text-muted-foreground italic border-l border-border pl-2">{review.notes}</div>
           )}
+          <ReviewTraceSummary review={review} />
         </div>
       )}
     </div>
@@ -120,10 +156,13 @@ interface ReviewFormState {
 
 function NewReviewForm({
   roundNumber,
+  allowedDecisions,
   onSubmit,
   onCancel,
 }: {
   roundNumber: number;
+  /** 可选的决议项：管理层三项全开；项目经理（仅召集权）只能记录「不通过」 */
+  allowedDecisions: GateReview['decision'][];
   onSubmit: (form: ReviewFormState) => void;
   onCancel: () => void;
 }) {
@@ -131,7 +170,7 @@ function NewReviewForm({
   const [form, setForm] = useState<ReviewFormState>({
     reviewDate: today,
     participants: '',
-    decision: 'approved',
+    decision: allowedDecisions.includes('approved') ? 'approved' : allowedDecisions[0],
     conditions: '',
     notes: '',
   });
@@ -168,8 +207,10 @@ function NewReviewForm({
         <label className="text-[10px] uppercase tracking-widest text-muted-foreground mb-2 block">
           评审决议 <span className="text-destructive">*</span>
         </label>
-        <div className="grid grid-cols-3 gap-2">
-          {(Object.entries(DECISION_CONFIG) as [GateReview['decision'], typeof DECISION_CONFIG[GateReview['decision']]][]).map(([val, cfg]) => (
+        <div className={allowedDecisions.length === 3 ? 'grid grid-cols-3 gap-2' : 'grid grid-cols-1 gap-2'}>
+          {(Object.entries(DECISION_CONFIG) as [GateReview['decision'], typeof DECISION_CONFIG[GateReview['decision']]][])
+            .filter(([val]) => allowedDecisions.includes(val))
+            .map(([val, cfg]) => (
             <button
               key={val}
               type="button"
@@ -287,18 +328,22 @@ interface GateReviewModalProps {
   existingReviews?: GateReview[];
   /** 就绪检查未通过项;非空时提示评审改走「有条件通过」并记录例外（projectId+gateTaskId 缺省时的回退展示） */
   blockers?: string[];
-  /** 提供 projectId + gateTaskId 时，改用服务端就绪度清单（4 维 + 交付物上传），取代源错的客户端 blockers 展示 */
+  /** 提供 projectId + gateTaskId 时，改用服务端就绪度清单，取代源错的客户端 blockers 展示 */
   projectId?: string;
   gateTaskId?: string;
   /** 是否允许在就绪清单里上传/删除交付物证据（viewer 等无权者隐藏按钮） */
   canEditDeliverables?: boolean;
+  canQualityGateBlock?: boolean;
+  canNpiGateBlock?: boolean;
   onConfirm: (review: GateReview) => void;
   onCancel: () => void;
   readOnly?: boolean;
+  /** 决策权（approved/conditional）；false 时仅召集权——只能记录「不通过」的评审 */
+  canDecide?: boolean;
 }
 
 export function GateReviewModal({
-  open, phaseId, phaseName, gateName, gateStandard, existingReviews = [], blockers = [], projectId, gateTaskId, canEditDeliverables = false, onConfirm, onCancel, readOnly = false,
+  open, phaseId, phaseName, gateName, gateStandard, existingReviews = [], blockers = [], projectId, gateTaskId, canEditDeliverables = false, canQualityGateBlock = false, canNpiGateBlock = false, onConfirm, onCancel, readOnly = false, canDecide = true,
 }: GateReviewModalProps) {
   // readOnly（无 canGateReview 权限）绝不能进表单：否则用户填完提交被静默丢弃
   const [showForm, setShowForm] = useState(existingReviews.length === 0 && !readOnly);
@@ -348,9 +393,16 @@ export function GateReviewModal({
           <div className="text-xs text-muted-foreground num">{gateName}</div>
         </div>
 
-        {/* 就绪度：有 projectId+gateTaskId 时用服务端清单（4 维 + 交付物上传），否则回退到传入的 blockers */}
+        {/* 就绪度：有 projectId+gateTaskId 时用服务端清单，否则回退到传入的 blockers */}
         {projectId && gateTaskId ? (
-          <GateReadinessChecklist projectId={projectId} phaseId={phaseId} gateTaskId={gateTaskId} canEdit={canEditDeliverables} />
+          <GateReadinessChecklist
+            projectId={projectId}
+            phaseId={phaseId}
+            gateTaskId={gateTaskId}
+            canEdit={canEditDeliverables}
+            canQualityGateBlock={canQualityGateBlock}
+            canNpiGateBlock={canNpiGateBlock}
+          />
         ) : blockers.length > 0 ? (
           <div className="border border-[color:var(--warning)] bg-[color:var(--warning-soft)] rounded-[9px] p-3 mb-4">
             <div className="text-[11px] font-semibold text-[color:var(--warning)] mb-1">⚠ 就绪检查未通过</div>
@@ -386,11 +438,20 @@ export function GateReviewModal({
 
         {/* Add new review or show button */}
         {showForm && !readOnly ? (
-          <NewReviewForm
-            roundNumber={nextRound}
-            onSubmit={handleSubmit}
-            onCancel={() => existingReviews.length > 0 ? setShowForm(false) : onCancel()}
-          />
+          <div className="space-y-3">
+            {!canDecide && (
+              <div className="flex items-start gap-2 p-3 rounded-[9px] bg-secondary border border-border text-xs text-muted-foreground">
+                <AlertCircle size={13} className="shrink-0 mt-0.5" />
+                <span>你有评审召集权：可记录「不通过」的评审会议；「通过 / 有条件通过」需由管理层（manager/owner）签署。</span>
+              </div>
+            )}
+            <NewReviewForm
+              roundNumber={nextRound}
+              allowedDecisions={canDecide ? ['approved', 'conditional', 'rejected'] : ['rejected']}
+              onSubmit={handleSubmit}
+              onCancel={() => existingReviews.length > 0 ? setShowForm(false) : onCancel()}
+            />
+          </div>
         ) : (
           <div className="space-y-2">
             {latestReview?.decision === 'rejected' && (

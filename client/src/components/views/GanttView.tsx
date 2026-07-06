@@ -57,6 +57,7 @@ interface GanttViewProps {
   onUpdate: (project: Project) => void;
   onPhaseClick?: (phaseId: string) => void;
   readOnly?: boolean;
+  phaseFilter?: string;
 }
 
 // ── Inline date editor ────────────────────────────────────────────────────────
@@ -88,7 +89,7 @@ function DateEditor({
   );
 }
 
-export function GanttView({ project, onUpdate, onPhaseClick, readOnly = false }: GanttViewProps) {
+export function GanttView({ project, onUpdate, onPhaseClick, readOnly = false, phaseFilter }: GanttViewProps) {
   const [zoom, setZoom] = useState(1);
   const [editingPhase, setEditingPhase] = useState<string | null>(null);
   const [editingField, setEditingField] = useState<'start' | 'end' | null>(null);
@@ -141,7 +142,7 @@ export function GanttView({ project, onUpdate, onPhaseClick, readOnly = false }:
       : 1;
 
     let cursor = new Date(projectStart);
-    const bars: PhaseBar[] = projectPhases.map((phase) => {
+    const allBars: PhaseBar[] = projectPhases.map((phase) => {
       const custom = project.phaseDates?.[phase.id];
       let phaseStart: Date;
       let phaseEnd: Date;
@@ -174,11 +175,21 @@ export function GanttView({ project, onUpdate, onPhaseClick, readOnly = false }:
 
     // Clamp totalEnd to projectEnd when all phases fit within the project window
     const computedEnd = cursor;
-    const totalEnd = projectEnd
+    const fullTotalEnd = projectEnd
       ? (computedEnd > projectEnd ? computedEnd : projectEnd)
       : computedEnd;
-    return { bars, totalStart: projectStart, totalEnd };
-  }, [project]);
+    const bars = phaseFilter && phaseFilter !== 'all'
+      ? allBars.filter((bar) => bar.phase.id === phaseFilter)
+      : allBars;
+
+    if (phaseFilter && phaseFilter !== 'all' && bars.length > 0) {
+      const filteredStart = bars.reduce((min, bar) => bar.startDate < min ? bar.startDate : min, bars[0].startDate);
+      const filteredEnd = bars.reduce((max, bar) => bar.endDate > max ? bar.endDate : max, bars[0].endDate);
+      return { bars, totalStart: filteredStart, totalEnd: filteredEnd };
+    }
+
+    return { bars, totalStart: projectStart, totalEnd: fullTotalEnd };
+  }, [project, phaseFilter]);
 
   // ── Timeline grid ─────────────────────────────────────────────────────────
   const totalDays = Math.max(
@@ -249,7 +260,7 @@ export function GanttView({ project, onUpdate, onPhaseClick, readOnly = false }:
   const LABEL_WIDTH = 148;
 
   return (
-    <div className="rounded-[11px] border border-border bg-card">
+    <div className="rounded-[10px] border border-border bg-card shadow-[0_1px_2px_rgb(0_0_0/0.03)]">
       {/* Toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-5 py-3">
         <div className="flex items-center gap-3">

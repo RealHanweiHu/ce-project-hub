@@ -39,21 +39,25 @@ const CATEGORY_LABELS: Record<string, string> = {
   other: '其他',
 };
 
-export function MetricsView({ project }: { project: Project }) {
+export function MetricsView({ project, phaseFilter }: { project: Project; phaseFilter?: string }) {
   const todayISO = useMemo(() => shanghaiTodayISO(), []);
   const [mode, setMode] = useState<WindowMode>('project');
   const [customFrom, setCustomFrom] = useState(addDays(todayISO, -27));
   const [customTo, setCustomTo] = useState(todayISO);
+  const projectPhases = useMemo(() => getProjectPhases(project), [project]);
+  const phaseIdForQuery = phaseFilter && phaseFilter !== 'all' ? phaseFilter : undefined;
+  const selectedPhase = phaseIdForQuery ? projectPhases.find((phase) => phase.id === phaseIdForQuery) : undefined;
+  const scopeLabel = selectedPhase ? `${selectedPhase.code} ${selectedPhase.name}` : '全部阶段';
 
   const queryInput = useMemo(() => {
     if (mode === 'last4w') {
-      return { projectId: project.id, fromISO: addDays(todayISO, -27), toISO: todayISO };
+      return { projectId: project.id, phaseId: phaseIdForQuery, fromISO: addDays(todayISO, -27), toISO: todayISO };
     }
     if (mode === 'custom') {
-      return { projectId: project.id, fromISO: customFrom || undefined, toISO: customTo || undefined };
+      return { projectId: project.id, phaseId: phaseIdForQuery, fromISO: customFrom || undefined, toISO: customTo || undefined };
     }
-    return { projectId: project.id };
-  }, [customFrom, customTo, mode, project.id, todayISO]);
+    return { projectId: project.id, phaseId: phaseIdForQuery };
+  }, [customFrom, customTo, mode, phaseIdForQuery, project.id, todayISO]);
 
   const queryEnabled = mode !== 'custom' || (!!customFrom && !!customTo);
   const { data: metrics, isLoading, error } = trpc.analytics.projectMetrics.useQuery(queryInput, {
@@ -61,8 +65,8 @@ export function MetricsView({ project }: { project: Project }) {
   });
 
   const phaseNameById = useMemo(() => {
-    return new Map(getProjectPhases(project).map((phase) => [phase.id, phase.name]));
-  }, [project]);
+    return new Map(projectPhases.map((phase) => [phase.id, phase.name]));
+  }, [projectPhases]);
 
   const throughputData = metrics?.efficiency.throughputByWeek.map((row) => ({
     week: row.weekKey.replace(`${row.weekKey.slice(0, 4)}-`, ''),
@@ -99,11 +103,11 @@ export function MetricsView({ project }: { project: Project }) {
 
   if (isLoading) {
     return (
-      <div className="p-6 space-y-4">
-        <MetricsHeader mode={mode} onModeChange={setMode} customFrom={customFrom} customTo={customTo} onCustomFrom={setCustomFrom} onCustomTo={setCustomTo} />
+      <div className="space-y-4">
+        <MetricsHeader mode={mode} scopeLabel={scopeLabel} onModeChange={setMode} customFrom={customFrom} customTo={customTo} onCustomFrom={setCustomFrom} onCustomTo={setCustomTo} />
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {Array.from({ length: 4 }).map((_, index) => (
-            <div key={index} className="border border-border bg-card rounded-[11px] h-80 animate-pulse bg-secondary" />
+            <div key={index} className="h-80 animate-pulse rounded-[10px] border border-border bg-secondary" />
           ))}
         </div>
       </div>
@@ -112,9 +116,9 @@ export function MetricsView({ project }: { project: Project }) {
 
   if (error) {
     return (
-      <div className="p-6 space-y-4">
-        <MetricsHeader mode={mode} onModeChange={setMode} customFrom={customFrom} customTo={customTo} onCustomFrom={setCustomFrom} onCustomTo={setCustomTo} />
-        <div className="border border-border bg-card rounded-[11px] p-8 text-center">
+      <div className="space-y-4">
+        <MetricsHeader mode={mode} scopeLabel={scopeLabel} onModeChange={setMode} customFrom={customFrom} customTo={customTo} onCustomFrom={setCustomFrom} onCustomTo={setCustomTo} />
+        <div className="rounded-[10px] border border-border bg-card p-8 text-center">
           <AlertTriangle size={24} className="mx-auto text-destructive mb-3" />
           <div className="text-sm text-foreground">度量数据加载失败</div>
           <div className="text-xs text-muted-foreground mt-1">{error.message}</div>
@@ -126,8 +130,8 @@ export function MetricsView({ project }: { project: Project }) {
   if (!metrics) return null;
 
   return (
-    <div className="p-6 space-y-4">
-      <MetricsHeader mode={mode} onModeChange={setMode} customFrom={customFrom} customTo={customTo} onCustomFrom={setCustomFrom} onCustomTo={setCustomTo} />
+    <div className="space-y-4">
+      <MetricsHeader mode={mode} scopeLabel={scopeLabel} onModeChange={setMode} customFrom={customFrom} customTo={customTo} onCustomFrom={setCustomFrom} onCustomTo={setCustomTo} />
 
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
         <MetricTile icon={<Timer size={15} />} label="Lead Time 中位" value={formatDays(metrics.efficiency.leadTimeDaysMedian)} />
@@ -245,6 +249,7 @@ export function MetricsView({ project }: { project: Project }) {
 
 function MetricsHeader({
   mode,
+  scopeLabel,
   onModeChange,
   customFrom,
   customTo,
@@ -252,6 +257,7 @@ function MetricsHeader({
   onCustomTo,
 }: {
   mode: WindowMode;
+  scopeLabel: string;
   onModeChange: (mode: WindowMode) => void;
   customFrom: string;
   customTo: string;
@@ -259,16 +265,16 @@ function MetricsHeader({
   onCustomTo: (value: string) => void;
 }) {
   return (
-    <div className="border border-border bg-card rounded-[11px] px-4 py-3 flex flex-col lg:flex-row lg:items-center gap-3">
+    <div className="flex flex-col gap-3 rounded-[10px] border border-border bg-card px-4 py-3 shadow-[0_1px_2px_rgb(0_0_0/0.03)] lg:flex-row lg:items-center">
       <div className="flex items-center gap-2 min-w-0">
         <Gauge size={17} className="text-muted-foreground shrink-0" />
         <div className="min-w-0">
-          <h2 className="text-lg text-foreground leading-tight">项目度量</h2>
-          <p className="text-[10px] uppercase tracking-widest text-muted-foreground">PROJECT METRICS</p>
+          <h2 className="text-sm font-semibold leading-tight text-foreground">项目度量</h2>
+          <p className="mt-0.5 text-[10px] uppercase tracking-widest text-muted-foreground">{scopeLabel}</p>
         </div>
       </div>
       <div className="lg:ml-auto flex flex-col sm:flex-row sm:items-center gap-2">
-        <div className="flex border border-border rounded-md w-fit">
+        <div className="flex w-fit overflow-hidden rounded-[7px] border border-border">
           <WindowButton active={mode === 'project'} icon={<CalendarDays size={13} />} label="项目至今" onClick={() => onModeChange('project')} />
           <WindowButton active={mode === 'last4w'} icon={<Activity size={13} />} label="近 4 周" onClick={() => onModeChange('last4w')} />
           <WindowButton active={mode === 'custom'} icon={<Clock3 size={13} />} label="自定义" onClick={() => onModeChange('custom')} />
@@ -300,8 +306,8 @@ function WindowButton({ active, icon, label, onClick }: { active: boolean; icon:
     <button
       type="button"
       onClick={onClick}
-      className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-[10px] uppercase tracking-wider transition-colors ${
-        active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-secondary'
+      className={`inline-flex h-[30px] items-center gap-1.5 px-3 text-xs font-medium transition-colors ${
+        active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
       }`}
     >
       {icon}
@@ -312,10 +318,10 @@ function WindowButton({ active, icon, label, onClick }: { active: boolean; icon:
 
 function MetricTile({ icon, label, value, accent }: { icon: React.ReactNode; label: string; value: string | number; accent?: string }) {
   return (
-    <div className="border border-border bg-card rounded-[11px] px-4 py-3">
+    <div className="rounded-[10px] border border-border bg-card px-4 py-3 shadow-[0_1px_2px_rgb(0_0_0/0.03)]">
       <div className="flex items-center gap-1.5 text-muted-foreground">
         {icon}
-        <span className="text-[10px] uppercase tracking-wider truncate">{label}</span>
+        <span className="truncate text-[10px] uppercase tracking-wider">{label}</span>
       </div>
       <div className={`num mt-1.5 text-2xl font-semibold ${accent ?? 'text-foreground'}`}>{value}</div>
     </div>
@@ -324,13 +330,13 @@ function MetricTile({ icon, label, value, accent }: { icon: React.ReactNode; lab
 
 function MetricPanel({ title, kicker, icon, children }: { title: string; kicker: string; icon: React.ReactNode; children: React.ReactNode }) {
   return (
-    <section className="border border-border bg-card rounded-[11px] p-4">
+    <section className="rounded-[10px] border border-border bg-card p-4 shadow-[0_1px_2px_rgb(0_0_0/0.03)]">
       <div className="flex items-center gap-2 mb-4">
         <div className="w-8 h-8 rounded-md border border-border bg-secondary flex items-center justify-center text-muted-foreground shrink-0">
           {icon}
         </div>
         <div>
-          <h3 className="text-base text-foreground leading-tight">{title}</h3>
+          <h3 className="text-sm font-semibold leading-tight text-foreground">{title}</h3>
           <p className="text-[10px] uppercase tracking-widest text-muted-foreground">{kicker}</p>
         </div>
       </div>
@@ -342,7 +348,7 @@ function MetricPanel({ title, kicker, icon, children }: { title: string; kicker:
 function InlineStat({ label, value, tone = 'stone' }: { label: string; value: string | number; tone?: 'stone' | 'rose' | 'emerald' }) {
   const toneClass = tone === 'rose' ? 'text-destructive' : tone === 'emerald' ? 'text-[color:var(--success)]' : 'text-foreground';
   return (
-    <div className="rounded-md border border-border bg-secondary px-3 py-2 min-w-0">
+    <div className="min-w-0 rounded-md border border-border bg-secondary px-3 py-2">
       <div className="text-[10px] uppercase tracking-wider text-muted-foreground truncate">{label}</div>
       <div className={`num mt-0.5 text-xl font-semibold ${toneClass}`}>{value}</div>
     </div>
@@ -362,7 +368,7 @@ function ChartFrame({ empty, children }: { empty: boolean; children: React.React
   return (
     <div className="h-[240px] min-h-[240px]">
       {empty ? (
-        <div className="h-full rounded-md border border-dashed border-border bg-secondary flex items-center justify-center text-xs text-muted-foreground">
+        <div className="flex h-full items-center justify-center rounded-md border border-dashed border-border bg-secondary text-xs text-muted-foreground">
           暂无足够数据
         </div>
       ) : children}

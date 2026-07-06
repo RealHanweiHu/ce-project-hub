@@ -176,6 +176,10 @@ export function useProjectData(projectId: string | null) {
           notes: g.notes ?? "",
           createdAt: g.createdAt ? new Date(g.createdAt).toISOString() : "",
           roundNumber: g.roundNumber ?? 1,
+          productId: g.productId ?? null,
+          baseRevisionId: g.baseRevisionId ?? null,
+          resultRevisionId: g.resultRevisionId ?? null,
+          traceSnapshot: g.traceSnapshot ?? null,
         }));
 
       // Phase notes

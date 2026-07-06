@@ -37,6 +37,12 @@ import { createContext } from "../_core/context";
 import { getEffectiveProjectRoleById as getEffectiveRole } from "../project-access";
 import { normalizeFileType, normalizeFileVersion } from "../../shared/file-types";
 import { canMutateFileForProject } from "../deliverable-access";
+import { PROJECT_FILE_VISIBILITIES } from "../../drizzle/schema";
+import {
+  canRoleViewFileVisibility,
+  normalizeProjectFileVisibility,
+  resolveDefaultUploadVisibility,
+} from "../file-visibility";
 
 // ── Permission helper ─────────────────────────────────────────────────────────
 
@@ -80,7 +86,8 @@ export const filesRouter = router({
       if (!role || !ROLE_PERMISSIONS[role].canView) {
         throw new TRPCError({ code: "FORBIDDEN" });
       }
-      return getProjectFiles(input.projectId, input.phaseId, input.taskId);
+      const files = await getProjectFiles(input.projectId, input.phaseId, input.taskId);
+      return files.filter((file) => canRoleViewFileVisibility(role, file.visibility));
     }),
 
   /**
@@ -162,13 +169,14 @@ export function registerFileUploadRoute(app: Express) {
           return;
         }
 
-        const { projectId, phaseId, taskId, deliverableName, fileType, fileVersion } = req.body as {
+        const { projectId, phaseId, taskId, deliverableName, fileType, fileVersion, visibility } = req.body as {
           projectId?: string;
           phaseId?: string;
           taskId?: string;
           deliverableName?: string;
           fileType?: string;
           fileVersion?: string;
+          visibility?: string;
         };
 
         if (!projectId) {
@@ -198,6 +206,19 @@ export function registerFileUploadRoute(app: Express) {
         });
         if (!canUpload) {
           res.status(403).json({ error: "Forbidden" });
+          return;
+        }
+        const requestedVisibility = typeof visibility === "string" && visibility.trim()
+          ? normalizeProjectFileVisibility(visibility)
+          : resolveDefaultUploadVisibility(role);
+        if (!PROJECT_FILE_VISIBILITIES.includes(requestedVisibility) || !canRoleViewFileVisibility(role, requestedVisibility)) {
+          // sales 未显式选可见性会落到 internal 并被上一行拒绝——提示其显式选择，
+          // 而不是旧行为静默把文件设为客户可见。
+          res.status(403).json({
+            error: role === "sales"
+              ? "销售账号请显式选择「客户可见」再上传（不再默认对客户公开）"
+              : "Forbidden file visibility",
+          });
           return;
         }
 
@@ -238,6 +259,7 @@ export function registerFileUploadRoute(app: Express) {
           uploadedBy: ctx.user.id,
           fileType: normFileType,
           fileVersion: normFileVersion,
+          visibility: requestedVisibility,
         });
 
         // Activity log
@@ -253,6 +275,7 @@ export function registerFileUploadRoute(app: Express) {
             mimeType: file.mimetype,
             phaseId: phaseId || null,
             taskId: taskId || null,
+            visibility: requestedVisibility,
           },
         });
 
@@ -266,6 +289,7 @@ export function registerFileUploadRoute(app: Express) {
           taskId: taskId || null,
           fileType: normFileType,
           fileVersion: normFileVersion,
+          visibility: requestedVisibility,
         });
       } catch (err: any) {
         console.error("[FileUpload] Error:", err);

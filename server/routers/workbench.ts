@@ -6,12 +6,15 @@ import {
   automationRuns,
   customFieldDefs,
   projectDeliverableReviews,
+  projectGateBlockers,
   projectIssues,
   projectMembers,
+  projectTasks,
   projects,
   users,
   type ProjectMemberRole,
 } from "../../drizzle/schema";
+import { isSystemAdminRole } from "../../shared/system-roles";
 
 type WorkbenchRole = {
   projectId: string;
@@ -23,6 +26,29 @@ type WorkbenchRole = {
   role: ProjectMemberRole;
   pmUserId: number | null;
 };
+
+const EXTERNAL_ROLES = new Set<ProjectMemberRole>(["external_customer", "supplier"]);
+const ROLE_TASK_ALIASES: Partial<Record<ProjectMemberRole, ProjectMemberRole[]>> = {
+  rd_hw: ["rd_hw"],
+  rd_sw: ["rd_sw"],
+  rd_mech: ["rd_mech"],
+  qa: ["qa", "cert", "battery_safety"],
+  cert: ["cert", "qa"],
+  battery_safety: ["battery_safety", "qa", "rd_hw"],
+  pe: ["pe", "mfg"],
+  mfg: ["mfg", "pe"],
+  scm: ["scm"],
+  sales: ["sales"],
+  pm: ["pm"],
+};
+
+function roleMatchesTask(role: ProjectMemberRole | undefined, visibleRoles: string[] | null): boolean {
+  if (!role || EXTERNAL_ROLES.has(role)) return false;
+  const roles = visibleRoles ?? [];
+  if (roles.length === 0) return false;
+  const aliases = ROLE_TASK_ALIASES[role] ?? [role];
+  return aliases.some((alias) => roles.includes(alias));
+}
 
 export const workbenchRouter = router({
   mine: protectedProcedure.query(async ({ ctx }) => {
@@ -36,8 +62,10 @@ export const workbenchRouter = router({
         systemRole: ctx.user.role,
         roles: [] as WorkbenchRole[],
         tasks,
+        roleTasks: [],
         reviews: [],
         issues: [],
+        gateBlockers: [],
         portfolio,
         admin: null,
       };
@@ -82,6 +110,10 @@ export const workbenchRouter = router({
     }
     const roles = Array.from(roleByProject.values());
     const projectIds = roles.map((role) => role.projectId);
+    const roleByProjectId = new Map(roles.map((role) => [role.projectId, role.role]));
+    const internalProjectIds = roles
+      .filter((role) => !EXTERNAL_ROLES.has(role.role))
+      .map((role) => role.projectId);
 
     const reviews = await db
       .select({
@@ -136,7 +168,77 @@ export const workbenchRouter = router({
       )
       .limit(120);
 
-    const admin = ctx.user.role === "admin"
+    const roleTaskRows = internalProjectIds.length === 0 ? [] : await db
+      .select({
+        id: projectTasks.id,
+        projectId: projectTasks.projectId,
+        phaseId: projectTasks.phaseId,
+        taskId: projectTasks.taskId,
+        completed: projectTasks.completed,
+        instructions: projectTasks.instructions,
+        visibleRoles: projectTasks.visibleRoles,
+        assigneeUserId: projectTasks.assigneeUserId,
+        dueDate: projectTasks.dueDate,
+        status: projectTasks.status,
+        priority: projectTasks.priority,
+        completedAt: projectTasks.completedAt,
+        statusChangedAt: projectTasks.statusChangedAt,
+        updatedBy: projectTasks.updatedBy,
+        createdAt: projectTasks.createdAt,
+        updatedAt: projectTasks.updatedAt,
+        projectName: projects.name,
+        projectNumber: projects.projectNumber,
+        projectCategory: projects.category,
+      })
+      .from(projectTasks)
+      .innerJoin(projects, eq(projectTasks.projectId, projects.id))
+      .where(and(
+        inArray(projectTasks.projectId, internalProjectIds),
+        eq(projects.archived, false),
+        drizzleSql`${projectTasks.status} != 'done'`,
+        drizzleSql`${projectTasks.status} != 'skipped'`,
+      ))
+      .orderBy(
+        drizzleSql`CASE ${projectTasks.priority} WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END`,
+        drizzleSql`${projectTasks.dueDate} IS NULL`,
+        projectTasks.dueDate,
+      )
+      .limit(200);
+
+    const roleTasks = roleTaskRows
+      .filter((task) =>
+        task.assigneeUserId == null &&
+        roleMatchesTask(roleByProjectId.get(task.projectId), task.visibleRoles as string[] | null)
+      )
+      .slice(0, 80);
+
+    const gateBlockers = internalProjectIds.length === 0 ? [] : await db
+      .select({
+        id: projectGateBlockers.id,
+        projectId: projectGateBlockers.projectId,
+        phaseId: projectGateBlockers.phaseId,
+        blockerType: projectGateBlockers.blockerType,
+        title: projectGateBlockers.title,
+        description: projectGateBlockers.description,
+        status: projectGateBlockers.status,
+        createdAt: projectGateBlockers.createdAt,
+        projectName: projects.name,
+        projectNumber: projects.projectNumber,
+      })
+      .from(projectGateBlockers)
+      .innerJoin(projects, eq(projectGateBlockers.projectId, projects.id))
+      .where(and(
+        inArray(projectGateBlockers.projectId, internalProjectIds),
+        eq(projectGateBlockers.status, "open"),
+        eq(projects.archived, false),
+      ))
+      .orderBy(
+        drizzleSql`CASE ${projectGateBlockers.blockerType} WHEN 'quality' THEN 0 ELSE 1 END`,
+        desc(projectGateBlockers.createdAt),
+      )
+      .limit(80);
+
+    const admin = isSystemAdminRole(ctx.user.role)
       ? await getAdminWorkbenchSignals(db)
       : null;
 
@@ -144,8 +246,10 @@ export const workbenchRouter = router({
       systemRole: ctx.user.role,
       roles,
       tasks,
+      roleTasks,
       reviews,
       issues,
+      gateBlockers,
       portfolio,
       admin,
     };

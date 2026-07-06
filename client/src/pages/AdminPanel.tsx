@@ -1,5 +1,4 @@
-// AdminPanel: System admin page for managing users, roles, and permissions
-// Only accessible to users with role === 'admin'
+// AdminPanel: system page for managing users, roles, and permissions.
 
 import { useEffect, useState } from 'react';
 import { trpc } from '@/lib/trpc';
@@ -38,6 +37,13 @@ import {
 } from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
 import { AutomationSettings } from '@/components/views/AutomationSettings';
+import {
+  SYSTEM_ROLE_LABELS,
+  SYSTEM_ROLES,
+  type SystemRole,
+  isSystemAdminRole,
+  systemRoleCanCreateProject,
+} from '@shared/system-roles';
 
 type UserRow = {
   id: number;
@@ -45,7 +51,7 @@ type UserRow = {
   username: string | null;
   email: string | null;
   mobile: string | null;
-  role: 'admin' | 'user';
+  role: SystemRole;
   canCreateProject: boolean;
   createdAt: Date | null;
   lastSignedIn: Date | null;
@@ -71,7 +77,7 @@ export default function AdminPanel() {
   const [newName, setNewName] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [newMobile, setNewMobile] = useState('');
-  const [newRole, setNewRole] = useState<'user' | 'admin'>('user');
+  const [newRole, setNewRole] = useState<SystemRole>('member');
   const [newCanCreate, setNewCanCreate] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<UserRow | null>(null);
 
@@ -82,13 +88,13 @@ export default function AdminPanel() {
   const [newPwd, setNewPwd] = useState('');
 
   // Redirect non-admins
-  if (!loading && (!isAuthenticated || user?.role !== 'admin')) {
+  if (!loading && (!isAuthenticated || !isSystemAdminRole(user?.role))) {
     navigate('/');
     return null;
   }
 
   const { data: users, isLoading, refetch } = trpc.admin.listUsers.useQuery(undefined, {
-    enabled: isAuthenticated && user?.role === 'admin',
+    enabled: isAuthenticated && isSystemAdminRole(user?.role),
   });
 
   const setRoleMutation = trpc.admin.setUserRole.useMutation({
@@ -107,7 +113,7 @@ export default function AdminPanel() {
       toast.success('用户已创建');
       setCreateOpen(false);
       setNewUsername(''); setNewPassword(''); setNewName('');
-      setNewRole('user'); setNewCanCreate(false); setNewEmail(''); setNewMobile('');
+      setNewRole('member'); setNewCanCreate(false); setNewEmail(''); setNewMobile('');
     },
     onError: (err) => toast.error(err.message),
   });
@@ -136,14 +142,14 @@ export default function AdminPanel() {
   });
 
   const { data: calExceptions, refetch: refetchCal } = trpc.admin.calendarExceptions.list.useQuery(undefined, {
-    enabled: isAuthenticated && user?.role === 'admin',
+    enabled: isAuthenticated && isSystemAdminRole(user?.role),
   });
   const upsertCal = trpc.admin.calendarExceptions.upsert.useMutation({ onSuccess: () => { void refetchCal(); } });
   const removeCal = trpc.admin.calendarExceptions.remove.useMutation({ onSuccess: () => { void refetchCal(); } });
   const [calForm, setCalForm] = useState({ date: '', type: 'holiday' as 'holiday' | 'makeup_workday', name: '' });
 
   const { data: approvalConfigs, refetch: refetchApprovalConfigs } = trpc.admin.approvalConfigs.list.useQuery(undefined, {
-    enabled: isAuthenticated && user?.role === 'admin',
+    enabled: isAuthenticated && isSystemAdminRole(user?.role),
   });
   const mpApprovalConfig = (approvalConfigs as ApprovalConfigRow[] | undefined)?.find((cfg) => cfg.businessType === 'mp_release');
   const [approvalEnabled, setApprovalEnabled] = useState(false);
@@ -169,8 +175,8 @@ export default function AdminPanel() {
     );
   }) ?? [];
 
-  const adminCount = (users as UserRow[] | undefined)?.filter((u) => u.role === 'admin').length ?? 0;
-  const canCreateCount = (users as UserRow[] | undefined)?.filter((u) => u.role === 'admin' || u.canCreateProject).length ?? 0;
+  const adminCount = (users as UserRow[] | undefined)?.filter((u) => isSystemAdminRole(u.role)).length ?? 0;
+  const canCreateCount = (users as UserRow[] | undefined)?.filter((u) => systemRoleCanCreateProject(u)).length ?? 0;
 
   return (
     <div className="min-h-screen bg-background">
@@ -206,7 +212,7 @@ export default function AdminPanel() {
           <div className="bg-card border border-border p-4">
             <div className="flex items-center gap-2 mb-1">
               <Shield size={14} className="text-primary" />
-              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">管理员</span>
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">拥有者/管理员</span>
             </div>
             <div className="text-2xl text-foreground">{adminCount}</div>
           </div>
@@ -225,7 +231,7 @@ export default function AdminPanel() {
             <AlertTriangle size={14} className="text-[color:var(--warning)] mt-0.5 shrink-0" />
             <div className="text-sm text-[color:var(--warning)] space-y-1">
               <p className="font-semibold">权限说明</p>
-              <p><strong>系统角色（admin/user）</strong>：admin 可访问本管理页面、管理所有用户权限。提升为 admin 时自动获得项目创建权限。</p>
+              <p><strong>系统角色</strong>：只管理系统边界，分为 owner/admin/member/external/viewer；业务分工放在项目内角色。</p>
               <p><strong>项目创建权限（canCreateProject）</strong>：控制用户是否可以新建项目。可单独授权给非 admin 用户（如产品经理、项目负责人）。</p>
               <p><strong>项目内角色</strong>：在各项目的「成员」标签页中单独设置（owner/manager/pm/rd_hw 等），与系统角色相互独立。</p>
             </div>
@@ -336,13 +342,14 @@ export default function AdminPanel() {
               </thead>
               <tbody>
                 {filteredUsers.map((u) => {
-                  const effectiveCanCreate = u.role === 'admin' || u.canCreateProject;
-                  const cannotDelete = u.id === user?.id || (u.role === 'admin' && adminCount <= 1);
+                  const effectiveCanCreate = systemRoleCanCreateProject(u);
+                  const isSystemAdmin = isSystemAdminRole(u.role);
+                  const cannotDelete = u.id === user?.id || (isSystemAdmin && adminCount <= 1);
                   return (
                   <tr key={u.id} className="border-b border-border hover:bg-secondary/50 transition-colors">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
-                        {u.role === 'admin' ? (
+                        {isSystemAdmin ? (
                           <Crown size={13} className="text-primary shrink-0" />
                         ) : (
                           <User size={13} className="text-muted-foreground shrink-0" />
@@ -376,30 +383,24 @@ export default function AdminPanel() {
                             className="h-7 gap-1 text-xs"
                             disabled={u.id === user?.id}
                           >
-                            {u.role === 'admin' ? (
-                              <span className="text-primary font-semibold">管理员</span>
-                            ) : (
-                              <span className="text-muted-foreground">普通用户</span>
-                            )}
+                            <span className={isSystemAdmin ? "text-primary font-semibold" : "text-muted-foreground"}>
+                              {SYSTEM_ROLE_LABELS[u.role]}
+                            </span>
                             {u.id !== user?.id && <ChevronDown size={11} />}
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="center">
-                          <DropdownMenuItem
-                            onClick={() => setRoleMutation.mutate({ userId: u.id, role: 'admin' })}
-                            disabled={u.role === 'admin'}
-                          >
-                            <Crown size={13} className="mr-2 text-primary" />
-                            提升为管理员
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => setRoleMutation.mutate({ userId: u.id, role: 'user' })}
-                            disabled={u.role === 'user'}
-                            className="text-[color:var(--destructive)]"
-                          >
-                            <User size={13} className="mr-2" />
-                            降级为普通用户
-                          </DropdownMenuItem>
+                          {SYSTEM_ROLES.map((role) => (
+                            <DropdownMenuItem
+                              key={role}
+                              onClick={() => setRoleMutation.mutate({ userId: u.id, role })}
+                              disabled={u.role === role}
+                              className={!isSystemAdminRole(role) ? "text-muted-foreground" : undefined}
+                            >
+                              {isSystemAdminRole(role) ? <Crown size={13} className="mr-2 text-primary" /> : <User size={13} className="mr-2" />}
+                              {SYSTEM_ROLE_LABELS[role]}
+                            </DropdownMenuItem>
+                          ))}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </td>
@@ -411,9 +412,9 @@ export default function AdminPanel() {
                             canCreate: !effectiveCanCreate,
                           })
                         }
-                        disabled={u.role === 'admin'}
+                        disabled={isSystemAdmin || u.role === 'external' || u.role === 'viewer'}
                         className="flex items-center gap-1 mx-auto transition-colors"
-                        title={u.role === 'admin' ? '管理员默认拥有项目创建权限' : effectiveCanCreate ? '点击撤销创建权限' : '点击授予创建权限'}
+                        title={isSystemAdmin ? '拥有者/管理员默认拥有项目创建权限' : u.role === 'external' || u.role === 'viewer' ? '外部/只读账号不能创建项目' : effectiveCanCreate ? '点击撤销创建权限' : '点击授予创建权限'}
                       >
                         {effectiveCanCreate ? (
                           <CheckCircle2 size={16} className="text-[color:var(--success)] hover:opacity-80" />
@@ -456,8 +457,8 @@ export default function AdminPanel() {
                           title={
                             u.id === user?.id
                               ? '不能删除自己的账号'
-                              : u.role === 'admin' && adminCount <= 1
-                                ? '不能删除最后一个管理员'
+                              : isSystemAdmin && adminCount <= 1
+                                ? '不能删除最后一个拥有者/管理员'
                                 : '删除用户'
                           }
                         >
@@ -560,12 +561,15 @@ export default function AdminPanel() {
                 {[
                   { role: 'owner', label: 'Owner（创建者）', perms: [true, true, true, true, true, true, true] },
                   { role: 'manager', label: '管理层', perms: [true, true, true, true, true, true, false] },
-                  { role: 'pm', label: '产品经理 PM', perms: [true, true, true, true, true, true, false] },
+                  { role: 'project_manager', label: '项目经理 / PMO', perms: [true, true, true, false, true, true, false] },
+                  { role: 'pm', label: '产品经理 PM', perms: [true, false, true, false, false, false, false] },
                   { role: 'rd_hw', label: '硬件研发 EE', perms: [true, true, true, false, false, false, false] },
                   { role: 'rd_sw', label: '软件研发 SW', perms: [true, true, true, false, false, false, false] },
                   { role: 'rd_mech', label: '结构研发 ME', perms: [true, true, true, false, false, false, false] },
-                  { role: 'qa', label: '质量工程师 QA', perms: [true, true, true, true, false, false, false] },
-                  { role: 'scm', label: '供应链 SCM', perms: [true, true, false, false, false, false, false] },
+                  { role: 'qa', label: '质量工程师 QA', perms: [true, false, true, false, false, false, false] },
+                  { role: 'scm', label: '供应链 SCM', perms: [true, false, true, false, false, false, false] },
+                  { role: 'external_customer', label: '外部客户', perms: [true, false, false, false, false, false, false] },
+                  { role: 'supplier', label: '外部供应商', perms: [true, false, false, false, false, false, false] },
                   { role: 'viewer', label: '只读访客', perms: [true, false, false, false, false, false, false] },
                 ].map(({ role, label, perms }) => (
                   <tr key={role} className="hover:bg-secondary/50">
@@ -651,14 +655,16 @@ export default function AdminPanel() {
                 <select
                   value={newRole}
                   onChange={(e) => {
-                    const role = e.target.value as 'user' | 'admin';
+                    const role = e.target.value as SystemRole;
                     setNewRole(role);
-                    if (role === 'admin') setNewCanCreate(true);
+                    if (isSystemAdminRole(role)) setNewCanCreate(true);
+                    if (role === 'external' || role === 'viewer') setNewCanCreate(false);
                   }}
                   className="w-full h-9 border border-border rounded-md px-3 text-sm bg-card"
                 >
-                  <option value="user">普通用户</option>
-                  <option value="admin">管理员</option>
+                  {SYSTEM_ROLES.map((role) => (
+                    <option key={role} value={role}>{SYSTEM_ROLE_LABELS[role]}</option>
+                  ))}
                 </select>
               </div>
               <div className="space-y-1.5">
@@ -666,8 +672,8 @@ export default function AdminPanel() {
                 <div className="flex items-center h-9">
                   <input
                     type="checkbox"
-                    checked={newRole === 'admin' || newCanCreate}
-                    disabled={newRole === 'admin'}
+                    checked={systemRoleCanCreateProject({ role: newRole, canCreateProject: newCanCreate })}
+                    disabled={isSystemAdminRole(newRole) || newRole === 'external' || newRole === 'viewer'}
                     onChange={(e) => setNewCanCreate(e.target.checked)}
                     className="w-4 h-4 accent-[var(--primary)]"
                   />
@@ -692,7 +698,7 @@ export default function AdminPanel() {
                   email: newEmail.trim() || undefined,
                   mobile: newMobile.trim() || undefined,
                   role: newRole,
-                  canCreateProject: newRole === 'admin' || newCanCreate,
+                  canCreateProject: systemRoleCanCreateProject({ role: newRole, canCreateProject: newCanCreate }),
                 });
               }}
             >

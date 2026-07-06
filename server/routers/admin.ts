@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import { TRPCError } from "@trpc/server";
+import { SYSTEM_ROLES, isSystemAdminRole, isSystemExternalRole } from "../../shared/system-roles";
 import {
   createUserWithPassword,
   getDb,
@@ -40,11 +41,11 @@ import {
   automationRules,
   calendarExceptions as calendarExceptionsTable,
 } from "../../drizzle/schema";
-import { eq, desc, and, notInArray, or, like, sql as drizzleSql } from "drizzle-orm";
+import { eq, desc, and, notInArray, or, like, inArray, sql as drizzleSql } from "drizzle-orm";
 
 /** Middleware: only system admins can call these procedures */
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
-  if (ctx.user.role !== "admin") {
+  if (!isSystemAdminRole(ctx.user.role)) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: "仅系统管理员可执行此操作",
@@ -64,7 +65,10 @@ export const adminRouter = router({
       query: z.string().min(1).max(50),
       projectId: z.string(),
     }))
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
+      if (isSystemExternalRole(ctx.user.role)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "外部协作账号不能搜索内部用户" });
+      }
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       // Collect existing member userIds AND project owner to exclude
@@ -110,7 +114,10 @@ export const adminRouter = router({
     }),
 
   /** List users for project manager selection (any logged-in user can call) */
-  listUsersForSelect: protectedProcedure.query(async () => {
+  listUsersForSelect: protectedProcedure.query(async ({ ctx }) => {
+    if (isSystemExternalRole(ctx.user.role)) {
+      throw new TRPCError({ code: "FORBIDDEN", message: "外部协作账号不能查看内部用户" });
+    }
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const rows = await db
@@ -153,7 +160,7 @@ export const adminRouter = router({
       name: z.string().trim().min(1, "请输入显示名称").max(64),
       email: z.string().trim().email("请输入有效的邮箱地址").toLowerCase().optional(),
       mobile: z.string().trim().max(32).optional(),
-      role: z.enum(["user", "admin"]).default("user"),
+      role: z.enum(SYSTEM_ROLES).default("member"),
       canCreateProject: z.boolean().default(false),
     }))
     .mutation(async ({ input }) => {
@@ -175,7 +182,7 @@ export const adminRouter = router({
         email: input.email ?? null,
         mobile: input.mobile?.trim() || null,
         role: input.role,
-        canCreateProject: input.role === "admin" || input.canCreateProject,
+        canCreateProject: isSystemAdminRole(input.role) || input.canCreateProject,
       });
       return { success: true } as const;
     }),
@@ -194,10 +201,13 @@ export const adminRouter = router({
       if (target.id === ctx.user.id) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "不能删除自己的账号" });
       }
-      if (target.role === "admin") {
-        const admins = await db.select({ id: users.id }).from(users).where(eq(users.role, "admin"));
+      if (isSystemAdminRole(target.role)) {
+        const admins = await db
+          .select({ id: users.id })
+          .from(users)
+          .where(inArray(users.role, ["owner", "admin"]));
         if (admins.length <= 1) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "不能删除最后一个管理员" });
+          throw new TRPCError({ code: "BAD_REQUEST", message: "不能删除最后一个拥有者/管理员" });
         }
       }
 
@@ -361,8 +371,11 @@ export const adminRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [target] = await db.select({ role: users.role }).from(users).where(eq(users.id, input.userId)).limit(1);
       if (!target) throw new TRPCError({ code: "NOT_FOUND", message: "用户不存在" });
-      if (target.role === "admin" && !input.canCreate) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "管理员默认拥有项目创建权限" });
+      if (isSystemAdminRole(target.role) && !input.canCreate) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "拥有者/管理员默认拥有项目创建权限" });
+      }
+      if ((target.role === "external" || target.role === "viewer") && input.canCreate) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "外部/只读账号不能创建项目" });
       }
       await db
         .update(users)
@@ -448,22 +461,24 @@ export const adminRouter = router({
   setUserRole: adminProcedure
     .input(z.object({
       userId: z.number(),
-      role: z.enum(["user", "admin"]),
+      role: z.enum(SYSTEM_ROLES),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       // Prevent self-demotion
-      if (input.userId === ctx.user.id && input.role !== "admin") {
+      if (input.userId === ctx.user.id && !isSystemAdminRole(input.role)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "不能撤销自己的管理员权限",
+          message: "不能撤销自己的系统管理权限",
         });
       }
-      // When promoting to admin, also grant canCreateProject automatically
+      // Workspace owner/admin always have project creation permission.
       const updates: Partial<typeof users.$inferInsert> = { role: input.role };
-      if (input.role === 'admin') {
+      if (isSystemAdminRole(input.role)) {
         updates.canCreateProject = true;
+      } else if (input.role === "external" || input.role === "viewer") {
+        updates.canCreateProject = false;
       }
       await db
         .update(users)

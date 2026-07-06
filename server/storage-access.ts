@@ -11,9 +11,13 @@ export type StorageAuthResult = "ok" | "unauthorized" | "notfound" | "forbidden"
 
 export type StorageAuthDeps = {
   /** Project id that owns the object with this storage key, or null if unknown. */
-  getFileProjectId: (key: string) => Promise<string | null>;
+  getFileProjectId?: (key: string) => Promise<string | null>;
+  /** Project id + visibility for the object with this storage key, or null if unknown. */
+  getFileAccess?: (key: string) => Promise<{ projectId: string; visibility: string } | null>;
   /** Caller's effective role in the project, or null if they have no access. */
   getRole: (projectId: string, userId: number) => Promise<ProjectMemberRole | null>;
+  /** Optional role/visibility policy for customer/supplier-facing files. */
+  canRoleViewFile?: (role: ProjectMemberRole, visibility: string) => boolean;
 };
 
 export async function resolveStorageAuthorization(
@@ -22,9 +26,15 @@ export async function resolveStorageAuthorization(
   deps: StorageAuthDeps,
 ): Promise<StorageAuthResult> {
   if (!userId) return "unauthorized";
-  const projectId = await deps.getFileProjectId(key);
-  if (!projectId) return "notfound";
+  const fileAccess = deps.getFileAccess
+    ? await deps.getFileAccess(key)
+    : deps.getFileProjectId
+      ? await deps.getFileProjectId(key).then((projectId) => projectId ? { projectId, visibility: "internal" } : null)
+      : null;
+  if (!fileAccess) return "notfound";
+  const { projectId, visibility } = fileAccess;
   const role = await deps.getRole(projectId, userId);
   if (!role) return "forbidden";
+  if (deps.canRoleViewFile && !deps.canRoleViewFile(role, visibility)) return "forbidden";
   return "ok";
 }

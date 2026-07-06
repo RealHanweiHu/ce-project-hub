@@ -8,6 +8,12 @@ import {
   projectTasks, ProjectTask, InsertProjectTask,
   projectIssues, ProjectIssue, InsertProjectIssue,
   projectRisks, ProjectRisk, InsertProjectRisk,
+  projectGateBlockers, ProjectGateBlocker, InsertProjectGateBlocker,
+  projectTestPlans, ProjectTestPlan, InsertProjectTestPlan,
+  projectTestCases, ProjectTestCase, InsertProjectTestCase,
+  projectTestReports, ProjectTestReport, InsertProjectTestReport,
+  projectNpiReadinessChecks, ProjectNpiReadinessCheck, InsertProjectNpiReadinessCheck,
+  projectSampleSignoffs, ProjectSampleSignoff, InsertProjectSampleSignoff,
   projectRequirements, ProjectRequirement, InsertProjectRequirement,
   projectGateReviews, ProjectGateReview, InsertProjectGateReview,
   projectChangelog, ProjectChangeRecord, InsertProjectChangeRecord,
@@ -33,7 +39,10 @@ import {
   projectDeliverableOverrides, ProjectDeliverableOverride,
   projectDeliverableReviews, ProjectDeliverableReview,
   calendarExceptions,
+  PROJECT_FILE_VISIBILITIES,
   type TaskStatus, type TaskPriority, type TaskApprovalStatus, type GateDecision,
+  type GateReviewTraceSnapshot,
+  type ProjectFileVisibility,
 } from "../drizzle/schema";
 import { buildRevisionChangelogSnapshot, REVISION_CHANGE_STATUSES, type RevisionChangeEntry } from "../shared/changelog-snapshot";
 import { normalizeFileType, normalizeFileVersion } from "../shared/file-types";
@@ -64,9 +73,18 @@ import {
 import type { MetricGate, MetricIssue, MetricPhase, MetricTask } from "../shared/metrics";
 import { computeProjectMetrics, type ProjectMetrics } from "../shared/metrics";
 import { rollupPortfolioMetrics, type PortfolioMetricsRollup } from "../shared/portfolio-metrics";
+import { computeManagementKpis, parseCostValue, type ManagementKpis } from "../shared/management-kpis";
+import { isSystemAdminRole } from "../shared/system-roles";
 import { defaultFromISO } from "./metrics-window";
 
 let _db: ReturnType<typeof drizzle> | null = null;
+const PROJECT_FILE_VISIBILITY_SET = new Set<string>(PROJECT_FILE_VISIBILITIES);
+
+function normalizeProjectFileVisibility(value: unknown): ProjectFileVisibility {
+  return typeof value === "string" && PROJECT_FILE_VISIBILITY_SET.has(value)
+    ? value as ProjectFileVisibility
+    : "internal";
+}
 
 // Lazily create the drizzle instance so local tooling can run without a DB.
 export async function getDb() {
@@ -133,8 +151,8 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       values.role = user.role;
       updateSet.role = user.role;
     } else if (user.openId === ENV.ownerOpenId) {
-      values.role = 'admin';
-      updateSet.role = 'admin';
+      values.role = 'owner';
+      updateSet.role = 'owner';
     }
 
     if (!values.lastSignedIn) {
@@ -208,7 +226,7 @@ export async function createUserWithPassword(data: {
   name: string;
   email?: string | null;
   mobile?: string | null;
-  role?: 'user' | 'admin';
+  role?: InsertUser["role"];
   canCreateProject?: boolean;
 }): Promise<void> {
   const db = await getDb();
@@ -221,7 +239,7 @@ export async function createUserWithPassword(data: {
     email: data.email ?? null,
     mobile: data.mobile ?? null,
     loginMethod: 'password',
-    role: data.role ?? 'user',
+    role: data.role ?? 'member',
     canCreateProject: data.canCreateProject ?? false,
     lastSignedIn: new Date(),
   });
@@ -645,6 +663,12 @@ async function deleteProjectRows(projectId: string, options: { allowReleased: bo
     await tx.delete(projectTailoring).where(eq(projectTailoring.projectId, projectId));
     await tx.delete(projectChangelog).where(eq(projectChangelog.projectId, projectId));
     await tx.delete(projectGateReviews).where(eq(projectGateReviews.projectId, projectId));
+    await tx.delete(projectGateBlockers).where(eq(projectGateBlockers.projectId, projectId));
+    await tx.delete(projectSampleSignoffs).where(eq(projectSampleSignoffs.projectId, projectId));
+    await tx.delete(projectNpiReadinessChecks).where(eq(projectNpiReadinessChecks.projectId, projectId));
+    await tx.delete(projectTestReports).where(eq(projectTestReports.projectId, projectId));
+    await tx.delete(projectTestCases).where(eq(projectTestCases.projectId, projectId));
+    await tx.delete(projectTestPlans).where(eq(projectTestPlans.projectId, projectId));
     await tx.delete(projectDeliverableReviews).where(eq(projectDeliverableReviews.projectId, projectId));
     await tx.delete(projectIssues).where(eq(projectIssues.projectId, projectId));
     await tx.delete(projectRisks).where(eq(projectRisks.projectId, projectId));
@@ -680,8 +704,8 @@ export async function getProjectsByMember(userId: number): Promise<ProjectRow[]>
     .where(eq(projectMembers.userId, userId));
   const memberProjectIds = memberRows.map((r) => r.projectId);
   const projectScope = memberProjectIds.length > 0
-    ? or(eq(projects.pmUserId, userId), inArray(projects.id, memberProjectIds))
-    : eq(projects.pmUserId, userId);
+    ? or(eq(projects.createdBy, userId), eq(projects.pmUserId, userId), inArray(projects.id, memberProjectIds))
+    : or(eq(projects.createdBy, userId), eq(projects.pmUserId, userId));
   return db
     .select()
     .from(projects)
@@ -695,6 +719,7 @@ export type PortfolioRow = {
   ragReasons: string[];
   customer: string | null;
   currentPhase: string; startDate: string | null; targetDate: string | null; pmUserId: number | null; pmName: string | null;
+  myRole?: ProjectMemberRole | null;
   taskTotal: number; taskDone: number; taskInProgress: number; overdueTasks: number; blockedTasks: number;
   openIssues: number; criticalIssues: number; plannedEnd: string | null; projectedEnd: string | null;
   openRisks: number; highRisks: number; mediumRisks: number;
@@ -720,7 +745,7 @@ export type PortfolioRow = {
   releaseConditions: string | null;
 };
 
-const PORTFOLIO_REQUIRED_ROLES: ProjectMemberRole[] = ["pm", "rd_hw", "rd_mech", "rd_sw", "qa", "scm"];
+const PORTFOLIO_REQUIRED_ROLES: ProjectMemberRole[] = ["project_manager", "pm", "rd_hw", "rd_mech", "rd_sw", "qa", "scm"];
 
 function todayInShanghaiISO(now = new Date()): string {
   const fmt = new Intl.DateTimeFormat("en-CA", {
@@ -858,8 +883,11 @@ async function getRiskAggByProjectIds(db: DbClient, projectIds: string[]) {
 export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
   const db = await getDb();
   if (!db) return [];
-  // 总览全员只读可见全部未归档项目（详情/编辑仍按各自权限拦截），避免信息闭塞。
-  const allProjects = await db.select().from(projects).where(eq(projects.archived, false));
+  const viewer = await getUserById(userId);
+  const viewerIsAdmin = isSystemAdminRole(viewer?.role);
+  const allProjects = viewerIsAdmin
+    ? await db.select().from(projects).where(eq(projects.archived, false))
+    : await getProjectsByMember(userId);
   const projById = new Map<string, ProjectRow>();
   for (const p of allProjects) projById.set(p.id, p);
   const ids = Array.from(projById.keys());
@@ -909,11 +937,10 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
     role: projectMembers.role,
   }).from(projectMembers).where(and(eq(projectMembers.userId, userId), inArray(projectMembers.projectId, ids)));
   const myRoleMap = new Map<string, ProjectMemberRole>(myMemberRows.map((r) => [r.projectId, r.role]));
-  const viewer = await getUserById(userId);
-  const viewerIsAdmin = viewer?.role === "admin";
   const rank: Record<string, number> = {
     viewer: 0, rd_hw: 1, rd_sw: 1, rd_mech: 1, qa: 1, scm: 1, pe: 1, mfg: 1, sales: 1, cert: 1, battery_safety: 1,
-    pm: 2, manager: 3, owner: 4,
+    external_customer: 0, supplier: 0,
+    pm: 2, project_manager: 3, manager: 3, owner: 4,
   };
   const higher = (a: ProjectMemberRole | null, b: ProjectMemberRole | null): ProjectMemberRole | null =>
     !a ? b : !b ? a : (rank[b] > rank[a] ? b : a);
@@ -948,8 +975,16 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
     const highRisks = r?.highRisks ?? 0;
     const mediumRisks = r?.mediumRisks ?? 0;
     const roles = new Set(roleMap.get(p.id) ?? []);
-    if (p.pmUserId) roles.add("pm");
+    if (p.pmUserId) roles.add("project_manager");
     const memberGap = PORTFOLIO_REQUIRED_ROLES.filter((role) => !roles.has(role)).length;
+    const myRole = (() => {
+      let role: ProjectMemberRole | null = myRoleMap.get(p.id) ?? null;
+      if (p.pmUserId === userId) role = higher(role, "project_manager");
+      if (p.createdBy === userId) role = higher(role, "owner");
+      if (viewerIsAdmin) role = higher(role, "manager");
+      return role;
+    })();
+    const isExternalRole = myRole === "external_customer" || myRole === "supplier";
     const phases = getPhasesForCategory(p.category);
     const phase = phases.find((item) => item.id === p.currentPhase) ?? null;
     const gateTaskIds = phases.map((item) => item.gateTaskId).filter(Boolean);
@@ -990,46 +1025,47 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
       overrideReason: p.riskOverrideReason,
     });
     return {
-      id: p.id, name: p.name, projectNumber: p.projectNumber, category: p.category, risk: health.risk,
-      ragLevel: health.ragLevel,
-      ragReasons: health.reasons,
+      id: p.id, name: p.name, projectNumber: p.projectNumber, category: p.category, risk: isExternalRole ? "low" as RiskLevel : health.risk,
+      ragLevel: isExternalRole ? "green" as RagLevel : health.ragLevel,
+      ragReasons: isExternalRole ? [] : health.reasons,
       customer: p.customer ?? null,
       currentPhase: p.currentPhase, startDate: p.startDate, targetDate: p.targetDate,
       pmUserId: p.pmUserId ?? null,
       pmName: p.pmUserId ? (pmName.get(p.pmUserId) ?? null) : null,
       // 当前用户对本项目的有效角色（成员角色 ∪ pm/owner/admin 兜底），供前端定视角
-      myRole: (() => {
-        let r: ProjectMemberRole | null = myRoleMap.get(p.id) ?? null;
-        if (p.pmUserId === userId) r = higher(r, "pm");
-        if (p.createdBy === userId) r = higher(r, "owner");
-        if (viewerIsAdmin) r = higher(r, "manager");
-        return r;
-      })(),
-      taskTotal: t?.total ?? 0, taskDone: t?.done ?? 0, taskInProgress: t?.inProgress ?? 0, overdueTasks: t?.overdue ?? 0, blockedTasks: t?.blocked ?? 0,
-      openIssues: i?.open ?? 0, criticalIssues: i?.critical ?? 0,
-      openRisks, highRisks, mediumRisks,
-      plannedEnd: t?.plannedEnd ?? null,
-      projectedEnd,
-      progressBehindPct: progressBehind,
-      unassignedTasks: t?.unassigned ?? 0,
-      memberGap,
-      gateTaskTotal,
-      gateTaskDone,
-      gatePhaseId: phase?.id ?? null,
-      gateName: phase?.gate ?? null,
-      gateDueDate: gateTask?.dueDate ?? null,
-      gateDone,
-      gateReady: gateDone ? true : readiness?.ready ?? null,
-      gateBlockers,
-      gateNotReady,
-      deliverableGap: deliverableDim?.blockers.length ?? 0,
-      releaseDecision: releaseGate.decision,
-      releaseGateName: releaseGate.gateName || null,
-      releaseGateReady: releaseGate.ready,
-      releaseDeliverableDone: releaseGate.deliverables.done,
-      releaseDeliverableTotal: releaseGate.deliverables.total,
-      releaseHardBlockers,
-      releaseConditions: releaseGate.conditions ?? null,
+      myRole,
+      taskTotal: isExternalRole ? 0 : t?.total ?? 0,
+      taskDone: isExternalRole ? 0 : t?.done ?? 0,
+      taskInProgress: isExternalRole ? 0 : t?.inProgress ?? 0,
+      overdueTasks: isExternalRole ? 0 : t?.overdue ?? 0,
+      blockedTasks: isExternalRole ? 0 : t?.blocked ?? 0,
+      openIssues: isExternalRole ? 0 : i?.open ?? 0,
+      criticalIssues: isExternalRole ? 0 : i?.critical ?? 0,
+      openRisks: isExternalRole ? 0 : openRisks,
+      highRisks: isExternalRole ? 0 : highRisks,
+      mediumRisks: isExternalRole ? 0 : mediumRisks,
+      plannedEnd: isExternalRole ? null : t?.plannedEnd ?? null,
+      projectedEnd: isExternalRole ? null : projectedEnd,
+      progressBehindPct: isExternalRole ? null : progressBehind,
+      unassignedTasks: isExternalRole ? 0 : t?.unassigned ?? 0,
+      memberGap: isExternalRole ? 0 : memberGap,
+      gateTaskTotal: isExternalRole ? 0 : gateTaskTotal,
+      gateTaskDone: isExternalRole ? 0 : gateTaskDone,
+      gatePhaseId: isExternalRole ? null : phase?.id ?? null,
+      gateName: isExternalRole ? null : phase?.gate ?? null,
+      gateDueDate: isExternalRole ? null : gateTask?.dueDate ?? null,
+      gateDone: isExternalRole ? false : gateDone,
+      gateReady: isExternalRole ? null : gateDone ? true : readiness?.ready ?? null,
+      gateBlockers: isExternalRole ? 0 : gateBlockers,
+      gateNotReady: isExternalRole ? null : gateNotReady,
+      deliverableGap: isExternalRole ? 0 : deliverableDim?.blockers.length ?? 0,
+      releaseDecision: isExternalRole ? null : releaseGate.decision,
+      releaseGateName: isExternalRole ? null : releaseGate.gateName || null,
+      releaseGateReady: isExternalRole ? false : releaseGate.ready,
+      releaseDeliverableDone: isExternalRole ? 0 : releaseGate.deliverables.done,
+      releaseDeliverableTotal: isExternalRole ? 0 : releaseGate.deliverables.total,
+      releaseHardBlockers: isExternalRole ? 0 : releaseHardBlockers,
+      releaseConditions: isExternalRole ? null : releaseGate.conditions ?? null,
     };
   }));
 }
@@ -1220,6 +1256,16 @@ export async function getProjectMember(projectId: string, userId: number): Promi
     .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId)))
     .limit(1);
   return result[0];
+}
+
+/** 某产品派生的全部未归档项目（定义冻结等产品级事件按项目扇出通知用） */
+export async function getProjectsByProductId(productId: string): Promise<Array<{ id: string; name: string }>> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({ id: projects.id, name: projects.name })
+    .from(projects)
+    .where(and(eq(projects.productId, productId), eq(projects.archived, false)));
 }
 
 /**
@@ -1554,6 +1600,503 @@ export async function deleteProjectRisk(id: number): Promise<void> {
   await db.delete(projectRisks).where(eq(projectRisks.id, id));
 }
 
+// ── Project Gate Blocker helpers ─────────────────────────────────────────────
+
+const GATE_BLOCKER_ORDER = [
+  drizzleSql`CASE ${projectGateBlockers.status} WHEN 'open' THEN 0 ELSE 1 END`,
+  drizzleSql`CASE ${projectGateBlockers.blockerType} WHEN 'quality' THEN 0 ELSE 1 END`,
+  desc(projectGateBlockers.createdAt),
+] as const;
+
+export async function getProjectGateBlockers(
+  projectId: string,
+  phaseId?: string,
+): Promise<ProjectGateBlocker[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(projectGateBlockers)
+    .where(phaseId
+      ? and(eq(projectGateBlockers.projectId, projectId), eq(projectGateBlockers.phaseId, phaseId))
+      : eq(projectGateBlockers.projectId, projectId))
+    .orderBy(...GATE_BLOCKER_ORDER);
+}
+
+export async function getProjectGateBlockerById(id: number): Promise<ProjectGateBlocker | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(projectGateBlockers).where(eq(projectGateBlockers.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
+export async function createProjectGateBlocker(blocker: InsertProjectGateBlocker): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(projectGateBlockers).values(blocker).returning({ id: projectGateBlockers.id });
+  return result[0].id;
+}
+
+export async function resolveProjectGateBlocker(id: number, resolvedBy: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(projectGateBlockers)
+    .set({ status: "resolved", resolvedBy, resolvedAt: new Date() })
+    .where(eq(projectGateBlockers.id, id));
+}
+
+// ── Project Test Plan / Report helpers ──────────────────────────────────────
+
+const TEST_PLAN_ORDER = [
+  drizzleSql`CASE ${projectTestPlans.status} WHEN 'active' THEN 0 WHEN 'draft' THEN 1 ELSE 2 END`,
+  desc(projectTestPlans.createdAt),
+] as const;
+
+const TEST_REPORT_ORDER = [
+  drizzleSql`CASE ${projectTestReports.reviewStatus} WHEN 'pending' THEN 0 WHEN 'rejected' THEN 1 ELSE 2 END`,
+  desc(projectTestReports.createdAt),
+] as const;
+
+const TEST_CASE_ORDER = [
+  drizzleSql`CASE ${projectTestCases.status} WHEN 'failed' THEN 0 WHEN 'blocked' THEN 1 WHEN 'planned' THEN 2 ELSE 3 END`,
+  desc(projectTestCases.updatedAt),
+] as const;
+
+export type PhaseTestReadiness = {
+  required: boolean;
+  phaseLabel: string;
+  planCount: number;
+  approvedReports: number;
+  pendingReports: number;
+  failedReports: number;
+  reportWithoutFileCount: number;
+  unresolvedFailedCaseCount: number;
+  blockers: string[];
+};
+
+function isFormalTestPhase(phaseId: string): boolean {
+  return phaseId === "evt" || phaseId === "dvt" || phaseId === "pvt";
+}
+
+export async function getProjectTestPlans(projectId: string, phaseId?: string): Promise<ProjectTestPlan[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(projectTestPlans)
+    .where(phaseId
+      ? and(eq(projectTestPlans.projectId, projectId), eq(projectTestPlans.phaseId, phaseId))
+      : eq(projectTestPlans.projectId, projectId))
+    .orderBy(...TEST_PLAN_ORDER);
+}
+
+export async function getProjectTestReports(projectId: string, phaseId?: string): Promise<ProjectTestReport[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(projectTestReports)
+    .where(phaseId
+      ? and(eq(projectTestReports.projectId, projectId), eq(projectTestReports.phaseId, phaseId))
+      : eq(projectTestReports.projectId, projectId))
+    .orderBy(...TEST_REPORT_ORDER);
+}
+
+export async function getProjectTestPlanById(id: number): Promise<ProjectTestPlan | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(projectTestPlans).where(eq(projectTestPlans.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
+export async function getProjectTestReportById(id: number): Promise<ProjectTestReport | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(projectTestReports).where(eq(projectTestReports.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
+export async function getProjectTestCases(projectId: string, phaseId?: string, planId?: number): Promise<ProjectTestCase[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const conditions: ReturnType<typeof eq>[] = [eq(projectTestCases.projectId, projectId)];
+  if (phaseId) conditions.push(eq(projectTestCases.phaseId, phaseId));
+  if (planId) conditions.push(eq(projectTestCases.planId, planId));
+  return db
+    .select()
+    .from(projectTestCases)
+    .where(and(...conditions))
+    .orderBy(...TEST_CASE_ORDER);
+}
+
+export async function getProjectTestCaseById(id: number): Promise<ProjectTestCase | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(projectTestCases).where(eq(projectTestCases.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
+export async function createProjectTestPlan(plan: InsertProjectTestPlan): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(projectTestPlans).values(plan).returning({ id: projectTestPlans.id });
+  return result[0].id;
+}
+
+export async function updateProjectTestPlan(
+  id: number,
+  patch: Partial<Omit<InsertProjectTestPlan, "id" | "projectId" | "phaseId" | "createdBy" | "createdAt">>,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(projectTestPlans).set(patch).where(eq(projectTestPlans.id, id));
+}
+
+export async function createProjectTestCase(testCase: InsertProjectTestCase): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(projectTestCases).values(testCase).returning({ id: projectTestCases.id });
+  return result[0].id;
+}
+
+export async function updateProjectTestCase(
+  id: number,
+  patch: Partial<Omit<InsertProjectTestCase, "id" | "projectId" | "phaseId" | "createdBy" | "createdAt">>,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(projectTestCases).set(patch).where(eq(projectTestCases.id, id));
+}
+
+export async function linkProjectTestCaseIssue(id: number, issueId: number, updatedBy: number): Promise<void> {
+  await updateProjectTestCase(id, { relatedIssueId: issueId, updatedBy });
+}
+
+export async function createProjectTestReport(report: InsertProjectTestReport): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(projectTestReports).values(report).returning({ id: projectTestReports.id });
+  return result[0].id;
+}
+
+export async function updateProjectTestReport(
+  id: number,
+  patch: Partial<Omit<InsertProjectTestReport, "id" | "projectId" | "phaseId" | "submittedBy" | "createdAt">>,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(projectTestReports).set(patch).where(eq(projectTestReports.id, id));
+}
+
+export async function reviewProjectTestReport(
+  id: number,
+  reviewerId: number,
+  reviewStatus: "approved" | "rejected",
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db
+    .update(projectTestReports)
+    .set({ reviewStatus, reviewedBy: reviewerId, reviewedAt: new Date() })
+    .where(eq(projectTestReports.id, id));
+}
+
+export async function getPhaseTestReadiness(
+  projectId: string,
+  phaseId: string,
+  phaseLabel?: string,
+): Promise<PhaseTestReadiness> {
+  const required = isFormalTestPhase(phaseId);
+  const label = phaseLabel ?? phaseId.toUpperCase();
+  if (!required) {
+    return {
+      required: false,
+      phaseLabel: label,
+      planCount: 0,
+      approvedReports: 0,
+      pendingReports: 0,
+      failedReports: 0,
+      reportWithoutFileCount: 0,
+      unresolvedFailedCaseCount: 0,
+      blockers: [],
+    };
+  }
+
+  const [plans, reports] = await Promise.all([
+    getProjectTestPlans(projectId, phaseId),
+    getProjectTestReports(projectId, phaseId),
+  ]);
+  const activePlans = plans.filter((plan) => plan.status !== "completed");
+  const acceptedReports = reports.filter((report) =>
+    report.reviewStatus === "approved"
+    && (report.result === "pass" || report.result === "conditional")
+    && report.fileId != null
+  );
+  const pendingReports = reports.filter((report) => report.reviewStatus === "pending");
+  const failedReports = reports.filter((report) => report.result === "fail" && report.reviewStatus !== "rejected");
+  const reportWithoutFileCount = reports.filter((report) =>
+    report.reviewStatus !== "rejected" && report.fileId == null
+  ).length;
+  const testCases = await getProjectTestCases(projectId, phaseId);
+  const failedOrBlockedCases = testCases.filter((testCase) => testCase.status === "failed" || testCase.status === "blocked");
+  const issueIds = Array.from(new Set(
+    failedOrBlockedCases
+      .map((testCase) => testCase.relatedIssueId)
+      .filter((id): id is number => typeof id === "number")
+  ));
+  const db = await getDb();
+  const issueRows = db && issueIds.length > 0
+    ? await db.select({ id: projectIssues.id, status: projectIssues.status })
+      .from(projectIssues)
+      .where(inArray(projectIssues.id, issueIds))
+    : [];
+  const issueStatusById = new Map(issueRows.map((issue) => [issue.id, issue.status]));
+  const closedIssueStatuses = new Set(["resolved", "closed", "wont_fix"]);
+  const unresolvedFailedCaseCount = failedOrBlockedCases.filter((testCase) => {
+    if (!testCase.relatedIssueId) return true;
+    const status = issueStatusById.get(testCase.relatedIssueId);
+    return !status || !closedIssueStatuses.has(status);
+  }).length;
+  const blockers: string[] = [];
+
+  if (activePlans.length === 0) blockers.push(`${label} 缺少测试计划`);
+  if (reports.length === 0) {
+    blockers.push(`${label} 缺少测试报告`);
+  } else if (acceptedReports.length === 0) {
+    blockers.push(`${label} 缺少已复核通过/有条件通过测试报告`);
+  }
+  if (pendingReports.length > 0) blockers.push(`${pendingReports.length} 个测试报告待 QA 复核`);
+  if (failedReports.length > 0) blockers.push(`${failedReports.length} 个测试报告结论为 Fail`);
+  if (reportWithoutFileCount > 0) blockers.push(`${reportWithoutFileCount} 个测试报告未绑定正式文件`);
+  if (unresolvedFailedCaseCount > 0) blockers.push(`${unresolvedFailedCaseCount} 个失败/阻塞测试项未完成 Issue 闭环`);
+
+  return {
+    required: true,
+    phaseLabel: label,
+    planCount: activePlans.length,
+    approvedReports: acceptedReports.length,
+    pendingReports: pendingReports.length,
+    failedReports: failedReports.length,
+    reportWithoutFileCount,
+    unresolvedFailedCaseCount,
+    blockers,
+  };
+}
+
+// ── Project NPI Readiness / Sample Signoff helpers ──────────────────────────
+
+const NPI_READINESS_ORDER = [
+  drizzleSql`CASE ${projectNpiReadinessChecks.status} WHEN 'blocked' THEN 0 WHEN 'pending' THEN 1 WHEN 'ready' THEN 2 ELSE 3 END`,
+  desc(projectNpiReadinessChecks.updatedAt),
+] as const;
+
+const SAMPLE_SIGNOFF_ORDER = [
+  drizzleSql`CASE ${projectSampleSignoffs.status} WHEN 'rejected' THEN 0 WHEN 'pending' THEN 1 WHEN 'approved' THEN 2 ELSE 3 END`,
+  desc(projectSampleSignoffs.updatedAt),
+] as const;
+
+export type PhaseNpiReadiness = {
+  required: boolean;
+  phaseLabel: string;
+  checkCount: number;
+  readyCount: number;
+  blockedCount: number;
+  pendingCount: number;
+  missingEvidenceCount: number;
+  blockers: string[];
+};
+
+export type PhaseSampleSignoffReadiness = {
+  required: boolean;
+  phaseLabel: string;
+  signoffCount: number;
+  approvedCount: number;
+  pendingCount: number;
+  rejectedCount: number;
+  blockers: string[];
+};
+
+function isNpiReadinessGatePhase(phaseId: string): boolean {
+  return phaseId === "pvt" || phaseId === "mp";
+}
+
+function isCustomerSignoffGatePhase(phaseId: string): boolean {
+  return phaseId === "pvt";
+}
+
+const NPI_EVIDENCE_REQUIRED_CATEGORIES = new Set([
+  "process_flow",
+  "sop_wi",
+  "fixture",
+  "test_program",
+  "trial_run",
+  "yield",
+]);
+
+export async function getProjectNpiReadinessChecks(
+  projectId: string,
+  phaseId?: string,
+): Promise<ProjectNpiReadinessCheck[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(projectNpiReadinessChecks)
+    .where(phaseId
+      ? and(eq(projectNpiReadinessChecks.projectId, projectId), eq(projectNpiReadinessChecks.phaseId, phaseId))
+      : eq(projectNpiReadinessChecks.projectId, projectId))
+    .orderBy(...NPI_READINESS_ORDER);
+}
+
+export async function getProjectNpiReadinessCheckById(id: number): Promise<ProjectNpiReadinessCheck | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(projectNpiReadinessChecks).where(eq(projectNpiReadinessChecks.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
+export async function createProjectNpiReadinessCheck(check: InsertProjectNpiReadinessCheck): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(projectNpiReadinessChecks).values(check).returning({ id: projectNpiReadinessChecks.id });
+  return result[0].id;
+}
+
+export async function updateProjectNpiReadinessCheck(
+  id: number,
+  patch: Partial<Omit<InsertProjectNpiReadinessCheck, "id" | "projectId" | "phaseId" | "createdBy" | "createdAt">>,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(projectNpiReadinessChecks).set(patch).where(eq(projectNpiReadinessChecks.id, id));
+}
+
+export async function linkProjectNpiReadinessIssue(id: number, issueId: number, updatedBy: number): Promise<void> {
+  await updateProjectNpiReadinessCheck(id, { relatedIssueId: issueId, updatedBy });
+}
+
+export async function getPhaseNpiReadiness(
+  projectId: string,
+  phaseId: string,
+  phaseLabel?: string,
+): Promise<PhaseNpiReadiness> {
+  const required = isNpiReadinessGatePhase(phaseId);
+  const label = phaseLabel ?? phaseId.toUpperCase();
+  const checks = await getProjectNpiReadinessChecks(projectId, phaseId);
+  const readyChecks = checks.filter((check) => check.status === "ready" || check.status === "waived");
+  const blockedChecks = checks.filter((check) => check.status === "blocked");
+  const pendingChecks = checks.filter((check) => check.status === "pending");
+  const missingEvidenceChecks = checks.filter((check) =>
+    check.status === "ready"
+    && !check.evidenceFileId
+    && NPI_EVIDENCE_REQUIRED_CATEGORIES.has(check.category)
+  );
+  const blockers: string[] = [];
+
+  if (required && checks.length === 0) blockers.push(`${label} 缺少 PE/NPI readiness 检查`);
+  for (const check of blockedChecks) blockers.push(`NPI 阻断: ${check.title}`);
+  for (const check of pendingChecks) blockers.push(`NPI 待确认: ${check.title}`);
+  for (const check of missingEvidenceChecks) blockers.push(`NPI 缺少证据文件: ${check.title}`);
+
+  return {
+    required,
+    phaseLabel: label,
+    checkCount: checks.length,
+    readyCount: readyChecks.length,
+    blockedCount: blockedChecks.length,
+    pendingCount: pendingChecks.length,
+    missingEvidenceCount: missingEvidenceChecks.length,
+    blockers,
+  };
+}
+
+export async function getProjectSampleSignoffs(
+  projectId: string,
+  phaseId?: string,
+  audience?: "customer" | "supplier" | "internal",
+): Promise<ProjectSampleSignoff[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const conditions: ReturnType<typeof eq>[] = [eq(projectSampleSignoffs.projectId, projectId)];
+  if (phaseId) conditions.push(eq(projectSampleSignoffs.phaseId, phaseId));
+  if (audience) conditions.push(eq(projectSampleSignoffs.audience, audience));
+  return db
+    .select()
+    .from(projectSampleSignoffs)
+    .where(and(...conditions))
+    .orderBy(...SAMPLE_SIGNOFF_ORDER);
+}
+
+export async function getProjectSampleSignoffById(id: number): Promise<ProjectSampleSignoff | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(projectSampleSignoffs).where(eq(projectSampleSignoffs.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
+export async function createProjectSampleSignoff(signoff: InsertProjectSampleSignoff): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(projectSampleSignoffs).values(signoff).returning({ id: projectSampleSignoffs.id });
+  return result[0].id;
+}
+
+export async function updateProjectSampleSignoff(
+  id: number,
+  patch: Partial<Omit<InsertProjectSampleSignoff, "id" | "projectId" | "phaseId" | "requestedBy" | "createdAt">>,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(projectSampleSignoffs).set(patch).where(eq(projectSampleSignoffs.id, id));
+}
+
+export async function respondProjectSampleSignoff(
+  id: number,
+  respondedBy: number,
+  status: "approved" | "rejected" | "waived",
+  responseNote?: string | null,
+): Promise<void> {
+  await updateProjectSampleSignoff(id, {
+    status,
+    respondedBy,
+    respondedAt: new Date(),
+    responseNote: responseNote ?? null,
+  });
+}
+
+export async function getPhaseSampleSignoffReadiness(
+  projectId: string,
+  phaseId: string,
+  phaseLabel?: string,
+): Promise<PhaseSampleSignoffReadiness> {
+  const label = phaseLabel ?? phaseId.toUpperCase();
+  const [project, signoffs] = await Promise.all([
+    getProjectById(projectId),
+    getProjectSampleSignoffs(projectId, phaseId),
+  ]);
+  const hasNamedCustomer = Boolean(project?.customer?.trim());
+  const customerRows = signoffs.filter((row) => row.audience === "customer");
+  const required = isCustomerSignoffGatePhase(phaseId) && hasNamedCustomer;
+  const approved = signoffs.filter((row) => row.status === "approved" || row.status === "waived");
+  const pending = signoffs.filter((row) => row.status === "pending");
+  const rejected = signoffs.filter((row) => row.status === "rejected");
+  const blockers: string[] = [];
+
+  if (required && customerRows.length === 0) blockers.push(`${label} 缺少客户样品 / Golden Sample 签样项`);
+  for (const row of rejected) blockers.push(`签样被拒绝: ${row.title}`);
+  for (const row of pending) blockers.push(`签样待确认: ${row.title}`);
+
+  return {
+    required: required || signoffs.length > 0,
+    phaseLabel: label,
+    signoffCount: signoffs.length,
+    approvedCount: approved.length,
+    pendingCount: pending.length,
+    rejectedCount: rejected.length,
+    blockers,
+  };
+}
+
 // ── Project Requirements helpers ─────────────────────────────────────────────
 
 const REQ_ORDER = [
@@ -1713,6 +2256,7 @@ export async function getProjectMetricsData(
   projectId: string,
   _fromISO: string,
   _toISO: string,
+  phaseId?: string,
 ): Promise<{
   tasks: MetricTask[];
   issues: MetricIssue[];
@@ -1724,6 +2268,18 @@ export async function getProjectMetricsData(
   if (!db) {
     return { tasks: [], issues: [], gates: [], phases: [], totalTaskCount: 0 };
   }
+  const taskWhere = phaseId
+    ? and(eq(projectTasks.projectId, projectId), eq(projectTasks.phaseId, phaseId))
+    : eq(projectTasks.projectId, projectId);
+  const issueWhere = phaseId
+    ? and(eq(projectIssues.projectId, projectId), eq(projectIssues.phaseId, phaseId))
+    : eq(projectIssues.projectId, projectId);
+  const gateWhere = phaseId
+    ? and(eq(projectGateReviews.projectId, projectId), eq(projectGateReviews.phaseId, phaseId))
+    : eq(projectGateReviews.projectId, projectId);
+  const phaseWhere = phaseId
+    ? and(eq(projectPhases.projectId, projectId), eq(projectPhases.phaseId, phaseId))
+    : eq(projectPhases.projectId, projectId);
 
   const [tasks, issues, gates, phases] = await Promise.all([
     db
@@ -1735,7 +2291,7 @@ export async function getProjectMetricsData(
         status: projectTasks.status,
       })
       .from(projectTasks)
-      .where(eq(projectTasks.projectId, projectId))
+      .where(taskWhere)
       .orderBy(projectTasks.id),
     db
       .select({
@@ -1746,7 +2302,7 @@ export async function getProjectMetricsData(
         category: projectIssues.category,
       })
       .from(projectIssues)
-      .where(eq(projectIssues.projectId, projectId))
+      .where(issueWhere)
       .orderBy(projectIssues.createdAt),
     db
       .select({
@@ -1755,7 +2311,7 @@ export async function getProjectMetricsData(
         roundNumber: projectGateReviews.roundNumber,
       })
       .from(projectGateReviews)
-      .where(eq(projectGateReviews.projectId, projectId))
+      .where(gateWhere)
       .orderBy(projectGateReviews.createdAt),
     db
       .select({
@@ -1764,7 +2320,7 @@ export async function getProjectMetricsData(
         endDate: projectPhases.endDate,
       })
       .from(projectPhases)
-      .where(eq(projectPhases.projectId, projectId))
+      .where(phaseWhere)
       .orderBy(projectPhases.id),
   ]);
 
@@ -1791,6 +2347,357 @@ export async function getPortfolioMetricsData(userId: number): Promise<Portfolio
   return rollupPortfolioMetrics(input);
 }
 
+/** 管理层决策 KPI：延误预测 / Gate 一次通过 / P0P1 aging / 验证关闭率 / BOM 成本偏差 / 客户风险排行。 */
+export async function getManagementKpisData(userId: number): Promise<ManagementKpis> {
+  const db = await getDb();
+  const portfolio = await getPortfolio(userId);
+  const todayISO = todayInShanghaiISO();
+  if (!db || portfolio.length === 0) {
+    return computeManagementKpis({
+      portfolio,
+      gateReviews: [],
+      issues: [],
+      validationItems: [],
+      bomCosts: [],
+      todayISO,
+    });
+  }
+
+  const projectIds = portfolio.map((project) => project.id);
+  const projectById = new Map(portfolio.map((project) => [project.id, project]));
+  const projectRows = await db
+    .select({
+      id: projects.id,
+      name: projects.name,
+      customer: projects.customer,
+      customFields: projects.customFields,
+      productDefinitionSnapshotId: projects.productDefinitionSnapshotId,
+    })
+    .from(projects)
+    .where(inArray(projects.id, projectIds));
+
+  const snapshotIds = Array.from(new Set(
+    projectRows
+      .map((project) => project.productDefinitionSnapshotId)
+      .filter((id): id is number => typeof id === "number")
+  ));
+
+  const [gateRows, issueRows, testRows, bomRows, snapshotRows] = await Promise.all([
+    db
+      .select({
+        projectId: projectGateReviews.projectId,
+        phaseId: projectGateReviews.phaseId,
+        decision: projectGateReviews.decision,
+        roundNumber: projectGateReviews.roundNumber,
+        reviewDate: projectGateReviews.reviewDate,
+      })
+      .from(projectGateReviews)
+      .where(inArray(projectGateReviews.projectId, projectIds)),
+    db
+      .select({
+        id: projectIssues.id,
+        projectId: projectIssues.projectId,
+        phaseId: projectIssues.phaseId,
+        title: projectIssues.title,
+        severity: projectIssues.severity,
+        status: projectIssues.status,
+        foundDate: projectIssues.foundDate,
+        targetDate: projectIssues.targetDate,
+        owner: projectIssues.owner,
+      })
+      .from(projectIssues)
+      .where(inArray(projectIssues.projectId, projectIds)),
+    db
+      .select({
+        projectId: projectTestCases.projectId,
+        phaseId: projectTestCases.phaseId,
+        status: projectTestCases.status,
+        relatedIssueId: projectTestCases.relatedIssueId,
+      })
+      .from(projectTestCases)
+      .where(and(
+        inArray(projectTestCases.projectId, projectIds),
+        inArray(projectTestCases.phaseId, ["evt", "dvt", "pvt"])
+      )),
+    db
+      .select({
+        projectId: bomItems.projectId,
+        quantity: bomItems.quantity,
+        unitCost: bomItems.unitCost,
+      })
+      .from(bomItems)
+      .where(inArray(bomItems.projectId, projectIds)),
+    snapshotIds.length > 0
+      ? db
+        .select({
+          id: productDefinitionSnapshots.id,
+          snapshot: productDefinitionSnapshots.snapshot,
+        })
+        .from(productDefinitionSnapshots)
+        .where(inArray(productDefinitionSnapshots.id, snapshotIds))
+      : Promise.resolve([]),
+  ]);
+
+  const issueStatusById = new Map(issueRows.map((issue) => [issue.id, issue.status]));
+  const snapshotsById = new Map(snapshotRows.map((snapshot) => [snapshot.id, snapshot.snapshot]));
+  const targetCostByProject = new Map<string, number | null>();
+  for (const project of projectRows) {
+    const snapshotTarget = project.productDefinitionSnapshotId
+      ? snapshotsById.get(project.productDefinitionSnapshotId)?.targetCost
+      : null;
+    const fields = project.customFields ?? {};
+    const customTarget = fields.targetCost ?? fields.target_cost ?? fields.bomTargetCost ?? fields.bom_target_cost;
+    targetCostByProject.set(project.id, parseCostValue(snapshotTarget) ?? parseCostValue(customTarget));
+  }
+
+  const bomAgg = new Map<string, { cost: number; lineCount: number; pricedLines: number }>();
+  for (const row of bomRows) {
+    if (!row.projectId) continue;
+    const current = bomAgg.get(row.projectId) ?? { cost: 0, lineCount: 0, pricedLines: 0 };
+    current.lineCount += 1;
+    const unitCost = parseCostValue(row.unitCost);
+    if (unitCost != null) {
+      current.cost += unitCost * row.quantity;
+      current.pricedLines += 1;
+    }
+    bomAgg.set(row.projectId, current);
+  }
+
+  return computeManagementKpis({
+    portfolio,
+    gateReviews: gateRows,
+    issues: issueRows.map((issue) => ({
+      projectId: issue.projectId,
+      projectName: projectById.get(issue.projectId)?.name ?? issue.projectId,
+      phaseId: issue.phaseId,
+      title: issue.title,
+      severity: issue.severity,
+      status: issue.status,
+      foundDate: issue.foundDate,
+      targetDate: issue.targetDate,
+      owner: issue.owner,
+    })),
+    validationItems: testRows.map((testCase) => ({
+      projectId: testCase.projectId,
+      phaseId: testCase.phaseId,
+      status: testCase.status,
+      relatedIssueStatus: testCase.relatedIssueId ? issueStatusById.get(testCase.relatedIssueId) ?? null : null,
+    })),
+    bomCosts: portfolio.map((project) => {
+      const bom = bomAgg.get(project.id);
+      return {
+        projectId: project.id,
+        projectName: project.name,
+        customer: project.customer,
+        targetCost: targetCostByProject.get(project.id) ?? null,
+        workingBomCost: bom && bom.pricedLines > 0 ? Math.round(bom.cost * 100) / 100 : null,
+        lineCount: bom?.lineCount ?? 0,
+      };
+    }),
+    todayISO,
+  });
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function buildGateReviewTraceSnapshot(exec: any, input: {
+  projectId: string;
+  phaseId: string;
+  gateName?: string | null;
+}): Promise<GateReviewTraceSnapshot> {
+  const [project] = await exec
+    .select()
+    .from(projects)
+    .where(eq(projects.id, input.projectId))
+    .limit(1);
+  const productId = project?.productId ?? null;
+  const revisionIds = Array.from(new Set([
+    project?.baseRevisionId ?? null,
+    project?.resultRevisionId ?? null,
+  ].filter((id): id is number => typeof id === "number")));
+
+  const [
+    product,
+    revisions,
+    bomRows,
+    variantRows,
+    testPlansRows,
+    testReportsRows,
+    testCaseRows,
+    npiRows,
+    sampleSignoffRows,
+  ] = await Promise.all([
+    productId
+      ? exec.select().from(products).where(eq(products.id, productId)).limit(1)
+      : Promise.resolve([]),
+    revisionIds.length > 0
+      ? exec.select().from(productRevisions).where(inArray(productRevisions.id, revisionIds))
+      : Promise.resolve([]),
+    exec
+      .select()
+      .from(bomItems)
+      .where(eq(bomItems.projectId, input.projectId))
+      .orderBy(bomItems.sortOrder, bomItems.id),
+    productId
+      ? exec
+        .select()
+        .from(customerVariants)
+        .where(eq(customerVariants.parentProductId, productId))
+        .orderBy(customerVariants.variantCode)
+      : Promise.resolve([]),
+    exec
+      .select()
+      .from(projectTestPlans)
+      .where(and(eq(projectTestPlans.projectId, input.projectId), eq(projectTestPlans.phaseId, input.phaseId)))
+      .orderBy(projectTestPlans.createdAt),
+    exec
+      .select()
+      .from(projectTestReports)
+      .where(and(eq(projectTestReports.projectId, input.projectId), eq(projectTestReports.phaseId, input.phaseId)))
+      .orderBy(projectTestReports.createdAt),
+    exec
+      .select()
+      .from(projectTestCases)
+      .where(and(eq(projectTestCases.projectId, input.projectId), eq(projectTestCases.phaseId, input.phaseId)))
+      .orderBy(projectTestCases.createdAt),
+    exec
+      .select()
+      .from(projectNpiReadinessChecks)
+      .where(and(eq(projectNpiReadinessChecks.projectId, input.projectId), eq(projectNpiReadinessChecks.phaseId, input.phaseId)))
+      .orderBy(projectNpiReadinessChecks.createdAt),
+    exec
+      .select()
+      .from(projectSampleSignoffs)
+      .where(and(eq(projectSampleSignoffs.projectId, input.projectId), eq(projectSampleSignoffs.phaseId, input.phaseId)))
+      .orderBy(projectSampleSignoffs.createdAt),
+  ]);
+  const productRow = product[0] as ProductRow | undefined;
+  const testReports = testReportsRows as ProjectTestReport[];
+  const testCases = testCaseRows as ProjectTestCase[];
+  const npiChecks = npiRows as ProjectNpiReadinessCheck[];
+  const sampleSignoffs = sampleSignoffRows as ProjectSampleSignoff[];
+  const failedCases = testCases.filter((row) => row.status === "failed" || row.status === "blocked");
+  const failedIssueIds = Array.from(new Set(
+    failedCases
+      .map((row) => row.relatedIssueId)
+      .filter((id): id is number => typeof id === "number")
+  ));
+  const failedIssueRows = failedIssueIds.length > 0
+    ? await exec
+      .select({ id: projectIssues.id, status: projectIssues.status })
+      .from(projectIssues)
+      .where(inArray(projectIssues.id, failedIssueIds))
+    : [];
+  const failedIssueStatusById = new Map((failedIssueRows as Array<{ id: number; status: string }>).map((row) => [row.id, row.status]));
+  const closedTraceIssueStatuses = new Set(["resolved", "closed", "wont_fix"]);
+  const unresolvedFailedCaseCount = failedCases.filter((row) => {
+    if (!row.relatedIssueId) return true;
+    const status = failedIssueStatusById.get(row.relatedIssueId);
+    return !status || !closedTraceIssueStatuses.has(status);
+  }).length;
+  const byRevisionId = new Map((revisions as ProductRevision[]).map((revision) => [revision.id, revision]));
+  const toRevision = (id: number | null | undefined) => {
+    const revision = typeof id === "number" ? byRevisionId.get(id) : undefined;
+    return revision
+      ? { id: revision.id, revisionLabel: revision.revisionLabel, status: revision.status }
+      : null;
+  };
+
+  return {
+    capturedAt: new Date().toISOString(),
+    projectId: input.projectId,
+    phaseId: input.phaseId,
+    gateName: input.gateName ?? "",
+    product: productRow
+      ? {
+        id: productRow.id,
+        productNumber: productRow.productNumber,
+        name: productRow.name,
+        lifecycleState: productRow.lifecycleState,
+      }
+      : null,
+    baseRevision: toRevision(project?.baseRevisionId),
+    resultRevision: toRevision(project?.resultRevisionId),
+    workingBom: {
+      lineCount: (bomRows as BomItem[]).length,
+      rows: (bomRows as BomItem[]).map((row) => ({
+        partNumber: row.partNumber,
+        name: row.name,
+        spec: row.spec,
+        quantity: row.quantity,
+        refDesignator: row.refDesignator,
+        componentProductId: row.componentProductId,
+        componentRevisionId: row.componentRevisionId,
+        sortOrder: row.sortOrder,
+      })),
+    },
+    customerVariants: (variantRows as CustomerVariant[]).map((variant) => ({
+      id: variant.id,
+      variantCode: variant.variantCode,
+      customerSku: variant.customerSku,
+      customerId: variant.customerId,
+      customerName: variant.customerName,
+      baseRevision: variant.baseRevision,
+      status: variant.status,
+      customerBomRevision: (variant.deltas ?? [])
+        .find((delta) => delta.note === "customer_bom_revision" && delta.variantValue.trim())
+        ?.variantValue ?? null,
+      customerApproved: variant.customerApproved,
+      goldenSampleRef: variant.goldenSampleRef,
+    })),
+    testEvidence: {
+      planCount: (testPlansRows as ProjectTestPlan[]).length,
+      reportCount: testReports.length,
+      approvedReportCount: testReports.filter((row) =>
+        row.reviewStatus === "approved" && (row.result === "pass" || row.result === "conditional") && row.fileId != null
+      ).length,
+      failedCaseCount: failedCases.length,
+      unresolvedFailedCaseCount,
+      reports: testReports.map((row) => ({
+        id: row.id,
+        title: row.title,
+        reportNo: row.reportNo,
+        result: row.result,
+        reviewStatus: row.reviewStatus,
+        fileId: row.fileId,
+      })),
+      failedCases: failedCases.map((row) => ({
+        id: row.id,
+        title: row.title,
+        status: row.status,
+        severity: row.severity,
+        sampleSerials: row.sampleSerials ?? [],
+        relatedIssueId: row.relatedIssueId,
+      })),
+    },
+    npiEvidence: {
+      checkCount: npiChecks.length,
+      openCheckCount: npiChecks.filter((row) => row.status === "pending" || row.status === "blocked").length,
+      checks: npiChecks.map((row) => ({
+        id: row.id,
+        title: row.title,
+        category: row.category,
+        status: row.status,
+        evidenceFileId: row.evidenceFileId,
+        relatedIssueId: row.relatedIssueId,
+      })),
+    },
+    sampleSignoffs: {
+      signoffCount: sampleSignoffs.length,
+      openSignoffCount: sampleSignoffs.filter((row) => row.status === "pending" || row.status === "rejected").length,
+      signoffs: sampleSignoffs.map((row) => ({
+        id: row.id,
+        title: row.title,
+        signoffType: row.signoffType,
+        audience: row.audience,
+        status: row.status,
+        sampleSerials: row.sampleSerials ?? [],
+        fileId: row.fileId,
+        respondedAt: row.respondedAt ? row.respondedAt.toISOString() : null,
+      })),
+    },
+  };
+}
+
 /** Create a gate review */
 export async function createProjectGateReview(review: InsertProjectGateReview): Promise<number> {
   const db = await getDb();
@@ -1805,9 +2712,17 @@ export async function createProjectGateReview(review: InsertProjectGateReview): 
         eq(projectGateReviews.phaseId, review.phaseId),
       ));
     const nextRound = (latest[0]?.maxRound ?? 0) + 1;
+    const traceSnapshot = await buildGateReviewTraceSnapshot(tx, review);
     const result = await tx
       .insert(projectGateReviews)
-      .values({ ...review, roundNumber: nextRound })
+      .values({
+        ...review,
+        roundNumber: nextRound,
+        productId: traceSnapshot.product?.id ?? null,
+        baseRevisionId: traceSnapshot.baseRevision?.id ?? null,
+        resultRevisionId: traceSnapshot.resultRevision?.id ?? null,
+        traceSnapshot,
+      })
       .returning({ id: projectGateReviews.id });
     return result[0].id;
   });
@@ -1949,6 +2864,7 @@ export async function createProjectFile(record: Omit<InsertProjectFile, "id" | "
     ...record,
     fileType: normalizeFileType(record.fileType),
     fileVersion: normalizeFileVersion(record.fileVersion),
+    visibility: normalizeProjectFileVisibility(record.visibility),
   };
   const result = await db.insert(projectFiles).values(normalized).returning({ id: projectFiles.id });
   // 上传新版本后触发交付物重审（若已审核过则回退待审）
@@ -1994,14 +2910,21 @@ export async function getProjectFileById(id: number): Promise<ProjectFile | unde
  * file record references this key.
  */
 export async function getProjectIdByStorageKey(storageKey: string): Promise<string | null> {
+  const access = await getProjectFileAccessByStorageKey(storageKey);
+  return access?.projectId ?? null;
+}
+
+export async function getProjectFileAccessByStorageKey(
+  storageKey: string,
+): Promise<{ projectId: string; visibility: string } | null> {
   const db = await getDb();
   if (!db) return null;
   const [row] = await db
-    .select({ projectId: projectFiles.projectId })
+    .select({ projectId: projectFiles.projectId, visibility: projectFiles.visibility })
     .from(projectFiles)
     .where(eq(projectFiles.storageKey, storageKey))
     .limit(1);
-  return row?.projectId ?? null;
+  return row ?? null;
 }
 
 /**
@@ -2865,8 +3788,9 @@ export async function assignTasksByRole(
   for (const t of tasks) {
     if (t.assigneeUserId) continue; // 不覆盖已分配
     const roles = (t.visibleRoles as string[] | null) ?? [];
-    // 责任角色 = visibleRoles 首个非管理角色;Gate/无角色任务归 PM。
-    const primary = roles.find((r) => r !== "manager" && r !== "owner") ?? "pm";
+    // 责任角色 = visibleRoles 首个非管理角色;Gate/无角色任务优先归项目经理/PMO。
+    const primary = roles.find((r) => !["project_manager", "manager", "owner"].includes(r))
+      ?? (roleToUser.has("project_manager") ? "project_manager" : "pm");
     // 只分给该角色对应成员;该角色没配人则留空(让缺口可见),不强塞给 PM。
     const userId = roleToUser.get(primary);
     if (!userId) continue;
@@ -3503,7 +4427,7 @@ export async function getApproachingGates(): Promise<Array<{
   return out;
 }
 
-/** 计算某项目某 phase 的 Gate 就绪度（4 维）。phase 不存在→null。 */
+/** 计算某项目某 phase 的 Gate 就绪度。phase 不存在→null。 */
 export async function getGateReadiness(projectId: string, phaseId: string): Promise<GateReadiness | null> {
   const db = await getDb();
   if (!db) return null;
@@ -3536,6 +4460,13 @@ export async function getGateReadiness(projectId: string, phaseId: string): Prom
   const uploaded = Array.from(await getReviewSatisfiedSet(projectId, phaseId, required));
 
   const critical = await getPhaseOpenP0P1(projectId, phaseId);
+  const testReports = await getPhaseTestReadiness(projectId, phaseId, phaseId.toUpperCase());
+  const npiReadiness = await getPhaseNpiReadiness(projectId, phaseId, phaseId.toUpperCase());
+  const sampleSignoffs = await getPhaseSampleSignoffReadiness(projectId, phaseId, phaseId.toUpperCase());
+  const gateBlockers = await getProjectGateBlockers(projectId, phaseId);
+  const openGateBlockerTitles = gateBlockers
+    .filter((blocker) => blocker.status === "open")
+    .map((blocker) => `${blocker.blockerType === "quality" ? "QA" : "PE/NPI"}: ${blocker.title}`);
 
   const reviews = await getProjectGateReviews(projectId, phaseId);
   const latest = pickLatestReview(reviews);
@@ -3544,7 +4475,11 @@ export async function getGateReadiness(projectId: string, phaseId: string): Prom
     phaseId, gateName: phase.gate,
     prereq: { incompleteTaskIds },
     deliverables: { required, uploaded },
+    testReports,
+    npiReadiness,
+    sampleSignoffs,
     criticalIssues: { titles: critical.titles },
+    roleBlocks: { titles: openGateBlockerTitles },
     latestReview: latest ? { decision: latest.decision as "approved" | "conditional" | "rejected", conditions: latest.conditions ?? null, notes: latest.notes ?? null } : null,
   });
 }
@@ -3554,7 +4489,7 @@ export async function isReleaseOverrideAuthorized(
   project: ProjectRow,
   actor: { id: number; role: string },
 ): Promise<boolean> {
-  if (actor.role === "admin") return true;
+  if (isSystemAdminRole(actor.role)) return true;
   if (project.createdBy === actor.id) return true;
   if (project.pmUserId === actor.id) return true;
   const member = await getProjectMember(project.id, actor.id);
@@ -3734,12 +4669,13 @@ export async function freezeBomToRevision(projectId: string, revisionId: number,
   return rows;
 }
 
-/** 用户是否有权看某产品线的商业数据：管理员，或该产品下任一项目的成员/创建者/PM */
+/** 用户是否有权看某产品线的商业数据：管理员，或该产品下具备商业权限的项目角色。 */
 export async function userCanSeeProductCommercials(userId: number, isAdmin: boolean, productId: string | null | undefined): Promise<boolean> {
   if (isAdmin) return true;
   if (!productId) return false;
   const db = await getDb();
   if (!db) return false;
+  const commercialRoles: ProjectMemberRole[] = ["owner", "manager", "project_manager", "pm", "scm"];
   const rows = await db
     .select({ id: projects.id })
     .from(projects)
@@ -3750,7 +4686,10 @@ export async function userCanSeeProductCommercials(userId: number, isAdmin: bool
         or(
           eq(projects.createdBy, userId),
           eq(projects.pmUserId, userId),
-          eq(projectMembers.userId, userId),
+          and(
+            eq(projectMembers.userId, userId),
+            inArray(projectMembers.role, commercialRoles),
+          ),
         ),
       ),
     )
@@ -4136,7 +5075,7 @@ export async function getCalendar(userId: number, fromDate: string, toDate: stri
 
   const [viewer] = await db.select({ role: users.role }).from(users).where(eq(users.id, userId)).limit(1);
   const taskProjectIds = new Set<string>();
-  if (viewer?.role === "admin") {
+  if (isSystemAdminRole(viewer?.role)) {
     ids.forEach((id) => taskProjectIds.add(id));
   } else {
     for (const p of allProjects) {

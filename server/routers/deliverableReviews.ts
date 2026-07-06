@@ -5,9 +5,10 @@ import { getDb, getProjectFiles, getProjectEffectiveProcess, getProjectMembers }
 import { projectDeliverableReviews } from "../../drizzle/schema";
 import { and, eq } from "drizzle-orm";
 import { listDeliverableReviews, getMyPendingReviews, submitDeliverableReview, reviewDeliverable } from "../deliverable-review-service";
-import { assertProjectAccess } from "../project-access";
+import { assertProjectAccess, pickHigherProjectRole } from "../project-access";
 import { canSubmitDeliverableEvidence } from "../deliverable-access";
 import { canRoleReviewDeliverables, preferredDeliverableReviewerRoles } from "../../shared/deliverable-permissions";
+import { isSystemAdminRole } from "../../shared/system-roles";
 
 function preferredReviewerRoles(deliverableName: string) {
   return preferredDeliverableReviewerRoles(deliverableName);
@@ -28,7 +29,7 @@ async function pickDefaultReviewer(
   if (notExcluded(preferred?.userId)) return preferred!.userId;
   if (notExcluded(pmUserId)) return pmUserId;
   const fallback = members.find(
-    (member) => member.userId !== excludeUserId && member.role !== "viewer",
+    (member) => member.userId !== excludeUserId && canRoleReviewDeliverables(member.role),
   );
   return fallback?.userId ?? null;
 }
@@ -80,12 +81,21 @@ export const deliverableReviewsRouter = router({
         ?? await pickDefaultReviewer(input.projectId, input.deliverableName, project.pmUserId ?? null, ctx.user.id);
       if (!reviewerUserId) throw new TRPCError({ code: "BAD_REQUEST", message: "未指定审核人，且项目内无其他可复核成员" });
       const members = await getProjectMembers(input.projectId);
+      const explicitReviewerRole = members.find((member) => member.userId === reviewerUserId)?.role ?? null;
       const reviewerRole =
         reviewerUserId === project.createdBy ? "owner"
-        : reviewerUserId === project.pmUserId ? "pm"
-        : members.find((member) => member.userId === reviewerUserId)?.role ?? null;
+        : reviewerUserId === project.pmUserId
+          ? pickHigherProjectRole(explicitReviewerRole, "project_manager")
+          : explicitReviewerRole;
       if (!canRoleReviewDeliverables(reviewerRole)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "审核人必须是项目内非只读角色" });
+      }
+      const requiredReviewerRoles = preferredReviewerRoles(input.deliverableName);
+      if (requiredReviewerRoles.length > 0 && !requiredReviewerRoles.includes(reviewerRole ?? "")) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `该交付物需由 ${requiredReviewerRoles.join("/")} 角色审核`,
+        });
       }
       await submitDeliverableReview({ projectId: input.projectId, phaseId: input.phaseId, deliverableName: input.deliverableName, reviewerUserId, submittedBy: ctx.user.id });
       return { success: true } as const;
@@ -98,7 +108,7 @@ export const deliverableReviewsRouter = router({
         .from(projectDeliverableReviews)
         .where(and(eq(projectDeliverableReviews.projectId, input.projectId), eq(projectDeliverableReviews.phaseId, input.phaseId), eq(projectDeliverableReviews.deliverableName, input.deliverableName)));
       if (!r) throw new TRPCError({ code: "NOT_FOUND", message: "无该审核记录" });
-      if (ctx.user.role !== "admin" && r.reviewerUserId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "仅指定审核人可审" });
+      if (!isSystemAdminRole(ctx.user.role) && r.reviewerUserId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "仅指定审核人可审" });
       await reviewDeliverable({ projectId: input.projectId, phaseId: input.phaseId, deliverableName: input.deliverableName, decision: input.decision, reviewedBy: ctx.user.id, note: input.note ?? null });
       return { success: true } as const;
     }),

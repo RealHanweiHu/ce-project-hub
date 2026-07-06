@@ -28,7 +28,7 @@ async function isEffectiveDeliverable(projectId: string, phaseId: string, delive
  * 派给他们——当事人必须能完成任务/交付证据，否则这些角色的工作流死锁。
  */
 export function taskAllowsEvidence(task: ProjectTask | undefined, actorId: number, role: ProjectMemberRole) {
-  if (!task || role === "viewer") return false;
+  if (!task || role === "viewer" || !ROLE_PERMISSIONS[role]?.canViewInternalWorkspace) return false;
   if (task.assigneeUserId != null && task.assigneeUserId === actorId) return true;
   const visibleRoles = (task.visibleRoles as string[] | null) ?? [];
   return visibleRoles.length > 0 && visibleRoles.includes(role);
@@ -53,7 +53,7 @@ export async function canSubmitDeliverableEvidence(input: DeliverableEvidenceInp
   if (!phaseId || !deliverableName) return false;
   if (!(await isEffectiveDeliverable(projectId, phaseId, deliverableName))) return false;
   if (permissions.canEditProjectInfo || permissions.canEditTasks) return true;
-  if (role === "viewer") return false;
+  if (role === "viewer" || !ROLE_PERMISSIONS[role]?.canViewInternalWorkspace) return false;
   if (files?.some((file) => file.deliverableName === deliverableName && file.uploadedBy === actorId)) {
     return true;
   }

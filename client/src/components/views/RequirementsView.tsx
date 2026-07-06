@@ -5,12 +5,13 @@ import { useAuth } from '@/_core/hooks/useAuth';
 import { Inbox } from 'lucide-react';
 import { PageHeader, Kicker } from '@/components/linear/primitives';
 import { RequirementPoolPanel, type RequirementPanelScope } from './RequirementPoolPanel';
+import { isSystemAdminRole } from '@shared/system-roles';
 
 type ProductRow = { id: string; name: string; productNumber: string };
 
 export function RequirementsView({ initialProductId }: { initialProductId?: string }) {
   const { user } = useAuth();
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = isSystemAdminRole(user?.role);
   const { data: products = [] } = trpc.products.list.useQuery();
   const productRows = products as ProductRow[];
   const [productId, setProductId] = useState<string>(initialProductId ?? '');

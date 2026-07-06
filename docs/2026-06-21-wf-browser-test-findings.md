@@ -7,6 +7,8 @@
 > 改动文件：`server/db.ts`、`server/routers/gateReviews.ts`、`client/src/pages/Home.tsx`、`client/src/components/views/ProjectDetailView.tsx`。tsc --noEmit 0 错误。
 > 注：旧脏数据 `新品主干-01`(n-2IYW6F) 仍卡在 design（修复不回溯历史数据），可手动重过规划 Gate 解锁或删除。
 
+> **【2026-07-05 拍板】问题 #4（RISK-08 回退语义）已裁决**：保留「停留本阶段整改重审」为唯一语义，**不做阶段回退**。用例集 RISK-08「交付物随阶段回退」预期作废。定版常量 `GATE_REJECTION_SEMANTICS` 见 `shared/sop-templates.ts`；后续动作见 `docs/2026-07-05-mvp-fix-plan.md` §3.2 / CEH-10。
+
 
 
 测试方式：本地 `pnpm dev`（localhost:3000）+ preview 浏览器实测 + DB(cehub) 真值核对。

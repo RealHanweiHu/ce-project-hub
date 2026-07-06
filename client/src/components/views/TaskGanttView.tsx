@@ -57,7 +57,7 @@ export function TaskGanttView({ project, onTaskClick, phaseFilter }: { project: 
     const totalEnd = maxDue || new Date(totalStart.getTime() + 90 * dayMs);
     const critTotal = rows.filter((r) => r.kind === 'task' && r.bar.critical).length;
     return { rows, totalStart, totalEnd, critTotal };
-  }, [project]);
+  }, [project, phaseFilter]);
 
   const totalDays = Math.max(1, Math.ceil((totalEnd.getTime() - totalStart.getTime()) / dayMs) + 1);
   const pxPerDay = 6 * zoom;
@@ -81,7 +81,7 @@ export function TaskGanttView({ project, onTaskClick, phaseFilter }: { project: 
   const taskRows = rows.filter((r) => r.kind === 'task') as Extract<Row, { kind: 'task' }>[];
   if (taskRows.length === 0) {
     return (
-      <div className="rounded-[11px] border border-border bg-card p-10 text-center">
+      <div className="rounded-[10px] border border-border bg-card p-10 text-center shadow-[0_1px_2px_rgb(0_0_0/0.03)]">
         <CalendarDays size={28} className="mx-auto text-muted-foreground/60 mb-3" />
         <div className="text-sm text-foreground">暂无任务排期</div>
         <div className="text-xs text-muted-foreground mt-1">请先在「总揽」设置项目开始日期(并重新生成排期),任务级甘特图会按工期+依赖自动排布。</div>
@@ -91,19 +91,19 @@ export function TaskGanttView({ project, onTaskClick, phaseFilter }: { project: 
   const overdueTotal = taskRows.filter((r) => r.bar.overdue).length;
 
   return (
-    <div className="rounded-[11px] border border-border bg-card overflow-hidden">
-      <div className="flex items-center justify-between px-5 py-3 border-b border-border flex-wrap gap-2">
+    <div className="overflow-hidden rounded-[10px] border border-border bg-card shadow-[0_1px_2px_rgb(0_0_0/0.03)]">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-5 py-3">
         <div className="flex items-center gap-3 flex-wrap">
           <span className="text-[10px] uppercase tracking-widest text-muted-foreground">任务甘特图</span>
           <span className="num inline-flex items-center gap-1 text-[10px] text-[color:var(--destructive)]"><Flame size={11} />关键路径 {critTotal} 项</span>
           {overdueTotal > 0 && <span className="num inline-flex items-center gap-1 text-[10px] text-[color:var(--warning)]"><AlertTriangle size={11} />逾期 {overdueTotal} 项</span>}
         </div>
         <div className="flex items-center gap-1">
-          <button onClick={() => scrollBy(-240)} className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded" title="左"><ChevronLeft size={15} /></button>
-          <button onClick={() => scrollBy(240)} className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded" title="右"><ChevronRight size={15} /></button>
+          <button onClick={() => scrollBy(-240)} className="rounded-[6px] p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground" title="左"><ChevronLeft size={15} /></button>
+          <button onClick={() => scrollBy(240)} className="rounded-[6px] p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground" title="右"><ChevronRight size={15} /></button>
           <div className="w-px h-4 bg-border mx-1" />
-          <button onClick={() => setZoom((z) => Math.min(4, +(z * 1.5).toFixed(2)))} className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded" title="放大"><ZoomIn size={15} /></button>
-          <button onClick={() => setZoom((z) => Math.max(0.3, +(z / 1.5).toFixed(2)))} className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded" title="缩小"><ZoomOut size={15} /></button>
+          <button onClick={() => setZoom((z) => Math.min(4, +(z * 1.5).toFixed(2)))} className="rounded-[6px] p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground" title="放大"><ZoomIn size={15} /></button>
+          <button onClick={() => setZoom((z) => Math.max(0.3, +(z / 1.5).toFixed(2)))} className="rounded-[6px] p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground" title="缩小"><ZoomOut size={15} /></button>
         </div>
       </div>
 
@@ -147,7 +147,7 @@ export function TaskGanttView({ project, onTaskClick, phaseFilter }: { project: 
                   <div
                     onClick={() => onTaskClick?.(r.bar.phaseId, r.bar.taskId)}
                     title={`${r.bar.name} · ${fmt(r.bar.start)} → ${fmt(r.bar.due)}${r.bar.critical ? ' · 关键路径' : ''}${r.bar.overdue ? ' · 逾期' : ''}`}
-                    className={`absolute cursor-pointer rounded-sm ${
+                    className={`absolute cursor-pointer rounded-[4px] ${
                       r.bar.done ? 'bg-[color:var(--success)]'
                         : r.bar.overdue ? 'bg-[color:var(--destructive)]'
                         : r.bar.critical ? 'bg-primary' : 'bg-muted-foreground'

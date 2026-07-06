@@ -6,13 +6,15 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { LinearCard, PageHeader, Kicker } from '@/components/linear/primitives';
 import { Shield, BookOpen, LogOut } from 'lucide-react';
+import { SYSTEM_ROLE_LABELS, isSystemAdminRole, normalizeSystemRole } from '@shared/system-roles';
 
 type View = 'overview' | 'mytasks' | 'projects' | 'calendar' | 'products' | 'requirements' | 'sop' | 'account';
 
 export function AccountPage({ onNavigate, onOpenAdmin }: { onNavigate: (v: View) => void; onOpenAdmin: () => void }) {
   const { user, logout } = useAuth();
   const utils = trpc.useUtils();
-  const isAdmin = (user as { role?: string } | null)?.role === 'admin';
+  const systemRole = normalizeSystemRole((user as { role?: string } | null)?.role);
+  const isAdmin = isSystemAdminRole(systemRole);
 
   const [name, setName] = useState(user?.name ?? '');
   const [mobile, setMobile] = useState((user as { mobile?: string | null } | null)?.mobile ?? '');
@@ -27,7 +29,7 @@ export function AccountPage({ onNavigate, onOpenAdmin }: { onNavigate: (v: View)
     onError: (e) => toast.error(e.message || '修改失败'),
   });
 
-  const roleLabel = isAdmin ? '管理员' : '成员';
+  const roleLabel = SYSTEM_ROLE_LABELS[systemRole];
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-5">

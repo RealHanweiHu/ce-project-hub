@@ -1,4 +1,5 @@
 import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
+import { SYSTEM_ROLES, isSystemAdminRole, systemRoleCanCreateProject } from "@shared/system-roles";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { getSessionCookieOptions } from "./_core/cookies";
@@ -14,6 +15,10 @@ import { tasksRouter } from "./routers/tasks";
 import { issuesRouter } from "./routers/issues";
 import { risksRouter } from "./routers/risks";
 import { gateReviewsRouter } from "./routers/gateReviews";
+import { gateBlockersRouter } from "./routers/gateBlockers";
+import { testPlansRouter } from "./routers/testPlans";
+import { npiReadinessRouter } from "./routers/npiReadiness";
+import { sampleSignoffsRouter } from "./routers/sampleSignoffs";
 import { changelogRouter } from "./routers/changelog";
 import { phasesRouter } from "./routers/phases";
 import { filesRouter } from "./routers/files";
@@ -50,8 +55,7 @@ export const appRouter = router({
       const { passwordHash: _passwordHash, ...safeUser } = user;
       return {
         ...safeUser,
-        // Derived permission: admin always can create projects
-        canCreateProject: user.role === 'admin' || user.canCreateProject,
+        canCreateProject: systemRoleCanCreateProject(user),
       };
     }),
 
@@ -121,7 +125,7 @@ export const appRouter = router({
           passwordHash,
           name: input.name,
           email: input.email,
-          role: 'user',
+          role: 'member',
           canCreateProject: false,
         });
         // Auto login after registration
@@ -145,11 +149,11 @@ export const appRouter = router({
         name: z.string().trim().min(1, '请输入显示名称').max(64),
         email: z.string().trim().email('请输入有效的邮箱地址').toLowerCase().optional(),
         mobile: z.string().trim().max(32).optional(),
-        role: z.enum(['user', 'admin']).default('user'),
+        role: z.enum(SYSTEM_ROLES).default('member'),
         canCreateProject: z.boolean().default(false),
       }))
       .mutation(async ({ input, ctx }) => {
-        if (ctx.user.role !== 'admin') {
+        if (!isSystemAdminRole(ctx.user.role)) {
           throw new TRPCError({ code: 'FORBIDDEN', message: '仅管理员可创建用户' });
         }
         const existing = await db.getUserByUsername(input.username);
@@ -170,7 +174,7 @@ export const appRouter = router({
           email: input.email ?? null,
           mobile: input.mobile?.trim() || null,
           role: input.role,
-          canCreateProject: input.role === 'admin' || input.canCreateProject,
+          canCreateProject: isSystemAdminRole(input.role) || input.canCreateProject,
         });
         return { success: true } as const;
       }),
@@ -179,7 +183,7 @@ export const appRouter = router({
     setUserMobile: protectedProcedure
       .input(z.object({ userId: z.number(), mobile: z.string().trim().max(32) }))
       .mutation(async ({ input, ctx }) => {
-        if (ctx.user.role !== 'admin') {
+        if (!isSystemAdminRole(ctx.user.role)) {
           throw new TRPCError({ code: 'FORBIDDEN', message: '仅管理员可修改手机号' });
         }
         await db.setUserMobile(input.userId, input.mobile.trim() || null);
@@ -193,7 +197,7 @@ export const appRouter = router({
         newPassword: z.string().min(6, '密码至少6位'),
       }))
       .mutation(async ({ input, ctx }) => {
-        if (ctx.user.role !== 'admin') {
+        if (!isSystemAdminRole(ctx.user.role)) {
           throw new TRPCError({ code: 'FORBIDDEN', message: '仅管理员可重置密码' });
         }
         const passwordHash = await hashPassword(input.newPassword);
@@ -254,6 +258,10 @@ export const appRouter = router({
   issues: issuesRouter,
   risks: risksRouter,
   gateReviews: gateReviewsRouter,
+  gateBlockers: gateBlockersRouter,
+  testPlans: testPlansRouter,
+  npiReadiness: npiReadinessRouter,
+  sampleSignoffs: sampleSignoffsRouter,
   deliverableReviews: deliverableReviewsRouter,
   changelog: changelogRouter,
   phases: phasesRouter,

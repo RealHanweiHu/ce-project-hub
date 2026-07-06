@@ -10,13 +10,15 @@ import {
 } from "../db";
 import { assertProjectAccess, assertProjectPermission } from "../project-access";
 import { CHANGE_TYPES, CHANGE_STATUSES } from "../../drizzle/schema";
+import { canRoleViewInternalWorkspace } from "../file-visibility";
 
 export const changelogRouter = router({
   /** List all changelog records for a project */
   list: protectedProcedure
     .input(z.object({ projectId: z.string() }))
     .query(async ({ ctx, input }) => {
-      await assertProjectAccess(input.projectId, ctx.user);
+      const access = await assertProjectAccess(input.projectId, ctx.user);
+      if (!canRoleViewInternalWorkspace(access.role)) return [];
       return getProjectChangelog(input.projectId);
     }),
 

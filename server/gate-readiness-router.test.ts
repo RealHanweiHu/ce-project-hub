@@ -14,7 +14,7 @@ afterAll(async () => {
 });
 
 describe("gateReviews.readiness", () => {
-  it("成员可取就绪度；返回 4 维", async () => {
+  it("成员可取就绪度；返回 8 维", async () => {
     const db = await getDb();
     if (!db) return;
     await db.insert(projects).values({
@@ -47,6 +47,15 @@ describe("gateReviews.readiness", () => {
     const caller = appRouter.createCaller(ctx);
     const r = await caller.gateReviews.readiness({ projectId: PROJ, phaseId: "design" });
     expect(r).not.toBeNull();
-    expect(r!.dimensions.length).toBe(4);
+    expect(r!.dimensions.map((dimension) => dimension.dimension)).toEqual([
+      "prereq",
+      "deliverables",
+      "test_reports",
+      "npi_readiness",
+      "sample_signoffs",
+      "critical_issues",
+      "role_blocks",
+      "review_conditions",
+    ]);
   });
 });

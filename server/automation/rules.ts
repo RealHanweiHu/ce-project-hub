@@ -10,11 +10,14 @@ export const AUTOMATION_RULE_KEYS = [
   "mp_release_broadcast",
   "delay_impact_notify",
   "exception_escalation",
+  "definition_confirmed_notify",
+  "gate_decision_notify",
+  "phase_advanced_notify",
 ] as const;
 
 export type AutomationRuleKey = (typeof AUTOMATION_RULE_KEYS)[number];
 
-export type AutomationEntityType = "task" | "issue" | "gate_review" | "mp_release" | "deliverable_review";
+export type AutomationEntityType = "task" | "issue" | "gate_review" | "mp_release" | "deliverable_review" | "product_definition" | "phase";
 
 export type AutomationEvent = {
   action:
@@ -26,7 +29,9 @@ export type AutomationEvent = {
     | "task.rescheduled"
     | "gate.create"
     | "gate.update"
-    | "mp.release";
+    | "mp.release"
+    | "product.definition_confirmed"
+    | "phase.advanced";
   projectId?: string | null;
   entityType: AutomationEntityType;
   entityId?: string | number | null;
@@ -126,6 +131,18 @@ const exceptionEscalationConfigSchema = z.object({
   pushGroup: z.boolean().default(false),
 });
 
+const definitionConfirmedConfigSchema = z.object({
+  pushGroup: z.boolean().default(false),
+});
+
+const gateDecisionConfigSchema = z.object({
+  pushGroup: z.boolean().default(true),
+});
+
+const phaseAdvancedConfigSchema = z.object({
+  pushGroup: z.boolean().default(true),
+});
+
 export type OverdueConfig = z.infer<typeof overdueConfigSchema>;
 export type HighSeverityIssueConfig = z.infer<typeof highSeverityIssueConfigSchema>;
 export type StatusChangeConfig = z.infer<typeof statusChangeConfigSchema>;
@@ -135,6 +152,9 @@ export type TaskBlockedConfig = z.infer<typeof taskBlockedConfigSchema>;
 export type GatePrereqConfig = z.infer<typeof gatePrereqConfigSchema>;
 export type DelayImpactConfig = z.infer<typeof delayImpactConfigSchema>;
 export type ExceptionEscalationConfig = z.infer<typeof exceptionEscalationConfigSchema>;
+export type DefinitionConfirmedConfig = z.infer<typeof definitionConfirmedConfigSchema>;
+export type GateDecisionConfig = z.infer<typeof gateDecisionConfigSchema>;
+export type PhaseAdvancedConfig = z.infer<typeof phaseAdvancedConfigSchema>;
 export type AutomationRuleConfig =
   | OverdueConfig
   | HighSeverityIssueConfig
@@ -144,7 +164,10 @@ export type AutomationRuleConfig =
   | TaskBlockedConfig
   | GatePrereqConfig
   | DelayImpactConfig
-  | ExceptionEscalationConfig;
+  | ExceptionEscalationConfig
+  | DefinitionConfirmedConfig
+  | GateDecisionConfig
+  | PhaseAdvancedConfig;
 
 export type BuiltInAutomationRule = {
   key: AutomationRuleKey;
@@ -257,6 +280,39 @@ export const AUTOMATION_RULES = [
     recipientRoles: ["assignee", "pm", "manager"],
     matches: (event, config) => matchesExceptionEscalation(event, config as ExceptionEscalationConfig),
     buildMessage: (event, config, ctx) => buildExceptionEscalationMessage(event, config as ExceptionEscalationConfig, ctx),
+  },
+  {
+    key: "definition_confirmed_notify",
+    label: "产品定义确认通知",
+    triggerType: "event",
+    defaultEnabled: true,
+    defaultConfig: definitionConfirmedConfigSchema.parse({}),
+    configSchema: definitionConfirmedConfigSchema,
+    recipientRoles: ["pm"],
+    matches: (event, _config) => event.action === "product.definition_confirmed" && event.entityType === "product_definition",
+    buildMessage: (event, _config, ctx) => buildDefinitionConfirmedMessage(event, ctx),
+  },
+  {
+    key: "gate_decision_notify",
+    label: "Gate 决策通知",
+    triggerType: "event",
+    defaultEnabled: true,
+    defaultConfig: gateDecisionConfigSchema.parse({}),
+    configSchema: gateDecisionConfigSchema,
+    recipientRoles: ["pm", "manager", "group"],
+    matches: (event, _config) => matchesGateDecision(event),
+    buildMessage: (event, _config, ctx) => buildGateDecisionMessage(event, ctx),
+  },
+  {
+    key: "phase_advanced_notify",
+    label: "阶段推进通知",
+    triggerType: "event",
+    defaultEnabled: true,
+    defaultConfig: phaseAdvancedConfigSchema.parse({}),
+    configSchema: phaseAdvancedConfigSchema,
+    recipientRoles: ["pm", "group"],
+    matches: (event, _config) => event.action === "phase.advanced" && event.entityType === "phase",
+    buildMessage: (event, _config, ctx) => buildPhaseAdvancedMessage(event, ctx),
   },
 ] as const satisfies readonly BuiltInAutomationRule[];
 
@@ -568,6 +624,50 @@ function exceptionTypeLabel(type: string): string {
   if (type === "critical_issue") return "重大问题";
   if (type === "pending_review") return "待审交付物";
   return "异常";
+}
+
+function matchesGateDecision(event: AutomationEvent): boolean {
+  if (event.entityType !== "gate_review") return false;
+  const decision = String(event.after?.decision ?? "");
+  if (!["approved", "conditional", "rejected"].includes(decision)) return false;
+  // create 即终态；update 仅在 decision 实际变化时通知（改参会人/纪要不扰动）
+  if (event.action === "gate.create") return true;
+  if (event.action === "gate.update") return String(event.before?.decision ?? "") !== decision;
+  return false;
+}
+
+function buildDefinitionConfirmedMessage(event: AutomationEvent, ctx: AutomationMessageContext): AutomationMessage {
+  const product = ctx.productName || String(event.after?.productName ?? "产品");
+  const version = event.after?.versionNumber != null ? `（基线 v${event.after.versionNumber}）` : "";
+  const project = ctx.projectName ? `「${ctx.projectName}」` : "关联项目";
+  const messageTitle = "产品定义已确认";
+  const text = `产品「${product}」定义已确认冻结${version}，${project}请查收交接任务；后续规格变更将走定义变更流程。`;
+  return { title: messageTitle, text, markdown: `#### ${messageTitle}\n${text}` };
+}
+
+function buildGateDecisionMessage(event: AutomationEvent, ctx: AutomationMessageContext): AutomationMessage {
+  const gate = ctx.entityTitle || String(event.after?.gateName ?? event.after?.phaseId ?? "Gate");
+  const project = ctx.projectName ? `「${ctx.projectName}」` : "项目";
+  const decision = String(event.after?.decision ?? "");
+  const conditions = String(event.after?.conditions ?? "").trim();
+  const decisionText = decision === "approved" ? "已通过" : decision === "conditional" ? "有条件通过" : "未通过";
+  const messageTitle = `Gate ${decisionText}`;
+  const suffix = decision === "conditional" && conditions
+    ? `，通过条件：${conditions}`
+    : decision === "rejected"
+      ? "，整改后请重新评审"
+      : "";
+  const text = `${project}评审「${gate}」${decisionText}${suffix}。`;
+  return { title: messageTitle, text, markdown: `#### ${messageTitle}\n${text}` };
+}
+
+function buildPhaseAdvancedMessage(event: AutomationEvent, ctx: AutomationMessageContext): AutomationMessage {
+  const project = ctx.projectName ? `「${ctx.projectName}」` : "项目";
+  const from = String(event.after?.fromPhaseName ?? event.after?.fromPhaseId ?? "上一阶段");
+  const to = String(event.after?.phaseName ?? event.after?.phaseId ?? "新阶段");
+  const messageTitle = "项目阶段推进";
+  const text = `${project}${from} Gate 已通过，项目进入 ${to} 阶段，请相关角色启动本阶段任务与交付物。`;
+  return { title: messageTitle, text, markdown: `#### ${messageTitle}\n${text}` };
 }
 
 function changedInto(
