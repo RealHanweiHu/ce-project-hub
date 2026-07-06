@@ -16,6 +16,7 @@ import { sendToGroupChat } from "../_core/dingtalkGroup";
 import { taskDisplayTitle } from "../task-title";
 import { runAutomation } from "./engine";
 import { runHealthDigestScan } from "./healthDigest";
+import { isAutomationSuppressedProject } from "./project-filter";
 
 let timer: NodeJS.Timeout | null = null;
 
@@ -211,6 +212,7 @@ async function runWeeklyMeetingFallbackScan(now: Date): Promise<void> {
   if (todayWeekday < 0) return;
   const projects = await getAllActiveProjects();
   for (const project of projects) {
+    if (isAutomationSuppressedProject(project)) continue;
     const config = getMeetingConfig(project.meetingConfig);
     if (!config?.enabled) continue;
     if (config.weekday !== todayWeekday) continue;

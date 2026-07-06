@@ -23,6 +23,7 @@ import {
   RecipientRole,
 } from "./rules";
 import { DIGEST_RULES } from "./digestRules";
+import { isAutomationSuppressedProject } from "./project-filter";
 
 type ResolvedRecipients = {
   userIds: number[];
@@ -36,6 +37,7 @@ type DispatchDeps = {
   pushWebhook?: typeof defaultPushWebhook;
   notifyDingtalk?: (userIds: number[], title: string, markdown: string) => Promise<void>;
   notifyGroup?: (chatId: string, title: string, markdown: string) => Promise<boolean>;
+  allowAutomationTestProjects?: boolean;
 };
 
 let seededDefaults = false;
@@ -60,9 +62,10 @@ export async function ensureAutomationRuleDefaults(): Promise<void> {
 export async function runAutomation(event: AutomationEvent, deps: DispatchDeps = {}): Promise<void> {
   await ensureAutomationRuleDefaults();
   const projectId = projectIdForEvent(event);
-  if (projectId && event.action !== "mp.release") {
+  if (projectId) {
     const project = await getProjectById(projectId);
-    if (!project || project.archived) return;
+    if (event.action !== "mp.release" && (!project || project.archived)) return;
+    if (!deps.allowAutomationTestProjects && isAutomationSuppressedProject(project)) return;
   }
 
   const rows = await listAutomationRuleRows();

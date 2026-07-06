@@ -11,6 +11,7 @@ import {
   type PortfolioHealthRow,
 } from "../db";
 import { parseDigestRuleConfig, type HealthDigestConfig } from "./digestRules";
+import { isAutomationSuppressedProject } from "./project-filter";
 
 // ── 日期/时区（统一 Asia/Shanghai）─────────────────────────────────────────
 export function isoWeekdayOf(iso: string): number {
@@ -142,7 +143,7 @@ export async function runHealthDigestScan(now: Date, deps: HealthDigestDeps = {}
 
   const { todayISO } = shanghaiParts(now);
   const getHealth = deps.getHealth ?? defaultGetHealth;
-  const rows = await getHealth(todayISO);
+  const rows = (await getHealth(todayISO)).filter((row) => !isAutomationSuppressedProject(row));
   const { abnormal, greenCount } = scorePortfolio(rows);
 
   if (abnormal.length === 0) {

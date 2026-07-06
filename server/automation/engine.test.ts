@@ -31,6 +31,7 @@ function makeDeps() {
       pushWebhook: async (_text: string, opts?: { title?: string }) => { pushes.push({ title: opts?.title }); },
       notifyDingtalk: async () => {}, // 测试不真发钉钉工作通知
       notifyGroup: async (chatId: string, title: string) => { groups.push({ chatId, title }); return true; },
+      allowAutomationTestProjects: true,
     },
   };
 }
@@ -290,5 +291,41 @@ describe("automation engine integration", () => {
       after: { severity: "P0", title: "禁用后不应触发", assigneeUserId: asgId },
     }, deps);
     expect(notes.length).toBe(0);
+  });
+
+  it("suppresses automated test fixture projects by default", async () => {
+    await updateAutomationRuleRow({ ruleKey: "high_severity_issue", enabled: true, config: { severities: ["P0", "P1"], pushGroup: true } });
+    const notes: Array<{ userId: number; title: string }> = [];
+    const pushes: Array<{ title?: string }> = [];
+
+    await runAutomation({
+      action: "issue.create", projectId: PROJECT_ID, entityType: "issue", entityId: 9004,
+      after: { severity: "P0", title: "测试夹具不应触发提醒", assigneeUserId: asgId },
+    }, {
+      createNotification: async (n: { userId: number; title: string }) => { notes.push({ userId: n.userId, title: n.title }); },
+      pushWebhook: async (_text: string, opts?: { title?: string }) => { pushes.push({ title: opts?.title }); },
+      notifyDingtalk: async () => {},
+      notifyGroup: async () => true,
+    });
+
+    expect(notes.length).toBe(0);
+    expect(pushes.length).toBe(0);
+  });
+
+  it("also suppresses release broadcasts for automated test fixture projects", async () => {
+    await updateAutomationRuleRow({ ruleKey: "mp_release_broadcast", enabled: true, config: { pushGroup: true } });
+    const pushes: Array<{ title?: string }> = [];
+
+    await runAutomation({
+      action: "mp.release", projectId: PROJECT_ID, entityType: "mp_release", entityId: "release-1",
+      after: { productName: "测试产品", revisionLabel: "Rev.A" },
+    }, {
+      createNotification: async () => {},
+      pushWebhook: async (_text: string, opts?: { title?: string }) => { pushes.push({ title: opts?.title }); },
+      notifyDingtalk: async () => {},
+      notifyGroup: async () => true,
+    });
+
+    expect(pushes.length).toBe(0);
   });
 });
