@@ -1,12 +1,34 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterAll } from "vitest";
+import { like } from "drizzle-orm";
 import {
   applyAutomaticTaskStatuses, setTaskCompletion, setTaskApprovalConfig, decideTaskApproval,
-  upsertProjectTask, getProjectTasks, getActivityLogs, getTaskActivityLogs,
+  upsertProjectTask, getProjectTasks, getActivityLogs, getTaskActivityLogs, getDb,
 } from "./db";
-import type { ProjectTask } from "../drizzle/schema";
+import { activityLogs, projects, type ProjectTask } from "../drizzle/schema";
 
 let pidSeq = 0;
-const uniquePid = () => `tst-appr-${Date.now()}-${pidSeq++}`;
+const RUN = `tst-appr-${Date.now()}`;
+const uniquePid = () => `${RUN}-${pidSeq++}`;
+
+/** project_tasks 有外键兜底后，子表写入必须先有真实项目行 */
+async function newProject(): Promise<string> {
+  const pid = uniquePid();
+  const db = await getDb();
+  if (!db) throw new Error("no db");
+  await db.insert(projects).values({
+    id: pid, name: "审批测试", projectNumber: pid, category: "npd",
+    risk: "low", currentPhase: "concept", createdBy: 1,
+  });
+  return pid;
+}
+
+afterAll(async () => {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(activityLogs).where(like(activityLogs.projectId, `${RUN}-%`));
+  // 外键 cascade 会一并清掉 project_tasks
+  await db.delete(projects).where(like(projects.id, `${RUN}-%`));
+});
 
 // 最小 ProjectTask（仅填 applyAutomaticTaskStatuses 用到的字段；其余以 any 占位）
 function makeTask(over: Partial<ProjectTask>): ProjectTask {
@@ -41,7 +63,7 @@ describe("automaticTaskStatus 保留 pending_approval", () => {
 
 describe("setTaskCompletion 需审批分支 + 单写日志", () => {
   it("需审批任务勾完成 → pending_approval/completed=false/approvalStatus=pending/outcome=submitted，且只记 task.submit_approval", async () => {
-    const pid = uniquePid();
+    const pid = await newProject();
     await upsertProjectTask(pid, "ph1", "c1", { requiresApproval: true, approverUserId: 2 });
     const r = await setTaskCompletion(pid, "ph1", "c1", true, 3);
     expect(r.outcome).toBe("submitted");
@@ -57,7 +79,7 @@ describe("setTaskCompletion 需审批分支 + 单写日志", () => {
   });
 
   it("普通任务勾完成 → done/completed=true/outcome=completed", async () => {
-    const pid = uniquePid();
+    const pid = await newProject();
     await upsertProjectTask(pid, "ph1", "c1", { instructions: "x" });
     const r = await setTaskCompletion(pid, "ph1", "c1", true, 3);
     expect(r.outcome).toBe("completed");
@@ -69,7 +91,7 @@ describe("setTaskCompletion 需审批分支 + 单写日志", () => {
 
 describe("setTaskApprovalConfig", () => {
   it("写入 requiresApproval/approverUserId", async () => {
-    const pid = uniquePid();
+    const pid = await newProject();
     await upsertProjectTask(pid, "ph1", "c1", { instructions: "x" });
     await setTaskApprovalConfig(pid, "ph1", "c1", { requiresApproval: true, approverUserId: 2 }, 9);
     const row = (await getProjectTasks(pid, "ph1"))[0];
@@ -78,7 +100,7 @@ describe("setTaskApprovalConfig", () => {
   });
 
   it("待审时关开关 → approvalStatus=none、completed=false、status 非 done/pending_approval", async () => {
-    const pid = uniquePid();
+    const pid = await newProject();
     await upsertProjectTask(pid, "ph1", "c1", { requiresApproval: true, approverUserId: 2 });
     await setTaskCompletion(pid, "ph1", "c1", true, 3); // → pending_approval
     await setTaskApprovalConfig(pid, "ph1", "c1", { requiresApproval: false, approverUserId: null }, 9);
@@ -97,7 +119,7 @@ describe("decideTaskApproval", () => {
   }
 
   it("通过 → done/completed=true/approved，记 task.approve", async () => {
-    const pid = uniquePid();
+    const pid = await newProject();
     await intoPending(pid);
     await decideTaskApproval(pid, "ph1", "c1", "approved", 2, "可以", false);
     const row = (await getProjectTasks(pid, "ph1"))[0];
@@ -109,7 +131,7 @@ describe("decideTaskApproval", () => {
   });
 
   it("驳回 → completed=false/approvalStatus=rejected，status 非 done/pending", async () => {
-    const pid = uniquePid();
+    const pid = await newProject();
     await intoPending(pid);
     await decideTaskApproval(pid, "ph1", "c1", "rejected", 2, "不行", false);
     const row = (await getProjectTasks(pid, "ph1"))[0];
@@ -120,7 +142,7 @@ describe("decideTaskApproval", () => {
   });
 
   it("admin 代审 → 日志 meta.proxyBy 记录", async () => {
-    const pid = uniquePid();
+    const pid = await newProject();
     await intoPending(pid);
     await decideTaskApproval(pid, "ph1", "c1", "approved", 99, null, true); // actor 99 ≠ approver 2
     const approve = (await getActivityLogs(pid)).find((a) => a.entityId === "c1" && a.action === "task.approve");
@@ -130,7 +152,7 @@ describe("decideTaskApproval", () => {
 
 describe("getTaskActivityLogs 带 phaseId", () => {
   it("只返回该 phaseId 的任务活动，不串其他阶段同名 taskId", async () => {
-    const pid = uniquePid();
+    const pid = await newProject();
     await upsertProjectTask(pid, "ph1", "c1", { instructions: "x" });
     await upsertProjectTask(pid, "ph2", "c1", { instructions: "y" });
     await setTaskCompletion(pid, "ph1", "c1", true, 3); // 日志写在 ph1

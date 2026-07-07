@@ -1,17 +1,29 @@
 /**
  * 立项后 PM 自动获得项目访问权:ensureProjectMember 幂等加入。
  */
-import { describe, it, expect, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { ensureProjectMember, getProjectMember, getDb } from "./db";
-import { projectMembers } from "../drizzle/schema";
+import { projectMembers, projects } from "../drizzle/schema";
 import { and, eq } from "drizzle-orm";
 
 const PROJ = `pm-test-${Date.now()}`;
 const PM_USER = 987654;
 
+beforeAll(async () => {
+  const db = await getDb();
+  if (!db) throw new Error("no db");
+  await db.insert(projects).values({
+    id: PROJ, name: "PM 成员测试", projectNumber: PROJ, category: "npd",
+    risk: "low", currentPhase: "concept", createdBy: 1,
+  });
+});
+
 afterAll(async () => {
   const db = await getDb();
-  if (db) await db.delete(projectMembers).where(and(eq(projectMembers.projectId, PROJ), eq(projectMembers.userId, PM_USER)));
+  if (db) {
+    await db.delete(projectMembers).where(and(eq(projectMembers.projectId, PROJ), eq(projectMembers.userId, PM_USER)));
+    await db.delete(projects).where(eq(projects.id, PROJ));
+  }
 });
 
 describe("ensureProjectMember", () => {

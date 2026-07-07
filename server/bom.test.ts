@@ -15,8 +15,15 @@ async function cleanup() {
   await db.execute(sql`DELETE FROM bom_items WHERE "projectId"=${PRJ} OR "componentProductId"=${COMP}`);
   await db.execute(sql`DELETE FROM product_revisions WHERE "productId" IN (${COMP},${FIN})`);
   await db.execute(sql`DELETE FROM products WHERE id IN (${COMP},${FIN})`);
+  await db.execute(sql`DELETE FROM projects WHERE id=${PRJ}`);
 }
-beforeAll(cleanup);
+beforeAll(async () => {
+  await cleanup();
+  // bom_items.projectId 有外键后，working BOM 必须挂在真实项目上
+  const db = await getDb(); if (!db) throw new Error("no db");
+  const { sql } = await import("drizzle-orm");
+  await db.execute(sql`INSERT INTO projects (id, name, "projectNumber", category, "currentPhase", "createdBy") VALUES (${PRJ}, 'BOM 测试', ${PRJ}, 'npd', 'concept', 1)`);
+});
 afterAll(cleanup);
 
 describe("BOM", () => {

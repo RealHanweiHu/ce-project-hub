@@ -137,12 +137,16 @@ export const projectRiskEnum = pgEnum("project_risk", ["low", "medium", "high"])
  * Projects table - stores CE product development project metadata.
  * All phase/task/issue/gate/changelog data live in separate tables.
  */
+/** 项目类型：必须与 shared/sop-templates.ts 的 ProjectCategory / CATEGORY_MAP 保持一致 */
+export const PROJECT_CATEGORIES = ["npd", "eco", "idr", "jdm", "obt"] as const;
+export const projectCategoryEnum = pgEnum("project_category", PROJECT_CATEGORIES);
+
 export const projects = pgTable("projects", {
   id: varchar("id", { length: 32 }).primaryKey(),
   name: varchar("name", { length: 256 }).notNull(),
   projectNumber: varchar("projectNumber", { length: 64 }).notNull().default(""),
   /** Product category: maps to SOP template */
-  category: varchar("category", { length: 64 }).notNull().default("npd"),
+  category: projectCategoryEnum("category").notNull().default("npd"),
   /**
    * Project manager user id (FK to users.id).
    * Use JOIN to get display name; no pmName string field.
@@ -249,7 +253,9 @@ export const projectMembers = pgTable(
   "project_members",
   {
     id: serial("id").primaryKey(),
-    projectId: varchar("projectId", { length: 32 }).notNull(),
+    projectId: varchar("projectId", { length: 32 })
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
     userId: integer("userId").notNull(),
     /** Role determines what the member can do in this project */
     role: projectMemberRoleEnum("role").notNull().default("viewer"),
@@ -282,7 +288,9 @@ export const projectPhases = pgTable(
   "project_phases",
   {
     id: serial("id").primaryKey(),
-    projectId: varchar("projectId", { length: 32 }).notNull(),
+    projectId: varchar("projectId", { length: 32 })
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
     /** Phase id matching SOP template (e.g. 'concept', 'planning', 'design') */
     phaseId: varchar("phaseId", { length: 32 }).notNull(),
     /** Custom start date override (YYYY-MM-DD) */
@@ -487,7 +495,9 @@ export const projectTasks = pgTable(
   "project_tasks",
   {
     id: serial("id").primaryKey(),
-    projectId: varchar("projectId", { length: 32 }).notNull(),
+    projectId: varchar("projectId", { length: 32 })
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
     phaseId: varchar("phaseId", { length: 32 }).notNull(),
     /** Task id matching SOP template (e.g. 'c1', 'p3', 'd5') */
     taskId: varchar("taskId", { length: 32 }).notNull(),
@@ -1158,7 +1168,9 @@ export const projectGateReviews = pgTable(
   "project_gate_reviews",
   {
     id: serial("id").primaryKey(),
-    projectId: varchar("projectId", { length: 32 }).notNull(),
+    projectId: varchar("projectId", { length: 32 })
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
     phaseId: varchar("phaseId", { length: 32 }).notNull(),
     phaseName: varchar("phaseName", { length: 256 }).notNull().default(""),
     gateName: varchar("gateName", { length: 256 }).notNull().default(""),
@@ -1587,6 +1599,9 @@ export const productDefinitionChanges = pgTable(
 export type ProductDefinitionChange = typeof productDefinitionChanges.$inferSelect;
 export type InsertProductDefinitionChange = typeof productDefinitionChanges.$inferInsert;
 
+export const PRODUCT_REVISION_STATUSES = ["draft", "released", "superseded"] as const;
+export const productRevisionStatusEnum = pgEnum("product_revision_status", PRODUCT_REVISION_STATUSES);
+
 /** 主版本 / Product Revision = 产品型号下的冻结版本（PLM 轴）；版本链由项目串起 */
 export const productRevisions = pgTable(
   "product_revisions",
@@ -1599,8 +1614,7 @@ export const productRevisions = pgTable(
     parentRevisionId: integer("parentRevisionId"),
     /** 产出该版本的来源项目 */
     createdByProjectId: varchar("createdByProjectId", { length: 32 }),
-    /** draft | released | superseded */
-    status: varchar("status", { length: 16 }).notNull().default("draft"),
+    status: productRevisionStatusEnum("status").notNull().default("draft"),
     releasedAt: timestamp("releasedAt"),
     releasedBy: integer("releasedBy"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -1675,6 +1689,16 @@ export const dingtalkApprovalConfigs = pgTable(
 export type DingtalkApprovalConfig = typeof dingtalkApprovalConfigs.$inferSelect;
 export type InsertDingtalkApprovalConfig = typeof dingtalkApprovalConfigs.$inferInsert;
 
+export const EXTERNAL_APPROVAL_STATUSES = [
+  "pending",
+  "approved",
+  "rejected",
+  "terminated",
+  "sync_failed",
+  "business_blocked",
+] as const;
+export const externalApprovalStatusEnum = pgEnum("external_approval_status", EXTERNAL_APPROVAL_STATUSES);
+
 export const externalApprovalInstances = pgTable(
   "external_approval_instances",
   {
@@ -1686,7 +1710,7 @@ export const externalApprovalInstances = pgTable(
     projectId: varchar("projectId", { length: 32 }),
     processCode: varchar("processCode", { length: 128 }),
     processInstanceId: varchar("processInstanceId", { length: 128 }),
-    status: varchar("status", { length: 32 }).notNull().default("pending"),
+    status: externalApprovalStatusEnum("status").notNull().default("pending"),
     title: varchar("title", { length: 256 }),
     submittedBy: integer("submittedBy").notNull(),
     originatorUserId: integer("originatorUserId"),
@@ -1716,6 +1740,9 @@ export type InsertExternalApprovalInstance = typeof externalApprovalInstances.$i
  * SKU 是客户版本下可销售的具体版本；Customer BOM Revision 基于标准 BOM 受控派生。
  * 所有客户版本与客户 BOM Revision 变化都应通过 ECO/ECN sourceRefId 留痕，只存 delta，不复制整份 BOM。
  */
+export const CUSTOMER_VARIANT_STATUSES = ["draft", "active", "on_hold", "eol"] as const;
+export const customerVariantStatusEnum = pgEnum("customer_variant_status", CUSTOMER_VARIANT_STATUSES);
+
 export const customerVariants = pgTable(
   "customer_variants",
   {
@@ -1730,8 +1757,7 @@ export const customerVariants = pgTable(
     baseRevision: varchar("baseRevision", { length: 16 }).notNull().default(""),
     customerId: varchar("customerId", { length: 64 }).notNull().default(""),
     customerName: varchar("customerName", { length: 256 }).notNull().default(""),
-    /** draft | active | on_hold | eol */
-    status: varchar("status", { length: 16 }).notNull().default("draft"),
+    status: customerVariantStatusEnum("status").notNull().default("draft"),
     /** 仅记录与 base 的差异 */
     deltas: jsonb("deltas").$type<VariantDelta[]>().notNull().default([]),
     /** 认证：是否沿用产品主版本 */
@@ -1766,8 +1792,8 @@ export const bomItems = pgTable(
   "bom_items",
   {
     id: serial("id").primaryKey(),
-    revisionId: integer("revisionId"),
-    projectId: varchar("projectId", { length: 32 }),
+    revisionId: integer("revisionId").references(() => productRevisions.id, { onDelete: "cascade" }),
+    projectId: varchar("projectId", { length: 32 }).references(() => projects.id, { onDelete: "cascade" }),
     partNumber: varchar("partNumber", { length: 64 }).notNull().default(""),
     name: varchar("name", { length: 256 }).notNull(),
     spec: varchar("spec", { length: 256 }).notNull().default(""),

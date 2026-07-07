@@ -20,6 +20,13 @@ async function row() {
 }
 
 beforeAll(async () => {
+  // project_tasks 有外键兜底后，任务必须挂在真实项目上
+  const db = await getDb();
+  if (!db) throw new Error("no db");
+  await db.insert(projects).values({
+    id: P, name: "完成态一致性测试", projectNumber: P, category: "npd",
+    risk: "low", currentPhase: PH, createdBy: U,
+  });
   // 起始:勾选一次再清空,确保存在一行
   await setTaskCompletion(P, PH, T, false, U);
 });
@@ -30,6 +37,7 @@ afterAll(async () => {
     await db.delete(projectTasks).where(eq(projectTasks.projectId, P_AUTO));
     await db.delete(projects).where(eq(projects.id, P_AUTO));
     await db.delete(projectTasks).where(and(eq(projectTasks.projectId, P), eq(projectTasks.phaseId, PH), eq(projectTasks.taskId, T)));
+    await db.delete(projects).where(eq(projects.id, P));
   }
 });
 

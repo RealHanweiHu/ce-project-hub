@@ -1,19 +1,29 @@
 /**
  * 按角色自动分配任务负责人:依据任务 visibleRoles 首个非管理角色匹配项目成员。
  */
-import { describe, it, expect, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { addProjectMember, upsertProjectTask, assignTasksByRole, getProjectTasks, getDb } from "./db";
-import { projectMembers, projectTasks } from "../drizzle/schema";
+import { projectMembers, projectTasks, projects } from "../drizzle/schema";
 import { eq } from "drizzle-orm";
 
 const PROJ = `assign-test-${Date.now()}`;
 const PM = 700001, EE = 700002, INV = 700003;
+
+beforeAll(async () => {
+  const db = await getDb();
+  if (!db) throw new Error("no db");
+  await db.insert(projects).values({
+    id: PROJ, name: "分配测试", projectNumber: PROJ, category: "npd",
+    risk: "low", currentPhase: "concept", createdBy: 1,
+  });
+});
 
 afterAll(async () => {
   const db = await getDb();
   if (db) {
     await db.delete(projectTasks).where(eq(projectTasks.projectId, PROJ));
     await db.delete(projectMembers).where(eq(projectMembers.projectId, PROJ));
+    await db.delete(projects).where(eq(projects.id, PROJ));
   }
 });
 
