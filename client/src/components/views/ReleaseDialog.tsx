@@ -73,7 +73,11 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
 
   const submitApprovalMutation = trpc.products.submitReleaseApproval.useMutation({
     onSuccess: (res) => {
-      toast.success(res.alreadyPending ? '已有待处理审批' : '发布审批已发起');
+      if (res.approval?.status === 'sync_failed') {
+        toast.error(`审批已登记，但钉钉同步失败：${res.approval.lastError ?? '未知原因'}。可稍后重新发起`);
+      } else {
+        toast.success(res.alreadyPending ? '已有待处理审批' : '发布审批已发起');
+      }
       utils.products.releasePrecheck.invalidate({ projectId });
     },
     onError: (e) => toast.error(e.message),

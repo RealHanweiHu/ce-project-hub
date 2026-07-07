@@ -751,10 +751,10 @@ export default function Home() {
         setView('projects');
         syncWorkbenchUrl('projects', null, null, 'replace');
       }
-      toast.success(result.dingtalkGroupDeleted ? '项目已删除，钉钉项目群已同步删除' : '项目已删除');
+      toast.success(result.dingtalkGroupDeleted ? '项目已删除，钉钉项目群已同步删除' : '项目已删除（如有钉钉项目群未同步解散，请手动清理）');
     } catch (error) {
       setSaveStatus('error');
-      toast.error(error instanceof Error ? error.message : '删除项目失败，请确认钉钉项目群可正常删除后再试');
+      toast.error(error instanceof Error ? error.message : '删除项目失败');
     }
   };
 

@@ -317,8 +317,9 @@ export function ProjectListView({
           },
         },
       });
-    } catch {
-      toast.error('操作失败，已回滚');
+    } catch (e) {
+      // 服务端阶段守卫会给出具体原因（如「不能直接前进阶段：请通过 Gate 评审推进」），透传给用户
+      toast.error(e instanceof Error && e.message ? e.message : '操作失败，已回滚');
       refreshBoard();
     }
   };

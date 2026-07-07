@@ -13,3 +13,5 @@ export { CHANGE_TYPES, CHANGE_STATUSES } from "../drizzle/schema";
 export type { ChangeType, ChangeStatus } from "../drizzle/schema";
 export { TASK_STATUSES, TASK_PRIORITIES } from "../drizzle/schema";
 export type { TaskStatus, TaskPriority } from "../drizzle/schema";
+export { ISSUE_SEVERITIES, GATE_DECISIONS } from "../drizzle/schema";
+export type { IssueSeverity, GateDecision } from "../drizzle/schema";

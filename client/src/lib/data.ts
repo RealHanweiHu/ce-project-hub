@@ -81,7 +81,9 @@ export interface FileAttachment {
 }
 
 // ── Issue Tracking ───────────────────────────────────────────────────────────
-export type IssueSeverity = 'P0' | 'P1' | 'P2' | 'P3';
+// severity 值域以 drizzle/schema.ts 为单一来源（经 @shared/const 转发），前端不再手写字面量数组
+import { ISSUE_SEVERITIES, type IssueSeverity } from '@shared/const';
+export { ISSUE_SEVERITIES, type IssueSeverity };
 export type IssueStatus = 'open' | 'in_progress' | 'resolved' | 'closed' | 'wont_fix';
 export type IssueCategory = 'hardware' | 'software' | 'mechanical' | 'thermal' | 'reliability' | 'safety' | 'performance' | 'other';
 
@@ -160,7 +162,7 @@ export interface GateReview {
   gateName: string;
   reviewDate: string;       // YYYY-MM-DD
   participants: string;     // comma-separated names
-  decision: 'approved' | 'conditional' | 'rejected';
+  decision: GateDecision;
   conditions: string;       // conditions if conditional approval
   notes: string;            // meeting notes / decision rationale
   createdAt: string;        // ISO timestamp
@@ -183,8 +185,8 @@ export interface PhaseData {
 // ── Change Log / ECR ────────────────────────────────────────────────────────
 // ChangeType and ChangeStatus are the single source of truth from drizzle/schema.ts.
 // They are re-exported via @shared/const to keep frontend and backend in sync.
-import type { ChangeType, ChangeStatus } from '@shared/const';
-export type { ChangeType, ChangeStatus };
+import type { ChangeType, ChangeStatus, GateDecision } from '@shared/const';
+export type { ChangeType, ChangeStatus, GateDecision };
 
 export interface ChangeRecord {
   id: string;
@@ -523,5 +525,3 @@ export const CATEGORY_LABELS: Record<IssueCategory, string> = {
   other:       '其他',
 };
 
-// Phases where Issue List is shown (validation phases)
-export const ISSUE_PHASES = new Set(['evt', 'dvt', 'pvt', 'mp', 'design']);

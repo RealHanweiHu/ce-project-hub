@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import {
   Issue, IssueSeverity, IssueStatus, IssueCategory,
-  SEVERITY_CONFIG, STATUS_CONFIG, CATEGORY_LABELS,
+  ISSUE_SEVERITIES, SEVERITY_CONFIG, STATUS_CONFIG, CATEGORY_LABELS,
 } from '@/lib/data';
 
 interface IssueListProps {
@@ -118,7 +118,7 @@ function IssueFormModal({
             <div>
               <label className="text-[10px] uppercase tracking-widest text-muted-foreground block mb-1.5">缺陷等级</label>
               <div className="flex flex-col gap-1">
-                {(['P0', 'P1', 'P2', 'P3'] as IssueSeverity[]).map((s) => {
+                {ISSUE_SEVERITIES.map((s) => {
                   const cfg = SEVERITY_CONFIG[s];
                   return (
                     <button
@@ -408,7 +408,7 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true
         <div className="bg-card border border-border p-3 rounded-[11px]">
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">等级分布</div>
           <div className="flex items-center gap-2 mt-1">
-            {(['P0', 'P1', 'P2', 'P3'] as IssueSeverity[]).map((s) => {
+            {ISSUE_SEVERITIES.map((s) => {
               const cfg = SEVERITY_CONFIG[s];
               const count = s === 'P0' ? stats.p0 : s === 'P1' ? stats.p1 : s === 'P2' ? stats.p2 : stats.p3;
               return count > 0 ? (
@@ -440,7 +440,7 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true
         {/* Severity Filter */}
         <div className="flex items-center gap-1">
           <Filter size={11} className="text-muted-foreground" />
-          {(['all', 'P0', 'P1', 'P2', 'P3'] as const).map((s) => (
+          {(['all', ...ISSUE_SEVERITIES] as const).map((s) => (
             <button
               key={s}
               onClick={() => setFilterSeverity(s)}

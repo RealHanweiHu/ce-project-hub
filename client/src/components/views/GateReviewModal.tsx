@@ -8,6 +8,7 @@ import {
   FileText, ClipboardCheck, Plus, ChevronDown, ChevronRight, RotateCcw,
 } from 'lucide-react';
 import { GateReview } from '@/lib/data';
+import { GATE_DECISIONS } from '@shared/const';
 import { toLocalISODate } from '@/lib/utils';
 import { GateReadinessChecklist } from './GateReadinessChecklist';
 import type { SOPGateStandard } from '@/lib/sop-templates';
@@ -447,7 +448,7 @@ export function GateReviewModal({
             )}
             <NewReviewForm
               roundNumber={nextRound}
-              allowedDecisions={canDecide ? ['approved', 'conditional', 'rejected'] : ['rejected']}
+              allowedDecisions={canDecide ? [...GATE_DECISIONS] : ['rejected']}
               onSubmit={handleSubmit}
               onCancel={() => existingReviews.length > 0 ? setShowForm(false) : onCancel()}
             />

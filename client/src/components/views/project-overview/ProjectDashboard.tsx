@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import {
   Project, HEALTH_CONFIG, getProjectPhases, computeOverallProgress,
-  Issue, ChangeRecord,
+  Issue, ChangeRecord, ISSUE_SEVERITIES,
 } from '@/lib/data';
 import { CATEGORY_MAP } from '@/lib/sop-templates';
 import { CHANGE_TYPE_CONFIG } from './../ChangeLog';
@@ -55,7 +55,7 @@ const TASK_STATUS_LABEL: Record<string, string> = {
   todo: '待开始', in_progress: '进行中', blocked: '阻塞', done: '已完成',
   skipped: '跳过', pending_approval: '待审批',
 };
-const SEV_ORDER: Record<string, number> = { P0: 0, P1: 1, P2: 2, P3: 3 };
+const SEV_ORDER: Record<string, number> = Object.fromEntries(ISSUE_SEVERITIES.map((s, i) => [s, i]));
 
 interface FlatTask {
   id: string; name: string; status: string; dueDate?: string | null; assigneeUserId?: number | null;
