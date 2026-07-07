@@ -127,8 +127,10 @@ export async function submitReleaseApproval(input: {
     formComponentValues,
   });
   if (!created.ok) {
-    await updateExternalApprovalInstance(instance.id, { status: "sync_failed", lastError: created.error });
-    throw new Error(created.error);
+    // 钉钉不可用不阻塞业务：实例落库为 sync_failed 返回，前端提示后可重新发起
+    // （getPendingExternalApproval 只匹配 pending，失败实例不会卡住重发）
+    const failed = await updateExternalApprovalInstance(instance.id, { status: "sync_failed", lastError: created.error });
+    return { instance: failed ?? instance, alreadyPending: false };
   }
 
   const updated = await updateExternalApprovalInstance(instance.id, {

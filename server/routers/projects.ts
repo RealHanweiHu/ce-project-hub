@@ -21,6 +21,7 @@ import {
   getProductDefinitionSnapshotById,
   listProductDefinitionChanges,
 } from "../db";
+import { PROJECT_CATEGORIES } from "../../drizzle/schema";
 import { applyProjectSchedule } from "../services/schedule-service";
 import { TRPCError } from "@trpc/server";
 import { ROLE_PERMISSIONS } from "./members";
@@ -96,7 +97,7 @@ const projectInputSchema = z.object({
   id: z.string(),
   name: z.string(),
   projectNumber: z.string().default(""),
-  category: z.string().default("npd"),
+  category: z.enum(PROJECT_CATEGORIES).default("npd"),
   /** PM user id (FK to users.id) */
   pmUserId: z.number().int().nullable().optional(),
   /** 关联产品(产品库 id);NPD 新产品可暂空 */
@@ -628,6 +629,21 @@ export const projectsRouter = router({
       const allowed = isSystemAdminRole(ctx.user.role) || (role && ROLE_PERMISSIONS[role].canEditProjectInfo);
       if (!allowed) throw new TRPCError({ code: "FORBIDDEN" });
 
+      // 阶段守卫：move 只承担「回退」；前进推进必须走 gateReviews.confirmAndAdvance
+      // （评审记录、gate task 完成、自动化事件都挂在那条路径上）。系统管理员也不例外。
+      if (input.currentPhase !== undefined && input.currentPhase !== existing.currentPhase) {
+        const phases = getPhasesForCategory(existing.category);
+        const toIdx = phases.findIndex((p) => p.id === input.currentPhase);
+        if (toIdx < 0) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "非法阶段：不在该项目类型的 SOP 阶段列表中" });
+        }
+        const fromIdx = phases.findIndex((p) => p.id === existing.currentPhase);
+        // fromIdx < 0 说明现值已是脏数据，放行任何合法阶段作为修复通道
+        if (fromIdx >= 0 && toIdx > fromIdx) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "不能直接前进阶段：请通过 Gate 评审推进" });
+        }
+      }
+
       const patch: Record<string, unknown> = {};
       if (input.currentPhase !== undefined) patch.currentPhase = input.currentPhase;
       if (input.pmUserId !== undefined) patch.pmUserId = input.pmUserId;
@@ -836,14 +852,14 @@ export const projectsRouter = router({
           catch (e) { console.warn("[meeting] cancel before project delete failed (non-fatal):", e); }
         }
         if (existing.dingtalkChatId) {
-          const groupResult = await disbandGroupChat(existing.dingtalkChatId);
-          if (!groupResult.ok) {
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message: groupResult.error,
-            });
+          // 群解散 best-effort：钉钉不可用不能把项目删除挡住（群可事后手动清理）
+          try {
+            const groupResult = await disbandGroupChat(existing.dingtalkChatId);
+            if (groupResult.ok) dingtalkGroupDeleted = true;
+            else console.warn("[project.delete] disband dingtalk group failed (non-fatal):", groupResult.error);
+          } catch (e) {
+            console.warn("[project.delete] disband dingtalk group failed (non-fatal):", e);
           }
-          dingtalkGroupDeleted = true;
         }
         result = await deleteProject(input.id);
       } catch (error) {

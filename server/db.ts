@@ -1,6 +1,7 @@
 import { eq, desc, and, or, isNull, inArray, between, getTableColumns, sql as drizzleSql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import {
+  EXTERNAL_APPROVAL_STATUSES,
   InsertUser, users, projects, InsertProject, ProjectRow,
   projectMembers, InsertProjectMember, ProjectMember, ProjectMemberRole,
   projectPhases, ProjectPhase, InsertProjectPhase,
@@ -367,9 +368,11 @@ export async function createProjectWithSeed(
 
 export async function updateProject(
   id: string,
-  patch: Partial<Omit<InsertProject, "id" | "createdBy" | "createdAt">>
+  patch: Partial<Omit<InsertProject, "id" | "createdBy" | "createdAt">>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec?: any
 ): Promise<void> {
-  const db = await getDb();
+  const db = exec ?? (await getDb());
   if (!db) throw new Error("Database not available");
   await db.update(projects).set(patch).where(eq(projects.id, id));
 }
@@ -420,14 +423,7 @@ export async function updateProjectDingtalkMeetingSync(
   await db.update(projects).set(updateSet).where(eq(projects.id, projectId));
 }
 
-export const EXTERNAL_APPROVAL_STATUSES = [
-  "pending",
-  "approved",
-  "rejected",
-  "terminated",
-  "sync_failed",
-  "business_blocked",
-] as const;
+export { EXTERNAL_APPROVAL_STATUSES } from "../drizzle/schema";
 export type ExternalApprovalStatus = (typeof EXTERNAL_APPROVAL_STATUSES)[number];
 
 export async function listApprovalConfigs(): Promise<DingtalkApprovalConfig[]> {
@@ -995,7 +991,10 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
     }).length;
     const gateTask = phase ? taskByProjectTask.get(`${p.id}:${phase.gateTaskId}`) : undefined;
     const gateDone = !!gateTask && (gateTask.status === "done" || gateTask.status === "skipped" || gateTask.completed);
-    const readiness = phase ? await getGateReadiness(p.id, phase.id) : null;
+    const [readiness, releaseGate] = await Promise.all([
+      phase ? getGateReadiness(p.id, phase.id) : Promise.resolve(null),
+      getReleaseGateStatus(p),
+    ]);
     const deliverableDim = readiness?.dimensions.find((d) => d.dimension === "deliverables");
     const gateBlockers = gateDone ? 0 : readiness?.blockerCount ?? 0;
     let gateNotReady: "red" | "amber" | null = null;
@@ -1007,7 +1006,6 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
           ? "amber"
           : null;
     }
-    const releaseGate = await getReleaseGateStatus(p);
     const releaseHardBlockers = releaseGate.dimensions.filter((d) => !d.ok && d.dimension !== "review_conditions").length;
     const progressBehind = progressBehindPct(t?.plannedItems ?? 0, t?.dueItems ?? 0, t?.donePlannedItems ?? 0);
     const projectedEnd = forecastProjectEnd(p, projectTaskRows, todayISO, cal);
@@ -1447,9 +1445,11 @@ export async function upsertProjectTask(
     approvalRequestedAt?: Date | null;
     approvalDecidedBy?: number | null;
     approvalDecidedAt?: Date | null;
-  }
+  },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec?: any
 ): Promise<void> {
-  const db = await getDb();
+  const db = exec ?? (await getDb());
   if (!db) throw new Error("Database not available");
   const existing = await db
     .select()
@@ -2337,13 +2337,12 @@ export async function getProjectMetricsData(
 export async function getPortfolioMetricsData(userId: number): Promise<PortfolioMetricsRollup> {
   const portfolio = await getPortfolio(userId);
   const todayISO = todayInShanghaiISO();
-  const input: { projectId: string; name: string; ragLevel: string; metrics: ProjectMetrics }[] = [];
-  for (const p of portfolio) {
+  const input = await Promise.all(portfolio.map(async (p) => {
     const raw = await getProjectMetricsData(p.id, "", todayISO);
     const fromISO = defaultFromISO(p.startDate, raw, todayISO);
     const metrics = computeProjectMetrics({ ...raw, window: { fromISO, toISO: todayISO } });
-    input.push({ projectId: p.id, name: p.name, ragLevel: p.ragLevel, metrics });
-  }
+    return { projectId: p.id, name: p.name, ragLevel: p.ragLevel, metrics };
+  }));
   return rollupPortfolioMetrics(input);
 }
 
@@ -2699,10 +2698,15 @@ async function buildGateReviewTraceSnapshot(exec: any, input: {
 }
 
 /** Create a gate review */
-export async function createProjectGateReview(review: InsertProjectGateReview): Promise<number> {
+export async function createProjectGateReview(
+  review: InsertProjectGateReview,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec?: any
+): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  return db.transaction(async (tx) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const run = async (tx: any): Promise<number> => {
     await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${review.projectId}:${review.phaseId}`}))`);
     const latest = await tx
       .select({ maxRound: drizzleSql<number>`coalesce(max(${projectGateReviews.roundNumber}), 0)::int` })
@@ -2725,12 +2729,16 @@ export async function createProjectGateReview(review: InsertProjectGateReview): 
       })
       .returning({ id: projectGateReviews.id });
     return result[0].id;
-  });
+  };
+  // exec 传入外层事务则并入之（advisory lock 绑定该事务）；否则自开事务
+  if (exec) return run(exec);
+  return db.transaction(run);
 }
 
 /**
  * 原子化「Gate 通过/有条件通过/不通过」：记录评审 → (非不通过时)标记 gate task 完成 → (复审当前阶段时)推进 currentPhase。
- * 关键不变量：先标 gate task done，再推进 currentPhase——任一步失败都不会出现「已推进但 gate task 未完成 → 下一阶段被锁死」的脏态。
+ * 三笔写入在同一事务：任一步失败整体回滚，不留「评审已记录但任务/阶段没动」的中间态
+ * （否则重试会产生第二轮评审记录）。advisory lock 同时防并发重复评审。
  * 替代旧的"客户端三笔分散写 + 600ms 防抖"路径（会因竞态/取消导致部分持久化）。
  */
 export async function confirmGateReview(input: {
@@ -2751,37 +2759,40 @@ export async function confirmGateReview(input: {
   const project = await getProjectById(input.projectId);
   if (!project) throw new Error("Project not found");
 
-  // 1) 记录评审（内部事务 + 顾问锁，自动算 roundNumber）
-  const reviewId = await createProjectGateReview({
-    projectId: input.projectId,
-    phaseId: input.phaseId,
-    phaseName: input.phaseName ?? "",
-    gateName: input.gateName ?? "",
-    reviewDate: input.reviewDate,
-    participants: input.participants ?? null,
-    decision: input.decision,
-    conditions: input.conditions ?? null,
-    notes: input.notes ?? null,
-    createdBy: input.createdBy,
-  });
+  const { reviewId, advancedTo } = await db.transaction(async (tx) => {
+    // 1) 记录评审（顾问锁并入本事务，自动算 roundNumber）
+    const reviewId = await createProjectGateReview({
+      projectId: input.projectId,
+      phaseId: input.phaseId,
+      phaseName: input.phaseName ?? "",
+      gateName: input.gateName ?? "",
+      reviewDate: input.reviewDate,
+      participants: input.participants ?? null,
+      decision: input.decision,
+      conditions: input.conditions ?? null,
+      notes: input.notes ?? null,
+      createdBy: input.createdBy,
+    }, tx);
 
-  let advancedTo: string | null = null;
-  if (input.decision !== "rejected") {
-    // 2) 先标记 gate task 完成（必须在推进之前）
-    if (input.gateTaskId) {
-      await setTaskCompletion(input.projectId, input.phaseId, input.gateTaskId, true, input.createdBy);
-    }
-    // 3) 仅当复审的是「当前阶段」且存在下一阶段时才推进
-    if (project.currentPhase === input.phaseId) {
-      const phases = getPhasesForCategory(project.category);
-      const idx = phases.findIndex((p) => p.id === input.phaseId);
-      const next = idx >= 0 && idx < phases.length - 1 ? phases[idx + 1] : null;
-      if (next) {
-        await updateProject(input.projectId, { currentPhase: next.id });
-        advancedTo = next.id;
+    let advancedTo: string | null = null;
+    if (input.decision !== "rejected") {
+      // 2) 标记 gate task 完成
+      if (input.gateTaskId) {
+        await setTaskCompletion(input.projectId, input.phaseId, input.gateTaskId, true, input.createdBy, tx);
+      }
+      // 3) 仅当复审的是「当前阶段」且存在下一阶段时才推进
+      if (project.currentPhase === input.phaseId) {
+        const phases = getPhasesForCategory(project.category);
+        const idx = phases.findIndex((p) => p.id === input.phaseId);
+        const next = idx >= 0 && idx < phases.length - 1 ? phases[idx + 1] : null;
+        if (next) {
+          await updateProject(input.projectId, { currentPhase: next.id }, tx);
+          advancedTo = next.id;
+        }
       }
     }
-  }
+    return { reviewId, advancedTo };
+  });
 
   const reviews = await getProjectGateReviews(input.projectId, input.phaseId);
   const roundNumber = reviews.find((r) => r.id === reviewId)?.roundNumber ?? 1;
@@ -2951,9 +2962,11 @@ export async function deleteProjectFile(id: number): Promise<{ storageKey: strin
 
 /** Append an immutable activity log entry */
 export async function createActivityLog(
-  record: Omit<InsertActivityLog, "id" | "createdAt">
+  record: Omit<InsertActivityLog, "id" | "createdAt">,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec?: any
 ): Promise<void> {
-  const db = await getDb();
+  const db = exec ?? (await getDb());
   if (!db) {
     // Non-fatal: activity logging should never block the main operation
     console.warn("[ActivityLog] Database not available, skipping log entry");
@@ -2963,6 +2976,7 @@ export async function createActivityLog(
     await db.insert(activityLogs).values(record);
   } catch (err) {
     // Non-fatal: log the error but don't propagate
+    // （在事务内失败会使整个事务中止回滚——日志与业务写入同生共死是预期行为）
     console.error("[ActivityLog] Failed to write log entry:", err);
   }
 }
@@ -3121,12 +3135,17 @@ export function applyAutomaticTaskStatuses(
  * and completion. Manual non-terminal status changes are intentionally not a
  * control surface; "done" and "skipped" remain explicit terminal states.
  */
-export async function refreshProjectTaskStatuses(projectId: string, todayISO = todayInShanghaiISO()): Promise<number> {
-  const db = await getDb();
+export async function refreshProjectTaskStatuses(
+  projectId: string,
+  todayISO = todayInShanghaiISO(),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec?: any
+): Promise<number> {
+  const db = exec ?? (await getDb());
   if (!db) return 0;
   const project = await getProjectById(projectId);
   if (!project) return 0;
-  const rows = await db.select().from(projectTasks).where(eq(projectTasks.projectId, projectId));
+  const rows: ProjectTask[] = await db.select().from(projectTasks).where(eq(projectTasks.projectId, projectId));
   if (rows.length === 0) return 0;
 
   const nextRows = applyAutomaticTaskStatuses(rows, project.category, todayISO);
@@ -3212,9 +3231,11 @@ export async function setTaskCompletion(
   phaseId: string,
   taskId: string,
   completed: boolean,
-  updatedBy?: number | null
+  updatedBy?: number | null,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec?: any
 ): Promise<{ outcome: CompletionOutcome }> {
-  const db = await getDb();
+  const db = exec ?? (await getDb());
   const current = db
     ? (
         await db
@@ -3233,14 +3254,14 @@ export async function setTaskCompletion(
       approvalRequestedBy: updatedBy ?? null,
       approvalRequestedAt: new Date(),
       updatedBy: updatedBy ?? null,
-    });
-    await refreshProjectTaskStatuses(projectId);
+    }, exec);
+    await refreshProjectTaskStatuses(projectId, undefined, exec);
     if (updatedBy != null) {
       await createActivityLog({
         projectId, userId: updatedBy, action: "task.submit_approval",
         entityType: "task", entityId: taskId,
         meta: { phaseId, approver: current?.approverUserId ?? null },
-      });
+      }, exec);
     }
     return { outcome: "submitted" };
   }
@@ -3249,13 +3270,13 @@ export async function setTaskCompletion(
   if (completed) {
     await upsertProjectTask(projectId, phaseId, taskId, {
       status: "done", completedAt: new Date(), updatedBy: updatedBy ?? null,
-    });
-    await refreshProjectTaskStatuses(projectId);
+    }, exec);
+    await refreshProjectTaskStatuses(projectId, undefined, exec);
     if (updatedBy != null) {
       await createActivityLog({
         projectId, userId: updatedBy, action: "task.complete",
         entityType: "task", entityId: taskId, meta: { phaseId },
-      });
+      }, exec);
     }
     return { outcome: "completed" };
   }
@@ -3265,13 +3286,13 @@ export async function setTaskCompletion(
     status: "todo", completedAt: null,
     approvalStatus: "none", approvalRequestedBy: null, approvalRequestedAt: null,
     updatedBy: updatedBy ?? null,
-  });
-  await refreshProjectTaskStatuses(projectId);
+  }, exec);
+  await refreshProjectTaskStatuses(projectId, undefined, exec);
   if (updatedBy != null) {
     await createActivityLog({
       projectId, userId: updatedBy, action: "task.uncomplete",
       entityType: "task", entityId: taskId, meta: { phaseId },
-    });
+    }, exec);
   }
   return { outcome: "uncompleted" };
 }
@@ -4355,14 +4376,16 @@ export async function getReleaseGateStatus(project: ProjectRow): Promise<Release
       dimensions: [],
     };
   }
-  const reviews = await getProjectGateReviews(project.id, phase.id);
+  const [reviews, effective, readiness] = await Promise.all([
+    getProjectGateReviews(project.id, phase.id),
+    getProjectEffectiveProcess(project.id),
+    getGateReadiness(project.id, phase.id),
+  ]);
   const latest = pickLatestReview(reviews);
-  const effective = await getProjectEffectiveProcess(project.id);
   const effectivePhase = effective?.phases.find((item) => item.id === phase.id);
   const expectedDeliverables = effectivePhase?.submittedDeliverables ?? Array.from(
     new Set([...(phase.deliverables ?? []), ...(phase.gateStandard?.requiredDeliverables ?? [])])
   );
-  const readiness = await getGateReadiness(project.id, phase.id);
   const deliverableDim = readiness?.dimensions.find((d) => d.dimension === "deliverables");
   const missing = deliverableDim?.blockers ?? [];
   const total = deliverableDim ? expectedDeliverables.length : 0;
@@ -4431,19 +4454,33 @@ export async function getApproachingGates(): Promise<Array<{
 export async function getGateReadiness(projectId: string, phaseId: string): Promise<GateReadiness | null> {
   const db = await getDb();
   if (!db) return null;
-  const project = await getProjectById(projectId);
+  const [project, effective] = await Promise.all([
+    getProjectById(projectId),
+    getProjectEffectiveProcess(projectId),
+  ]);
   if (!project) return null;
   const phase = getPhasesForCategory(project.category).find((p) => p.id === phaseId);
   if (!phase) return null;
 
   // 裁剪集成：被裁阶段的 Gate 视为 N/A（不阻塞）；非裁剪阶段的应交付物用"有效提交集"（含归集+override）。
-  const effective = await getProjectEffectiveProcess(projectId);
   const effPhase = effective?.phases.find((p) => p.id === phaseId);
   if (effPhase?.tailored) {
     return { phaseId, gateName: phase.gate, ready: true, dimensions: [], blockerCount: 0 };
   }
 
-  const tasks = await getProjectTasks(projectId, phaseId);
+  const required = effPhase?.submittedDeliverables ?? phase.gateStandard.requiredDeliverables;
+  // 8 组只读查询彼此独立，并行拉取（此前串行 10 次往返是 portfolio N+1 的主放大器）
+  const [tasks, uploadedSet, critical, testReports, npiReadiness, sampleSignoffs, gateBlockers, reviews] = await Promise.all([
+    getProjectTasks(projectId, phaseId),
+    loadDeliverableReviewService().then(({ getReviewSatisfiedSet }) => getReviewSatisfiedSet(projectId, phaseId, required)),
+    getPhaseOpenP0P1(projectId, phaseId),
+    getPhaseTestReadiness(projectId, phaseId, phaseId.toUpperCase()),
+    getPhaseNpiReadiness(projectId, phaseId, phaseId.toUpperCase()),
+    getPhaseSampleSignoffReadiness(projectId, phaseId, phaseId.toUpperCase()),
+    getProjectGateBlockers(projectId, phaseId),
+    getProjectGateReviews(projectId, phaseId),
+  ]);
+
   const byTask = new Map(tasks.map((t) => [t.taskId, t]));
   const isDone = (id: string) => {
     const t = byTask.get(id);
@@ -4455,20 +4492,10 @@ export async function getGateReadiness(projectId: string, phaseId: string): Prom
     .filter((t) => !isDone(t.id))
     .map((t) => t.id);
 
-  const required = effPhase?.submittedDeliverables ?? phase.gateStandard.requiredDeliverables;
-  const { getReviewSatisfiedSet } = await loadDeliverableReviewService();
-  const uploaded = Array.from(await getReviewSatisfiedSet(projectId, phaseId, required));
-
-  const critical = await getPhaseOpenP0P1(projectId, phaseId);
-  const testReports = await getPhaseTestReadiness(projectId, phaseId, phaseId.toUpperCase());
-  const npiReadiness = await getPhaseNpiReadiness(projectId, phaseId, phaseId.toUpperCase());
-  const sampleSignoffs = await getPhaseSampleSignoffReadiness(projectId, phaseId, phaseId.toUpperCase());
-  const gateBlockers = await getProjectGateBlockers(projectId, phaseId);
+  const uploaded = Array.from(uploadedSet);
   const openGateBlockerTitles = gateBlockers
     .filter((blocker) => blocker.status === "open")
     .map((blocker) => `${blocker.blockerType === "quality" ? "QA" : "PE/NPI"}: ${blocker.title}`);
-
-  const reviews = await getProjectGateReviews(projectId, phaseId);
   const latest = pickLatestReview(reviews);
 
   return computeGateReadiness({
