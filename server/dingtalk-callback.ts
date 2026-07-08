@@ -45,6 +45,29 @@ function getString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+function parseJsonObject(value: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeCallbackPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  const content = payload.content;
+  if (typeof content !== "string" || !content.trim()) return payload;
+  const parsedContent = parseJsonObject(content);
+  if (!parsedContent) return payload;
+  return {
+    ...payload,
+    content: parsedContent,
+    cardCallbackData: parsedContent,
+  };
+}
+
 function removePkcs7Padding(buffer: Buffer): Buffer {
   const pad = buffer[buffer.length - 1];
   if (pad < 1 || pad > 32) return buffer;
@@ -65,6 +88,28 @@ function timingSafeEqualHex(a: string, b: string): boolean {
   const left = Buffer.from(a);
   const right = Buffer.from(b);
   return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function timingSafeEqualText(a: string, b: string): boolean {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+export function verifyDingtalkCardCallbackSignature(input: {
+  timestamp: string;
+  signature: string;
+  secret: string;
+}): boolean {
+  const timestamp = input.timestamp.trim();
+  const signature = input.signature.trim();
+  const secret = input.secret.trim();
+  if (!timestamp || !signature || !secret) return false;
+  const expected = crypto
+    .createHmac("sha256", secret)
+    .update(timestamp)
+    .digest("base64");
+  return timingSafeEqualText(expected, signature);
 }
 
 function decryptDingtalkPayload(input: {
@@ -131,12 +176,13 @@ export type CallbackAction =
  * - 其余无关事件 → ignore(回 ack,避免钉钉重试风暴)
  */
 export function classifyCallbackEvent(payload: Record<string, unknown>): CallbackAction {
-  const eventType = getString(payload?.EventType) || getString(payload?.eventType);
+  const normalizedPayload = normalizeCallbackPayload(payload);
+  const eventType = getString(normalizedPayload?.EventType) || getString(normalizedPayload?.eventType);
   if (eventType === "check_url") return { kind: "verify" };
-  const actionToken = findNestedString(payload, ["actionToken", "action_token", "token"]);
-  const outTrackId = findNestedString(payload, ["outTrackId", "out_track_id"]);
+  const actionToken = findNestedString(normalizedPayload, ["actionToken", "action_token", "token"]);
+  const outTrackId = findNestedString(normalizedPayload, ["outTrackId", "out_track_id"]);
   if (actionToken && outTrackId) return { kind: "card", token: actionToken, outTrackId };
-  const processInstanceId = findProcessInstanceId(payload);
+  const processInstanceId = findProcessInstanceId(normalizedPayload);
   if (processInstanceId) return { kind: "sync", processInstanceId };
   return { kind: "ignore" };
 }
@@ -162,6 +208,17 @@ export function registerDingtalkCallbackRoute(app: Express, appRouter?: AppRoute
 
     const action = classifyCallbackEvent(payload);
     if (action.kind === "card") {
+      if (!encrypt && ENV.dingtalkInteractiveCardCallbackSecret.trim()) {
+        const signatureOk = verifyDingtalkCardCallbackSignature({
+          timestamp: getString(req.header("x-ddpaas-signature-timestamp")),
+          signature: getString(req.header("x-ddpaas-signature")),
+          secret: ENV.dingtalkInteractiveCardCallbackSecret,
+        });
+        if (!signatureOk) {
+          res.status(401).json({ success: false, error: "card callback signature invalid" });
+          return;
+        }
+      }
       if (!appRouter) {
         res.status(500).json({ success: false, error: "app router unavailable" });
         return;

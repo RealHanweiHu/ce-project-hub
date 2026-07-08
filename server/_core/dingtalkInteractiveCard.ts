@@ -3,6 +3,7 @@ import { getAccessToken, isDingtalkConfigured } from "./dingtalk";
 import type { WorkNotificationButton } from "./dingtalkMessage";
 
 const INTERACTIVE_CARD_BASE = "https://api.dingtalk.com/v1.0/card/instances";
+const INTERACTIVE_CARD_CALLBACK_REGISTER_URL = "https://api.dingtalk.com/v1.0/card/callbacks/register";
 
 export type InteractiveCardResult =
   | { ok: true; raw: unknown }
@@ -53,6 +54,13 @@ export function isDingtalkInteractiveCardConfigured(): boolean {
     && isDingtalkConfigured()
     && !!ENV.dingtalkInteractiveCardTemplateId.trim()
     && !!ENV.dingtalkInteractiveRobotCode.trim();
+}
+
+export function isDingtalkInteractiveCardCallbackConfigured(): boolean {
+  return isDingtalkInteractiveCardConfigured()
+    && !!ENV.appBaseUrl.trim()
+    && !!ENV.dingtalkInteractiveCardCallbackRouteKey.trim()
+    && !!ENV.dingtalkInteractiveCardCallbackSecret.trim();
 }
 
 export function buildPendingActionCardParams(input: {
@@ -109,11 +117,13 @@ export async function createAndDeliverInteractiveCard(input: {
   }
   const token = await getAccessToken();
   if (!token) return { ok: false, error: "获取钉钉 access_token 失败" };
+  const callbackRouteKey = ENV.dingtalkInteractiveCardCallbackRouteKey.trim();
 
   const requestBody = {
     userId: input.corpUserId,
     cardTemplateId: ENV.dingtalkInteractiveCardTemplateId.trim(),
     outTrackId: input.outTrackId,
+    ...(callbackRouteKey ? { callbackRouteKey } : {}),
     userIdType: 1,
     openSpaceId: `dtv1.card//IM_ROBOT.${input.corpUserId}`,
     cardData: { cardParamMap: input.cardParamMap },
@@ -137,6 +147,50 @@ export async function createAndDeliverInteractiveCard(input: {
     return { ok: true, raw: body };
   } catch (error) {
     return { ok: false, error: `钉钉互动卡片投放异常: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
+export async function registerInteractiveCardCallback(input?: {
+  callbackUrl?: string;
+  callbackRouteKey?: string;
+  apiSecret?: string;
+  forceUpdate?: boolean;
+}): Promise<InteractiveCardResult> {
+  if (!isDingtalkConfigured()) {
+    return { ok: false, error: "钉钉应用未配置" };
+  }
+  const token = await getAccessToken();
+  if (!token) return { ok: false, error: "获取钉钉 access_token 失败" };
+
+  const appBaseUrl = ENV.appBaseUrl.trim();
+  const callbackUrl = (input?.callbackUrl ?? (appBaseUrl ? `${appBaseUrl}/api/dingtalk/callback` : "")).trim();
+  const callbackRouteKey = (input?.callbackRouteKey ?? ENV.dingtalkInteractiveCardCallbackRouteKey).trim();
+  const apiSecret = (input?.apiSecret ?? ENV.dingtalkInteractiveCardCallbackSecret).trim();
+  if (!callbackUrl) return { ok: false, error: "缺少互动卡片回调地址 APP_BASE_URL" };
+  if (!callbackRouteKey) return { ok: false, error: "缺少 DINGTALK_INTERACTIVE_CARD_CALLBACK_ROUTE_KEY" };
+  if (!apiSecret) return { ok: false, error: "缺少 DINGTALK_INTERACTIVE_CARD_CALLBACK_SECRET" };
+
+  try {
+    const resp = await fetch(INTERACTIVE_CARD_CALLBACK_REGISTER_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-acs-dingtalk-access-token": token,
+      },
+      body: JSON.stringify({
+        callbackRouteKey,
+        callbackUrl,
+        apiSecret,
+        forceUpdate: input?.forceUpdate ?? true,
+      }),
+    });
+    const body = await resp.json().catch(() => ({})) as Record<string, unknown>;
+    if (!resp.ok || hasApiError(body)) {
+      return { ok: false, error: responseError("钉钉互动卡片回调注册失败", body, resp.status), raw: body };
+    }
+    return { ok: true, raw: body };
+  } catch (error) {
+    return { ok: false, error: `钉钉互动卡片回调注册异常: ${error instanceof Error ? error.message : String(error)}` };
   }
 }
 

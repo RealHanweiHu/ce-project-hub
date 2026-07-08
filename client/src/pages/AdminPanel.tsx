@@ -92,6 +92,10 @@ type DingtalkStatus = {
     robotCodeConfigured: boolean;
     robotCodeMasked: string | null;
     appBaseUrlConfigured: boolean;
+    callbackReady: boolean;
+    callbackRouteConfigured: boolean;
+    callbackRouteKey: string | null;
+    callbackSecretConfigured: boolean;
     deliveryApi: string;
   };
 };
@@ -295,8 +299,8 @@ export default function AdminPanel() {
           <div className="px-4 py-3 border-b border-border flex items-center gap-2">
             <Bot size={14} className="text-primary" />
             <h2 className="text-base text-foreground flex-1">钉钉通知状态</h2>
-            <Badge variant={ding?.interactiveCard.ready ? 'default' : 'secondary'} className="text-[10px]">
-              {ding?.interactiveCard.ready ? '原生卡片可用' : '待配置'}
+            <Badge variant={ding?.interactiveCard.callbackReady ? 'default' : ding?.interactiveCard.ready ? 'outline' : 'secondary'} className="text-[10px]">
+              {ding?.interactiveCard.callbackReady ? '原生回调可用' : ding?.interactiveCard.ready ? '卡片可发送' : '待配置'}
             </Badge>
             <Button
               variant="ghost"
@@ -347,14 +351,17 @@ export default function AdminPanel() {
             <div className="border border-border bg-secondary/40 p-3">
               <div className="flex items-center justify-between gap-2 mb-2">
                 <span className="text-sm text-foreground">原生互动卡片</span>
-                <Badge variant={ding?.interactiveCard.ready ? 'default' : 'secondary'} className="text-[10px]">
-                  {ding?.interactiveCard.ready ? '可用' : '缺配置'}
+                <Badge variant={ding?.interactiveCard.callbackReady ? 'default' : ding?.interactiveCard.ready ? 'outline' : 'secondary'} className="text-[10px]">
+                  {ding?.interactiveCard.callbackReady ? '回调可用' : ding?.interactiveCard.ready ? '可发送' : '缺配置'}
                 </Badge>
               </div>
               <div className="space-y-1 text-xs text-muted-foreground">
                 <p>开关：{ding?.interactiveCard.enabled ? '已开启' : '已关闭'}</p>
                 <p className="break-all">模板：{ding?.interactiveCard.templateId || '未配置'}</p>
                 <p>机器人：{ding?.interactiveCard.robotCodeConfigured ? ding.interactiveCard.robotCodeMasked : '未配置'}</p>
+                <p>站点地址：{ding?.interactiveCard.appBaseUrlConfigured ? '已配置' : '缺失'}</p>
+                <p className="break-all">回调路由：{ding?.interactiveCard.callbackRouteKey || '未配置'}</p>
+                <p>回调密钥：{ding?.interactiveCard.callbackSecretConfigured ? '已配置' : '未配置'}</p>
                 <p>入口：{ding?.interactiveCard.deliveryApi || '—'}</p>
               </div>
             </div>

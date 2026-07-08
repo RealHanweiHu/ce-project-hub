@@ -50,9 +50,13 @@ Create all variables as string variables.
 5. Button row
    - Show only when `status == pending`
    - Primary button text: `${primaryActionText}`
-   - Primary button click event: link jump to `${primaryActionUrl}`
+   - Phase B primary button click event: callback request / 回传请求
+     - Param key: `actionToken`
+     - Param value: `${primaryActionToken}`
    - Secondary button text: `${secondaryActionText}`
-   - Secondary button click event: link jump to `${secondaryActionUrl}`
+   - Phase B secondary button click event: callback request / 回传请求
+     - Param key: `actionToken`
+     - Param value: `${secondaryActionToken}`
 
 6. Optional detail link
    - Text/button: `打开详情`
@@ -73,6 +77,30 @@ Use these rules if the builder supports conditional visibility.
 If the builder does not support checking empty strings, keep both buttons visible.
 CE Hub sends empty button text only for action types that do not need a second
 button, so the worst case is a blank secondary button during early testing.
+
+## Phase A Link Mode
+
+If the DingTalk card builder cannot find callback request / 回传请求 settings,
+use link jump as a temporary fallback:
+
+- Primary button link: `${primaryActionUrl}`
+- Secondary button link: `${secondaryActionUrl}`
+
+This still closes the action item in CE Hub, but the user briefly opens a CE Hub
+action page. Phase B uses callback request buttons so the card can close in
+place.
+
+## Phase B Callback Mode
+
+Use callback request / 回传请求 for action buttons.
+
+| Button | Param key | Param value |
+| --- | --- | --- |
+| Primary | `actionToken` | `${primaryActionToken}` |
+| Secondary | `actionToken` | `${secondaryActionToken}` |
+
+CE Hub verifies DingTalk's callback signature, executes the signed token, writes
+activity logs, and then updates all related native cards to handled.
 
 ## Recommended Styling
 
@@ -99,6 +127,19 @@ If DingTalk shows a robot code for the associated robot, also set:
 
 ```env
 DINGTALK_INTERACTIVE_ROBOT_CODE=your_robot_code
+```
+
+For Phase B callback buttons, also set:
+
+```env
+DINGTALK_INTERACTIVE_CARD_CALLBACK_ROUTE_KEY=cehub_action_card_v1
+DINGTALK_INTERACTIVE_CARD_CALLBACK_SECRET=your_random_callback_secret
+```
+
+Then register the callback route with DingTalk:
+
+```bash
+pnpm dingtalk:register-card-callback
 ```
 
 Then restart CE Hub. If the template ID or robot code is missing, CE Hub will

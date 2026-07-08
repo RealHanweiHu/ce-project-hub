@@ -420,6 +420,12 @@ export const adminRouter = router({
     const agentConfigured = configured(ENV.dingtalkAgentId);
     const interactiveTemplateConfigured = configured(ENV.dingtalkInteractiveCardTemplateId);
     const interactiveRobotConfigured = configured(ENV.dingtalkInteractiveRobotCode);
+    const interactiveCallbackRouteConfigured = configured(ENV.dingtalkInteractiveCardCallbackRouteKey);
+    const interactiveCallbackSecretConfigured = configured(ENV.dingtalkInteractiveCardCallbackSecret);
+    const interactiveDeliveryReady = ENV.dingtalkInteractiveCardEnabled
+      && appConfigured
+      && interactiveTemplateConfigured
+      && interactiveRobotConfigured;
 
     return {
       app: {
@@ -437,16 +443,20 @@ export const adminRouter = router({
         configs: approvalConfigs,
       },
       interactiveCard: {
-        ready: ENV.dingtalkInteractiveCardEnabled
-          && appConfigured
-          && interactiveTemplateConfigured
-          && interactiveRobotConfigured,
+        ready: interactiveDeliveryReady,
         enabled: ENV.dingtalkInteractiveCardEnabled,
         templateConfigured: interactiveTemplateConfigured,
         templateId: ENV.dingtalkInteractiveCardTemplateId.trim() || null,
         robotCodeConfigured: interactiveRobotConfigured,
         robotCodeMasked: maskConfigValue(ENV.dingtalkInteractiveRobotCode),
         appBaseUrlConfigured: configured(ENV.appBaseUrl),
+        callbackReady: interactiveDeliveryReady
+          && configured(ENV.appBaseUrl)
+          && interactiveCallbackRouteConfigured
+          && interactiveCallbackSecretConfigured,
+        callbackRouteConfigured: interactiveCallbackRouteConfigured,
+        callbackRouteKey: ENV.dingtalkInteractiveCardCallbackRouteKey.trim() || null,
+        callbackSecretConfigured: interactiveCallbackSecretConfigured,
         deliveryApi: "card/instances",
       },
     };

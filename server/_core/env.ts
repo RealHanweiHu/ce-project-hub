@@ -37,5 +37,8 @@ export const ENV = {
   /** 钉钉原生互动卡片（配置齐全时启用；未配置自动回退工作通知 ActionCard） */
   dingtalkInteractiveCardTemplateId: process.env.DINGTALK_INTERACTIVE_CARD_TEMPLATE_ID ?? "",
   dingtalkInteractiveRobotCode: process.env.DINGTALK_INTERACTIVE_ROBOT_CODE ?? "",
+  /** 原生互动卡片按钮回调（Phase B）：模板按钮用回传请求时需要 */
+  dingtalkInteractiveCardCallbackRouteKey: process.env.DINGTALK_INTERACTIVE_CARD_CALLBACK_ROUTE_KEY ?? "",
+  dingtalkInteractiveCardCallbackSecret: process.env.DINGTALK_INTERACTIVE_CARD_CALLBACK_SECRET ?? "",
   dingtalkInteractiveCardEnabled: process.env.DINGTALK_INTERACTIVE_CARD_ENABLED !== "false",
 };
