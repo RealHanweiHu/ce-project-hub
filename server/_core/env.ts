@@ -36,6 +36,6 @@ export const ENV = {
   dingtalkCallbackAesKey: process.env.DINGTALK_CALLBACK_AES_KEY ?? "",
   /** 钉钉原生互动卡片（配置齐全时启用；未配置自动回退工作通知 ActionCard） */
   dingtalkInteractiveCardTemplateId: process.env.DINGTALK_INTERACTIVE_CARD_TEMPLATE_ID ?? "",
-  dingtalkInteractiveRobotCode: process.env.DINGTALK_INTERACTIVE_ROBOT_CODE ?? process.env.DINGTALK_APP_KEY ?? "",
+  dingtalkInteractiveRobotCode: process.env.DINGTALK_INTERACTIVE_ROBOT_CODE ?? "",
   dingtalkInteractiveCardEnabled: process.env.DINGTALK_INTERACTIVE_CARD_ENABLED !== "false",
 };

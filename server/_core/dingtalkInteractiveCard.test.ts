@@ -5,6 +5,7 @@ import {
   buildHandledActionCardParams,
   buildPendingActionCardParams,
   createAndDeliverInteractiveCard,
+  updateInteractiveCard,
 } from "./dingtalkInteractiveCard";
 
 const originalTemplateId = ENV.dingtalkInteractiveCardTemplateId;
@@ -56,7 +57,7 @@ describe("dingtalk interactive cards", () => {
     });
   });
 
-  it("creates and delivers a native card using DingTalk v1 interactive card payload", async () => {
+  it("creates and delivers a native card using DingTalk private chat payload", async () => {
     const payloads: Array<{ url: string; body: Record<string, unknown>; headers: Headers }> = [];
     vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
       const u = String(url);
@@ -78,15 +79,45 @@ describe("dingtalk interactive cards", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(payloads[0]?.url).toContain("/v1.0/card/instances/createAndDeliver");
+    expect(payloads[0]?.url).toContain("/v1.0/im/privateChat/interactiveCards/send");
     expect(payloads[0]?.headers.get("x-acs-dingtalk-access-token")).toBe("tok");
     expect(payloads[0]?.body).toMatchObject({
       cardTemplateId: "tmpl-1",
+      receiverUserIdList: ["user-1"],
       outTrackId: "cehub_ai_1_7",
-      callbackType: "HTTP",
-      userId: "user-1",
-      openSpaceId: "dtv1.card//IM_ROBOT.user-1",
-      imRobotOpenDeliverModel: { spaceType: "IM_ROBOT" },
+      robotCode: "robot-1",
+      userIdType: 1,
+      cardOptions: { supportForward: false },
+    });
+  });
+
+  it("updates a native card by outTrackId", async () => {
+    const payloads: Array<{ url: string; body: Record<string, unknown>; headers: Headers }> = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const u = String(url);
+      if (u.includes("oauth2/accessToken")) {
+        return new Response(JSON.stringify({ accessToken: "tok", expireIn: 7200 }), { status: 200 });
+      }
+      payloads.push({
+        url: u,
+        body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+        headers: new Headers(init?.headers),
+      });
+      return new Response(JSON.stringify({ success: true }), { status: 200 });
+    });
+
+    const result = await updateInteractiveCard({
+      outTrackId: "cehub_ai_1_7",
+      cardParamMap: buildHandledActionCardParams({ title: "已处理", message: "审批已闭环" }),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(payloads[0]?.url).toContain("/v1.0/im/interactiveCards");
+    expect(payloads[0]?.headers.get("x-acs-dingtalk-access-token")).toBe("tok");
+    expect(payloads[0]?.body).toMatchObject({
+      outTrackId: "cehub_ai_1_7",
+      userIdType: 1,
+      cardOptions: { updateCardDataByKey: true },
     });
   });
 });

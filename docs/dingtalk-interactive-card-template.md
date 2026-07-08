@@ -85,6 +85,10 @@ button, so the worst case is a blank secondary button during early testing.
 
 ## Publish And Configure
 
+Save and publish the template in the DingTalk card builder first. A template
+that is only imported or saved as a draft will make DingTalk return
+`cardInstance.wrong` when CE Hub tries to send a native card.
+
 After publishing the template, copy its template ID into production:
 
 ```env
