@@ -78,17 +78,15 @@ describe("dingtalk interactive cards", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(payloads[0]?.url).toContain("/v1.0/im/interactiveCards/createAndDeliver");
+    expect(payloads[0]?.url).toContain("/v1.0/card/instances/createAndDeliver");
     expect(payloads[0]?.headers.get("x-acs-dingtalk-access-token")).toBe("tok");
     expect(payloads[0]?.body).toMatchObject({
       cardTemplateId: "tmpl-1",
       outTrackId: "cehub_ai_1_7",
       callbackType: "HTTP",
+      userId: "user-1",
       openSpaceId: "dtv1.card//IM_ROBOT.user-1",
-      imRobotOpenDeliverModel: {
-        robotCode: "robot-1",
-        spaceType: "IM_ROBOT",
-      },
+      imRobotOpenDeliverModel: { spaceType: "IM_ROBOT" },
     });
   });
 });
