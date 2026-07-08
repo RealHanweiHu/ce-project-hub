@@ -59,4 +59,28 @@ describe("auth.updateProfile", () => {
     const caller = appRouter.createCaller(ctx(null));
     await expect(caller.auth.updateProfile({ name: "x", mobile: null })).rejects.toThrow();
   });
+
+  it("读写自己的通知偏好", async () => {
+    const caller = appRouter.createCaller(ctx(OPENID));
+    await expect(caller.auth.notificationPrefs()).resolves.toEqual(expect.any(Object));
+
+    const prefs = await caller.auth.updateNotificationPrefs({
+      dingtalk: {
+        enabled: false,
+        quietHours: { startHour: 21, endHour: 9, timezone: "Asia/Shanghai" },
+        maxImmediatePerDay: 6,
+      },
+    });
+    expect(prefs.dingtalk?.enabled).toBe(false);
+    expect(prefs.dingtalk?.quietHours?.startHour).toBe(21);
+    expect(prefs.dingtalk?.maxImmediatePerDay).toBe(6);
+
+    await expect(caller.auth.notificationPrefs()).resolves.toMatchObject({
+      dingtalk: {
+        enabled: false,
+        quietHours: { startHour: 21, endHour: 9, timezone: "Asia/Shanghai" },
+        maxImmediatePerDay: 6,
+      },
+    });
+  });
 });

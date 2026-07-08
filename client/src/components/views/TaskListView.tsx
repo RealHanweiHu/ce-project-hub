@@ -31,9 +31,10 @@ export interface TaskRow {
 
 /** Deep-link target: open a project at a specific tab/phase with an optional task detail expanded. */
 export type TaskFocus = {
-  tab?: 'overview' | 'metrics' | 'tasks' | 'kanban' | 'requirements' | 'gantt' | 'issues' | 'changelog' | 'bom' | 'files';
+  tab?: 'overview' | 'tasks' | 'reviews' | 'materials' | 'activity' | 'metrics' | 'kanban' | 'requirements' | 'gantt' | 'issues' | 'changelog' | 'bom' | 'files';
   phaseId?: string;
   taskId?: string;
+  taskTab?: 'comments' | 'activity' | 'flow' | 'approval';
 };
 
 interface TaskListViewProps {

@@ -13,7 +13,7 @@ import {
 } from "@shared/pm-workbench";
 import {
   AlertTriangle, Ban, Bug, CalendarClock, CheckCircle2, ChevronRight,
-  ClipboardCheck, Cpu, FileCheck, Flag, Handshake, Inbox, ListChecks,
+  ClipboardCheck, Clock, Cpu, FileCheck, Flag, Handshake, Inbox, ListChecks,
   PackageCheck, Rocket, ShieldCheck, UserMinus, Wrench,
 } from "lucide-react";
 import type { PortfolioTableRow } from "./PortfolioTable";
@@ -291,10 +291,18 @@ type WorkbenchGateBlocker = {
   description: string | null; status: "open" | "resolved"; createdAt: string | Date;
   projectName: string; projectNumber: string;
 };
+type WorkbenchActionItem = {
+  id: number; kind: string; projectId: string; entityType: string; entityId: string;
+  title: string; body: string | null; actionUrl: string; status: string; priority: string;
+  dueAt: string | Date | null; snoozedUntil: string | Date | null;
+  createdAt: string | Date; metadata: Record<string, unknown> | null;
+};
 type WorkbenchData = {
   systemRole: string;
   roles: WorkbenchRole[];
   tasks: MyTaskApiRow[];
+  actionItems: WorkbenchActionItem[];
+  snoozedActionItems: WorkbenchActionItem[];
   roleTasks: MyTaskApiRow[];
   reviews: WorkbenchReview[];
   issues: WorkbenchIssue[];
@@ -310,6 +318,8 @@ type QueueItem = {
   projectId: string;
   phaseId?: string;
   taskId?: string;
+  tab?: TaskFocus["tab"];
+  taskTab?: TaskFocus["taskTab"];
   title: string;
   detail: string;
   tag: string;
@@ -325,9 +335,11 @@ function RoleWorkbench({ lens, workbench, isLoading, onRefetch, onSelectProject 
   const roleTasks = workbench?.roleTasks ?? [];
   const reviews = workbench?.reviews ?? [];
   const issues = workbench?.issues ?? [];
+  const actionItems = workbench?.actionItems ?? [];
+  const snoozedActionItems = workbench?.snoozedActionItems ?? [];
   const gateBlockers = workbench?.gateBlockers ?? [];
   const portfolio = workbench?.portfolio ?? [];
-  const queue = useMemo(() => buildWorkbenchQueue(tasks, roleTasks, reviews, issues), [tasks, roleTasks, reviews, issues]);
+  const queue = useMemo(() => buildWorkbenchQueue(tasks, roleTasks, reviews, issues, actionItems), [tasks, roleTasks, reviews, issues, actionItems]);
   const rows: TaskRow[] = mergeTasks(tasks, roleTasks).map((t) => ({
     id: t.id, projectId: t.projectId, phaseId: t.phaseId, taskId: t.taskId,
     projectName: t.projectName, projectNumber: t.projectNumber, projectCategory: t.projectCategory,
@@ -365,6 +377,12 @@ function RoleWorkbench({ lens, workbench, isLoading, onRefetch, onSelectProject 
         <QueueRows items={queue.slice(0, 10)} onSelectProject={onSelectProject} />
       </Panel>
 
+      {snoozedActionItems.length > 0 && (
+        <Panel title="已推迟" icon={<Clock size={15} />}>
+          <SnoozedRows items={snoozedActionItems.slice(0, 6)} onSelectProject={onSelectProject} />
+        </Panel>
+      )}
+
       <div className="overflow-hidden rounded-[10px] border border-border">
         <TaskListView tasks={rows} isLoading={isLoading} emptyIcon={<CheckCircle2 size={24} />}
           emptyTitle="没有待办任务" emptyDesc="当前没有指派给您的未完成任务。"
@@ -386,6 +404,7 @@ function makeTaskItems(tasks: MyTaskApiRow[], tag: string, priorityBoost = 0): Q
     projectId: task.projectId,
     phaseId: task.phaseId,
     taskId: task.taskId,
+    tab: "tasks",
     title: resolveTaskName(task.taskId, task.phaseId, task.projectCategory),
     detail: `${task.projectName} · ${task.dueDate ? `截止 ${task.dueDate}` : "未设截止日"}`,
     tag,
@@ -400,6 +419,7 @@ function makeIssueItems(issues: WorkbenchIssue[], tagForResolved = "待复测"):
     key: `issue-${issue.id}`,
     projectId: issue.projectId,
     phaseId: issue.phaseId,
+    tab: "issues",
     title: issue.title,
     detail: `${issue.projectName} · ${issue.owner ? `责任人 ${issue.owner}` : issue.targetDate ? `目标 ${issue.targetDate}` : "质量关注项"}`,
     tag: issue.status === "resolved" ? tagForResolved : `${issue.severity} Issue`,
@@ -414,6 +434,7 @@ function makeReviewItems(reviews: WorkbenchReview[]): QueueItem[] {
     key: `review-${review.id}`,
     projectId: review.projectId,
     phaseId: review.phaseId,
+    tab: "reviews",
     title: review.deliverableName,
     detail: `${review.projectName} · 交付物待审核`,
     tag: "审核",
@@ -421,6 +442,68 @@ function makeReviewItems(reviews: WorkbenchReview[]): QueueItem[] {
     priority: 92,
     icon: <FileCheck size={14} />,
   } satisfies QueueItem));
+}
+
+function makeActionItemItems(actionItems: WorkbenchActionItem[]): QueueItem[] {
+  return actionItems.map((item) => {
+    const target = targetFromActionItem(item);
+    return {
+      key: `action-${item.id}`,
+      projectId: item.projectId,
+      phaseId: target.phaseId,
+      taskId: target.taskId,
+      tab: target.tab,
+      taskTab: target.taskTab,
+      title: item.title,
+      detail: item.body || "需要你处理的行动项",
+      tag: actionItemTag(item.kind),
+      tone: item.priority === "critical" ? "rose" : "amber",
+      priority: 120 + (item.priority === "critical" ? 20 : item.priority === "high" ? 10 : 0),
+      icon: item.kind.startsWith("deliverable") ? <FileCheck size={14} /> : <ClipboardCheck size={14} />,
+    } satisfies QueueItem;
+  });
+}
+
+function actionItemTag(kind: string) {
+  if (kind === "task_approval") return "审批";
+  if (kind === "task_rework") return "返工";
+  if (kind === "deliverable_review") return "审核";
+  if (kind === "deliverable_rework") return "交付物返工";
+  if (kind === "critical_issue") return "P0/P1";
+  return "行动项";
+}
+
+function targetFromActionItem(item: WorkbenchActionItem): Pick<QueueItem, "phaseId" | "taskId" | "tab" | "taskTab"> {
+  const meta = item.metadata ?? {};
+  const phaseFromMeta = typeof meta.phaseId === "string" ? meta.phaseId : undefined;
+  const taskFromMeta = typeof meta.taskId === "string" ? meta.taskId : undefined;
+  const urlTarget = targetFromUrl(item.actionUrl);
+  const fallbackTab: TaskFocus["tab"] =
+    item.kind.startsWith("task_") ? "tasks" :
+      item.kind.startsWith("deliverable_") ? "reviews" :
+        item.kind === "critical_issue" ? "issues" : undefined;
+  return {
+    phaseId: phaseFromMeta ?? urlTarget.phaseId,
+    taskId: taskFromMeta ?? urlTarget.taskId,
+    tab: urlTarget.tab ?? fallbackTab,
+    taskTab: urlTarget.taskTab ?? (item.kind.startsWith("task_") ? "approval" : undefined),
+  };
+}
+
+function targetFromUrl(actionUrl: string): Pick<QueueItem, "phaseId" | "taskId" | "tab" | "taskTab"> {
+  try {
+    const url = new URL(actionUrl, window.location.origin);
+    const tab = url.searchParams.get("tab") as TaskFocus["tab"] | null;
+    const taskTab = url.searchParams.get("taskTab") as TaskFocus["taskTab"] | null;
+    return {
+      phaseId: url.searchParams.get("phaseId") ?? undefined,
+      taskId: url.searchParams.get("taskId") ?? undefined,
+      tab: tab ?? undefined,
+      taskTab: taskTab ?? undefined,
+    };
+  } catch {
+    return {};
+  }
 }
 
 function makeBlockerItems(blockers: WorkbenchGateBlocker[], type?: "quality" | "npi"): QueueItem[] {
@@ -689,8 +772,9 @@ function MetricStrip({ items }: { items: Array<{ label: string; value: number; t
   );
 }
 
-function buildWorkbenchQueue(tasks: MyTaskApiRow[], roleTasks: MyTaskApiRow[], reviews: WorkbenchReview[], issues: WorkbenchIssue[]): QueueItem[] {
+function buildWorkbenchQueue(tasks: MyTaskApiRow[], roleTasks: MyTaskApiRow[], reviews: WorkbenchReview[], issues: WorkbenchIssue[], actionItems: WorkbenchActionItem[]): QueueItem[] {
   const taskKeys = new Set(tasks.map((task) => `${task.projectId}:${task.taskId}`));
+  const actionItemItems = makeActionItemItems(actionItems);
   const taskItems = [
     ...makeTaskItems(tasks, "我的任务"),
     ...makeTaskItems(roleTasks, "角色待分配", 12),
@@ -704,7 +788,7 @@ function buildWorkbenchQueue(tasks: MyTaskApiRow[], roleTasks: MyTaskApiRow[], r
       (issue.relatedTaskId ? taskKeys.has(`${issue.projectId}:${issue.relatedTaskId}`) : false)
     )
     .map((issue) => makeIssueItems([issue])[0]);
-  return [...reviewItems, ...issueItems, ...taskItems].sort((a, b) => b.priority - a.priority);
+  return [...actionItemItems, ...reviewItems, ...issueItems, ...taskItems].sort((a, b) => b.priority - a.priority);
 }
 
 function priorityScore(priority: string | null) {
@@ -729,14 +813,12 @@ function QueueRows({ items, onSelectProject }: { items: QueueItem[]; onSelectPro
       {items.map((item) => (
         <button
           key={item.key}
-          onClick={() => onSelectProject(
-            item.projectId,
-            item.phaseId && item.taskId
-              ? { tab: 'tasks', phaseId: item.phaseId, taskId: item.taskId }
-              : item.key.startsWith('issue-')
-                ? { tab: 'issues', phaseId: item.phaseId }
-                : undefined
-          )}
+          onClick={() => {
+            const focus = item.tab || item.phaseId || item.taskId || item.taskTab
+              ? { tab: item.tab, phaseId: item.phaseId, taskId: item.taskId, taskTab: item.taskTab }
+              : undefined;
+            onSelectProject(item.projectId, focus);
+          }}
           className="-mx-2 w-full px-2 py-2.5 text-left transition-colors hover:bg-secondary"
         >
           <div className="flex items-start gap-3">
@@ -754,6 +836,53 @@ function QueueRows({ items, onSelectProject }: { items: QueueItem[]; onSelectPro
       ))}
     </div>
   );
+}
+
+function SnoozedRows({ items, onSelectProject }: { items: WorkbenchActionItem[]; onSelectProject: (id: string, focus?: TaskFocus) => void }) {
+  return (
+    <div className="divide-y divide-border">
+      {items.map((item) => {
+        const target = targetFromActionItem(item);
+        return (
+          <button
+            key={item.id}
+            onClick={() => onSelectProject(item.projectId, {
+              tab: target.tab,
+              phaseId: target.phaseId,
+              taskId: target.taskId,
+              taskTab: target.taskTab,
+            })}
+            className="-mx-2 w-full px-2 py-2.5 text-left transition-colors hover:bg-secondary"
+          >
+            <div className="flex items-start gap-3">
+              <Clock size={14} className="mt-0.5 shrink-0 text-muted-foreground" />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="truncate text-sm font-medium text-foreground">{item.title}</span>
+                  <Tag tone="stone">已推迟</Tag>
+                </div>
+                <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                  {item.body || "已暂时移出主待办"} · {item.snoozedUntil ? `恢复 ${formatDateTime(item.snoozedUntil)}` : "等待恢复"}
+                </div>
+              </div>
+              <ChevronRight size={13} className="mt-1 shrink-0 text-muted-foreground" />
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function formatDateTime(value: string | Date): string {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function DecisionRows({

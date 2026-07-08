@@ -16,6 +16,7 @@ import {
 } from '@/lib/data';
 
 interface IssueListProps {
+  projectId: string;
   phaseId: string;
   phaseName: string;
   issues: Issue[];
@@ -305,7 +306,7 @@ function IssueFormModal({
 }
 
 // ── Main Component ────────────────────────────────────────────────────────────
-export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true, currentUserId, canManage = false, phaseTasks = [], onRaiseChange }: IssueListProps) {
+export function IssueList({ projectId, phaseId, phaseName, issues, onUpdate, canEdit = true, currentUserId, canManage = false, phaseTasks = [], onRaiseChange }: IssueListProps) {
   const [showForm, setShowForm] = useState(false);
   const [editingIssue, setEditingIssue] = useState<Issue | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -636,7 +637,7 @@ export function IssueList({ phaseId, phaseName, issues, onUpdate, canEdit = true
                     )}
                     {/^\d+$/.test(issue.id) && (
                       <div className="border-t border-border pt-3">
-                        <CommentThread entityType="issue" entityId={issue.id} />
+                        <CommentThread entityType="issue" entityId={issue.id} projectId={projectId} />
                       </div>
                     )}
                   </div>

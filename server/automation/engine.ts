@@ -1,10 +1,8 @@
 import { ENV } from "../_core/env";
 import { pushWebhook as defaultPushWebhook } from "../_core/notify";
-import { notifyUsersViaDingtalk as defaultNotifyDingtalk } from "../_core/dingtalkMessage";
 import { sendToGroupChat as defaultNotifyGroup } from "../_core/dingtalkGroup";
 import {
   createAutomationRun,
-  createNotification as defaultCreateNotification,
   getProjectById,
   getProjectMembers,
   hasRecentAutomationFire,
@@ -24,6 +22,14 @@ import {
 } from "./rules";
 import { DIGEST_RULES } from "./digestRules";
 import { isAutomationSuppressedProject } from "./project-filter";
+import { notifyPersonal, type NotifyPersonalDeps } from "../notification-gateway";
+import { actionDedupeKey, notifyActionItem } from "../action-item-notify";
+import {
+  buildDeliverableReviewActionPath,
+  buildIssueValidationActionPath,
+  buildProjectActionPath,
+  buildTaskCompletionActionPath,
+} from "../../shared/action-links";
 
 type ResolvedRecipients = {
   userIds: number[];
@@ -32,10 +38,8 @@ type ResolvedRecipients = {
   chatId: string | null;
 };
 
-type DispatchDeps = {
-  createNotification?: typeof defaultCreateNotification;
+type DispatchDeps = NotifyPersonalDeps & {
   pushWebhook?: typeof defaultPushWebhook;
-  notifyDingtalk?: (userIds: number[], title: string, markdown: string) => Promise<void>;
   notifyGroup?: (chatId: string, title: string, markdown: string) => Promise<boolean>;
   allowAutomationTestProjects?: boolean;
 };
@@ -103,22 +107,21 @@ export async function runAutomation(event: AutomationEvent, deps: DispatchDeps =
         continue;
       }
 
-      const createNotification = deps.createNotification ?? defaultCreateNotification;
-      for (const userId of recipients.userIds) {
-        await createNotification({
-          userId,
-          type: "automation",
-          title: message.title,
-          body: message.text,
-          entityType: event.entityType,
-          entityId: event.entityId == null ? null : String(event.entityId),
-        });
-      }
-
-      // 钉钉工作通知：把提醒直接推到负责人本人的钉钉（解析不到/未配则静默跳过）
       if (recipients.userIds.length > 0) {
-        const notifyDingtalk = deps.notifyDingtalk ?? defaultNotifyDingtalk;
-        await notifyDingtalk(recipients.userIds, message.title, message.markdown ?? message.text);
+        if (rule.key === "delay_impact_notify" && projectId) {
+          await notifyDelayImpactActionItems(event, recipients.userIds, message, projectId, entityId, deps);
+        } else {
+          await notifyPersonal({
+            eventKey: rule.key,
+            userIds: recipients.userIds,
+            title: message.title,
+            body: message.text,
+            markdown: message.markdown ?? message.text,
+            entityType: event.entityType,
+            entityId: entityId ?? entityIdForRun(event),
+            actionPath: actionPathForAutomationEvent(event, projectId),
+          }, deps);
+        }
       }
 
       if (recipients.pushGroup) {
@@ -139,6 +142,43 @@ export async function runAutomation(event: AutomationEvent, deps: DispatchDeps =
     } catch (error) {
       await writeRun(rule, event, "error", [], error instanceof Error ? error.message : String(error), entityId);
     }
+  }
+}
+
+async function notifyDelayImpactActionItems(
+  event: AutomationEvent,
+  userIds: number[],
+  message: { title: string; text: string; markdown?: string },
+  projectId: string,
+  entityId: string | null | undefined,
+  deps: NotifyPersonalDeps,
+): Promise<void> {
+  const taskId = String(event.after?.taskId ?? event.entityId ?? "");
+  const actionEntityId = entityId ?? entityIdForRun(event) ?? taskId;
+  if (!actionEntityId) return;
+  for (const userId of userIds) {
+    await notifyActionItem({
+      kind: "delay_impact_notify",
+      projectId,
+      entityType: "task",
+      entityId: String(actionEntityId),
+      dedupeKey: actionDedupeKey({
+        kind: "delay_impact_notify",
+        entityId: String(actionEntityId),
+        recipientUserId: userId,
+      }),
+      recipientUserId: userId,
+      title: message.title,
+      body: message.text,
+      actionPath: actionPathForAutomationEvent(event, projectId) ?? buildProjectActionPath({ projectId, tab: "tasks" }),
+      priority: "high",
+      metadata: {
+        taskId: taskId || String(actionEntityId),
+        startDate: typeof event.after?.startDate === "string" ? event.after.startDate : null,
+        dueDate: typeof event.after?.dueDate === "string" ? event.after.dueDate : null,
+        impact: event.impact ?? null,
+      },
+    }, deps);
   }
 }
 
@@ -279,6 +319,74 @@ function entityIdForRuleRun(
 
 function projectIdForEvent(event: AutomationEvent): string | null {
   return event.projectId ?? stringField(event.after, "projectId") ?? stringField(event.before, "projectId");
+}
+
+function actionPathForAutomationEvent(event: AutomationEvent, projectId: string | null): string | null {
+  if (!projectId) return ENV.appBaseUrl ? "/" : null;
+  if (event.entityType === "task") {
+    const parsed = parseTaskTarget(event, projectId);
+    if (parsed.phaseId && parsed.taskId) {
+      return buildTaskCompletionActionPath({
+        projectId,
+        phaseId: parsed.phaseId,
+        taskId: parsed.taskId,
+      });
+    }
+    return buildProjectActionPath({
+      projectId,
+      tab: "tasks",
+      phaseId: parsed.phaseId,
+      taskId: parsed.taskId,
+    });
+  }
+  if (event.entityType === "issue") {
+    const phaseId = stringField(event.after, "phaseId") ?? stringField(event.before, "phaseId");
+    const issueId = event.entityId == null ? null : String(event.entityId);
+    const status = stringField(event.after, "status") ?? stringField(event.before, "status");
+    if (phaseId && issueId && status === "resolved") {
+      return buildIssueValidationActionPath({ projectId, phaseId, issueId });
+    }
+    return buildProjectActionPath({
+      projectId,
+      tab: "issues",
+      phaseId,
+    });
+  }
+  if (event.entityType === "deliverable_review") {
+    const phaseId = stringField(event.after, "phaseId") ?? stringField(event.before, "phaseId");
+    const deliverableName = stringField(event.after, "deliverableName") ?? stringField(event.before, "deliverableName");
+    if (phaseId && deliverableName) {
+      return buildDeliverableReviewActionPath({ projectId, phaseId, deliverableName });
+    }
+    return buildProjectActionPath({
+      projectId,
+      tab: "reviews",
+      phaseId,
+    });
+  }
+  if (event.entityType === "gate_review") {
+    return buildProjectActionPath({
+      projectId,
+      tab: "reviews",
+      phaseId: stringField(event.after, "phaseId") ?? stringField(event.before, "phaseId"),
+    });
+  }
+  return buildProjectActionPath({ projectId, tab: "overview" });
+}
+
+function parseTaskTarget(event: AutomationEvent, projectId: string): { phaseId?: string; taskId?: string } {
+  const phaseId = stringField(event.after, "phaseId") ?? stringField(event.before, "phaseId");
+  const taskId = stringField(event.after, "taskId") ?? stringField(event.before, "taskId");
+  if (phaseId || taskId) return { phaseId: phaseId ?? undefined, taskId: taskId ?? undefined };
+  const raw = event.entityId == null ? "" : String(event.entityId);
+  const parts = raw.split(":");
+  if (parts[0] === projectId && parts.length >= 3) {
+    return { phaseId: parts[1], taskId: parts[2] };
+  }
+  if (parts[0] === "gate" && parts[1] === projectId && parts[2]) {
+    return { taskId: parts[2] };
+  }
+  return {};
 }
 
 function getCadenceHours(config: AutomationRuleConfig): number {

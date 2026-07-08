@@ -1349,8 +1349,13 @@ export const ACTIVITY_ACTIONS = [
   // Tasks
   "task.complete",
   "task.uncomplete",
+  "task.submit_approval",
+  "task.approve",
+  "task.reject",
   "task.update_instructions",
   "task.update_meta",
+  "task.update_deliverable",
+  "task.rescheduled",
   "task.update_visible_roles",
   // Issues
   "issue.create",
@@ -1371,6 +1376,27 @@ export const ACTIVITY_ACTIONS = [
   "sample_signoff.create",
   "sample_signoff.respond",
   "sample_signoff.update",
+  // Deliverable reviews
+  "deliverable_review.submit",
+  "deliverable_review.approve",
+  "deliverable_review.reject",
+  "deliverable_review.reset",
+  // Release / product lifecycle
+  "mp.release",
+  "product.definition_confirmed",
+  // External approvals
+  "approval.submit",
+  "approval.approve",
+  "approval.reject",
+  "approval.terminate",
+  "approval.business_blocked",
+  // Meetings / calendar
+  "meeting.update_config",
+  "calendar.create_event",
+  // BOM
+  "bom.add",
+  "bom.update",
+  "bom.delete",
   // Changelog
   "change.create",
   "change.update",
@@ -1735,6 +1761,36 @@ export const externalApprovalInstances = pgTable(
 export type ExternalApprovalInstance = typeof externalApprovalInstances.$inferSelect;
 export type InsertExternalApprovalInstance = typeof externalApprovalInstances.$inferInsert;
 
+export const dingtalkInteractiveCards = pgTable(
+  "dingtalk_interactive_cards",
+  {
+    id: serial("id").primaryKey(),
+    outTrackId: varchar("outTrackId", { length: 128 }).notNull(),
+    actionItemId: integer("actionItemId"),
+    recipientUserId: integer("recipientUserId").notNull(),
+    projectId: varchar("projectId", { length: 32 }),
+    eventKey: varchar("eventKey", { length: 64 }).notNull(),
+    entityType: varchar("entityType", { length: 32 }),
+    entityId: varchar("entityId", { length: 128 }),
+    title: varchar("title", { length: 256 }).notNull(),
+    body: text("body"),
+    actionUrl: varchar("actionUrl", { length: 1024 }),
+    status: varchar("status", { length: 24 }).notNull().default("sent"),
+    cardData: jsonb("cardData").$type<Record<string, unknown>>().notNull().default({}),
+    lastError: text("lastError"),
+    handledAt: timestamp("handledAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    uniqOutTrack: uniqueIndex("uniq_dingtalk_interactive_card_out_track").on(table.outTrackId),
+    idxActionItem: index("idx_dingtalk_interactive_cards_action_item").on(table.actionItemId),
+    idxRecipientStatus: index("idx_dingtalk_interactive_cards_recipient_status").on(table.recipientUserId, table.status),
+  }),
+);
+export type DingtalkInteractiveCard = typeof dingtalkInteractiveCards.$inferSelect;
+export type InsertDingtalkInteractiveCard = typeof dingtalkInteractiveCards.$inferInsert;
+
 /**
  * OEM 客户版本 / Customer Revision = 同一产品型号下，各客户相对 Product Revision 的差异登记。
  * SKU 是客户版本下可销售的具体版本；Customer BOM Revision 基于标准 BOM 受控派生。
@@ -1896,6 +1952,88 @@ export const automationRuns = pgTable(
 );
 export type AutomationRunRow = typeof automationRuns.$inferSelect;
 export type InsertAutomationRun = typeof automationRuns.$inferInsert;
+
+// ── 行动项：明确指派给个人、可闭环、可去重的「事找人」底座 ────────────────
+export const ACTION_ITEM_KINDS = [
+  "task_approval",
+  "task_rework",
+  "deliverable_review",
+  "deliverable_rework",
+  "issue_validation",
+  "critical_issue",
+  "delay_impact_notify",
+  "mp_release_confirm",
+] as const;
+export type ActionItemKind = (typeof ACTION_ITEM_KINDS)[number];
+export const actionItemKindEnum = pgEnum("action_item_kind", ACTION_ITEM_KINDS);
+
+export const ACTION_ITEM_STATUSES = [
+  "open",
+  "sent",
+  "read",
+  "done",
+  "closed",
+  "escalated",
+  "snoozed",
+] as const;
+export type ActionItemStatus = (typeof ACTION_ITEM_STATUSES)[number];
+export const actionItemStatusEnum = pgEnum("action_item_status", ACTION_ITEM_STATUSES);
+
+export const ACTION_ITEM_LEVELS = ["owner", "pm", "manager"] as const;
+export type ActionItemLevel = (typeof ACTION_ITEM_LEVELS)[number];
+export const actionItemLevelEnum = pgEnum("action_item_level", ACTION_ITEM_LEVELS);
+
+export const actionItems = pgTable(
+  "action_items",
+  {
+    id: serial("id").primaryKey(),
+    kind: actionItemKindEnum("kind").notNull(),
+    projectId: varchar("projectId", { length: 32 }).notNull(),
+    entityType: varchar("entityType", { length: 32 }).notNull(),
+    entityId: varchar("entityId", { length: 128 }).notNull(),
+    dedupeKey: varchar("dedupeKey", { length: 256 }).notNull(),
+    recipientUserId: integer("recipientUserId").notNull(),
+    level: actionItemLevelEnum("level").notNull().default("owner"),
+    title: varchar("title", { length: 256 }).notNull(),
+    body: text("body"),
+    actionUrl: varchar("actionUrl", { length: 1024 }).notNull(),
+    status: actionItemStatusEnum("status").notNull().default("open"),
+    priority: varchar("priority", { length: 16 }).notNull().default("normal"),
+    dueAt: timestamp("dueAt"),
+    snoozedUntil: timestamp("snoozedUntil"),
+    sourceActivityLogId: integer("sourceActivityLogId"),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    firstSentAt: timestamp("firstSentAt"),
+    lastSentAt: timestamp("lastSentAt"),
+    readAt: timestamp("readAt"),
+    handledAt: timestamp("handledAt"),
+    closedAt: timestamp("closedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (t) => ({
+    uqDedupeKey: uniqueIndex("uq_action_items_dedupe_key").on(t.dedupeKey),
+    idxRecipientStatus: index("idx_action_items_recipient_status").on(t.recipientUserId, t.status),
+    idxProjectCreated: index("idx_action_items_project_created").on(t.projectId, t.createdAt),
+    idxEntity: index("idx_action_items_entity").on(t.entityType, t.entityId),
+  })
+);
+export type ActionItem = typeof actionItems.$inferSelect;
+export type InsertActionItem = typeof actionItems.$inferInsert;
+
+// ── 调度心跳：单实例巡检状态 + 便宜 DB 锁 ──────────────────────────────────
+export const automationHeartbeats = pgTable("automation_heartbeats", {
+  schedulerKey: varchar("schedulerKey", { length: 64 }).primaryKey(),
+  lastStartedAt: timestamp("lastStartedAt"),
+  lastFinishedAt: timestamp("lastFinishedAt"),
+  status: varchar("status", { length: 24 }).notNull().default("idle"),
+  durationMs: integer("durationMs"),
+  lastCursorId: integer("lastCursorId").notNull().default(0),
+  lastError: text("lastError"),
+  updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+});
+export type AutomationHeartbeat = typeof automationHeartbeats.$inferSelect;
+export type InsertAutomationHeartbeat = typeof automationHeartbeats.$inferInsert;
 
 // ── 自定义字段（管理员定义，项目级填值）─────────────────────────────────
 export const CUSTOM_FIELD_TYPES = ["text", "number", "date", "select", "boolean"] as const;

@@ -18,6 +18,7 @@ import {
   getDownstreamVariantImpact,
   getApprovalConfig, getExternalApprovalByProcessInstanceId,
   getProjectRolesForUser, getProjectsByProductId,
+  createActivityLog,
 } from "../db";
 import { VARIANT_DIMENSIONS } from "../../shared/oem-variant";
 import { isSystemAdminRole, isSystemExternalRole, systemRoleCanCreateProject } from "../../shared/system-roles";
@@ -230,13 +231,22 @@ export const productsRouter = router({
       ]);
       const versionNumber = snapshots.reduce((max, s) => Math.max(max, s.versionNumber), 0) || null;
       for (const linked of linkedProjects) {
+        const after = { projectId: linked.id, productName: product.name, versionNumber };
+        await createActivityLog({
+          projectId: linked.id,
+          userId: ctx.user.id,
+          action: "product.definition_confirmed",
+          entityType: "product_definition",
+          entityId: input.productId,
+          meta: { after },
+        });
         await emitAutomationEvent({
           action: "product.definition_confirmed",
           projectId: linked.id,
           entityType: "product_definition",
           entityId: input.productId,
           actorId: ctx.user.id,
-          after: { projectId: linked.id, productName: product.name, versionNumber },
+          after,
         });
       }
       return definition;
@@ -449,7 +459,20 @@ export const productsRouter = router({
     .input(z.object({ projectId: z.string(), productId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       await assertProjectPermission(input.projectId, ctx.user, "canEditProjectInfo", "没有关联产品的权限");
+      const beforeProject = await getProjectById(input.projectId);
       await setProjectProduct(input.projectId, input.productId);
+      await createActivityLog({
+        projectId: input.projectId,
+        userId: ctx.user.id,
+        action: "project.update",
+        entityType: "project",
+        entityId: input.projectId,
+        meta: {
+          patch: { productId: input.productId },
+          before: { productId: beforeProject?.productId ?? null },
+          after: { productId: input.productId },
+        },
+      });
       return { ok: true };
     }),
 
@@ -584,19 +607,28 @@ export const productsRouter = router({
           try { await cancelAndRecordProjectMeeting(project); }
           catch (error) { console.warn("[meeting] cancel on release failed (non-fatal):", error); }
         }
+        const after = {
+          projectId: input.projectId,
+          productId: project?.productId ?? null,
+          productName: product?.name ?? null,
+          revisionId: result.revisionId,
+          revisionLabel: result.revisionLabel,
+        };
+        await createActivityLog({
+          projectId: input.projectId,
+          userId: ctx.user.id,
+          action: "mp.release",
+          entityType: "mp_release",
+          entityId: `${input.projectId}:${result.revisionId}`,
+          meta: { after },
+        });
         await emitAutomationEvent({
           action: "mp.release",
           projectId: input.projectId,
           entityType: "mp_release",
           entityId: `${input.projectId}:${result.revisionId}`,
           actorId: ctx.user.id,
-          after: {
-            projectId: input.projectId,
-            productId: project?.productId ?? null,
-            productName: product?.name ?? null,
-            revisionId: result.revisionId,
-            revisionLabel: result.revisionLabel,
-          },
+          after,
         });
         return result;
       } catch (e) {

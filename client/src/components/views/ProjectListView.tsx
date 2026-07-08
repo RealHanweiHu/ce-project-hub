@@ -260,6 +260,20 @@ export function ProjectListView({
       }
     }
 
+    // 目标列（npd 阶段桶）→ 该项目类别的具体阶段：取该类别中落在此列桶内的第一个阶段
+    // （npd 行为不变；eco/idr/jdm/obt 落到自己流程的合法阶段，服务端阶段守卫才会放行）。
+    // 类别没有对应此列的阶段（如 OBT 拖到 EVT 列）→ 明确提示，而不是写入非法阶段。
+    let targetPhase: string | null = null;
+    if (stageChanged) {
+      const candidate = getPhasesForCategory(project.category).find((ph) => stageBucket(ph.id) === toStage);
+      if (!candidate) {
+        const catName = CATEGORY_MAP[project.category as ProjectCategory]?.name ?? project.category;
+        toast.error(`「${catName}」流程没有对应「${stageLabel(toStage)}」列的阶段，无法回退到此列`);
+        return;
+      }
+      targetPhase = candidate.id;
+    }
+
     // HARD WIP 上限：只有阶段推进（toStage 变化）才受限；纯改派不受 WIP 约束。
     // 限制是 per-stage 的，计数为全板内 currentPhase 落在 toStage 的项目总数。
     if (stageChanged) {
@@ -277,7 +291,7 @@ export function ProjectListView({
       // Combined推进+改派 → keep the confirm dialog (stage change is the heavy part).
       setMoveConfirm({
         project, fromStage, toStage,
-        patch: { currentPhase: toStage, ...reassignPatch },
+        patch: { currentPhase: targetPhase!, ...reassignPatch },
         // 撤销须还原“原始”阶段（可能是 planning/d3 等细粒度 phase），不能用 stageBucket 折叠后的 fromStage
         undoPatch: { currentPhase: project.currentPhase, ...undoReassign! },
         successMsg: `已回退并改派 · 可撤销`,
@@ -289,7 +303,7 @@ export function ProjectListView({
       // Stage-only → existing confirm path.
       setMoveConfirm({
         project, fromStage, toStage,
-        patch: { currentPhase: toStage },
+        patch: { currentPhase: targetPhase! },
         // 撤销还原原始细粒度 phase（非 stageBucket 折叠值）
         undoPatch: { currentPhase: project.currentPhase },
         successMsg: `已将 ${project.name} 回退到 ${stageLabel(toStage)} · 可撤销`,

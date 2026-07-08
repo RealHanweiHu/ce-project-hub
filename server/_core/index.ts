@@ -6,10 +6,12 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerStorageProxy } from "./storageProxy";
 import { registerFileUploadRoute } from "../routers/files";
 import { registerSetupRoute } from "../setup";
+import { registerActionCardRoute } from "../action-card-route";
 import { registerDingtalkCallbackRoute } from "../dingtalk-callback";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic } from "./static";
+import { startActivityLogTailer } from "../automation/activityLogTailer";
 import { startAutomationScheduler } from "../automation/scheduler";
 import { ensureBucket } from "../storage";
 
@@ -60,7 +62,8 @@ async function startServer() {
   registerStorageProxy(app);
   registerFileUploadRoute(app);
   registerSetupRoute(app);
-  registerDingtalkCallbackRoute(app);
+  registerDingtalkCallbackRoute(app, appRouter);
+  registerActionCardRoute(app, appRouter);
   // tRPC API
   app.use(
     "/api/trpc",
@@ -89,6 +92,7 @@ async function startServer() {
   server.listen(port, () => {
     console.log(`Server running on http://localhost:${port}/`);
     startAutomationScheduler();
+    startActivityLogTailer();
     // 首次部署自建对象存储桶（MinIO），避免第一个上传报 NoSuchBucket。best-effort，不阻断启动。
     void ensureBucket().catch(() => {});
   });

@@ -29,10 +29,13 @@ import {
   mpReleases, InsertMpRelease,
   dingtalkApprovalConfigs, DingtalkApprovalConfig, InsertDingtalkApprovalConfig,
   externalApprovalInstances, ExternalApprovalInstance, InsertExternalApprovalInstance,
+  dingtalkInteractiveCards, DingtalkInteractiveCard, InsertDingtalkInteractiveCard,
   customerVariants, CustomerVariant, InsertCustomerVariant,
   bomItems, BomItem, InsertBomItem,
   comments, Comment,
   notifications,
+  actionItems, ActionItem, InsertActionItem,
+  automationHeartbeats, AutomationHeartbeat, InsertAutomationHeartbeat,
   automationRules, AutomationRuleRow, InsertAutomationRule,
   automationRuns, AutomationRunRow, InsertAutomationRun,
   customFieldDefs, CustomFieldDef, InsertCustomFieldDef,
@@ -190,6 +193,23 @@ export async function getUserById(id: number) {
   const db = await getDb();
   if (!db) return undefined;
   const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
+  return result[0];
+}
+
+export async function getUserByDingtalkIdentity(identity: {
+  corpUserId?: string | null;
+  unionId?: string | null;
+  mobile?: string | null;
+}) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const conditions = [
+    identity.corpUserId ? eq(users.dingtalkCorpUserId, identity.corpUserId) : null,
+    identity.unionId ? eq(users.dingtalkUserId, identity.unionId) : null,
+    identity.mobile ? eq(users.mobile, identity.mobile) : null,
+  ].filter((condition): condition is NonNullable<typeof condition> => condition != null);
+  if (conditions.length === 0) return undefined;
+  const result = await db.select().from(users).where(or(...conditions)).limit(1);
   return result[0];
 }
 
@@ -570,6 +590,17 @@ export async function getExternalApprovalByProcessInstanceId(
   return row;
 }
 
+export async function getExternalApprovalById(id: number): Promise<ExternalApprovalInstance | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const [row] = await db
+    .select()
+    .from(externalApprovalInstances)
+    .where(eq(externalApprovalInstances.id, id))
+    .limit(1);
+  return row;
+}
+
 export async function listExternalApprovalsForEntity(input: {
   businessType?: string;
   entityType: string;
@@ -587,6 +618,82 @@ export async function listExternalApprovalsForEntity(input: {
     .from(externalApprovalInstances)
     .where(and(...conditions))
     .orderBy(desc(externalApprovalInstances.createdAt));
+}
+
+export async function upsertDingtalkInteractiveCard(input: {
+  outTrackId: string;
+  actionItemId?: number | null;
+  recipientUserId: number;
+  projectId?: string | null;
+  eventKey: string;
+  entityType?: string | null;
+  entityId?: string | null;
+  title: string;
+  body?: string | null;
+  actionUrl?: string | null;
+  status?: string;
+  cardData?: Record<string, unknown>;
+  lastError?: string | null;
+}): Promise<DingtalkInteractiveCard | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const values: InsertDingtalkInteractiveCard = {
+    outTrackId: input.outTrackId,
+    actionItemId: input.actionItemId ?? null,
+    recipientUserId: input.recipientUserId,
+    projectId: input.projectId ?? null,
+    eventKey: input.eventKey,
+    entityType: input.entityType ?? null,
+    entityId: input.entityId ?? null,
+    title: input.title,
+    body: input.body ?? null,
+    actionUrl: input.actionUrl ?? null,
+    status: input.status ?? "sent",
+    cardData: input.cardData ?? {},
+    lastError: input.lastError ?? null,
+  };
+  const [row] = await db
+    .insert(dingtalkInteractiveCards)
+    .values(values)
+    .onConflictDoUpdate({
+      target: dingtalkInteractiveCards.outTrackId,
+      set: {
+        ...values,
+        updatedAt: new Date(),
+      },
+    })
+    .returning();
+  return row;
+}
+
+export async function listDingtalkInteractiveCardsForActionItem(actionItemId: number): Promise<DingtalkInteractiveCard[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(dingtalkInteractiveCards)
+    .where(eq(dingtalkInteractiveCards.actionItemId, actionItemId));
+}
+
+export async function markDingtalkInteractiveCardStatus(input: {
+  outTrackId: string;
+  status: string;
+  cardData?: Record<string, unknown>;
+  lastError?: string | null;
+  handledAt?: Date | null;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(dingtalkInteractiveCards)
+    .set({
+      status: input.status,
+      cardData: input.cardData,
+      lastError: input.lastError ?? null,
+      handledAt: input.handledAt ?? null,
+      updatedAt: new Date(),
+    })
+    .where(eq(dingtalkInteractiveCards.outTrackId, input.outTrackId));
 }
 
 type DeleteProjectResult = { storageKeys: string[] };
@@ -652,6 +759,7 @@ async function deleteProjectRows(projectId: string, options: { allowReleased: bo
       eq(notifications.entityType, "project"),
       eq(notifications.entityId, projectId),
     ));
+    await tx.delete(actionItems).where(eq(actionItems.projectId, projectId));
     await tx.delete(automationRuns).where(eq(automationRuns.projectId, projectId));
     await tx.delete(projectCalendarEvents).where(eq(projectCalendarEvents.projectId, projectId));
     await tx.delete(bomItems).where(eq(bomItems.projectId, projectId));
@@ -1221,6 +1329,8 @@ export async function getMeetingParticipants(
 export async function getProjectMembers(projectId: string): Promise<Array<ProjectMember & {
   userName: string | null;
   userEmail: string | null;
+  userUsername: string | null;
+  userOpenId: string | null;
 }>> {
   const db = await getDb();
   if (!db) return [];
@@ -1236,12 +1346,19 @@ export async function getProjectMembers(projectId: string): Promise<Array<Projec
       updatedAt: projectMembers.updatedAt,
       userName: users.name,
       userEmail: users.email,
+      userUsername: users.username,
+      userOpenId: users.openId,
     })
     .from(projectMembers)
     .leftJoin(users, eq(projectMembers.userId, users.id))
     .where(eq(projectMembers.projectId, projectId))
     .orderBy(projectMembers.createdAt);
-  return rows as Array<ProjectMember & { userName: string | null; userEmail: string | null }>;
+  return rows as Array<ProjectMember & {
+    userName: string | null;
+    userEmail: string | null;
+    userUsername: string | null;
+    userOpenId: string | null;
+  }>;
 }
 
 /** Get a specific member's role in a project */
@@ -2880,8 +2997,16 @@ export async function createProjectFile(record: Omit<InsertProjectFile, "id" | "
   const result = await db.insert(projectFiles).values(normalized).returning({ id: projectFiles.id });
   // 上传新版本后触发交付物重审（若已审核过则回退待审）
   if (record.deliverableName && record.phaseId) {
-    const { resetReviewOnReupload } = await loadDeliverableReviewService();
-    await resetReviewOnReupload(record.projectId, record.phaseId, record.deliverableName);
+    const { resetReviewOnReupload, maybeAutoSubmitDeliverableReviewOnUpload } = await loadDeliverableReviewService();
+    await resetReviewOnReupload(record.projectId, record.phaseId, record.deliverableName, record.uploadedBy);
+    await maybeAutoSubmitDeliverableReviewOnUpload({
+      projectId: record.projectId,
+      phaseId: record.phaseId,
+      deliverableName: record.deliverableName,
+      uploadedBy: record.uploadedBy,
+    }).catch((error) => {
+      console.warn("[deliverable-review] auto submit on upload failed (non-fatal):", error);
+    });
   }
   return result[0].id;
 }
@@ -3022,6 +3147,27 @@ export async function getTaskActivityLogs(
     )
     .orderBy(desc(activityLogs.createdAt))
     .limit(limit);
+}
+
+/** Fetch activity logs after a cursor, oldest first, for the event tailer. */
+export async function listActivityLogsAfter(cursorId: number, limit = 100): Promise<ActivityLog[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(activityLogs)
+    .where(drizzleSql`${activityLogs.id} > ${Math.max(0, cursorId)}`)
+    .orderBy(activityLogs.id)
+    .limit(Math.min(Math.max(limit, 1), 500));
+}
+
+export async function getLatestActivityLogId(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const [row] = await db
+    .select({ id: drizzleSql<number>`coalesce(max(${activityLogs.id}), 0)`.as("id") })
+    .from(activityLogs);
+  return Number(row?.id ?? 0);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3794,16 +3940,20 @@ export async function getProjectEffectiveProcess(projectId: string): Promise<Eff
 /**
  * 按角色把未分配的任务自动指派给对应项目成员（responsible role 取自任务 visibleRoles 首个非管理角色）。
  * 不覆盖已手动分配的任务。返回新建的分配明细，供上层发钉钉通知。
+ * roleOverrides:显式角色分工(立项向导),优先于成员表推导——成员表一人一角色,
+ * 表达不了创建者兼任/一人多角色,向导里填了什么就按什么派。
  */
 export async function assignTasksByRole(
   projectId: string,
-  updatedBy: number
+  updatedBy: number,
+  roleOverrides?: Record<string, number>
 ): Promise<Array<{ userId: number; taskId: string; phaseId: string; dueDate: string | null; instructions: string | null }>> {
   const db = await getDb();
   if (!db) return [];
   const members = await getProjectMembers(projectId);
   const roleToUser = new Map<string, number>();
   for (const m of members) if (!roleToUser.has(m.role)) roleToUser.set(m.role, m.userId);
+  if (roleOverrides) for (const [role, userId] of Object.entries(roleOverrides)) roleToUser.set(role, userId);
   const tasks = await getProjectTasks(projectId);
   const out: Array<{ userId: number; taskId: string; phaseId: string; dueDate: string | null; instructions: string | null }> = [];
   for (const t of tasks) {
@@ -3970,6 +4120,245 @@ export async function getBlockedTasks(projectIds?: string[]): Promise<TaskWithCo
       projectTasks.projectId
     );
   return rows as TaskWithContext[];
+}
+
+// ── 个人每日摘要：状态扫描型聚合输入 ────────────────────────────────────────
+
+export const PERSONAL_DAILY_DIGEST_ITEM_KINDS = [
+  "task_overdue",
+  "task_due_soon",
+  "task_blocked",
+  "deliverable_review",
+  "issue_critical",
+  "issue_overdue",
+  "issue_due_soon",
+] as const;
+export type PersonalDailyDigestItemKind = (typeof PERSONAL_DAILY_DIGEST_ITEM_KINDS)[number];
+
+export type PersonalDailyDigestItem = {
+  recipientUserId: number;
+  kind: PersonalDailyDigestItemKind;
+  projectId: string;
+  projectName: string;
+  projectNumber: string;
+  projectCategory: string;
+  phaseId: string | null;
+  entityType: "task" | "issue" | "deliverable_review";
+  entityId: string;
+  title: string;
+  dueDate: string | null;
+  status: string | null;
+  severity: string | null;
+};
+
+export async function getPersonalDailyDigestItems(input: {
+  todayISO: string;
+  dueSoonDays: number;
+  includePendingReviews?: boolean;
+  includeProjectExceptions?: boolean;
+}): Promise<PersonalDailyDigestItem[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const soonISO = addDaysISO(input.todayISO, input.dueSoonDays);
+  const items: PersonalDailyDigestItem[] = [];
+
+  const taskRows = await db
+    .select({
+      recipientUserId: projectTasks.assigneeUserId,
+      projectId: projectTasks.projectId,
+      projectName: projects.name,
+      projectNumber: projects.projectNumber,
+      projectCategory: projects.category,
+      phaseId: projectTasks.phaseId,
+      taskId: projectTasks.taskId,
+      dueDate: projectTasks.dueDate,
+      status: projectTasks.status,
+      priority: projectTasks.priority,
+    })
+    .from(projectTasks)
+    .innerJoin(projects, eq(projectTasks.projectId, projects.id))
+    .where(and(
+      eq(projects.archived, false),
+      drizzleSql`${projectTasks.assigneeUserId} IS NOT NULL`,
+      drizzleSql`${projectTasks.dueDate} IS NOT NULL`,
+      drizzleSql`${projectTasks.dueDate} <= ${soonISO}`,
+      drizzleSql`${projectTasks.status} NOT IN ('done','skipped','blocked')`,
+    ));
+
+  for (const row of taskRows) {
+    if (!row.recipientUserId) continue;
+    items.push({
+      recipientUserId: row.recipientUserId,
+      kind: row.dueDate && row.dueDate < input.todayISO ? "task_overdue" : "task_due_soon",
+      projectId: row.projectId,
+      projectName: row.projectName,
+      projectNumber: row.projectNumber,
+      projectCategory: row.projectCategory,
+      phaseId: row.phaseId,
+      entityType: "task",
+      entityId: `${row.projectId}:${row.phaseId}:${row.taskId}`,
+      title: row.taskId,
+      dueDate: row.dueDate,
+      status: row.status,
+      severity: row.priority,
+    });
+  }
+
+  const blockedRows = await db
+    .select({
+      recipientUserId: projectTasks.assigneeUserId,
+      projectId: projectTasks.projectId,
+      projectName: projects.name,
+      projectNumber: projects.projectNumber,
+      projectCategory: projects.category,
+      phaseId: projectTasks.phaseId,
+      taskId: projectTasks.taskId,
+      dueDate: projectTasks.dueDate,
+      status: projectTasks.status,
+      priority: projectTasks.priority,
+    })
+    .from(projectTasks)
+    .innerJoin(projects, eq(projectTasks.projectId, projects.id))
+    .where(and(
+      eq(projects.archived, false),
+      eq(projectTasks.status, "blocked"),
+      drizzleSql`${projectTasks.assigneeUserId} IS NOT NULL`,
+    ));
+
+  for (const row of blockedRows) {
+    if (!row.recipientUserId) continue;
+    items.push({
+      recipientUserId: row.recipientUserId,
+      kind: "task_blocked",
+      projectId: row.projectId,
+      projectName: row.projectName,
+      projectNumber: row.projectNumber,
+      projectCategory: row.projectCategory,
+      phaseId: row.phaseId,
+      entityType: "task",
+      entityId: `${row.projectId}:${row.phaseId}:${row.taskId}`,
+      title: row.taskId,
+      dueDate: row.dueDate,
+      status: row.status,
+      severity: row.priority,
+    });
+  }
+
+  if (input.includePendingReviews !== false) {
+    const reviewRows = await db
+      .select({
+        recipientUserId: projectDeliverableReviews.reviewerUserId,
+        projectId: projectDeliverableReviews.projectId,
+        projectName: projects.name,
+        projectNumber: projects.projectNumber,
+        projectCategory: projects.category,
+        phaseId: projectDeliverableReviews.phaseId,
+        id: projectDeliverableReviews.id,
+        deliverableName: projectDeliverableReviews.deliverableName,
+        status: projectDeliverableReviews.status,
+      })
+      .from(projectDeliverableReviews)
+      .innerJoin(projects, eq(projectDeliverableReviews.projectId, projects.id))
+      .where(and(
+        eq(projects.archived, false),
+        eq(projectDeliverableReviews.status, "pending"),
+      ));
+
+    for (const row of reviewRows) {
+      items.push({
+        recipientUserId: row.recipientUserId,
+        kind: "deliverable_review",
+        projectId: row.projectId,
+        projectName: row.projectName,
+        projectNumber: row.projectNumber,
+        projectCategory: row.projectCategory,
+        phaseId: row.phaseId,
+        entityType: "deliverable_review",
+        entityId: `${row.id}:pending`,
+        title: row.deliverableName,
+        dueDate: null,
+        status: row.status,
+        severity: null,
+      });
+    }
+  }
+
+  if (input.includeProjectExceptions !== false) {
+    const issueRows = await db
+      .select({
+        recipientUserId: projects.pmUserId,
+        projectId: projectIssues.projectId,
+        projectName: projects.name,
+        projectNumber: projects.projectNumber,
+        projectCategory: projects.category,
+        phaseId: projectIssues.phaseId,
+        id: projectIssues.id,
+        title: projectIssues.title,
+        targetDate: projectIssues.targetDate,
+        status: projectIssues.status,
+        severity: projectIssues.severity,
+      })
+      .from(projectIssues)
+      .innerJoin(projects, eq(projectIssues.projectId, projects.id))
+      .where(and(
+        eq(projects.archived, false),
+        drizzleSql`${projects.pmUserId} IS NOT NULL`,
+        drizzleSql`${projectIssues.status} NOT IN ('resolved','closed','wont_fix')`,
+        or(
+          inArray(projectIssues.severity, ["P0", "P1"] as const),
+          and(
+            drizzleSql`${projectIssues.targetDate} IS NOT NULL`,
+            drizzleSql`${projectIssues.targetDate} <> ''`,
+            drizzleSql`${projectIssues.targetDate} <= ${soonISO}`,
+          ),
+        ),
+      ));
+
+    for (const row of issueRows) {
+      if (!row.recipientUserId) continue;
+      const isCritical = row.severity === "P0" || row.severity === "P1";
+      items.push({
+        recipientUserId: row.recipientUserId,
+        kind: isCritical
+          ? "issue_critical"
+          : row.targetDate && row.targetDate < input.todayISO
+            ? "issue_overdue"
+            : "issue_due_soon",
+        projectId: row.projectId,
+        projectName: row.projectName,
+        projectNumber: row.projectNumber,
+        projectCategory: row.projectCategory,
+        phaseId: row.phaseId,
+        entityType: "issue",
+        entityId: String(row.id),
+        title: row.title,
+        dueDate: row.targetDate || null,
+        status: row.status,
+        severity: row.severity,
+      });
+    }
+  }
+
+  const rank: Record<PersonalDailyDigestItemKind, number> = {
+    issue_critical: 0,
+    task_blocked: 1,
+    task_overdue: 2,
+    issue_overdue: 3,
+    deliverable_review: 4,
+    task_due_soon: 5,
+    issue_due_soon: 6,
+  };
+  return items.sort((a, b) =>
+    rank[a.kind] - rank[b.kind] ||
+    (a.dueDate ?? "9999-99-99").localeCompare(b.dueDate ?? "9999-99-99") ||
+    a.projectName.localeCompare(b.projectName)
+  );
+}
+
+function addDaysISO(iso: string, days: number): string {
+  const date = new Date(`${iso}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
 }
 
 // ── Test helpers (not used in production code) ────────────────────────────────
@@ -4402,7 +4791,7 @@ export async function getReleaseGateStatus(project: ProjectRow): Promise<Release
   };
 }
 
-/** 阶段级未关闭 P0/P1（不动项目级 getOpenP0P1Count）。 */
+/** 阶段级未闭环 P0/P1（resolved 仍需报告人/QA 验证，closed/wont_fix 才放行）。 */
 export async function getPhaseOpenP0P1(projectId: string, phaseId: string): Promise<{ count: number; titles: string[] }> {
   const db = await getDb();
   if (!db) return { count: 0, titles: [] };
@@ -4412,7 +4801,7 @@ export async function getPhaseOpenP0P1(projectId: string, phaseId: string): Prom
       eq(projectIssues.projectId, projectId),
       eq(projectIssues.phaseId, phaseId),
       inArray(projectIssues.severity, ["P0", "P1"] as const),
-      inArray(projectIssues.status, ["open", "in_progress"] as const),
+      inArray(projectIssues.status, ["open", "in_progress", "resolved"] as const),
     ));
   return { count: rows.length, titles: rows.map((r) => r.title) };
 }
@@ -4763,11 +5152,55 @@ export async function bomDiff(revA: number, revB: number): Promise<{ added: BomI
 
 // ── 协作：评论 + @提及 + 通知 ─────────────────────────────────────────────────
 
-/** 从正文提取 @username，匹配候选用户名（不区分大小写），返回命中用户 id */
-export function parseMentions(body: string, candidates: { id: number; username: string | null }[]): number[] {
+type MentionCandidate = {
+  id: number;
+  username: string | null;
+  openId?: string | null;
+};
+
+function mentionHandles(candidate: MentionCandidate): string[] {
+  return [candidate.username, candidate.openId, `u${candidate.id}`]
+    .filter((name): name is string => typeof name === "string" && name.trim().length > 0)
+    .map((name) => name.toLowerCase());
+}
+
+/** 从正文提取 @handle，匹配候选用户名 / openId / u{userId}（不区分大小写），返回命中用户 id */
+export function parseMentions(body: string, candidates: MentionCandidate[]): number[] {
   const names = new Set((body.match(/@([A-Za-z0-9_.\-]+)/g) || []).map((m) => m.slice(1).toLowerCase()));
   if (names.size === 0) return [];
-  return candidates.filter((c) => c.username && names.has(c.username.toLowerCase())).map((c) => c.id);
+  return candidates
+    .filter((c) => mentionHandles(c).some((name) => names.has(name)))
+    .map((c) => c.id);
+}
+
+async function getCommentMentionCandidates(projectId: string | null | undefined): Promise<MentionCandidate[]> {
+  const db = await getDb();
+  if (!db) return [];
+  if (!projectId) {
+    return db.select({ id: users.id, username: users.username, openId: users.openId }).from(users);
+  }
+
+  const members = await getProjectMembers(projectId);
+  const project = await getProjectById(projectId);
+  const byId = new Map<number, MentionCandidate>();
+  for (const member of members) {
+    byId.set(member.userId, {
+      id: member.userId,
+      username: member.userUsername,
+      openId: member.userOpenId,
+    });
+  }
+  if (project?.createdBy && !byId.has(project.createdBy)) {
+    const owner = await getUserById(project.createdBy);
+    if (owner) {
+      byId.set(owner.id, {
+        id: owner.id,
+        username: owner.username,
+        openId: owner.openId,
+      });
+    }
+  }
+  return Array.from(byId.values());
 }
 
 export async function createNotification(n: {
@@ -4785,40 +5218,42 @@ export async function addComment(input: {
   entityType: string; entityId: string; projectId?: string | null; authorId: number; body: string;
 }): Promise<Comment> {
   const db = await getDb(); if (!db) throw new Error("Database not available");
-  const candidates = await db.select({ id: users.id, username: users.username }).from(users);
+  const candidates = await getCommentMentionCandidates(input.projectId);
   const mentions = parseMentions(input.body, candidates);
   const [c] = await db.insert(comments).values({
     entityType: input.entityType, entityId: input.entityId,
     projectId: input.projectId ?? null, authorId: input.authorId, body: input.body, mentions,
   }).returning();
   const author = await getUserById(input.authorId);
-  for (const uid of mentions) {
-    if (uid === input.authorId) continue;
-    await createNotification({
-      userId: uid, type: "mention",
-      title: `${author?.name || "有人"} 在评论中提到了你`,
-      body: input.body.slice(0, 140), entityType: input.entityType, entityId: input.entityId,
-    });
-  }
-  if (mentions.length > 0) {
-    const { pushWebhook } = await import("./_core/notify");
+  const recipientIds = mentions.filter((uid) => uid !== input.authorId);
+  if (recipientIds.length > 0) {
+    const { notifyPersonal } = await import("./notification-gateway");
+    const { buildProjectActionPath } = await import("../shared/action-links");
     const authorName = author?.name || author?.username || "有人";
     const mentionedNames = candidates
       .filter((u) => mentions.includes(u.id))
-      .map((u) => `@${u.username || u.id}`)
+      .map((u) => `@${u.username || u.openId || `u${u.id}`}`)
       .join(" ");
     const entityLabel = ({ issue: "问题", task: "任务", change: "变更", changelog: "变更", project: "项目" } as Record<string, string>)[input.entityType] || input.entityType;
     const projName = input.projectId ? (await getProjectById(input.projectId))?.name : null;
     const where = projName ? `「${projName}」的${entityLabel}` : entityLabel;
     const excerpt = input.body.slice(0, 140);
-    const link = ENV.appBaseUrl ? `${ENV.appBaseUrl}/` : null;
-    const plain = `💬 ${authorName} 在${where}评论中提到了 ${mentionedNames}：${excerpt}${link ? `\n${link}` : ""}`;
     const markdown =
-      `#### 💬 有人在评论中 @ 了你\n` +
+      `#### 有人在评论中 @ 了你\n` +
       `**${authorName}** 在${where}评论中提到了 ${mentionedNames}\n\n` +
-      `> ${excerpt}\n\n` +
-      (link ? `[在 CE Project Hub 中查看](${link})` : "");
-    await pushWebhook(plain, { title: "有人@了你", markdown });
+      `> ${excerpt}`;
+    await notifyPersonal({
+      eventKey: "mention",
+      userIds: recipientIds,
+      title: `${authorName} 在评论中提到了你`,
+      body: excerpt,
+      markdown,
+      entityType: input.entityType,
+      entityId: input.entityId,
+      actionPath: input.projectId ? buildProjectActionPath({ projectId: input.projectId, tab: "comments" }) : "/",
+      priority: "normal",
+      bestEffortDingtalk: true,
+    });
   }
   return c;
 }
@@ -4858,6 +5293,575 @@ export async function markRead(id: number): Promise<void> {
 export async function markAllRead(userId: number): Promise<void> {
   const db = await getDb(); if (!db) return;
   await db.update(notifications).set({ read: true }).where(eq(notifications.userId, userId));
+}
+
+export type UserNotificationPrefs = {
+  dingtalk?: {
+    enabled?: boolean;
+    quietHours?: {
+      startHour?: number;
+      endHour?: number;
+      timezone?: string;
+    };
+    maxImmediatePerDay?: number;
+  };
+};
+
+export type NotificationDeliveryProfile = {
+  userId: number;
+  prefs: UserNotificationPrefs;
+  immediateSent24h: number;
+};
+
+function parseNotificationPrefs(value: unknown): UserNotificationPrefs {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as UserNotificationPrefs;
+}
+
+export async function getNotificationDeliveryProfiles(userIds: number[]): Promise<Map<number, NotificationDeliveryProfile>> {
+  const uniqueUserIds = Array.from(new Set(userIds.filter((id) => Number.isInteger(id) && id > 0)));
+  const profiles = new Map(uniqueUserIds.map((userId) => [
+    userId,
+    { userId, prefs: {}, immediateSent24h: 0 } satisfies NotificationDeliveryProfile,
+  ]));
+  if (uniqueUserIds.length === 0) return profiles;
+  const db = await getDb();
+  if (!db) return profiles;
+
+  try {
+    const idList = drizzleSql.join(uniqueUserIds.map((id) => drizzleSql`${id}`), drizzleSql`, `);
+    const result = await db.execute(drizzleSql`
+      SELECT
+        u.id,
+        COALESCE(u."notificationPrefs", '{}'::jsonb) AS prefs,
+        (
+          SELECT count(*)::int
+          FROM action_items ai
+          WHERE ai."recipientUserId" = u.id
+            AND ai."firstSentAt" >= now() - interval '24 hours'
+        ) AS immediate_sent_24h
+      FROM users u
+      WHERE u.id IN (${idList})
+    `);
+    const rows = rowsFromExecute<{ id: number | string; prefs: unknown; immediate_sent_24h: number | string | null }>(result);
+    for (const row of rows) {
+      const userId = Number(row.id);
+      profiles.set(userId, {
+        userId,
+        prefs: parseNotificationPrefs(row.prefs),
+        immediateSent24h: toInt(row.immediate_sent_24h),
+      });
+    }
+  } catch (error) {
+    if (isMissingRelationError(error) || isMissingColumnError(error, "notificationPrefs")) return profiles;
+    throw error;
+  }
+  return profiles;
+}
+
+export async function getUserNotificationPrefs(userId: number): Promise<UserNotificationPrefs> {
+  const db = await getDb();
+  if (!db) return {};
+  try {
+    const result = await db.execute(drizzleSql`
+      SELECT COALESCE("notificationPrefs", '{}'::jsonb) AS prefs
+      FROM users
+      WHERE id = ${userId}
+      LIMIT 1
+    `);
+    const [row] = rowsFromExecute<{ prefs: unknown }>(result);
+    return parseNotificationPrefs(row?.prefs);
+  } catch (error) {
+    if (isMissingRelationError(error) || isMissingColumnError(error, "notificationPrefs")) return {};
+    throw error;
+  }
+}
+
+export async function updateUserNotificationPrefs(
+  userId: number,
+  prefs: UserNotificationPrefs,
+): Promise<UserNotificationPrefs> {
+  const db = await getDb();
+  if (!db) return prefs;
+  try {
+    const result = await db.execute(drizzleSql`
+      UPDATE users
+      SET "notificationPrefs" = ${JSON.stringify(prefs)}::jsonb,
+          "updatedAt" = now()
+      WHERE id = ${userId}
+      RETURNING "notificationPrefs" AS prefs
+    `);
+    const [row] = rowsFromExecute<{ prefs: unknown }>(result);
+    return parseNotificationPrefs(row?.prefs) ?? prefs;
+  } catch (error) {
+    if (isMissingRelationError(error) || isMissingColumnError(error, "notificationPrefs")) return prefs;
+    throw error;
+  }
+}
+
+// ── 行动项：唯一可行动通知底座 ───────────────────────────────────────────────
+
+const ACTIVE_ACTION_ITEM_STATUSES = ["open", "sent", "read", "escalated", "snoozed"] as const;
+
+function isMissingRelationError(error: unknown): boolean {
+  let current: unknown = error;
+  while (current && typeof current === "object") {
+    const code = (current as { code?: unknown }).code;
+    if (code === "42P01") return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+function isMissingColumnError(error: unknown, columnName: string): boolean {
+  let current: unknown = error;
+  while (current && typeof current === "object") {
+    const code = (current as { code?: unknown }).code;
+    const message = String((current as { message?: unknown }).message ?? "");
+    if (code === "42703" && message.includes(columnName)) return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+export type UpsertActionItemInput = {
+  kind: InsertActionItem["kind"];
+  projectId: string;
+  entityType: string;
+  entityId: string;
+  dedupeKey: string;
+  recipientUserId: number;
+  title: string;
+  body?: string | null;
+  actionUrl: string;
+  level?: InsertActionItem["level"];
+  priority?: string;
+  dueAt?: Date | null;
+  snoozedUntil?: Date | null;
+  sourceActivityLogId?: number | null;
+  metadata?: Record<string, unknown>;
+};
+
+export async function upsertActionItem(input: UpsertActionItemInput): Promise<{
+  actionItem: ActionItem | null;
+  shouldNotify: boolean;
+}> {
+  const db = await getDb();
+  if (!db) return { actionItem: null, shouldNotify: false };
+
+  try {
+    const [existing] = await db
+      .select()
+      .from(actionItems)
+      .where(eq(actionItems.dedupeKey, input.dedupeKey))
+      .limit(1);
+    const now = new Date();
+
+    if (existing) {
+      const shouldNotify = existing.status === "done" || existing.status === "closed";
+      const [row] = await db
+        .update(actionItems)
+        .set({
+          kind: input.kind,
+          projectId: input.projectId,
+          entityType: input.entityType,
+          entityId: input.entityId,
+          recipientUserId: input.recipientUserId,
+          level: input.level ?? existing.level,
+          title: input.title,
+          body: input.body ?? null,
+          actionUrl: input.actionUrl,
+          status: shouldNotify ? "open" : existing.status,
+          priority: input.priority ?? existing.priority,
+          dueAt: input.dueAt ?? null,
+          snoozedUntil: input.snoozedUntil ?? null,
+          sourceActivityLogId: input.sourceActivityLogId ?? existing.sourceActivityLogId,
+          metadata: input.metadata ?? existing.metadata ?? {},
+          handledAt: shouldNotify ? null : existing.handledAt,
+          closedAt: shouldNotify ? null : existing.closedAt,
+          updatedAt: now,
+        })
+        .where(eq(actionItems.id, existing.id))
+        .returning();
+      return { actionItem: row ?? existing, shouldNotify };
+    }
+
+    const [row] = await db
+      .insert(actionItems)
+      .values({
+        kind: input.kind,
+        projectId: input.projectId,
+        entityType: input.entityType,
+        entityId: input.entityId,
+        dedupeKey: input.dedupeKey,
+        recipientUserId: input.recipientUserId,
+        level: input.level ?? "owner",
+        title: input.title,
+        body: input.body ?? null,
+        actionUrl: input.actionUrl,
+        status: "open",
+        priority: input.priority ?? "normal",
+        dueAt: input.dueAt ?? null,
+        snoozedUntil: input.snoozedUntil ?? null,
+        sourceActivityLogId: input.sourceActivityLogId ?? null,
+        metadata: input.metadata ?? {},
+      })
+      .returning();
+    return { actionItem: row ?? null, shouldNotify: Boolean(row) };
+  } catch (error) {
+    if (isMissingRelationError(error)) return { actionItem: null, shouldNotify: true };
+    throw error;
+  }
+}
+
+export async function markActionItemSent(id: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    await db
+      .update(actionItems)
+      .set({
+        status: "sent",
+        firstSentAt: drizzleSql`coalesce(${actionItems.firstSentAt}, now())`,
+        lastSentAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(actionItems.id, id));
+  } catch (error) {
+    if (!isMissingRelationError(error)) throw error;
+  }
+}
+
+export async function closeActionItems(input: {
+  dedupeKey?: string;
+  kind?: InsertActionItem["kind"];
+  entityType?: string;
+  entityId?: string;
+  recipientUserId?: number;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const conditions = [];
+  if (input.dedupeKey) conditions.push(eq(actionItems.dedupeKey, input.dedupeKey));
+  if (input.kind) conditions.push(eq(actionItems.kind, input.kind));
+  if (input.entityType) conditions.push(eq(actionItems.entityType, input.entityType));
+  if (input.entityId) conditions.push(eq(actionItems.entityId, input.entityId));
+  if (input.recipientUserId) conditions.push(eq(actionItems.recipientUserId, input.recipientUserId));
+  if (conditions.length === 0) return;
+  try {
+    await db
+      .update(actionItems)
+      .set({
+        status: "closed",
+        handledAt: new Date(),
+        closedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(and(...conditions));
+  } catch (error) {
+    if (!isMissingRelationError(error)) throw error;
+  }
+}
+
+export async function completeActionItem(input: {
+  id: number;
+  recipientUserId: number;
+}): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  try {
+    const [row] = await db
+      .update(actionItems)
+      .set({
+        status: "done",
+        handledAt: new Date(),
+        closedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(and(
+        eq(actionItems.id, input.id),
+        eq(actionItems.recipientUserId, input.recipientUserId),
+        inArray(actionItems.status, ACTIVE_ACTION_ITEM_STATUSES),
+      ))
+      .returning({ id: actionItems.id });
+    return Boolean(row);
+  } catch (error) {
+    if (isMissingRelationError(error)) return false;
+    throw error;
+  }
+}
+
+export async function snoozeActionItem(input: {
+  id: number;
+  recipientUserId: number;
+  snoozedUntil: Date;
+}): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  try {
+    const [row] = await db
+      .update(actionItems)
+      .set({
+        status: "snoozed",
+        snoozedUntil: input.snoozedUntil,
+        updatedAt: new Date(),
+      })
+      .where(and(
+        eq(actionItems.id, input.id),
+        eq(actionItems.recipientUserId, input.recipientUserId),
+        inArray(actionItems.status, ACTIVE_ACTION_ITEM_STATUSES),
+      ))
+      .returning({ id: actionItems.id });
+    return Boolean(row);
+  } catch (error) {
+    if (isMissingRelationError(error)) return false;
+    throw error;
+  }
+}
+
+export async function listOpenActionItemsForUser(userId: number, limit = 100): Promise<ActionItem[]> {
+  const db = await getDb();
+  if (!db) return [];
+  try {
+    await db
+      .update(actionItems)
+      .set({
+        status: "sent",
+        snoozedUntil: null,
+        updatedAt: new Date(),
+      })
+      .where(and(
+        eq(actionItems.recipientUserId, userId),
+        eq(actionItems.status, "snoozed"),
+        drizzleSql`${actionItems.snoozedUntil} <= now()`,
+      ));
+
+    return await db
+      .select()
+      .from(actionItems)
+      .where(and(
+        eq(actionItems.recipientUserId, userId),
+        inArray(actionItems.status, ACTIVE_ACTION_ITEM_STATUSES),
+        or(isNull(actionItems.snoozedUntil), drizzleSql`${actionItems.snoozedUntil} <= now()`),
+      ))
+      .orderBy(
+        drizzleSql`CASE ${actionItems.priority} WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END`,
+        drizzleSql`${actionItems.dueAt} IS NULL`,
+        actionItems.dueAt,
+        desc(actionItems.createdAt),
+      )
+      .limit(Math.min(Math.max(limit, 1), 200));
+  } catch (error) {
+    if (isMissingRelationError(error)) return [];
+    throw error;
+  }
+}
+
+export async function listSnoozedActionItemsForUser(userId: number, limit = 50): Promise<ActionItem[]> {
+  const db = await getDb();
+  if (!db) return [];
+  try {
+    return await db
+      .select()
+      .from(actionItems)
+      .where(and(
+        eq(actionItems.recipientUserId, userId),
+        eq(actionItems.status, "snoozed"),
+        drizzleSql`${actionItems.snoozedUntil} > now()`,
+      ))
+      .orderBy(actionItems.snoozedUntil, desc(actionItems.createdAt))
+      .limit(Math.min(Math.max(limit, 1), 100));
+  } catch (error) {
+    if (isMissingRelationError(error)) return [];
+    throw error;
+  }
+}
+
+export type ActionItemSlaRow = ActionItem & {
+  projectName: string;
+  projectNumber: string;
+  pmUserId: number | null;
+  managerUserIds: number[];
+};
+
+export async function listActionItemsForSla(): Promise<ActionItemSlaRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  try {
+    const rows = await db
+      .select({
+        actionItem: actionItems,
+        projectName: projects.name,
+        projectNumber: projects.projectNumber,
+        pmUserId: projects.pmUserId,
+      })
+      .from(actionItems)
+      .innerJoin(projects, eq(actionItems.projectId, projects.id))
+      .where(and(
+        eq(projects.archived, false),
+        eq(actionItems.level, "owner"),
+        inArray(actionItems.status, ACTIVE_ACTION_ITEM_STATUSES),
+        or(isNull(actionItems.snoozedUntil), drizzleSql`${actionItems.snoozedUntil} <= now()`),
+      ));
+    if (rows.length === 0) return [];
+    const projectIds = Array.from(new Set(rows.map((row) => row.actionItem.projectId)));
+    const managerRows = await db
+      .select({ projectId: projectMembers.projectId, userId: projectMembers.userId })
+      .from(projectMembers)
+      .where(and(
+        inArray(projectMembers.projectId, projectIds),
+        eq(projectMembers.role, "manager"),
+      ));
+    const managersByProject = new Map<string, number[]>();
+    for (const row of managerRows) {
+      const list = managersByProject.get(row.projectId) ?? [];
+      list.push(row.userId);
+      managersByProject.set(row.projectId, list);
+    }
+    return rows.map((row) => ({
+      ...row.actionItem,
+      projectName: row.projectName,
+      projectNumber: row.projectNumber,
+      pmUserId: row.pmUserId ?? null,
+      managerUserIds: managersByProject.get(row.actionItem.projectId) ?? [],
+    }));
+  } catch (error) {
+    if (isMissingRelationError(error)) return [];
+    throw error;
+  }
+}
+
+export async function patchActionItemMetadata(
+  id: number,
+  patch: Record<string, unknown>,
+  status?: InsertActionItem["status"],
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    const [existing] = await db
+      .select({ metadata: actionItems.metadata })
+      .from(actionItems)
+      .where(eq(actionItems.id, id))
+      .limit(1);
+    if (!existing) return;
+    await db
+      .update(actionItems)
+      .set({
+        metadata: { ...(existing.metadata ?? {}), ...patch },
+        ...(status ? { status } : {}),
+        updatedAt: new Date(),
+      })
+      .where(eq(actionItems.id, id));
+  } catch (error) {
+    if (!isMissingRelationError(error)) throw error;
+  }
+}
+
+export const AUTOMATION_SCHEDULER_KEY = "scheduled_scan";
+
+async function ensureAutomationHeartbeatCursorColumn(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
+): Promise<void> {
+  await db.execute(drizzleSql`
+    ALTER TABLE "automation_heartbeats"
+    ADD COLUMN IF NOT EXISTS "lastCursorId" integer DEFAULT 0 NOT NULL
+  `);
+}
+
+export async function tryStartAutomationHeartbeat(
+  schedulerKey = AUTOMATION_SCHEDULER_KEY,
+  staleAfterMs = 10 * 60 * 1000,
+): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const now = new Date();
+  const staleBefore = new Date(now.getTime() - staleAfterMs);
+  try {
+    await db
+      .insert(automationHeartbeats)
+      .values({
+        schedulerKey,
+        status: "idle",
+        updatedAt: now,
+      } satisfies InsertAutomationHeartbeat)
+      .onConflictDoNothing({ target: automationHeartbeats.schedulerKey });
+
+    const rows = await db
+      .update(automationHeartbeats)
+      .set({
+        status: "running",
+        lastStartedAt: now,
+        lastError: null,
+        updatedAt: now,
+      })
+      .where(and(
+        eq(automationHeartbeats.schedulerKey, schedulerKey),
+        drizzleSql`(${automationHeartbeats.status} != 'running' OR ${automationHeartbeats.updatedAt} < ${staleBefore})`,
+      ))
+      .returning({ schedulerKey: automationHeartbeats.schedulerKey });
+    return rows.length > 0;
+  } catch (error) {
+    if (isMissingColumnError(error, "lastCursorId")) {
+      await ensureAutomationHeartbeatCursorColumn(db);
+      return tryStartAutomationHeartbeat(schedulerKey, staleAfterMs);
+    }
+    if (isMissingRelationError(error)) return true;
+    throw error;
+  }
+}
+
+export async function finishAutomationHeartbeat(input: {
+  schedulerKey?: string;
+  status: "success" | "error" | "skipped";
+  durationMs?: number | null;
+  lastCursorId?: number;
+  error?: string | null;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    await db
+      .update(automationHeartbeats)
+      .set({
+        status: input.status,
+        lastFinishedAt: new Date(),
+        durationMs: input.durationMs ?? null,
+        ...(input.lastCursorId !== undefined ? { lastCursorId: input.lastCursorId } : {}),
+        lastError: input.error ?? null,
+        updatedAt: new Date(),
+      })
+      .where(eq(automationHeartbeats.schedulerKey, input.schedulerKey ?? AUTOMATION_SCHEDULER_KEY));
+  } catch (error) {
+    if (isMissingColumnError(error, "lastCursorId")) {
+      await ensureAutomationHeartbeatCursorColumn(db);
+      return finishAutomationHeartbeat(input);
+    }
+    if (!isMissingRelationError(error)) throw error;
+  }
+}
+
+export async function getAutomationHeartbeat(
+  schedulerKey = AUTOMATION_SCHEDULER_KEY,
+): Promise<AutomationHeartbeat | null> {
+  const db = await getDb();
+  if (!db) return null;
+  try {
+    const [row] = await db
+      .select()
+      .from(automationHeartbeats)
+      .where(eq(automationHeartbeats.schedulerKey, schedulerKey))
+      .limit(1);
+    return row ?? null;
+  } catch (error) {
+    if (isMissingColumnError(error, "lastCursorId")) {
+      await ensureAutomationHeartbeatCursorColumn(db);
+      return getAutomationHeartbeat(schedulerKey);
+    }
+    if (isMissingRelationError(error)) return null;
+    throw error;
+  }
 }
 
 // ── 自动化规则：配置 + 运行审计 ────────────────────────────────────────────────
@@ -4963,6 +5967,309 @@ export async function listAutomationRuns(input: {
     .where(activeRunScope)
     .orderBy(desc(automationRuns.createdAt))
     .limit(limit);
+}
+
+type AutomationPressureKindRow = {
+  kind: string;
+  total: number;
+  sent: number;
+  open: number;
+  handled: number;
+  escalated: number;
+  readUnresolved: number;
+  openOver24h: number;
+  medianResponseHours: number | null;
+};
+
+export type AutomationPressureMetrics = {
+  windowDays: number;
+  since: string;
+  actionItems: {
+    total: number;
+    sent: number;
+    open: number;
+    handled: number;
+    escalated: number;
+    readUnresolved: number;
+    openOver24h: number;
+    uniqueRecipients: number;
+    perRecipientPerDay: number | null;
+    closeRatePct: number | null;
+    escalationRatePct: number | null;
+    readNoActionRatePct: number | null;
+    medianResponseHours: number | null;
+    byKind: AutomationPressureKindRow[];
+  };
+  notifications: {
+    total: number;
+    unread: number;
+    uniqueRecipients: number;
+    perRecipientPerDay: number | null;
+  };
+  dingtalkCards: {
+    total: number;
+    sent: number;
+    handled: number;
+    failed: number;
+    handleRatePct: number | null;
+    failureRatePct: number | null;
+  };
+  runs: {
+    total: number;
+    errors: number;
+    errorRatePct: number | null;
+  };
+};
+
+function rowsFromExecute<T>(result: unknown): T[] {
+  return ((result as { rows?: T[] }).rows ?? (result as T[] | undefined) ?? []) as T[];
+}
+
+function toInt(value: unknown): number {
+  return Number(value ?? 0) || 0;
+}
+
+function toNullableNumber(value: unknown): number | null {
+  if (value == null) return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function ratePct(numerator: number, denominator: number): number | null {
+  if (denominator <= 0) return null;
+  return Math.round((numerator / denominator) * 10_000) / 100;
+}
+
+function perRecipientPerDay(total: number, recipients: number, windowDays: number): number | null {
+  if (total <= 0 || recipients <= 0 || windowDays <= 0) return null;
+  return Math.round((total / recipients / windowDays) * 100) / 100;
+}
+
+export async function getAutomationPressureMetrics(windowDays = 7): Promise<AutomationPressureMetrics> {
+  const db = await getDb();
+  const days = Math.min(Math.max(Math.floor(windowDays), 1), 90);
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const empty: AutomationPressureMetrics = {
+    windowDays: days,
+    since: since.toISOString(),
+    actionItems: {
+      total: 0,
+      sent: 0,
+      open: 0,
+      handled: 0,
+      escalated: 0,
+      readUnresolved: 0,
+      openOver24h: 0,
+      uniqueRecipients: 0,
+      perRecipientPerDay: null,
+      closeRatePct: null,
+      escalationRatePct: null,
+      readNoActionRatePct: null,
+      medianResponseHours: null,
+      byKind: [],
+    },
+    notifications: {
+      total: 0,
+      unread: 0,
+      uniqueRecipients: 0,
+      perRecipientPerDay: null,
+    },
+    dingtalkCards: {
+      total: 0,
+      sent: 0,
+      handled: 0,
+      failed: 0,
+      handleRatePct: null,
+      failureRatePct: null,
+    },
+    runs: {
+      total: 0,
+      errors: 0,
+      errorRatePct: null,
+    },
+  };
+  if (!db) return empty;
+
+  try {
+    const actionSummaryRows = rowsFromExecute<{
+      total: number | string | null;
+      sent: number | string | null;
+      open: number | string | null;
+      handled: number | string | null;
+      escalated: number | string | null;
+      read_unresolved: number | string | null;
+      open_over_24h: number | string | null;
+      unique_recipients: number | string | null;
+      median_response_hours: number | string | null;
+    }>(await db.execute(drizzleSql`
+      SELECT
+        count(*)::int AS total,
+        count(*) FILTER (WHERE ai."firstSentAt" IS NOT NULL)::int AS sent,
+        count(*) FILTER (WHERE ai.status IN ('open','sent','read','escalated','snoozed'))::int AS open,
+        count(*) FILTER (WHERE ai."handledAt" IS NOT NULL)::int AS handled,
+        count(*) FILTER (WHERE ai.level <> 'owner' OR ai.status = 'escalated')::int AS escalated,
+        count(*) FILTER (WHERE ai.status = 'read')::int AS read_unresolved,
+        count(*) FILTER (
+          WHERE ai.status IN ('open','sent','read','escalated','snoozed')
+            AND ai."createdAt" <= now() - interval '24 hours'
+        )::int AS open_over_24h,
+        count(DISTINCT ai."recipientUserId")::int AS unique_recipients,
+        percentile_cont(0.5) WITHIN GROUP (
+          ORDER BY extract(epoch FROM (ai."handledAt" - coalesce(ai."firstSentAt", ai."createdAt"))) / 3600
+        ) FILTER (WHERE ai."handledAt" IS NOT NULL)::float AS median_response_hours
+      FROM action_items ai
+      INNER JOIN projects p ON p.id = ai."projectId"
+      WHERE p.archived = false AND ai."createdAt" >= ${since}
+    `));
+
+    const actionKindRows = rowsFromExecute<{
+      kind: string;
+      total: number | string | null;
+      sent: number | string | null;
+      open: number | string | null;
+      handled: number | string | null;
+      escalated: number | string | null;
+      read_unresolved: number | string | null;
+      open_over_24h: number | string | null;
+      median_response_hours: number | string | null;
+    }>(await db.execute(drizzleSql`
+      SELECT
+        ai.kind::text AS kind,
+        count(*)::int AS total,
+        count(*) FILTER (WHERE ai."firstSentAt" IS NOT NULL)::int AS sent,
+        count(*) FILTER (WHERE ai.status IN ('open','sent','read','escalated','snoozed'))::int AS open,
+        count(*) FILTER (WHERE ai."handledAt" IS NOT NULL)::int AS handled,
+        count(*) FILTER (WHERE ai.level <> 'owner' OR ai.status = 'escalated')::int AS escalated,
+        count(*) FILTER (WHERE ai.status = 'read')::int AS read_unresolved,
+        count(*) FILTER (
+          WHERE ai.status IN ('open','sent','read','escalated','snoozed')
+            AND ai."createdAt" <= now() - interval '24 hours'
+        )::int AS open_over_24h,
+        percentile_cont(0.5) WITHIN GROUP (
+          ORDER BY extract(epoch FROM (ai."handledAt" - coalesce(ai."firstSentAt", ai."createdAt"))) / 3600
+        ) FILTER (WHERE ai."handledAt" IS NOT NULL)::float AS median_response_hours
+      FROM action_items ai
+      INNER JOIN projects p ON p.id = ai."projectId"
+      WHERE p.archived = false AND ai."createdAt" >= ${since}
+      GROUP BY ai.kind
+      ORDER BY total DESC, kind
+    `));
+
+    const notificationRows = rowsFromExecute<{
+      total: number | string | null;
+      unread: number | string | null;
+      unique_recipients: number | string | null;
+    }>(await db.execute(drizzleSql`
+      SELECT
+        count(*)::int AS total,
+        count(*) FILTER (WHERE read = false)::int AS unread,
+        count(DISTINCT "userId")::int AS unique_recipients
+      FROM notifications
+      WHERE "createdAt" >= ${since}
+    `));
+
+    const runRows = rowsFromExecute<{
+      total: number | string | null;
+      errors: number | string | null;
+    }>(await db.execute(drizzleSql`
+      SELECT
+        count(*)::int AS total,
+        count(*) FILTER (WHERE status IN ('error','failed'))::int AS errors
+      FROM automation_runs
+      WHERE "createdAt" >= ${since}
+    `));
+
+    let dingtalkCardRows: Array<{
+      total: number | string | null;
+      sent: number | string | null;
+      handled: number | string | null;
+      failed: number | string | null;
+    }> = [];
+    try {
+      dingtalkCardRows = rowsFromExecute(await db.execute(drizzleSql`
+        SELECT
+          count(*)::int AS total,
+          count(*) FILTER (WHERE status IN ('sent','handled'))::int AS sent,
+          count(*) FILTER (WHERE status = 'handled')::int AS handled,
+          count(*) FILTER (WHERE status = 'failed')::int AS failed
+        FROM dingtalk_interactive_cards
+        WHERE "createdAt" >= ${since}
+      `));
+    } catch (error) {
+      if (!isMissingRelationError(error)) throw error;
+    }
+
+    const summary = actionSummaryRows[0];
+    const total = toInt(summary?.total);
+    const sent = toInt(summary?.sent);
+    const handled = toInt(summary?.handled);
+    const escalated = toInt(summary?.escalated);
+    const readUnresolved = toInt(summary?.read_unresolved);
+    const uniqueRecipients = toInt(summary?.unique_recipients);
+    const notificationSummary = notificationRows[0];
+    const notificationTotal = toInt(notificationSummary?.total);
+    const notificationRecipients = toInt(notificationSummary?.unique_recipients);
+    const runSummary = runRows[0];
+    const runTotal = toInt(runSummary?.total);
+    const runErrors = toInt(runSummary?.errors);
+    const cardSummary = dingtalkCardRows[0];
+    const cardTotal = toInt(cardSummary?.total);
+    const cardHandled = toInt(cardSummary?.handled);
+    const cardFailed = toInt(cardSummary?.failed);
+
+    return {
+      windowDays: days,
+      since: since.toISOString(),
+      actionItems: {
+        total,
+        sent,
+        open: toInt(summary?.open),
+        handled,
+        escalated,
+        readUnresolved,
+        openOver24h: toInt(summary?.open_over_24h),
+        uniqueRecipients,
+        perRecipientPerDay: perRecipientPerDay(sent, uniqueRecipients, days),
+        closeRatePct: ratePct(handled, total),
+        escalationRatePct: ratePct(escalated, total),
+        readNoActionRatePct: ratePct(readUnresolved, total),
+        medianResponseHours: toNullableNumber(summary?.median_response_hours),
+        byKind: actionKindRows.map((row) => ({
+          kind: row.kind,
+          total: toInt(row.total),
+          sent: toInt(row.sent),
+          open: toInt(row.open),
+          handled: toInt(row.handled),
+          escalated: toInt(row.escalated),
+          readUnresolved: toInt(row.read_unresolved),
+          openOver24h: toInt(row.open_over_24h),
+          medianResponseHours: toNullableNumber(row.median_response_hours),
+        })),
+      },
+      notifications: {
+        total: notificationTotal,
+        unread: toInt(notificationSummary?.unread),
+        uniqueRecipients: notificationRecipients,
+        perRecipientPerDay: perRecipientPerDay(notificationTotal, notificationRecipients, days),
+      },
+      dingtalkCards: {
+        total: cardTotal,
+        sent: toInt(cardSummary?.sent),
+        handled: cardHandled,
+        failed: cardFailed,
+        handleRatePct: ratePct(cardHandled, cardTotal),
+        failureRatePct: ratePct(cardFailed, cardTotal),
+      },
+      runs: {
+        total: runTotal,
+        errors: runErrors,
+        errorRatePct: ratePct(runErrors, runTotal),
+      },
+    };
+  } catch (error) {
+    if (isMissingRelationError(error)) return empty;
+    throw error;
+  }
 }
 
 export type AutomationDueTask = ProjectTask & {

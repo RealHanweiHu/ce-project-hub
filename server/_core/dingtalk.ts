@@ -34,6 +34,13 @@ export async function getAccessToken(now = Date.now()): Promise<string | null> {
 
 type MappableUser = { id: number; dingtalkUserId?: string | null; dingtalkCorpUserId?: string | null; mobile?: string | null };
 
+export type DingtalkAuthUser = {
+  corpUserId: string;
+  unionId: string | null;
+  name: string | null;
+  mobile: string | null;
+};
+
 /** 解析钉钉通讯录 userid（工作通知用）：缓存命中 → 否则按手机号反查并回写缓存。 */
 export async function resolveDingtalkCorpUserId(
   user: MappableUser,
@@ -102,6 +109,64 @@ export async function resolveDingtalkUserId(
     return unionid;
   } catch (e) {
     console.warn("[dingtalk] resolve user unionid failed (degrade):", e);
+    return null;
+  }
+}
+
+/** 钉钉微应用免登：前端 getAuthCode → 服务端用 code 换通讯录 userid，并尽量补 unionId。 */
+export async function getDingtalkUserByAuthCode(code: string): Promise<DingtalkAuthUser | null> {
+  const trimmedCode = code.trim();
+  if (!trimmedCode) return null;
+  const token = await getAccessToken();
+  if (!token) return null;
+
+  try {
+    const infoResp = await fetch(`https://oapi.dingtalk.com/topapi/v2/user/getuserinfo?access_token=${encodeURIComponent(token)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: trimmedCode }),
+    });
+    if (!infoResp.ok) return null;
+    const info = (await infoResp.json()) as {
+      errcode?: number;
+      result?: {
+        userid?: string;
+        name?: string;
+        associated_unionid?: string;
+        unionid?: string;
+      };
+    };
+    const corpUserId = info.result?.userid;
+    if (info.errcode !== 0 || !corpUserId) return null;
+
+    let unionId = info.result?.unionid ?? info.result?.associated_unionid ?? null;
+    let name = info.result?.name ?? null;
+    let mobile: string | null = null;
+
+    const detailResp = await fetch(`https://oapi.dingtalk.com/topapi/v2/user/get?access_token=${encodeURIComponent(token)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userid: corpUserId }),
+    });
+    if (detailResp.ok) {
+      const detail = (await detailResp.json()) as {
+        errcode?: number;
+        result?: {
+          unionid?: string;
+          name?: string;
+          mobile?: string;
+        };
+      };
+      if (detail.errcode === 0) {
+        unionId = detail.result?.unionid ?? unionId;
+        name = detail.result?.name ?? name;
+        mobile = detail.result?.mobile ?? null;
+      }
+    }
+
+    return { corpUserId, unionId, name, mobile };
+  } catch (e) {
+    console.warn("[dingtalk] auth code exchange failed (degrade):", e);
     return null;
   }
 }

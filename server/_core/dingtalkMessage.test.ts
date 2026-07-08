@@ -52,6 +52,70 @@ describe("sendWorkNotification", () => {
     expect(result.error).toContain("40035");
   });
 
+  it("sends ActionCard work notifications when action buttons are provided", async () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const u = String(url);
+      if (u.includes("oauth2/accessToken")) {
+        return new Response(JSON.stringify({ accessToken: "tok", expireIn: 7200 }), { status: 200 });
+      }
+      payloads.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(JSON.stringify({ errcode: 0, task_id: 123 }), { status: 200 });
+    });
+
+    const result = await sendWorkNotification(["corp-a"], "任务审批", "请审批", {
+      buttons: [
+        { title: "通过", actionUrl: "https://hub.test/api/action-card/execute?token=ok" },
+        { title: "驳回", actionUrl: "https://hub.test/api/action-card/execute?token=no" },
+      ],
+    });
+
+    expect(result.delivered).toBe(1);
+    expect(payloads[0]?.msg).toMatchObject({
+      msgtype: "action_card",
+      action_card: {
+        title: "任务审批",
+        markdown: "请审批",
+        btn_orientation: "1",
+        btn_json_list: [
+          { title: "通过", action_url: "https://hub.test/api/action-card/execute?token=ok" },
+          { title: "驳回", action_url: "https://hub.test/api/action-card/execute?token=no" },
+        ],
+      },
+    });
+  });
+
+  it("falls back to markdown when ActionCard delivery is rejected", async () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const u = String(url);
+      if (u.includes("oauth2/accessToken")) {
+        return new Response(JSON.stringify({ accessToken: "tok", expireIn: 7200 }), { status: 200 });
+      }
+      const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      payloads.push(payload);
+      const msg = payload.msg as { msgtype?: string };
+      if (msg.msgtype === "action_card") {
+        return new Response(JSON.stringify({ errcode: 400, errmsg: "unsupported" }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ errcode: 0, task_id: 123 }), { status: 200 });
+    });
+
+    const result = await sendWorkNotification(["corp-a"], "任务审批", "请审批", {
+      buttons: [{ title: "通过", actionUrl: "https://hub.test/api/action-card/execute?token=ok" }],
+    });
+
+    expect(result.delivered).toBe(1);
+    expect(payloads.map((payload) => (payload.msg as { msgtype?: string }).msgtype)).toEqual(["action_card", "markdown"]);
+    expect(payloads[1]?.msg).toMatchObject({
+      msgtype: "markdown",
+      markdown: {
+        title: "任务审批",
+      },
+    });
+    expect(JSON.stringify(payloads[1])).toContain("[通过](https://hub.test/api/action-card/execute?token=ok)");
+  });
+
   it("counts users as skipped when work notification is not configured", async () => {
     ENV.dingtalkAgentId = "";
     const spy = vi.spyOn(globalThis, "fetch");

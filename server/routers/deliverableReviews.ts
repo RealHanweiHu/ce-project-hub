@@ -4,7 +4,13 @@ import { protectedProcedure, router } from "../_core/trpc";
 import { getDb, getProjectFiles, getProjectEffectiveProcess, getProjectMembers } from "../db";
 import { projectDeliverableReviews } from "../../drizzle/schema";
 import { and, eq } from "drizzle-orm";
-import { listDeliverableReviews, getMyPendingReviews, submitDeliverableReview, reviewDeliverable } from "../deliverable-review-service";
+import {
+  listDeliverableReviews,
+  getMyPendingReviews,
+  submitDeliverableReview,
+  reviewDeliverable,
+  pickDefaultDeliverableReviewer,
+} from "../deliverable-review-service";
 import { assertProjectAccess, pickHigherProjectRole } from "../project-access";
 import { canSubmitDeliverableEvidence } from "../deliverable-access";
 import { canRoleReviewDeliverables, preferredDeliverableReviewerRoles } from "../../shared/deliverable-permissions";
@@ -12,26 +18,6 @@ import { isSystemAdminRole } from "../../shared/system-roles";
 
 function preferredReviewerRoles(deliverableName: string) {
   return preferredDeliverableReviewerRoles(deliverableName);
-}
-
-async function pickDefaultReviewer(
-  projectId: string,
-  deliverableName: string,
-  pmUserId: number | null,
-  excludeUserId: number | null = null,
-) {
-  const members = await getProjectMembers(projectId);
-  const notExcluded = (id: number | null | undefined) => id != null && id !== excludeUserId;
-  // 优先匹配角色成员（回避提交人），再退到 PM，再退到任一非只读成员——始终不落到提交人自己
-  const preferred = preferredReviewerRoles(deliverableName)
-    .map((role) => members.find((member) => member.role === role && member.userId !== excludeUserId))
-    .find(Boolean);
-  if (notExcluded(preferred?.userId)) return preferred!.userId;
-  if (notExcluded(pmUserId)) return pmUserId;
-  const fallback = members.find(
-    (member) => member.userId !== excludeUserId && canRoleReviewDeliverables(member.role),
-  );
-  return fallback?.userId ?? null;
 }
 
 export const deliverableReviewsRouter = router({
@@ -78,7 +64,12 @@ export const deliverableReviewsRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "不能指定自己为审核人，需第二人复核" });
       }
       const reviewerUserId = input.reviewerUserId
-        ?? await pickDefaultReviewer(input.projectId, input.deliverableName, project.pmUserId ?? null, ctx.user.id);
+        ?? await pickDefaultDeliverableReviewer({
+          projectId: input.projectId,
+          deliverableName: input.deliverableName,
+          pmUserId: project.pmUserId ?? null,
+          excludeUserId: ctx.user.id,
+        });
       if (!reviewerUserId) throw new TRPCError({ code: "BAD_REQUEST", message: "未指定审核人，且项目内无其他可复核成员" });
       const members = await getProjectMembers(input.projectId);
       const explicitReviewerRole = members.find((member) => member.userId === reviewerUserId)?.role ?? null;

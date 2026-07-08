@@ -3,8 +3,11 @@ import { adminProcedure, router } from "../_core/trpc";
 import {
   listAutomationRuleRows,
   listAutomationRuns,
+  getAutomationHeartbeat,
+  getAutomationPressureMetrics,
   updateAutomationRuleRow,
 } from "../db";
+import { ACTIVITY_LOG_TAILER_KEY } from "../automation/activityLogTailer";
 import { ensureAutomationRuleDefaults } from "../automation/engine";
 import {
   AUTOMATION_RULE_KEYS,
@@ -12,6 +15,7 @@ import {
   parseAutomationRuleConfig,
 } from "../automation/rules";
 import { DIGEST_RULES, DIGEST_RULE_KEYS, isDigestRuleKey, parseDigestRuleConfig } from "../automation/digestRules";
+import { getNotificationPolicy, type NotificationEventKey } from "../../shared/notification-matrix";
 
 export const automationRouter = router({
   listRules: adminProcedure.query(async () => {
@@ -22,6 +26,7 @@ export const automationRouter = router({
     const builtIn = AUTOMATION_RULES.map((rule) => {
       const row = rowByKey.get(rule.key);
       const effectiveConfig = parseAutomationRuleConfig(rule.key, row?.config ?? rule.defaultConfig) as Record<string, unknown>;
+      const policy = getNotificationPolicy(rule.key as NotificationEventKey);
       return {
         key: rule.key as string,
         label: rule.label,
@@ -31,6 +36,9 @@ export const automationRouter = router({
         config: effectiveConfig,
         effectiveConfig,
         recipientRoles: rule.recipientRoles as readonly string[],
+        deliveryTier: policy.tier,
+        personalChannels: policy.personalChannels,
+        requiresAction: policy.requiresAction,
         updatedAt: row?.updatedAt ?? null,
         updatedBy: row?.updatedBy ?? null,
       };
@@ -38,6 +46,7 @@ export const automationRouter = router({
     const digest = DIGEST_RULES.map((rule) => {
       const row = rowByKey.get(rule.key);
       const effectiveConfig = parseDigestRuleConfig(rule.key, row?.config ?? rule.defaultConfig) as Record<string, unknown>;
+      const policy = getNotificationPolicy(rule.key as NotificationEventKey);
       return {
         key: rule.key as string,
         label: rule.label,
@@ -47,6 +56,9 @@ export const automationRouter = router({
         config: effectiveConfig,
         effectiveConfig,
         recipientRoles: [] as readonly string[],
+        deliveryTier: policy.tier,
+        personalChannels: policy.personalChannels,
+        requiresAction: policy.requiresAction,
         updatedAt: row?.updatedAt ?? null,
         updatedBy: row?.updatedBy ?? null,
       };
@@ -85,4 +97,10 @@ export const automationRouter = router({
       projectId: input?.projectId ?? null,
       limit: input?.limit,
     })),
+
+  schedulerStatus: adminProcedure.query(() => getAutomationHeartbeat()),
+  eventTailerStatus: adminProcedure.query(() => getAutomationHeartbeat(ACTIVITY_LOG_TAILER_KEY)),
+  pressureMetrics: adminProcedure
+    .input(z.object({ windowDays: z.number().int().min(1).max(90).optional() }).optional())
+    .query(({ input }) => getAutomationPressureMetrics(input?.windowDays ?? 7)),
 });

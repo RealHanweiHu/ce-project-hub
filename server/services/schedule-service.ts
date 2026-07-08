@@ -5,7 +5,7 @@ import { scheduleForCategory, buildSchedTasks } from "../../shared/schedule-grap
 import { getPhasesForCategory } from "../../shared/sop-templates";
 import { rescheduleFrom, type CalendarExceptions, type Schedule } from "../../shared/scheduling";
 import { emitAutomationEvent } from "../automation/events";
-import { getCalendarExceptions, getDb, getProjectById, refreshProjectTaskStatuses } from "../db";
+import { createActivityLog, getCalendarExceptions, getDb, getProjectById, refreshProjectTaskStatuses } from "../db";
 import { taskDisplayTitle } from "../task-title";
 
 /** 按项目 category + 开始日重生成整套任务起止日，写回 project_tasks。返回写入任务数。 */
@@ -96,7 +96,7 @@ async function loadEffectiveScheduleContext(projectId: string): Promise<Effectiv
 /** 改某任务起止后，只向后联动重排其传递后继；返回受影响并更新的任务数。 */
 export async function rescheduleProjectFromTask(
   projectId: string, taskId: string, start: string, due: string,
-  deps: { emit?: (e: any) => Promise<void> } = {}
+  deps: { emit?: (e: any) => Promise<void>; actorId?: number | null } = {}
 ): Promise<{ count: number; impact: DelayImpact | null }> {
   const db = await getDb();
   if (!db) return { count: 0, impact: null };
@@ -125,17 +125,30 @@ export async function rescheduleProjectFromTask(
   if (n > 0) await refreshProjectTaskStatuses(projectId);
 
   if (impact?.hasImpact) {
+    const after = {
+      taskId,
+      title: ctx.taskTitles[taskId] ?? taskDisplayTitle({ taskId, projectCategory: ctx.projectCategory }),
+      projectCategory: ctx.projectCategory,
+      startDate: start,
+      dueDate: due,
+    };
+    if (deps.actorId != null) {
+      await createActivityLog({
+        projectId,
+        userId: deps.actorId,
+        action: "task.rescheduled",
+        entityType: "task",
+        entityId: taskId,
+        meta: { startDate: start, dueDate: due, after, impact },
+      });
+    }
     const emit = deps.emit ?? emitAutomationEvent;
     await emit({
       action: "task.rescheduled",
       entityType: "task",
       entityId: taskId,
       projectId,
-      after: {
-        taskId,
-        title: ctx.taskTitles[taskId] ?? taskDisplayTitle({ taskId, projectCategory: ctx.projectCategory }),
-        projectCategory: ctx.projectCategory,
-      },
+      after,
       impact,
     } as any);
   }

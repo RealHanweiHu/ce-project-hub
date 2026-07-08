@@ -69,9 +69,12 @@ interface ProjectDetailViewProps {
   /** Deep-link: open a specific top-level tab on mount. Accepts legacy tab ids
    *  (e.g. 'issues' | 'changelog' | 'metrics') which are normalized internally. */
   initialTab?: LegacyMainTab;
+  /** Deep-link: open a specific task detail sub-tab on mount. */
+  initialTaskTab?: TaskDetailTab;
 }
 
 type ProjectMainTab = 'overview' | 'tasks' | 'reviews' | 'materials' | 'activity';
+type TaskDetailTab = 'comments' | 'activity' | 'flow' | 'approval';
 
 // Sub-view types for the consolidated tabs.
 type TaskSubView = 'list' | 'kanban' | 'gantt' | 'metrics';
@@ -573,7 +576,7 @@ function computeGateReadiness(phase: any, phaseData: any, submittedDeliverables?
     delivDone = submittedDeliverables.filter((name) => satisfiedNames.has(name)).length;
   } else {
     for (const t of tasks) {
-      const names = getTaskDeliverables(t.id, phase?.deliverables ?? []);
+      const names = getTaskDeliverables(t.id);
       const status: Record<string, boolean> = phaseData?.taskDetails?.[t.id]?.deliverables ?? {};
       delivTotal += names.length;
       delivDone += names.filter((n) => status[n]).length;
@@ -1921,7 +1924,7 @@ function TaskPhaseFilterRail({
   );
 }
 
-export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, initialTaskId, initialTab }: ProjectDetailViewProps) {
+export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, initialTaskId, initialTab, initialTaskTab }: ProjectDetailViewProps) {
   const [activePhaseId, setActivePhaseId] = useState(initialPhaseId ?? project.currentPhase);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(initialTaskId ?? null);
   // 任务详情子窗口：Esc 关闭
@@ -1955,7 +1958,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
     return channels;
   }, [perms.canViewCustomerFiles, perms.canViewSupplierFiles]);
   // 任务详情弹窗：左栏底部四标签
-  const [taskTab, setTaskTab] = useState<'comments' | 'activity' | 'flow' | 'approval'>('comments');
+  const [taskTab, setTaskTab] = useState<TaskDetailTab>(initialTaskTab ?? 'comments');
   // 活动/流转/审批标签里把 userId 解析为人名用
   const { data: detailUsers = [] } = trpc.admin.listUsersForSelect.useQuery(undefined, { staleTime: 60_000 });
   const detailUtils = trpc.useUtils();
@@ -2703,6 +2706,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
             </div>
           </LinearCard>
           <IssueList
+            projectId={project.id}
             phaseId={activePhaseId}
             phaseName={activePhase?.name || activePhaseId}
             issues={activeIssues}
@@ -3250,7 +3254,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                             items={
                               selectedTaskIsGate
                                 ? activeGateDeliverables
-                                : getTaskDeliverables(selectedTask.id, activePhase?.deliverables || [])
+                                : getTaskDeliverables(selectedTask.id)
                             }
                             status={selectedTaskDetails?.deliverables || {}}
                             canEdit={canActOnSelectedTask && isCurrentPhaseUnlocked}

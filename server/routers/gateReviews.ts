@@ -88,6 +88,7 @@ export const gateReviewsRouter = router({
       const createdReview = (await getProjectGateReviews(input.projectId, input.phaseId))
         .find((review) => review.id === id);
       const roundNumber = createdReview?.roundNumber ?? 1;
+      const afterReview = { ...input, roundNumber, id, createdBy: ctx.user.id };
       await createActivityLog({
         projectId: input.projectId,
         userId: ctx.user.id,
@@ -98,6 +99,7 @@ export const gateReviewsRouter = router({
           phaseId: input.phaseId,
           decision: input.decision,
           roundNumber,
+          after: afterReview,
         },
       });
       await emitAutomationEvent({
@@ -106,7 +108,7 @@ export const gateReviewsRouter = router({
         entityType: "gate_review",
         entityId: id,
         actorId: ctx.user.id,
-        after: { ...input, roundNumber, id, createdBy: ctx.user.id },
+        after: afterReview,
       });
       return { success: true, id };
     }),
@@ -151,13 +153,18 @@ export const gateReviewsRouter = router({
         }
       }
       await updateProjectGateReview(id, patch);
+      const afterReview = { ...beforeReview, ...patch } as Record<string, unknown>;
       await createActivityLog({
         projectId,
         userId: ctx.user.id,
         action: "gate.update",
         entityType: "gate_review",
         entityId: String(id),
-        meta: { patch },
+        meta: {
+          patch,
+          before: beforeReview as unknown as Record<string, unknown>,
+          after: afterReview,
+        },
       });
       if (beforeReview) {
         await emitAutomationEvent({
@@ -167,7 +174,7 @@ export const gateReviewsRouter = router({
           entityId: id,
           actorId: ctx.user.id,
           before: beforeReview as unknown as Record<string, unknown>,
-          after: { ...beforeReview, ...patch } as Record<string, unknown>,
+          after: afterReview,
         });
       }
       return { success: true };
@@ -210,13 +217,14 @@ export const gateReviewsRouter = router({
         notes: input.notes ?? null,
         createdBy: ctx.user.id,
       });
+      const afterReview = { ...input, roundNumber, id: reviewId, createdBy: ctx.user.id };
       await createActivityLog({
         projectId: input.projectId,
         userId: ctx.user.id,
         action: "gate.create",
         entityType: "gate_review",
         entityId: String(reviewId),
-        meta: { phaseId: input.phaseId, decision: input.decision, roundNumber, advancedTo },
+        meta: { phaseId: input.phaseId, decision: input.decision, roundNumber, advancedTo, after: afterReview },
       });
       await emitAutomationEvent({
         action: "gate.create",
@@ -224,7 +232,7 @@ export const gateReviewsRouter = router({
         entityType: "gate_review",
         entityId: reviewId,
         actorId: ctx.user.id,
-        after: { ...input, roundNumber, id: reviewId, createdBy: ctx.user.id },
+        after: afterReview,
       });
       if (advancedTo) {
         // Gate 通过推进阶段 → 通知项目群与 PM，下一阶段角色启动任务（旧行为静默推进）
@@ -232,19 +240,28 @@ export const gateReviewsRouter = router({
         const nextPhase = project
           ? getPhasesForCategory(project.category).find((phase) => phase.id === advancedTo)
           : undefined;
+        const phaseAfter = {
+          projectId: input.projectId,
+          fromPhaseId: input.phaseId,
+          fromPhaseName: input.phaseName || input.phaseId,
+          phaseId: advancedTo,
+          phaseName: nextPhase?.name ?? advancedTo,
+        };
+        await createActivityLog({
+          projectId: input.projectId,
+          userId: ctx.user.id,
+          action: "phase.advance",
+          entityType: "phase",
+          entityId: advancedTo,
+          meta: phaseAfter,
+        });
         await emitAutomationEvent({
           action: "phase.advanced",
           projectId: input.projectId,
           entityType: "phase",
           entityId: `${input.projectId}:${advancedTo}`,
           actorId: ctx.user.id,
-          after: {
-            projectId: input.projectId,
-            fromPhaseId: input.phaseId,
-            fromPhaseName: input.phaseName || input.phaseId,
-            phaseId: advancedTo,
-            phaseName: nextPhase?.name ?? advancedTo,
-          },
+          after: phaseAfter,
         });
       }
       return { success: true, id: reviewId, roundNumber, advancedTo };

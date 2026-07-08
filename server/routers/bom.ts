@@ -4,7 +4,7 @@ import { protectedProcedure, router } from "../_core/trpc";
 import {
   addBomLine, updateBomLine, deleteBomLine,
   listWorkingBom, listFrozenBom, whereUsed, bomDiff, getBomLineById,
-  userCanSeeProductCommercials, getProductIdByRevisionId,
+  userCanSeeProductCommercials, getProductIdByRevisionId, createActivityLog,
 } from "../db";
 import type { BomItem } from "../../drizzle/schema";
 import { assertNotExternalOnlyAccount, assertProjectAccess } from "../project-access";
@@ -109,6 +109,14 @@ export const bomRouter = router({
       const { structureOnly } = await assertCanEditWorkingBom(input.projectId, ctx.user);
       if (structureOnly) assertStructureOnlyCommercials(input.line, true);
       const id = await addBomLine(input.projectId, input.line);
+      await createActivityLog({
+        projectId: input.projectId,
+        userId: ctx.user.id,
+        action: "bom.add",
+        entityType: "bom_item",
+        entityId: String(id),
+        meta: { after: { id, projectId: input.projectId, ...input.line } },
+      });
       return { id };
     }),
 
@@ -121,6 +129,14 @@ export const bomRouter = router({
       const { structureOnly } = await assertCanEditWorkingBom(line.projectId, ctx.user);
       if (structureOnly) assertStructureOnlyCommercials(input.patch, false);
       await updateBomLine(input.id, input.patch);
+      await createActivityLog({
+        projectId: line.projectId,
+        userId: ctx.user.id,
+        action: "bom.update",
+        entityType: "bom_item",
+        entityId: String(input.id),
+        meta: { patch: input.patch, before: line, after: { ...line, ...input.patch } },
+      });
       return { ok: true };
     }),
 
@@ -132,6 +148,14 @@ export const bomRouter = router({
       if (!line.projectId) throw new TRPCError({ code: "FORBIDDEN", message: "冻结 BOM 不可直接删除" });
       await assertCanEditWorkingBom(line.projectId, ctx.user);
       await deleteBomLine(input.id);
+      await createActivityLog({
+        projectId: line.projectId,
+        userId: ctx.user.id,
+        action: "bom.delete",
+        entityType: "bom_item",
+        entityId: String(input.id),
+        meta: { before: line },
+      });
       return { ok: true };
     }),
 

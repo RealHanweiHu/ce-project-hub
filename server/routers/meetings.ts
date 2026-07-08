@@ -46,13 +46,27 @@ export const meetingsRouter = router({
   setConfig: protectedProcedure
     .input(z.object({ projectId: z.string(), config: cfgSchema }))
     .mutation(async ({ ctx, input }) => {
-      await assertProjectPermission(input.projectId, ctx.user, "canEditProjectInfo", "没有编辑周会配置的权限");
+      const { project: beforeProject } = await assertProjectPermission(input.projectId, ctx.user, "canEditProjectInfo", "没有编辑周会配置的权限");
+      const beforeConfig = (beforeProject as { meetingConfig?: unknown }).meetingConfig ?? null;
       await updateProjectMeetingConfig(input.projectId, input.config);
       const project = await getProjectById(input.projectId);
       if (!project) return { success: true, syncStatus: "failed" } as const;
       const syncResult = await syncAndRecordProjectMeeting({
         project,
         config: input.config,
+      });
+      await createActivityLog({
+        projectId: input.projectId,
+        userId: ctx.user.id,
+        action: "meeting.update_config",
+        entityType: "meeting_config",
+        entityId: input.projectId,
+        meta: {
+          before: beforeConfig,
+          after: input.config,
+          syncStatus: syncResult.mode,
+          error: syncResult.error ?? null,
+        },
       });
       return { success: true, syncStatus: syncResult.mode, error: syncResult.error ?? null } as const;
     }),

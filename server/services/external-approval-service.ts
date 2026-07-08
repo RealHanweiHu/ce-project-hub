@@ -2,6 +2,7 @@ import {
   createActivityLog,
   createExternalApprovalInstance,
   getApprovalConfig,
+  getExternalApprovalById,
   getExternalApprovalByProcessInstanceId,
   getOpenP0P1Count,
   getPendingExternalApproval,
@@ -16,6 +17,8 @@ import {
   updateExternalApprovalInstance,
 } from "../db";
 import type { ExternalApprovalInstance } from "../../drizzle/schema";
+import { emitAutomationEvent } from "../automation/events";
+import { actionDedupeKey, closeActionItems, notifyActionItem } from "../action-item-notify";
 import { resolveDingtalkCorpUserId } from "../_core/dingtalk";
 import {
   buildApprovalForm,
@@ -23,6 +26,10 @@ import {
   getApprovalInstance,
   type NormalizedApprovalStatus,
 } from "../_core/dingtalkApproval";
+import { buildProjectActionPath } from "../../shared/action-links";
+import { cancelAndRecordProjectMeeting } from "./project-meeting-lifecycle";
+import { applyActionExternalApproval } from "./action-approval-apply";
+import { isActionExternalApprovalType } from "./action-approval-submit";
 
 export const MP_RELEASE_APPROVAL = "mp_release";
 
@@ -150,25 +157,104 @@ export async function submitReleaseApproval(input: {
   return { instance: updated ?? instance, alreadyPending: false };
 }
 
-async function applyReleaseApproval(instance: ExternalApprovalInstance): Promise<void> {
-  const actor = await getUserById(instance.submittedBy);
-  if (!actor) throw new Error("审批发起人不存在，无法执行发布");
+async function enqueueReleaseConfirmation(instance: ExternalApprovalInstance): Promise<void> {
+  const project = await getProjectById(instance.entityId);
+  if (!project) throw new Error("项目不存在，无法生成发布确认");
+  await createActivityLog({
+    projectId: instance.entityId,
+    userId: instance.submittedBy,
+    action: "approval.approve",
+    entityType: "external_approval",
+    entityId: String(instance.id),
+    meta: { businessType: instance.businessType, processInstanceId: instance.processInstanceId },
+  });
+  await notifyActionItem({
+    kind: "mp_release_confirm",
+    projectId: instance.entityId,
+    entityType: "external_approval",
+    entityId: String(instance.id),
+    dedupeKey: actionDedupeKey({
+      kind: "mp_release_confirm",
+      entityId: String(instance.id),
+      recipientUserId: instance.submittedBy,
+    }),
+    recipientUserId: instance.submittedBy,
+    title: "MP Release 待确认发布",
+    body: `钉钉审批已通过，系统已备齐「${project.name}」发布链，请确认发布。`,
+    actionPath: buildProjectActionPath({ projectId: instance.entityId, tab: "approval" }),
+    priority: "critical",
+    metadata: {
+      approvalInstanceId: instance.id,
+      processInstanceId: instance.processInstanceId,
+      projectId: instance.entityId,
+    },
+  });
+}
+
+export async function confirmApprovedRelease(input: {
+  approvalInstanceId: number;
+  actorId: number;
+}): Promise<{ revisionId: number; revisionLabel: string }> {
+  const instance = await getExternalApprovalById(input.approvalInstanceId);
+  if (!instance) throw new Error("审批实例不存在");
+  if (instance.businessType !== MP_RELEASE_APPROVAL) throw new Error("不是 MP Release 审批实例");
+  if (instance.status !== "approved") throw new Error("审批尚未通过，不能发布");
+  if (instance.submittedBy !== input.actorId) throw new Error("仅审批发起人可确认发布");
+
+  const actor = await getUserById(input.actorId);
+  if (!actor) throw new Error("发布确认人不存在");
   const request = toRecord(instance.requestSnapshot);
   const override = request.override as ReleaseOverrideInput | null | undefined;
+  const project = await getProjectById(instance.entityId);
+  const product = project?.productId ? await getProductById(project.productId) : undefined;
   const result = await releaseProject({
     projectId: instance.entityId,
     actor: { id: actor.id, role: actor.role },
     override: override ?? undefined,
     externalApprovalInstanceId: instance.id,
   });
+  if (project && (project.dingtalkEventId || (project.meetingConfig as { enabled?: boolean } | null)?.enabled)) {
+    try { await cancelAndRecordProjectMeeting(project); }
+    catch (error) { console.warn("[meeting] cancel on approved release failed (non-fatal):", error); }
+  }
+  await closeActionItems({
+    kind: "mp_release_confirm",
+    entityType: "external_approval",
+    entityId: String(instance.id),
+    recipientUserId: input.actorId,
+  });
   await createActivityLog({
     projectId: instance.entityId,
     userId: actor.id,
-    action: "approval.approve",
-    entityType: "external_approval",
-    entityId: String(instance.id),
-    meta: { businessType: instance.businessType, revisionId: result.revisionId, revisionLabel: result.revisionLabel },
+    action: "mp.release",
+    entityType: "mp_release",
+    entityId: `${instance.entityId}:${result.revisionId}`,
+    meta: {
+      after: {
+        projectId: instance.entityId,
+        productId: project?.productId ?? null,
+        productName: product?.name ?? null,
+        revisionId: result.revisionId,
+        revisionLabel: result.revisionLabel,
+      },
+      externalApprovalInstanceId: instance.id,
+    },
   });
+  await emitAutomationEvent({
+    action: "mp.release",
+    projectId: instance.entityId,
+    entityType: "mp_release",
+    entityId: `${instance.entityId}:${result.revisionId}`,
+    actorId: actor.id,
+    after: {
+      projectId: instance.entityId,
+      productId: project?.productId ?? null,
+      productName: product?.name ?? null,
+      revisionId: result.revisionId,
+      revisionLabel: result.revisionLabel,
+    },
+  });
+  return result;
 }
 
 async function markTerminal(instance: ExternalApprovalInstance, status: NormalizedApprovalStatus, detail: Record<string, unknown>) {
@@ -190,6 +276,32 @@ async function markTerminal(instance: ExternalApprovalInstance, status: Normaliz
       entityType: "external_approval",
       entityId: String(instance.id),
       meta: { businessType: instance.businessType, processInstanceId: instance.processInstanceId },
+    });
+  }
+}
+
+async function applyTerminalBusiness(
+  instance: ExternalApprovalInstance,
+  status: Extract<NormalizedApprovalStatus, "approved" | "rejected">,
+): Promise<void> {
+  try {
+    if (instance.businessType === MP_RELEASE_APPROVAL && status === "approved") {
+      await enqueueReleaseConfirmation(instance);
+      return;
+    }
+    if (isActionExternalApprovalType(instance.businessType)) {
+      await applyActionExternalApproval(instance, status);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await updateExternalApprovalInstance(instance.id, { status: "business_blocked", lastError: message, syncedAt: new Date() });
+    await createActivityLog({
+      projectId: instance.projectId ?? instance.entityId,
+      userId: instance.submittedBy,
+      action: "approval.business_blocked",
+      entityType: "external_approval",
+      entityId: String(instance.id),
+      meta: { businessType: instance.businessType, error: message },
     });
   }
 }
@@ -218,22 +330,10 @@ export async function syncExternalApprovalByProcessInstanceId(
 
   if (status === "approved") {
     await markTerminal(instance, "approved", detail.data.detail);
-    try {
-      if (instance.businessType === MP_RELEASE_APPROVAL) await applyReleaseApproval(instance);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await updateExternalApprovalInstance(instance.id, { status: "business_blocked", lastError: message, syncedAt: new Date() });
-      await createActivityLog({
-        projectId: instance.projectId ?? instance.entityId,
-        userId: instance.submittedBy,
-        action: "approval.business_blocked",
-        entityType: "external_approval",
-        entityId: String(instance.id),
-        meta: { businessType: instance.businessType, error: message },
-      });
-    }
+    await applyTerminalBusiness(instance, "approved");
   } else {
     await markTerminal(instance, status, detail.data.detail);
+    if (status === "rejected") await applyTerminalBusiness(instance, "rejected");
   }
 
   return getExternalApprovalByProcessInstanceId(processInstanceId);

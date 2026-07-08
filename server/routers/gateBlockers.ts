@@ -12,6 +12,7 @@ import { protectedProcedure, router } from "../_core/trpc";
 import { canRoleViewInternalWorkspace } from "../file-visibility";
 import { assertProjectAccess, type ProjectAccess } from "../project-access";
 import { getPhasesForCategory } from "../../shared/sop-templates";
+import { notifyGateReadyIfReady } from "../gate-ready-notify";
 
 function assertBlockerAuthority(access: ProjectAccess, blockerType: GateBlockerType) {
   const allowed = blockerType === "quality"
@@ -100,6 +101,14 @@ export const gateBlockersRouter = router({
           entityType: "gate_blocker",
           entityId: String(input.id),
           meta: { phaseId: blocker.phaseId, blockerType: blocker.blockerType, title: blocker.title },
+        });
+        await notifyGateReadyIfReady({
+          projectId: blocker.projectId,
+          phaseId: blocker.phaseId,
+          actorId: ctx.user.id,
+          reason: "gate_blocker.resolve",
+        }).catch((error) => {
+          console.warn("[gate-ready] failed after gate blocker resolve:", error);
         });
       }
       return { success: true };

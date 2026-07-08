@@ -1,7 +1,9 @@
 import type { Express } from "express";
+import type { AppRouter } from "./routers";
 import crypto from "crypto";
 import { ENV } from "./_core/env";
 import { syncExternalApprovalByProcessInstanceId } from "./services/external-approval-service";
+import { executeActionCardToken } from "./action-card-route";
 
 function findProcessInstanceId(value: unknown): string | null {
   if (!value || typeof value !== "object") return null;
@@ -13,6 +15,22 @@ function findProcessInstanceId(value: unknown): string | null {
   for (const nested of Object.values(obj)) {
     if (nested && typeof nested === "object") {
       const found = findProcessInstanceId(nested);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function findNestedString(value: unknown, keys: readonly string[]): string | null {
+  if (!value || typeof value !== "object") return null;
+  const obj = value as Record<string, unknown>;
+  for (const key of keys) {
+    const raw = obj[key];
+    if (typeof raw === "string" && raw.trim()) return raw.trim();
+  }
+  for (const nested of Object.values(obj)) {
+    if (nested && typeof nested === "object") {
+      const found = findNestedString(nested, keys);
       if (found) return found;
     }
   }
@@ -102,6 +120,7 @@ function encryptDingtalkResponse(message: string, nonce: string): Record<string,
 
 export type CallbackAction =
   | { kind: "verify" }
+  | { kind: "card"; token: string; outTrackId: string | null }
   | { kind: "sync"; processInstanceId: string }
   | { kind: "ignore" };
 
@@ -114,12 +133,15 @@ export type CallbackAction =
 export function classifyCallbackEvent(payload: Record<string, unknown>): CallbackAction {
   const eventType = getString(payload?.EventType) || getString(payload?.eventType);
   if (eventType === "check_url") return { kind: "verify" };
+  const actionToken = findNestedString(payload, ["actionToken", "action_token", "token"]);
+  const outTrackId = findNestedString(payload, ["outTrackId", "out_track_id"]);
+  if (actionToken && outTrackId) return { kind: "card", token: actionToken, outTrackId };
   const processInstanceId = findProcessInstanceId(payload);
   if (processInstanceId) return { kind: "sync", processInstanceId };
   return { kind: "ignore" };
 }
 
-export function registerDingtalkCallbackRoute(app: Express) {
+export function registerDingtalkCallbackRoute(app: Express, appRouter?: AppRouter) {
   app.post("/api/dingtalk/callback", async (req, res) => {
     let payload = req.body as Record<string, unknown>;
     const encrypt = getString(payload?.encrypt);
@@ -139,6 +161,24 @@ export function registerDingtalkCallbackRoute(app: Express) {
     }
 
     const action = classifyCallbackEvent(payload);
+    if (action.kind === "card") {
+      if (!appRouter) {
+        res.status(500).json({ success: false, error: "app router unavailable" });
+        return;
+      }
+      try {
+        const result = await executeActionCardToken(action.token, appRouter, req, res);
+        if (encrypt) {
+          res.json(encryptDingtalkResponse("success", nonce || "nonce"));
+          return;
+        }
+        res.json({ success: true, outTrackId: action.outTrackId, result });
+      } catch (error) {
+        res.status(409).json({ success: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
     // check_url 注册握手与无关事件:回 ack(加密则回加密 success),让钉钉认为已确认
     if (action.kind !== "sync") {
       res.json(encrypt ? encryptDingtalkResponse("success", nonce || "nonce") : { success: true });

@@ -51,4 +51,21 @@ describe("assignTasksByRole", () => {
     expect(tasks.find((t) => t.taskId === "d4")?.assigneeUserId).toBe(INV); // 未被覆盖
     expect(tasks.find((t) => t.taskId === "d3")?.assigneeUserId).toBe(EE);
   });
+
+  it("显式角色分工(立项向导)优先于成员表:支持创建者本人与一人多角色", async () => {
+    const CREATOR = 700004;
+    // rd_sw 角色在成员表中无人(创建者兼任,ensureProjectMember 会跳过创建者);
+    // qa 角色由 EE 兼任(EE 已是 rd_hw 成员,成员表一人一角色存不下第二个);
+    // rd_mech 有成员 INV,但向导里改配给 PM → 显式分工应覆盖成员表推导。
+    await addProjectMember({ projectId: PROJ, userId: INV, role: "rd_mech", invitedBy: 1 });
+    await upsertProjectTask(PROJ, "design", "d5", { visibleRoles: ["rd_sw", "pm", "manager", "owner"] });
+    await upsertProjectTask(PROJ, "evt", "e2", { visibleRoles: ["qa", "pm", "manager", "owner"] });
+    await upsertProjectTask(PROJ, "design", "d2", { visibleRoles: ["rd_mech", "pm", "manager", "owner"] });
+
+    const out = await assignTasksByRole(PROJ, 1, { rd_sw: CREATOR, qa: EE, rd_mech: PM });
+    const byTask = Object.fromEntries(out.map((a) => [a.taskId, a.userId]));
+    expect(byTask["d5"]).toBe(CREATOR); // 成员表无 rd_sw,靠显式分工
+    expect(byTask["e2"]).toBe(EE);      // EE 兼任 qa,不受一人一角色限制
+    expect(byTask["d2"]).toBe(PM);      // 显式分工覆盖成员表的 INV
+  });
 });

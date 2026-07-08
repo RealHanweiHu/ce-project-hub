@@ -12,6 +12,20 @@ describe("classifyCallbackEvent", () => {
     ).toEqual({ kind: "sync", processInstanceId: "pi-1" });
   });
 
+  it("extracts native interactive card callbacks when the card returns an action token", () => {
+    expect(
+      classifyCallbackEvent({
+        eventType: "card_callback",
+        outTrackId: "cehub_ai_1_7",
+        cardCallbackData: {
+          cardPrivateData: {
+            params: { actionToken: "signed-token" },
+          },
+        },
+      }),
+    ).toEqual({ kind: "card", token: "signed-token", outTrackId: "cehub_ai_1_7" });
+  });
+
   it("ignores other events without a processInstanceId instead of erroring", () => {
     expect(classifyCallbackEvent({ EventType: "bpms_task_change" })).toEqual({ kind: "ignore" });
   });

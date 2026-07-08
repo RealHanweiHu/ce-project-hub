@@ -100,9 +100,14 @@ describe("runHealthDigestScan（注入 deps）", () => {
       getConfigRow: async () => ({ enabled: true, config: cfg }),
       getHealth: async (_today: string) => over.rows ?? [row({ id: "r", overdueTasks: 1, pmUserId: 7, ragLevel: "red", ragReasons: ["逾期×1"] })],
       hasRun: async () => false,
+      now: NOW,
       writeRun: async (status: "fired" | "skipped", key: string) => { calls.runs.push({ status, key }); },
       createNotification: async (n: { userId: number }) => { calls.notifications.push(n.userId); },
       notifyDingtalk: async (ids: number[]) => { calls.notify.push(ids); },
+      getDeliveryProfiles: async (userIds: number[]) => new Map(userIds.map((userId) => [
+        userId,
+        { userId, prefs: {}, immediateSent24h: 0 },
+      ])),
       pushWebhook: async () => { calls.group += 1; },
       ...over,
     };

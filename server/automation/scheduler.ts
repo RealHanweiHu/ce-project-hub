@@ -1,6 +1,8 @@
 import { ENV } from "../_core/env";
 import {
   createAutomationRun,
+  AUTOMATION_SCHEDULER_KEY,
+  finishAutomationHeartbeat,
   getAllActiveProjects,
   getAutomationCriticalIssues,
   getAutomationDueIssues,
@@ -10,17 +12,21 @@ import {
   getBlockedTasks,
   getGateReadiness,
   hasAutomationRunForEntity,
+  tryStartAutomationHeartbeat,
 } from "../db";
 import { pushWebhook } from "../_core/notify";
 import { sendToGroupChat } from "../_core/dingtalkGroup";
 import { taskDisplayTitle } from "../task-title";
-import { runAutomation } from "./engine";
+import { runActionItemSlaScan } from "./actionItemSla";
+import { ensureAutomationRuleDefaults, runAutomation } from "./engine";
 import { runHealthDigestScan } from "./healthDigest";
+import { runPersonalDailyDigestScan } from "./personalDailyDigest";
 import { isAutomationSuppressedProject } from "./project-filter";
 
 let timer: NodeJS.Timeout | null = null;
 
 export async function runScheduledAutomationScan(now = new Date()): Promise<void> {
+  await ensureAutomationRuleDefaults();
   const [tasks, issues, blockedTasks, criticalIssues, pendingReviews] = await Promise.all([
     getAutomationDueTasks(),
     getAutomationDueIssues(),
@@ -143,6 +149,18 @@ export async function runScheduledAutomationScan(now = new Date()): Promise<void
   }
 
   try {
+    await runPersonalDailyDigestScan(now);
+  } catch (error) {
+    console.warn("[automation] personal daily digest failed (non-fatal):", error);
+  }
+
+  try {
+    await runActionItemSlaScan(now);
+  } catch (error) {
+    console.warn("[automation] action item SLA scan failed (non-fatal):", error);
+  }
+
+  try {
     await runWeeklyMeetingFallbackScan(now);
   } catch (error) {
     console.warn("[automation] weekly meeting fallback failed (non-fatal):", error);
@@ -153,10 +171,32 @@ export function startAutomationScheduler(): void {
   if (timer) return;
   const intervalMs = Math.max(1, ENV.automationScanIntervalMin) * 60 * 1000;
   timer = setInterval(() => {
-    void runScheduledAutomationScan().catch((error) => {
+    void runScheduledAutomationTick().catch((error) => {
       console.warn("[automation] scheduled scan failed (non-fatal):", error);
     });
   }, intervalMs);
+}
+
+async function runScheduledAutomationTick(): Promise<void> {
+  const startedAt = Date.now();
+  const locked = await tryStartAutomationHeartbeat(AUTOMATION_SCHEDULER_KEY);
+  if (!locked) return;
+  try {
+    await runScheduledAutomationScan();
+    await finishAutomationHeartbeat({
+      schedulerKey: AUTOMATION_SCHEDULER_KEY,
+      status: "success",
+      durationMs: Date.now() - startedAt,
+    });
+  } catch (error) {
+    await finishAutomationHeartbeat({
+      schedulerKey: AUTOMATION_SCHEDULER_KEY,
+      status: "error",
+      durationMs: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
 }
 
 export function stopAutomationScheduler(): void {

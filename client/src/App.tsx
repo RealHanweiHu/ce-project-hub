@@ -9,6 +9,7 @@ import { ThemeProvider } from "./contexts/ThemeContext";
 const Home = lazy(() => import("./pages/Home"));
 const Login = lazy(() => import("./pages/Login"));
 const AdminPanel = lazy(() => import("./pages/AdminPanel"));
+const ActionPage = lazy(() => import("./pages/ActionPage"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
 function RouteLoading() {
@@ -28,6 +29,9 @@ function Router() {
       <Switch>
         <Route path={"/"} component={Home} />
         <Route path={"/login"} component={Login} />
+        <Route path={"/actions/:kind"}>
+          {(params) => <ActionPage kind={params.kind} />}
+        </Route>
         <Route path={"/admin"} component={AdminPanel} />
         <Route path={"/404"} component={NotFound} />
         {/* Final fallback route */}

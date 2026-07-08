@@ -25,8 +25,9 @@ import { PROJECT_CATEGORIES } from "../../drizzle/schema";
 import { applyProjectSchedule } from "../services/schedule-service";
 import { TRPCError } from "@trpc/server";
 import { ROLE_PERMISSIONS } from "./members";
-import { notifyUsersViaDingtalk, resolveCorpIdsForUsers } from "../_core/dingtalkMessage";
+import { resolveCorpIdsForUsers } from "../_core/dingtalkMessage";
 import { createGroupChat, disbandGroupChat, sendToGroupChat } from "../_core/dingtalkGroup";
+import { ENV } from "../_core/env";
 import { storageDelete } from "../storage";
 import { getProjectMembers, getProjectRolesForUser } from "../db";
 import { taskDisplayTitle } from "../task-title";
@@ -35,7 +36,10 @@ import { isSystemAdminRole, systemRoleCanCreateProject } from "../../shared/syst
 import { PROJECT_MEMBER_ROLES, type ProjectMemberRole } from "../../drizzle/schema";
 import { getEffectiveProjectRoleById as getEffectiveRole, pickHigherProjectRole } from "../project-access";
 import { isISODate } from "../../shared/scheduling";
+import { buildActionCardExecutePath, buildProjectActionPath, buildTaskCompletionActionPath, toAbsoluteAppUrl } from "../../shared/action-links";
 import { cancelAndRecordProjectMeeting, syncAndRecordProjectMeeting } from "../services/project-meeting-lifecycle";
+import { createActionCardToken } from "../action-card-tokens";
+import { notifyPersonal } from "../notification-gateway";
 
 const DEFAULT_MEETING = { enabled: true, weekday: 3, time: "15:00", durationMin: 60, title: "项目周会" };
 const isoDateInput = z.string().refine(isISODate, "日期必须是有效的 YYYY-MM-DD");
@@ -50,9 +54,10 @@ function getStoredMeetingConfig(project: { meetingConfig?: unknown }): typeof DE
 async function assignAndNotify(
   project: { id: string; name: string; category: string; dingtalkChatId?: string | null },
   actorId: number,
-  notify: boolean
+  notify: boolean,
+  roleOverrides?: Record<string, number>
 ): Promise<{ assigned: number; recipients: number; notified: number }> {
-  const assignments = await assignTasksByRole(project.id, actorId);
+  const assignments = await assignTasksByRole(project.id, actorId, roleOverrides);
   const byUser = new Map<number, Array<{ taskId: string; phaseId: string; dueDate: string | null; instructions: string | null }>>();
   for (const a of assignments) {
     const arr = byUser.get(a.userId) ?? [];
@@ -62,22 +67,49 @@ async function assignAndNotify(
   let notified = 0;
   if (notify) {
     for (const [userId, items] of Array.from(byUser.entries())) {
-      const lines = items
-        .map((i) => {
-          const title = taskDisplayTitle({
-            taskId: i.taskId,
+      const lineParts: string[] = [];
+      for (const i of items) {
+        const title = taskDisplayTitle({
+          taskId: i.taskId,
+          phaseId: i.phaseId,
+          projectCategory: project.category,
+          instructions: i.instructions,
+        });
+        const actionUrl = toAbsoluteAppUrl(
+          buildTaskCompletionActionPath({ projectId: project.id, phaseId: i.phaseId, taskId: i.taskId }),
+          ENV.appBaseUrl,
+        );
+        let completeUrl = actionUrl;
+        try {
+          const token = await createActionCardToken({
+            kind: "task_complete",
+            userId,
+            projectId: project.id,
             phaseId: i.phaseId,
-            projectCategory: project.category,
-            instructions: i.instructions,
+            taskId: i.taskId,
           });
-          return `- ${title}${i.dueDate ? `（截止 ${i.dueDate}）` : ""}`;
-        })
-        .join("\n");
+          completeUrl = toAbsoluteAppUrl(buildActionCardExecutePath(token), ENV.appBaseUrl);
+        } catch (error) {
+          console.warn("[assign] action-card complete link failed (non-fatal):", error);
+        }
+        lineParts.push(`- [${title}${i.dueDate ? `（截止 ${i.dueDate}）` : ""}](${actionUrl}) · [完成](${completeUrl})`);
+      }
+      const lines = lineParts.join("\n");
       const md = `### 项目「${project.name}」任务分配\n你被指派以下 ${items.length} 项任务：\n${lines}`;
       try {
-        const result = await notifyUsersViaDingtalk([userId], "项目任务分配", md);
-        if (result.delivered > 0) notified += 1;
-        else if (result.failed > 0) console.warn("[assign] dingtalk notify failed (non-fatal):", result.error);
+        const result = await notifyPersonal({
+          eventKey: "task_assignment",
+          userIds: [userId],
+          title: "项目任务分配",
+          body: `你被指派 ${items.length} 项任务。`,
+          markdown: md,
+          entityType: "project",
+          entityId: project.id,
+          actionPath: buildProjectActionPath({ projectId: project.id, tab: "tasks" }),
+          priority: "high",
+          bestEffortDingtalk: true,
+        });
+        if (result.site > 0 || result.dingtalk > 0) notified += 1;
       }
       catch (e) { console.warn("[assign] dingtalk notify failed (non-fatal):", e); }
     }
@@ -734,11 +766,16 @@ export const projectsRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "仅 Owner/管理层/PM 可执行立项向导" });
       }
 
-      // 1) 开始日 → 生成整套排期(非阻断)
-      if (input.startDate && input.startDate !== project.startDate) {
+      // 1) 开始日 → 生成整套排期(非阻断)。
+      // 日期未变时通常不重排(避免覆盖手动调整的任务日期);但若整个项目从未排期
+      // (创建时排期失败/历史项目),重跑向导应能自愈补排。
+      if (input.startDate) {
         try {
-          await updateProject(input.projectId, { startDate: input.startDate });
-          await applyProjectSchedule(input.projectId);
+          const changed = input.startDate !== project.startDate;
+          const neverScheduled = !changed
+            && (await getProjectTasks(input.projectId)).every((t) => !t.dueDate && !t.startDate);
+          if (changed) await updateProject(input.projectId, { startDate: input.startDate });
+          if (changed || neverScheduled) await applyProjectSchedule(input.projectId);
         } catch (e) { console.warn("[kickoff] schedule failed (non-fatal):", e); }
       }
 
@@ -754,11 +791,15 @@ export const projectsRouter = router({
         catch (e) { console.warn("[kickoff] staffing failed (non-fatal):", e); }
       }
 
-      // 3) 按角色分配任务 + 通知
+      // 3) 按角色分配任务 + 通知。向导显式分工直接传入:
+      // 成员表一人一角色,创建者兼任/一人多角色时 ensureProjectMember 落不了库,派任务不能只靠成员表。
+      const staffingMap: Record<string, number> = {};
+      for (const s of input.staffing) staffingMap[s.role] = s.userId;
       const r = await assignAndNotify(
         { id: project.id, name: project.name, category: project.category, dingtalkChatId: project.dingtalkChatId },
         ctx.user.id,
         input.notify,
+        staffingMap,
       );
       await createActivityLog({
         projectId: input.projectId,

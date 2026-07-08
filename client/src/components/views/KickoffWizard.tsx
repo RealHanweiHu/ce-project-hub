@@ -45,7 +45,8 @@ export function KickoffWizard({ project, onClose }: {
   const userRows = users as UserRow[];
 
   const today = toLocalISODate();
-  const [step, setStep] = useState(1);
+  // 创建项目时已填开始日期 → 跳过第 1 步直达角色分工；点「上一步」仍可回去改日期
+  const [step, setStep] = useState(project.startDate ? 2 : 1);
   const [startDate, setStartDate] = useState(project.startDate || today);
   const [staff, setStaff] = useState<Record<string, string>>({});
   const [seeded, setSeeded] = useState(false);

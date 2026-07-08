@@ -3,6 +3,7 @@ import { SYSTEM_ROLES, isSystemAdminRole, systemRoleCanCreateProject } from "@sh
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { getSessionCookieOptions } from "./_core/cookies";
+import { getDingtalkUserByAuthCode } from "./_core/dingtalk";
 import { ENV } from "./_core/env";
 import { hashPassword, verifyPassword } from "./_core/password";
 import { sdk } from "./_core/sdk";
@@ -38,6 +39,18 @@ import { getDb } from "./db";
 import { users } from "../drizzle/schema";
 import { eq } from "drizzle-orm";
 
+const notificationPrefsSchema = z.object({
+  dingtalk: z.object({
+    enabled: z.boolean().optional(),
+    quietHours: z.object({
+      startHour: z.number().int().min(0).max(23).optional(),
+      endHour: z.number().int().min(0).max(23).optional(),
+      timezone: z.string().trim().min(1).max(64).optional(),
+    }).strict().optional(),
+    maxImmediatePerDay: z.number().int().min(0).max(100).optional(),
+  }).strict().optional(),
+}).strict();
+
 export const appRouter = router({
   // if you need to use socket.io, read and register route in server/_core/index.ts, all api should start with '/api/' so that the gateway can route correctly
   system: systemRouter,
@@ -46,6 +59,11 @@ export const appRouter = router({
     registrationEnabled: publicProcedure.query(() => ({
       enabled: ENV.allowRegistration,
       requiresInviteCode: ENV.allowRegistration && ENV.registrationInviteCode.length > 0,
+    })),
+
+    dingtalkConfig: publicProcedure.query(() => ({
+      enabled: Boolean(ENV.dingtalkAppKey && ENV.dingtalkAppSecret && ENV.dingtalkCorpId),
+      corpId: ENV.dingtalkCorpId || null,
     })),
 
     me: publicProcedure.query(opts => {
@@ -58,6 +76,16 @@ export const appRouter = router({
         canCreateProject: systemRoleCanCreateProject(user),
       };
     }),
+
+    notificationPrefs: protectedProcedure.query(async ({ ctx }) => {
+      return db.getUserNotificationPrefs(ctx.user.id);
+    }),
+
+    updateNotificationPrefs: protectedProcedure
+      .input(notificationPrefsSchema)
+      .mutation(async ({ ctx, input }) => {
+        return db.updateUserNotificationPrefs(ctx.user.id, input);
+      }),
 
     /** Password-based login */
     login: publicProcedure
@@ -79,6 +107,37 @@ export const appRouter = router({
         // Create session token using existing JWT infrastructure
         const sessionToken = await sdk.createSessionToken(user.openId, {
           name: user.name || user.username || '',
+          expiresInMs: ONE_YEAR_MS,
+        });
+        const cookieOptions = getSessionCookieOptions(ctx.req);
+        ctx.res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+        return { success: true } as const;
+      }),
+
+    /** DingTalk micro-app passwordless login: getAuthCode → existing bound user → session cookie */
+    dingtalkLogin: publicProcedure
+      .input(z.object({ code: z.string().trim().min(1) }))
+      .mutation(async ({ input, ctx }) => {
+        const identity = await getDingtalkUserByAuthCode(input.code);
+        if (!identity) {
+          throw new TRPCError({ code: "UNAUTHORIZED", message: "钉钉免登失败，请使用账号密码登录" });
+        }
+        const user = await db.getUserByDingtalkIdentity({
+          corpUserId: identity.corpUserId,
+          unionId: identity.unionId,
+          mobile: identity.mobile,
+        });
+        if (!user) {
+          throw new TRPCError({ code: "UNAUTHORIZED", message: "未找到已绑定的钉钉账号，请先用手机号/账号绑定后再免登" });
+        }
+
+        await Promise.all([
+          identity.unionId ? db.setUserDingtalkId(user.id, identity.unionId) : Promise.resolve(),
+          db.setUserDingtalkCorpId(user.id, identity.corpUserId),
+          db.upsertUser({ openId: user.openId, lastSignedIn: new Date() }),
+        ]);
+        const sessionToken = await sdk.createSessionToken(user.openId, {
+          name: user.name || user.username || identity.name || "",
           expiresInMs: ONE_YEAR_MS,
         });
         const cookieOptions = getSessionCookieOptions(ctx.req);

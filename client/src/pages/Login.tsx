@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'wouter';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
@@ -10,8 +10,19 @@ import { Loader2, Cpu, AlertCircle, Eye, EyeOff } from 'lucide-react';
 
 type Mode = 'login' | 'register';
 
+function safeRedirectFromSearch(search: string): string {
+  const redirect = new URLSearchParams(search).get('redirect');
+  if (!redirect || !redirect.startsWith('/') || redirect.startsWith('//')) return '/';
+  if (redirect === '/login' || redirect.startsWith('/login?')) return '/';
+  return redirect;
+}
+
 export default function Login() {
   const [, navigate] = useLocation();
+  const redirectTo = useMemo(() => {
+    if (typeof window === 'undefined') return '/';
+    return safeRedirectFromSearch(window.location.search);
+  }, []);
   const [mode, setMode] = useState<Mode>('login');
 
   // Shared fields
@@ -38,7 +49,7 @@ export default function Login() {
   const loginMutation = trpc.auth.login.useMutation({
     onSuccess: async () => {
       await utils.auth.me.invalidate();
-      navigate('/');
+      navigate(redirectTo);
     },
     onError: (err) => {
       setError(err.message || '登录失败，请重试');
@@ -48,7 +59,7 @@ export default function Login() {
   const registerMutation = trpc.auth.register.useMutation({
     onSuccess: async () => {
       await utils.auth.me.invalidate();
-      navigate('/');
+      navigate(redirectTo);
     },
     onError: (err) => {
       setError(err.message || '注册失败，请重试');

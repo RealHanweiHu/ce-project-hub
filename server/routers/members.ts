@@ -455,6 +455,7 @@ export const membersRouter = router({
         jobTitle: m.jobTitle,
         userName: m.userName,
         userEmail: m.userEmail,
+        mentionName: m.userUsername ?? m.userOpenId ?? `u${m.userId}`,
         isOwner: m.userId === project.createdBy,
         permissions: ROLE_PERMISSIONS[m.role],
       }));
@@ -466,6 +467,7 @@ export const membersRouter = router({
           jobTitle: null,
           userName: ownerUser.name ?? null,
           userEmail: ownerUser.email ?? null,
+          mentionName: ownerUser.username ?? ownerUser.openId ?? `u${ownerUser.id}`,
           isOwner: true,
           permissions: ROLE_PERMISSIONS["owner"],
         });

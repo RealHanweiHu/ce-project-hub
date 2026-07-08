@@ -27,9 +27,14 @@ function makeDeps() {
     pushes,
     groups,
     deps: {
+      now: new Date("2026-06-16T02:00:00Z"),
       createNotification: async (n: { userId: number; title: string }) => { notes.push({ userId: n.userId, title: n.title }); },
       pushWebhook: async (_text: string, opts?: { title?: string }) => { pushes.push({ title: opts?.title }); },
       notifyDingtalk: async () => {}, // 测试不真发钉钉工作通知
+      getDeliveryProfiles: async (userIds: number[]) => new Map(userIds.map((userId) => [
+        userId,
+        { userId, prefs: {}, immediateSent24h: 0 },
+      ])),
       notifyGroup: async (chatId: string, title: string) => { groups.push({ chatId, title }); return true; },
       allowAutomationTestProjects: true,
     },
@@ -40,6 +45,8 @@ async function cleanup() {
   const db = await getDb();
   if (!db) return;
   const { sql } = await import("drizzle-orm");
+  await db.execute(sql`DELETE FROM action_items WHERE "projectId" = ${PROJECT_ID}`);
+  await db.execute(sql`DELETE FROM action_items WHERE "projectId" = ${ARCHIVED_PROJECT_ID}`);
   await db.execute(sql`DELETE FROM automation_runs WHERE "projectId" = ${PROJECT_ID}`);
   await db.execute(sql`DELETE FROM automation_runs WHERE "projectId" = ${ARCHIVED_PROJECT_ID}`);
   await db.execute(sql`DELETE FROM project_members WHERE "projectId" = ${PROJECT_ID}`);
@@ -79,7 +86,11 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   const db = await getDb();
-  if (db) { const { sql } = await import("drizzle-orm"); await db.execute(sql`DELETE FROM automation_runs WHERE "projectId" = ${PROJECT_ID}`); }
+  if (db) {
+    const { sql } = await import("drizzle-orm");
+    await db.execute(sql`DELETE FROM action_items WHERE "projectId" = ${PROJECT_ID}`);
+    await db.execute(sql`DELETE FROM automation_runs WHERE "projectId" = ${PROJECT_ID}`);
+  }
   // 重置规则到已知状态
   await updateAutomationRuleRow({ ruleKey: "high_severity_issue", enabled: true, config: { severities: ["P0", "P1"], pushGroup: true } });
   await updateAutomationRuleRow({ ruleKey: "overdue_reminder", enabled: true, config: { graceDays: 0, cadenceHours: 24, scope: "both", notifyRoles: ["assignee", "pm"], pushGroup: false } });

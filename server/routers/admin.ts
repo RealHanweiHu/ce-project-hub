@@ -2,6 +2,14 @@ import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { SYSTEM_ROLES, isSystemAdminRole, isSystemExternalRole } from "../../shared/system-roles";
+
+const DINGTALK_APPROVAL_BUSINESS_TYPES = [
+  "mp_release",
+  "task_approval",
+  "deliverable_review",
+  "issue_validation",
+  "gate_override",
+] as const;
 import {
   createUserWithPassword,
   getDb,
@@ -388,25 +396,22 @@ export const adminRouter = router({
   approvalConfigs: router({
     list: adminProcedure.query(async () => {
       const rows = await listApprovalConfigs();
-      if (!rows.some((row) => row.businessType === "mp_release")) {
-        return [
-          ...rows,
-          {
+      const existing = new Map(rows.map((row) => [row.businessType, row]));
+      return DINGTALK_APPROVAL_BUSINESS_TYPES.map((businessType) => (
+        existing.get(businessType) ?? {
             id: 0,
-            businessType: "mp_release",
+            businessType,
             processCode: null,
             enabled: false,
             defaultDeptId: null,
             createdAt: new Date(0),
             updatedAt: new Date(0),
-          },
-        ];
-      }
-      return rows;
+          }
+      ));
     }),
     upsert: adminProcedure
       .input(z.object({
-        businessType: z.enum(["mp_release", "gate_override"]),
+        businessType: z.enum(DINGTALK_APPROVAL_BUSINESS_TYPES),
         processCode: z.string().trim().max(128).nullable(),
         enabled: z.boolean(),
         defaultDeptId: z.number().int().nullable().optional(),

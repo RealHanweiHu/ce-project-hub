@@ -101,17 +101,18 @@ describe("getGateReadiness", () => {
     expect(r2!.dimensions.find((d) => d.dimension === "deliverables")!.blockers).toContain(firstDeliverable);
   });
 
-  it("getPhaseOpenP0P1 只数本阶段未关闭 P0/P1", async () => {
+  it("getPhaseOpenP0P1 只数本阶段未闭环 P0/P1", async () => {
     const db = await getDb();
     if (!db) return;
     await db.insert(projectIssues).values([
       { projectId: PROJ, phaseId: "design", title: "本阶段P0", severity: "P0", status: "open" },
+      { projectId: PROJ, phaseId: "design", title: "本阶段待验证", severity: "P1", status: "resolved" },
       { projectId: PROJ, phaseId: "design", title: "本阶段已关", severity: "P1", status: "closed" },
       { projectId: PROJ, phaseId: "evt", title: "他阶段P0", severity: "P0", status: "open" },
     ]);
     const res = await getPhaseOpenP0P1(PROJ, "design");
-    expect(res.count).toBe(1);
-    expect(res.titles).toEqual(["本阶段P0"]);
+    expect(res.count).toBe(2);
+    expect(res.titles).toEqual(["本阶段P0", "本阶段待验证"]);
   });
 
   it("getApproachingGates 含有 dueDate 未完成的 gate", async () => {

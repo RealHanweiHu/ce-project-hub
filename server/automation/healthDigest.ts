@@ -1,9 +1,7 @@
 import { type RagLevel } from "../../shared/health";
 import { ENV } from "../_core/env";
 import { pushWebhook as defaultPushWebhook } from "../_core/notify";
-import { notifyUsersViaDingtalk as defaultNotifyDingtalk } from "../_core/dingtalkMessage";
 import {
-  createNotification as defaultCreateNotification,
   createAutomationRun,
   hasAutomationRunForEntity,
   listAutomationRuleRows,
@@ -12,6 +10,7 @@ import {
 } from "../db";
 import { parseDigestRuleConfig, type HealthDigestConfig } from "./digestRules";
 import { isAutomationSuppressedProject } from "./project-filter";
+import { notifyPersonal, type NotifyPersonalDeps } from "../notification-gateway";
 
 // ── 日期/时区（统一 Asia/Shanghai）─────────────────────────────────────────
 export function isoWeekdayOf(iso: string): number {
@@ -107,10 +106,8 @@ export type HealthDigestDeps = {
   getHealth?: (todayISO: string) => Promise<PortfolioHealthRow[]>;
   hasRun?: (periodKey: string) => Promise<boolean>;
   writeRun?: (status: "fired" | "skipped", periodKey: string, detail: string) => Promise<void>;
-  createNotification?: typeof defaultCreateNotification;
-  notifyDingtalk?: (userIds: number[], title: string, markdown: string) => Promise<void>;
   pushWebhook?: typeof defaultPushWebhook;
-};
+} & NotifyPersonalDeps;
 
 async function defaultGetConfigRow(): Promise<{ enabled: boolean; config: HealthDigestConfig } | null> {
   const rows = await listAutomationRuleRows();
@@ -151,18 +148,19 @@ export async function runHealthDigestScan(now: Date, deps: HealthDigestDeps = {}
     return;
   }
 
-  const createNotification = deps.createNotification ?? defaultCreateNotification;
-  const notifyDingtalk = deps.notifyDingtalk ?? defaultNotifyDingtalk;
   const pushWebhook = deps.pushWebhook ?? defaultPushWebhook;
 
   if (config.pushPmPersonal) {
     for (const [pmUserId, scored] of Array.from(groupByPm(abnormal).entries())) {
       const { title, markdown } = buildPmMarkdown(scored, config.cadence);
-      await createNotification({
-        userId: pmUserId, type: "automation", title,
+      await notifyPersonal({
+        eventKey: "health_digest",
+        userIds: [pmUserId],
+        title,
         body: `${scored.length} 个项目需关注`, entityType: "portfolio", entityId: periodKey,
-      });
-      await notifyDingtalk([pmUserId], title, markdown);
+        markdown,
+        actionPath: "/",
+      }, deps);
     }
   }
 

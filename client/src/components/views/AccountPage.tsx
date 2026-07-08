@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { trpc } from '@/lib/trpc';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Slider } from '@/components/ui/slider';
+import { Switch } from '@/components/ui/switch';
 import { LinearCard, PageHeader, Kicker } from '@/components/linear/primitives';
 import { Shield, BookOpen, LogOut } from 'lucide-react';
 import { SYSTEM_ROLE_LABELS, isSystemAdminRole, normalizeSystemRole } from '@shared/system-roles';
@@ -28,6 +30,32 @@ export function AccountPage({ onNavigate, onOpenAdmin }: { onNavigate: (v: View)
     onSuccess: () => { setCur(''); setNw(''); setCf(''); toast.success('密码已修改'); },
     onError: (e) => toast.error(e.message || '修改失败'),
   });
+
+  const notificationPrefs = trpc.auth.notificationPrefs.useQuery(undefined, {
+    enabled: Boolean(user),
+    refetchOnWindowFocus: false,
+  });
+  const [dingtalkEnabled, setDingtalkEnabled] = useState(true);
+  const [quietStart, setQuietStart] = useState(22);
+  const [quietEnd, setQuietEnd] = useState(8);
+  const [maxImmediatePerDay, setMaxImmediatePerDay] = useState(10);
+  const saveNotificationPrefs = trpc.auth.updateNotificationPrefs.useMutation({
+    onSuccess: () => {
+      utils.auth.notificationPrefs.invalidate();
+      toast.success('通知偏好已保存');
+    },
+    onError: (e) => toast.error(e.message || '保存失败'),
+  });
+
+  useEffect(() => {
+    const prefs = notificationPrefs.data;
+    if (!prefs) return;
+    const dingtalk = prefs.dingtalk ?? {};
+    setDingtalkEnabled(dingtalk.enabled !== false);
+    setQuietStart(clampHour(dingtalk.quietHours?.startHour ?? 22));
+    setQuietEnd(clampHour(dingtalk.quietHours?.endHour ?? 8));
+    setMaxImmediatePerDay(clampImmediateCap(dingtalk.maxImmediatePerDay ?? 10));
+  }, [notificationPrefs.data]);
 
   const roleLabel = SYSTEM_ROLE_LABELS[systemRole];
 
@@ -80,6 +108,76 @@ export function AccountPage({ onNavigate, onOpenAdmin }: { onNavigate: (v: View)
         {nw && cf && nw !== cf && <p className="mt-2 text-[12px] text-[color:var(--destructive)]">两次输入的新密码不一致</p>}
       </LinearCard>
 
+      <LinearCard className="p-5">
+        <div className="flex items-center justify-between gap-4">
+          <Kicker>通知偏好</Kicker>
+          <Switch
+            checked={dingtalkEnabled}
+            onCheckedChange={setDingtalkEnabled}
+            disabled={notificationPrefs.isLoading || saveNotificationPrefs.isPending}
+            aria-label="钉钉工作通知"
+          />
+        </div>
+        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="rounded-[10px] border border-border bg-background/50 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[13px] font-medium text-foreground">钉钉工作通知</span>
+              <span className="text-[12px] text-muted-foreground">{dingtalkEnabled ? '开启' : '关闭'}</span>
+            </div>
+          </div>
+          <label className="flex flex-col gap-1.5">
+            <span className="text-[12px] text-muted-foreground">每日即时上限</span>
+            <Input
+              type="number"
+              min={0}
+              max={100}
+              value={maxImmediatePerDay}
+              onChange={(e) => setMaxImmediatePerDay(clampImmediateCap(Number(e.target.value)))}
+              disabled={notificationPrefs.isLoading || saveNotificationPrefs.isPending}
+            />
+          </label>
+        </div>
+        <div className="mt-4 rounded-[10px] border border-border bg-background/50 p-3">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <span className="text-[13px] font-medium text-foreground">静默时段</span>
+            <span className="num text-[12px] text-muted-foreground">{formatHour(quietStart)} - {formatHour(quietEnd)}</span>
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <HourSlider
+              label="开始"
+              value={quietStart}
+              disabled={notificationPrefs.isLoading || saveNotificationPrefs.isPending}
+              onChange={setQuietStart}
+            />
+            <HourSlider
+              label="结束"
+              value={quietEnd}
+              disabled={notificationPrefs.isLoading || saveNotificationPrefs.isPending}
+              onChange={setQuietEnd}
+            />
+          </div>
+        </div>
+        <div className="mt-4 flex justify-end">
+          <Button
+            variant="outline"
+            disabled={notificationPrefs.isLoading || saveNotificationPrefs.isPending}
+            onClick={() => saveNotificationPrefs.mutate({
+              dingtalk: {
+                enabled: dingtalkEnabled,
+                quietHours: {
+                  startHour: quietStart,
+                  endHour: quietEnd,
+                  timezone: 'Asia/Shanghai',
+                },
+                maxImmediatePerDay,
+              },
+            })}
+          >
+            {saveNotificationPrefs.isPending ? '保存中…' : '保存通知偏好'}
+          </Button>
+        </div>
+      </LinearCard>
+
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {isAdmin && (
           <button onClick={onOpenAdmin} className="flex items-center gap-3 rounded-[11px] border border-border bg-card p-4 text-left transition-colors hover:border-[color:var(--acc-border)] hover:bg-secondary">
@@ -98,6 +196,49 @@ export function AccountPage({ onNavigate, onOpenAdmin }: { onNavigate: (v: View)
           <LogOut size={15} /> 退出登录
         </Button>
       </div>
+    </div>
+  );
+}
+
+function clampHour(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(23, Math.max(0, Math.round(value)));
+}
+
+function clampImmediateCap(value: number): number {
+  if (!Number.isFinite(value)) return 10;
+  return Math.min(100, Math.max(0, Math.round(value)));
+}
+
+function formatHour(hour: number): string {
+  return `${String(clampHour(hour)).padStart(2, '0')}:00`;
+}
+
+function HourSlider({
+  label,
+  value,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  disabled?: boolean;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <span className="text-[12px] text-muted-foreground">{label}</span>
+        <span className="num text-[12px] text-foreground">{formatHour(value)}</span>
+      </div>
+      <Slider
+        min={0}
+        max={23}
+        step={1}
+        value={[value]}
+        disabled={disabled}
+        onValueChange={(next) => onChange(clampHour(next[0] ?? value))}
+      />
     </div>
   );
 }

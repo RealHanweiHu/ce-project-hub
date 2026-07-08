@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { eq } from "drizzle-orm";
-import { getDb, createProduct, createProductRevision } from "./db";
+import { getDb, createProduct, createProductRevision, getActivityLogs } from "./db";
 import { bomItems, productRevisions, products, projectMembers, projects } from "../drizzle/schema";
 import { bomRouter } from "./routers/bom";
 
@@ -69,6 +69,10 @@ describe("bom router permissions", () => {
     const added = await caller(SCM).add({ projectId: PROJ, line: { name: "外壳", quantity: 1 } });
     await expect(caller(SCM).update({ id: added.id, patch: { quantity: 2 } })).resolves.toEqual({ ok: true });
     await expect(caller(SCM).delete({ id: added.id })).resolves.toEqual({ ok: true });
+    const actions = (await getActivityLogs(PROJ)).map((log) => log.action);
+    expect(actions).toContain("bom.add");
+    expect(actions).toContain("bom.update");
+    expect(actions).toContain("bom.delete");
   });
 
   it("冻结 BOM 行不可从 working BOM 接口修改", async () => {

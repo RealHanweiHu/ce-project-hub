@@ -65,6 +65,16 @@ type ApprovalConfigRow = {
   defaultDeptId: number | null;
 };
 
+const APPROVAL_CONFIG_TYPES = [
+  { key: 'mp_release', label: 'MP Release' },
+  { key: 'task_approval', label: '任务审批' },
+  { key: 'deliverable_review', label: '交付物审核' },
+  { key: 'issue_validation', label: '问题验证' },
+] as const;
+
+type ApprovalConfigType = typeof APPROVAL_CONFIG_TYPES[number]['key'];
+type ApprovalDraft = { enabled: boolean; processCode: string; defaultDeptId: string };
+
 export default function AdminPanel() {
   const { user, isAuthenticated, loading } = useAuth();
   const [, navigate] = useLocation();
@@ -151,20 +161,29 @@ export default function AdminPanel() {
   const { data: approvalConfigs, refetch: refetchApprovalConfigs } = trpc.admin.approvalConfigs.list.useQuery(undefined, {
     enabled: isAuthenticated && isSystemAdminRole(user?.role),
   });
-  const mpApprovalConfig = (approvalConfigs as ApprovalConfigRow[] | undefined)?.find((cfg) => cfg.businessType === 'mp_release');
-  const [approvalEnabled, setApprovalEnabled] = useState(false);
-  const [approvalProcessCode, setApprovalProcessCode] = useState('');
-  const [approvalDeptId, setApprovalDeptId] = useState('');
+  const [approvalDrafts, setApprovalDrafts] = useState<Record<ApprovalConfigType, ApprovalDraft>>(() => Object.fromEntries(
+    APPROVAL_CONFIG_TYPES.map((item) => [item.key, { enabled: false, processCode: '', defaultDeptId: '' }]),
+  ) as Record<ApprovalConfigType, ApprovalDraft>);
   useEffect(() => {
-    if (!mpApprovalConfig) return;
-    setApprovalEnabled(mpApprovalConfig.enabled);
-    setApprovalProcessCode(mpApprovalConfig.processCode ?? '');
-    setApprovalDeptId(mpApprovalConfig.defaultDeptId == null ? '' : String(mpApprovalConfig.defaultDeptId));
-  }, [mpApprovalConfig?.businessType, mpApprovalConfig?.enabled, mpApprovalConfig?.processCode, mpApprovalConfig?.defaultDeptId]);
+    const rows = approvalConfigs as ApprovalConfigRow[] | undefined;
+    if (!rows) return;
+    setApprovalDrafts(Object.fromEntries(APPROVAL_CONFIG_TYPES.map((item) => {
+      const config = rows.find((row) => row.businessType === item.key);
+      return [item.key, {
+        enabled: config?.enabled ?? false,
+        processCode: config?.processCode ?? '',
+        defaultDeptId: config?.defaultDeptId == null ? '' : String(config.defaultDeptId),
+      }];
+    })) as Record<ApprovalConfigType, ApprovalDraft>);
+  }, [approvalConfigs]);
   const saveApprovalConfig = trpc.admin.approvalConfigs.upsert.useMutation({
     onSuccess: () => { void refetchApprovalConfigs(); toast.success('审批配置已更新'); },
     onError: (err) => toast.error(err.message),
   });
+  const enabledApprovalCount = APPROVAL_CONFIG_TYPES.filter((item) => approvalDrafts[item.key]?.enabled).length;
+  const setApprovalDraft = (key: ApprovalConfigType, patch: Partial<ApprovalDraft>) => {
+    setApprovalDrafts((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
+  };
 
   const filteredUsers = (users as UserRow[] | undefined)?.filter((u) => {
     const q = search.toLowerCase();
@@ -244,51 +263,62 @@ export default function AdminPanel() {
           <div className="px-4 py-3 border-b border-border flex items-center gap-2">
             <FileCheck2 size={14} className="text-primary" />
             <h2 className="text-base text-foreground flex-1">钉钉审批配置</h2>
-            <Badge variant={approvalEnabled ? 'default' : 'secondary'} className="text-[10px]">
-              {approvalEnabled ? '已启用' : '未启用'}
+            <Badge variant={enabledApprovalCount > 0 ? 'default' : 'secondary'} className="text-[10px]">
+              {enabledApprovalCount > 0 ? `${enabledApprovalCount} 类已启用` : '未启用'}
             </Badge>
           </div>
-          <div className="p-4 grid grid-cols-1 md:grid-cols-[1fr_160px_auto] gap-3 items-end">
-            <div>
-              <Label className="text-xs text-muted-foreground">MP Release processCode</Label>
-              <Input
-                value={approvalProcessCode}
-                onChange={(e) => setApprovalProcessCode(e.target.value)}
-                placeholder="PROC-..."
-                className="mt-1 h-9 text-sm"
-              />
-            </div>
-            <div>
-              <Label className="text-xs text-muted-foreground">默认部门 ID</Label>
-              <Input
-                value={approvalDeptId}
-                onChange={(e) => setApprovalDeptId(e.target.value.replace(/[^\d-]/g, ''))}
-                placeholder="-1"
-                className="mt-1 h-9 text-sm"
-              />
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setApprovalEnabled((v) => !v)}
-                className={`h-9 px-3 text-xs border transition-colors ${approvalEnabled ? 'bg-primary text-primary-foreground border-primary' : 'bg-secondary text-secondary-foreground border-border'}`}
-              >
-                {approvalEnabled ? '停用' : '启用'}
-              </button>
-              <Button
-                size="sm"
-                disabled={saveApprovalConfig.isPending}
-                onClick={() => saveApprovalConfig.mutate({
-                  businessType: 'mp_release',
-                  processCode: approvalProcessCode.trim() || null,
-                  enabled: approvalEnabled,
-                  defaultDeptId: approvalDeptId.trim() ? Number(approvalDeptId) : null,
-                })}
-                className="h-9 text-xs"
-              >
-                保存
-              </Button>
-            </div>
+          <div className="p-4 space-y-3">
+            {APPROVAL_CONFIG_TYPES.map((item) => {
+              const draft = approvalDrafts[item.key];
+              return (
+                <div key={item.key} className="grid grid-cols-1 md:grid-cols-[140px_1fr_150px_auto] gap-3 items-end">
+                  <div>
+                    <Label className="text-xs text-muted-foreground">业务类型</Label>
+                    <div className="mt-1 h-9 flex items-center text-sm text-foreground">{item.label}</div>
+                  </div>
+                  <div>
+                    <Label className="text-xs text-muted-foreground">processCode</Label>
+                    <Input
+                      value={draft.processCode}
+                      onChange={(e) => setApprovalDraft(item.key, { processCode: e.target.value })}
+                      placeholder="PROC-..."
+                      className="mt-1 h-9 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs text-muted-foreground">默认部门 ID</Label>
+                    <Input
+                      value={draft.defaultDeptId}
+                      onChange={(e) => setApprovalDraft(item.key, { defaultDeptId: e.target.value.replace(/[^\d-]/g, '') })}
+                      placeholder="-1"
+                      className="mt-1 h-9 text-sm"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setApprovalDraft(item.key, { enabled: !draft.enabled })}
+                      className={`h-9 px-3 text-xs border transition-colors ${draft.enabled ? 'bg-primary text-primary-foreground border-primary' : 'bg-secondary text-secondary-foreground border-border'}`}
+                    >
+                      {draft.enabled ? '停用' : '启用'}
+                    </button>
+                    <Button
+                      size="sm"
+                      disabled={saveApprovalConfig.isPending}
+                      onClick={() => saveApprovalConfig.mutate({
+                        businessType: item.key,
+                        processCode: draft.processCode.trim() || null,
+                        enabled: draft.enabled,
+                        defaultDeptId: draft.defaultDeptId.trim() ? Number(draft.defaultDeptId) : null,
+                      })}
+                      className="h-9 text-xs"
+                    >
+                      保存
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
 

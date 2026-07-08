@@ -32,7 +32,10 @@ type View = 'overview' | 'mytasks' | 'projects' | 'calendar' | 'products' | 'req
 
 const VIEW_IDS = new Set<View>(['overview', 'mytasks', 'projects', 'calendar', 'products', 'requirements', 'sop', 'account']);
 const PROJECT_DETAIL_TABS = new Set<NonNullable<TaskFocus['tab']>>([
-  'overview', 'metrics', 'tasks', 'kanban', 'requirements', 'gantt', 'issues', 'changelog', 'bom', 'files',
+  'overview', 'tasks', 'reviews', 'materials', 'activity', 'metrics', 'kanban', 'requirements', 'gantt', 'issues', 'changelog', 'bom', 'files',
+]);
+const PROJECT_TASK_TABS = new Set<NonNullable<TaskFocus['taskTab']>>([
+  'comments', 'activity', 'flow', 'approval',
 ]);
 
 function readWorkbenchLocation(): { view: View; selectedProjectId: string | null; focus: TaskFocus | null } {
@@ -45,6 +48,8 @@ function readWorkbenchLocation(): { view: View; selectedProjectId: string | null
   const taskId = params.get('taskId');
   const tabParam = params.get('tab') as TaskFocus['tab'] | null;
   const tab = tabParam && PROJECT_DETAIL_TABS.has(tabParam) ? tabParam : undefined;
+  const taskTabParam = params.get('taskTab') as TaskFocus['taskTab'] | null;
+  const taskTab = taskTabParam && PROJECT_TASK_TABS.has(taskTabParam) ? taskTabParam : undefined;
   const viewParam = params.get('view');
   const view = selectedProjectId
     ? 'projects'
@@ -55,7 +60,9 @@ function readWorkbenchLocation(): { view: View; selectedProjectId: string | null
   return {
     view,
     selectedProjectId,
-    focus: tab || phaseId || taskId ? { tab, phaseId: phaseId ?? undefined, taskId: taskId ?? undefined } : null,
+    focus: tab || phaseId || taskId || taskTab
+      ? { tab, phaseId: phaseId ?? undefined, taskId: taskId ?? undefined, taskTab }
+      : null,
   };
 }
 
@@ -66,6 +73,7 @@ function buildWorkbenchUrl(view: View, selectedProjectId: string | null, focus?:
   url.searchParams.delete('phaseId');
   url.searchParams.delete('taskId');
   url.searchParams.delete('tab');
+  url.searchParams.delete('taskTab');
 
   if (selectedProjectId) {
     url.searchParams.set('view', 'projects');
@@ -73,9 +81,14 @@ function buildWorkbenchUrl(view: View, selectedProjectId: string | null, focus?:
     if (focus?.tab) {
       url.searchParams.set('tab', focus.tab);
     }
-    if (focus?.phaseId && focus.taskId) {
+    if (focus?.phaseId) {
       url.searchParams.set('phaseId', focus.phaseId);
+    }
+    if (focus?.taskId) {
       url.searchParams.set('taskId', focus.taskId);
+    }
+    if (focus?.taskTab) {
+      url.searchParams.set('taskTab', focus.taskTab);
     }
   } else if (view !== 'overview') {
     url.searchParams.set('view', view);
@@ -602,6 +615,7 @@ function ProjectDetailWrapper({
       initialPhaseId={focus?.phaseId}
       initialTaskId={focus?.taskId}
       initialTab={focus?.tab}
+      initialTaskTab={focus?.taskTab}
     />
   );
 }
@@ -1040,7 +1054,7 @@ export default function Home() {
               )}
               {view === 'projects' && selectedProjectId && (
                 <ProjectDetailWrapper
-                  key={`${selectedProjectId}:${pendingFocus?.taskId ?? ''}`}
+                  key={`${selectedProjectId}:${pendingFocus?.tab ?? ''}:${pendingFocus?.phaseId ?? ''}:${pendingFocus?.taskId ?? ''}:${pendingFocus?.taskTab ?? ''}`}
                   projectId={selectedProjectId}
                   focus={pendingFocus}
                   onBack={() => {

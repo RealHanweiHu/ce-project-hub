@@ -1,6 +1,12 @@
 import { and, desc, eq, inArray, sql as drizzleSql } from "drizzle-orm";
 import { protectedProcedure, router } from "../_core/trpc";
-import { getDb, getMyTasks, getPortfolio } from "../db";
+import {
+  getDb,
+  getMyTasks,
+  getPortfolio,
+  listOpenActionItemsForUser,
+  listSnoozedActionItemsForUser,
+} from "../db";
 import {
   automationRules,
   automationRuns,
@@ -52,9 +58,11 @@ function roleMatchesTask(role: ProjectMemberRole | undefined, visibleRoles: stri
 
 export const workbenchRouter = router({
   mine: protectedProcedure.query(async ({ ctx }) => {
-    const [tasks, portfolio] = await Promise.all([
+    const [tasks, portfolio, actionItems, snoozedActionItems] = await Promise.all([
       getMyTasks(ctx.user.id),
       getPortfolio(ctx.user.id),
+      listOpenActionItemsForUser(ctx.user.id),
+      listSnoozedActionItemsForUser(ctx.user.id),
     ]);
     const db = await getDb();
     if (!db) {
@@ -62,6 +70,8 @@ export const workbenchRouter = router({
         systemRole: ctx.user.role,
         roles: [] as WorkbenchRole[],
         tasks,
+        actionItems,
+        snoozedActionItems,
         roleTasks: [],
         reviews: [],
         issues: [],
@@ -246,6 +256,8 @@ export const workbenchRouter = router({
       systemRole: ctx.user.role,
       roles,
       tasks,
+      actionItems,
+      snoozedActionItems,
       roleTasks,
       reviews,
       issues,
@@ -265,7 +277,7 @@ async function getAdminWorkbenchSignals(db: NonNullable<Awaited<ReturnType<typeo
     db.select({ id: automationRuns.id }).from(automationRuns).limit(50),
     db.select({ id: automationRuns.id })
       .from(automationRuns)
-      .where(eq(automationRuns.status, "failed"))
+      .where(inArray(automationRuns.status, ["failed", "error"]))
       .limit(50),
     db.select({ id: users.id }).from(users),
     db.select({ id: customFieldDefs.id }).from(customFieldDefs),

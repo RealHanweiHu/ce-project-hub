@@ -3,6 +3,7 @@ import { protectedProcedure, router } from "../_core/trpc";
 import { TRPCError } from "@trpc/server";
 import {
   getProjectIssues,
+  getProjectMembers,
   createProjectIssue,
   updateProjectIssue,
   deleteProjectIssue,
@@ -14,8 +15,87 @@ import {
   ISSUE_SEVERITIES,
   ISSUE_STATUSES,
   ISSUE_CATEGORIES,
+  type ProjectIssue,
+  type User,
 } from "../../drizzle/schema";
 import { emitAutomationEvent } from "../automation/events";
+import {
+  actionDedupeKey,
+  closeActionItems,
+  notifyActionItem,
+} from "../action-item-notify";
+import { buildIssueValidationActionPath } from "../../shared/action-links";
+import { notifyGateReadyIfReady } from "../gate-ready-notify";
+
+function normalizeLabel(value: string | null | undefined): string | null {
+  const normalized = value?.trim().toLowerCase();
+  return normalized || null;
+}
+
+function isIssueReporterUser(issue: ProjectIssue, user: User): boolean {
+  if (issue.creatorId === user.id) return true;
+  const reporter = normalizeLabel(issue.reporter);
+  if (!reporter) return false;
+  return [user.name, user.username, user.email]
+    .map(normalizeLabel)
+    .some((label) => label === reporter);
+}
+
+async function resolveIssueValidationRecipient(projectId: string, issue: ProjectIssue): Promise<number | null> {
+  if (issue.creatorId && issue.creatorId > 0) return issue.creatorId;
+  const reporter = normalizeLabel(issue.reporter);
+  if (!reporter) return null;
+  const members = await getProjectMembers(projectId);
+  const matched = members.find((member) => [member.userName, member.userUsername, member.userEmail]
+    .map(normalizeLabel)
+    .some((label) => label === reporter));
+  return matched?.userId ?? null;
+}
+
+async function notifyIssueValidation(input: {
+  projectId: string;
+  issue: ProjectIssue;
+  actorId: number;
+}): Promise<void> {
+  const recipientUserId = await resolveIssueValidationRecipient(input.projectId, input.issue);
+  if (!recipientUserId) return;
+  const entityId = String(input.issue.id);
+  await notifyActionItem({
+    kind: "issue_validation",
+    projectId: input.projectId,
+    entityType: "issue",
+    entityId,
+    dedupeKey: actionDedupeKey({ kind: "issue_validation", entityId, recipientUserId }),
+    recipientUserId,
+    title: "问题待验证",
+    body: `「${input.issue.title}」已标记解决，请验证是否可以关闭。`,
+    actionPath: buildIssueValidationActionPath({
+      projectId: input.projectId,
+      phaseId: input.issue.phaseId,
+      issueId: input.issue.id,
+    }),
+    priority: input.issue.severity === "P0" ? "critical" : input.issue.severity === "P1" ? "high" : "normal",
+    metadata: {
+      phaseId: input.issue.phaseId,
+      issueId: String(input.issue.id),
+      severity: input.issue.severity,
+      resolvedBy: input.actorId,
+    },
+  });
+}
+
+async function closeIssueValidationActionItem(issueId: number): Promise<void> {
+  await closeActionItems({
+    kind: "issue_validation",
+    entityType: "issue",
+    entityId: String(issueId),
+  });
+}
+
+function isGateBlockingCriticalIssue(issue: Pick<ProjectIssue, "severity" | "status">): boolean {
+  return (issue.severity === "P0" || issue.severity === "P1")
+    && (issue.status === "open" || issue.status === "in_progress" || issue.status === "resolved");
+}
 
 export const issuesRouter = router({
   /** List all issues for a project (optionally filtered by phase) */
@@ -55,13 +135,14 @@ export const issuesRouter = router({
         creatorId: ctx.user.id,
         productId: project?.productId ?? null,
       });
+      const afterIssue = { ...input, id, creatorId: ctx.user.id };
       await createActivityLog({
         projectId: input.projectId,
         userId: ctx.user.id,
         action: "issue.create",
         entityType: "issue",
         entityId: String(id),
-        meta: { phaseId: input.phaseId, title: input.title, severity: input.severity },
+        meta: { phaseId: input.phaseId, title: input.title, severity: input.severity, after: afterIssue },
       });
       await emitAutomationEvent({
         action: "issue.create",
@@ -69,7 +150,7 @@ export const issuesRouter = router({
         entityType: "issue",
         entityId: id,
         actorId: ctx.user.id,
-        after: { ...input, id, creatorId: ctx.user.id },
+        after: afterIssue,
       });
       return { success: true, id };
     }),
@@ -103,7 +184,11 @@ export const issuesRouter = router({
 
       const isCreator = issue.creatorId === ctx.user.id;
       const canManage = access.isAdmin || access.permissions.canEditIssues;
-      if (!isCreator && !canManage) {
+      const isReporterValidationAction =
+        issue.status === "resolved" &&
+        (input.status === "closed" || input.status === "in_progress") &&
+        isIssueReporterUser(issue, ctx.user);
+      if (!isCreator && !canManage && !isReporterValidationAction) {
         throw new TRPCError({ code: "FORBIDDEN", message: "只有问题创建者或有管理权限的角色可以编辑" });
       }
 
@@ -122,7 +207,7 @@ export const issuesRouter = router({
       const { id, projectId, ...inputPatch } = input;
       const patch: Parameters<typeof updateProjectIssue>[1] = { ...inputPatch };
       if (patch.status === "closed" && issue.status !== "closed") {
-        if (!access.isAdmin && !access.permissions.canCloseIssues) {
+        if (!access.isAdmin && !access.permissions.canCloseIssues && !isReporterValidationAction) {
           throw new TRPCError({ code: "FORBIDDEN", message: "只有 QA/管理层可以确认问题关闭" });
         }
         patch.verifiedBy = ctx.user.id;
@@ -133,14 +218,18 @@ export const issuesRouter = router({
         patch.verifiedAt = null;
       }
       await updateProjectIssue(id, patch);
-      const afterIssue = { ...issue, ...patch };
+      const afterIssue = { ...issue, ...patch } as ProjectIssue;
       await createActivityLog({
         projectId,
         userId: ctx.user.id,
         action: patch.status === "closed" ? "issue.close" : "issue.update",
         entityType: "issue",
         entityId: String(id),
-        meta: { patch },
+        meta: {
+          patch,
+          before: issue as unknown as Record<string, unknown>,
+          after: afterIssue as unknown as Record<string, unknown>,
+        },
       });
       await emitAutomationEvent({
         action: "issue.update",
@@ -151,6 +240,21 @@ export const issuesRouter = router({
         before: issue as unknown as Record<string, unknown>,
         after: afterIssue as unknown as Record<string, unknown>,
       });
+      if (patch.status === "resolved" && issue.status !== "resolved") {
+        await notifyIssueValidation({ projectId, issue: afterIssue, actorId: ctx.user.id });
+      } else if (patch.status && patch.status !== "resolved" && issue.status === "resolved") {
+        await closeIssueValidationActionItem(id);
+      }
+      if (isGateBlockingCriticalIssue(issue) && !isGateBlockingCriticalIssue(afterIssue)) {
+        await notifyGateReadyIfReady({
+          projectId,
+          phaseId: afterIssue.phaseId,
+          actorId: ctx.user.id,
+          reason: "issue.unblock",
+        }).catch((error) => {
+          console.warn("[gate-ready] failed after issue unblock:", error);
+        });
+      }
       return { success: true };
     }),
 
@@ -173,6 +277,7 @@ export const issuesRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "只有问题创建者或有管理权限的角色可以删除" });
       }
 
+      await closeIssueValidationActionItem(input.id);
       await deleteProjectIssue(input.id);
       await createActivityLog({
         projectId: input.projectId,

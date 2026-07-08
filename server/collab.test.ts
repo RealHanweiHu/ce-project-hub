@@ -24,6 +24,14 @@ describe("Collaboration: comments + mentions + notifications", () => {
     expect(ids.sort()).toEqual([10, 11]);
   });
 
+  it("parseMentions matches stable @u{id} handles for users without usernames", () => {
+    const ids = parseMentions("@u42 看下 @u100 @missing", [
+      { id: 42, username: null, openId: null },
+      { id: 100, username: null, openId: "legacy-openid" },
+    ]);
+    expect(ids.sort((a, b) => a - b)).toEqual([42, 100]);
+  });
+
   it("addComment with @mention creates a notification for the mentioned user", async () => {
     const admin = await getUserByUsername("admin");
     const author = await getUserByUsername("testpm");
