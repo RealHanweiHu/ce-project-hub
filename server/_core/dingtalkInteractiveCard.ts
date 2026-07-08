@@ -2,8 +2,7 @@ import { ENV } from "./env";
 import { getAccessToken, isDingtalkConfigured } from "./dingtalk";
 import type { WorkNotificationButton } from "./dingtalkMessage";
 
-const INTERACTIVE_CARD_BASE = "https://api.dingtalk.com/v1.0/im/interactiveCards";
-const PRIVATE_CHAT_INTERACTIVE_CARD_BASE = "https://api.dingtalk.com/v1.0/im/privateChat/interactiveCards";
+const INTERACTIVE_CARD_BASE = "https://api.dingtalk.com/v1.0/card/instances";
 
 export type InteractiveCardResult =
   | { ok: true; raw: unknown }
@@ -112,17 +111,18 @@ export async function createAndDeliverInteractiveCard(input: {
   if (!token) return { ok: false, error: "获取钉钉 access_token 失败" };
 
   const requestBody = {
+    userId: input.corpUserId,
     cardTemplateId: ENV.dingtalkInteractiveCardTemplateId.trim(),
-    receiverUserIdList: [input.corpUserId],
     outTrackId: input.outTrackId,
-    robotCode: ENV.dingtalkInteractiveRobotCode.trim(),
     userIdType: 1,
+    openSpaceId: `dtv1.card//IM_ROBOT.${input.corpUserId}`,
     cardData: { cardParamMap: input.cardParamMap },
-    cardOptions: { supportForward: false },
+    imRobotOpenSpaceModel: { supportForward: false },
+    imRobotOpenDeliverModel: { spaceType: "IM_ROBOT" },
   };
 
   try {
-    const resp = await fetch(`${PRIVATE_CHAT_INTERACTIVE_CARD_BASE}/send`, {
+    const resp = await fetch(`${INTERACTIVE_CARD_BASE}/createAndDeliver`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -161,7 +161,7 @@ export async function updateInteractiveCard(input: {
         outTrackId: input.outTrackId,
         cardData: { cardParamMap: input.cardParamMap },
         userIdType: 1,
-        cardOptions: { updateCardDataByKey: true },
+        cardUpdateOptions: { updateCardDataByKey: true },
       }),
     });
     const body = await resp.json().catch(() => ({})) as Record<string, unknown>;
