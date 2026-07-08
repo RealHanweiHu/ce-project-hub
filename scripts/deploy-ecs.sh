@@ -31,7 +31,7 @@ echo "==> 同步代码到 $ECS:$DIR"
 rsync -az --delete \
   -e "ssh -p $ECS_PORT -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=2" \
   --exclude node_modules --exclude .git --exclude dist \
-  --exclude .manus-logs --exclude .env \
+  --exclude .manus-logs --exclude .env --exclude .env.production \
   --exclude .playwright-cli --exclude output --exclude task_plan.md \
   ./ "$ECS:$DIR/"
 
