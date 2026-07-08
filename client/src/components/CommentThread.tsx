@@ -36,6 +36,10 @@ function memberMentionHandle(member: MentionMember) {
   return member.mentionName || `u${member.userId}`;
 }
 
+function memberRoleLabel(member: MentionMember) {
+  return member.permissions?.label || member.jobTitle || member.role;
+}
+
 function renderBody(body: string) {
   // 高亮 @username
   return body.split(/(@[^\s@]+)/g).map((part, i) =>
@@ -87,6 +91,7 @@ function MentionComposer({
       })
       .slice(0, 8);
   }, [members, mention, projectId]);
+  const mentionableMembers = useMemo(() => (members as MentionMember[]).slice(0, 10), [members]);
 
   useEffect(() => {
     setActiveIndex(0);
@@ -102,6 +107,23 @@ function MentionComposer({
     const token = `@${memberMentionHandle(member)} `;
     const next = `${body.slice(0, mention.start)}${token}${body.slice(cursor)}`;
     const nextCursor = mention.start + token.length;
+    setBody(next);
+    setCursor(nextCursor);
+    window.setTimeout(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(nextCursor, nextCursor);
+    }, 0);
+  };
+
+  const appendMention = (member: MentionMember) => {
+    if (mention) {
+      insertMention(member);
+      return;
+    }
+    const token = `@${memberMentionHandle(member)} `;
+    const prefix = body && !/\s$/.test(body.slice(0, cursor)) ? ' ' : '';
+    const next = `${body.slice(0, cursor)}${prefix}${token}${body.slice(cursor)}`;
+    const nextCursor = cursor + prefix.length + token.length;
     setBody(next);
     setCursor(nextCursor);
     window.setTimeout(() => {
@@ -146,6 +168,29 @@ function MentionComposer({
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && body.trim()) onSubmit();
         }}
       />
+      {projectId && mentionableMembers.length > 0 && (
+        <div className="mt-1 flex flex-wrap items-center gap-1">
+          <span className="mr-1 text-[10px] uppercase tracking-widest text-muted-foreground">@</span>
+          {mentionableMembers.map((member) => (
+            <button
+              key={member.userId}
+              type="button"
+              disabled={disabled}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                appendMention(member);
+              }}
+              className="max-w-[150px] truncate border border-border bg-secondary px-1.5 py-0.5 text-[11px] text-foreground hover:bg-muted disabled:opacity-50"
+              title={`${memberLabel(member)} · ${memberRoleLabel(member)}`}
+            >
+              @{memberMentionHandle(member)}
+            </button>
+          ))}
+          {(members as MentionMember[]).length > mentionableMembers.length && (
+            <span className="text-[11px] text-muted-foreground">+{(members as MentionMember[]).length - mentionableMembers.length}</span>
+          )}
+        </div>
+      )}
       {candidates.length > 0 && mention && (
         <div className="absolute bottom-full left-0 z-20 mb-1 min-w-[240px] max-w-[320px] overflow-hidden border border-border bg-white shadow-lg">
           <div className="border-b border-border px-2 py-1 text-[10px] uppercase tracking-widest text-muted-foreground">

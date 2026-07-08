@@ -2,6 +2,7 @@ import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { SYSTEM_ROLES, isSystemAdminRole, isSystemExternalRole } from "../../shared/system-roles";
+import { ENV } from "../_core/env";
 
 const DINGTALK_APPROVAL_BUSINESS_TYPES = [
   "mp_release",
@@ -10,6 +11,18 @@ const DINGTALK_APPROVAL_BUSINESS_TYPES = [
   "issue_validation",
   "gate_override",
 ] as const;
+
+function maskConfigValue(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.length <= 10) return `${trimmed.slice(0, 2)}***${trimmed.slice(-2)}`;
+  return `${trimmed.slice(0, 6)}...${trimmed.slice(-6)}`;
+}
+
+function configured(value: string | number | null | undefined): boolean {
+  if (typeof value === "number") return Number.isFinite(value);
+  return typeof value === "string" && value.trim().length > 0;
+}
 import {
   createUserWithPassword,
   getDb,
@@ -391,6 +404,53 @@ export const adminRouter = router({
         .where(eq(users.id, input.userId));
       return { success: true };
     }),
+
+  dingtalkStatus: adminProcedure.query(async () => {
+    const approvalRows = await listApprovalConfigs();
+    const approvalConfigs = DINGTALK_APPROVAL_BUSINESS_TYPES.map((businessType) => {
+      const row = approvalRows.find((item) => item.businessType === businessType);
+      return {
+        businessType,
+        enabled: row?.enabled ?? false,
+        hasProcessCode: configured(row?.processCode),
+      };
+    });
+    const enabledApprovals = approvalConfigs.filter((item) => item.enabled && item.hasProcessCode).length;
+    const appConfigured = configured(ENV.dingtalkAppKey) && configured(ENV.dingtalkAppSecret);
+    const agentConfigured = configured(ENV.dingtalkAgentId);
+    const interactiveTemplateConfigured = configured(ENV.dingtalkInteractiveCardTemplateId);
+    const interactiveRobotConfigured = configured(ENV.dingtalkInteractiveRobotCode);
+
+    return {
+      app: {
+        configured: appConfigured,
+        corpIdConfigured: configured(ENV.dingtalkCorpId),
+      },
+      workNotice: {
+        ready: appConfigured && agentConfigured,
+        agentConfigured,
+      },
+      approvals: {
+        ready: appConfigured && enabledApprovals > 0,
+        enabled: enabledApprovals,
+        total: DINGTALK_APPROVAL_BUSINESS_TYPES.length,
+        configs: approvalConfigs,
+      },
+      interactiveCard: {
+        ready: ENV.dingtalkInteractiveCardEnabled
+          && appConfigured
+          && interactiveTemplateConfigured
+          && interactiveRobotConfigured,
+        enabled: ENV.dingtalkInteractiveCardEnabled,
+        templateConfigured: interactiveTemplateConfigured,
+        templateId: ENV.dingtalkInteractiveCardTemplateId.trim() || null,
+        robotCodeConfigured: interactiveRobotConfigured,
+        robotCodeMasked: maskConfigValue(ENV.dingtalkInteractiveRobotCode),
+        appBaseUrlConfigured: configured(ENV.appBaseUrl),
+        deliveryApi: "card/instances",
+      },
+    };
+  }),
 
   /** Admin CRUD for DingTalk approval process mappings */
   approvalConfigs: router({

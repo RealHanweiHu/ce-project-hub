@@ -6,7 +6,7 @@ import { useAuth } from '@/_core/hooks/useAuth';
 import { useLocation } from 'wouter';
 import {
   Shield, Users, CheckCircle2, XCircle, ChevronDown,
-  Crown, User, AlertTriangle, RefreshCw, Search, UserPlus, KeyRound, Trash2, FileCheck2,
+  Crown, User, AlertTriangle, RefreshCw, Search, UserPlus, KeyRound, Trash2, FileCheck2, Bot,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -74,6 +74,27 @@ const APPROVAL_CONFIG_TYPES = [
 
 type ApprovalConfigType = typeof APPROVAL_CONFIG_TYPES[number]['key'];
 type ApprovalDraft = { enabled: boolean; processCode: string; defaultDeptId: string };
+
+type DingtalkStatus = {
+  app: { configured: boolean; corpIdConfigured: boolean };
+  workNotice: { ready: boolean; agentConfigured: boolean };
+  approvals: {
+    ready: boolean;
+    enabled: number;
+    total: number;
+    configs: Array<{ businessType: string; enabled: boolean; hasProcessCode: boolean }>;
+  };
+  interactiveCard: {
+    ready: boolean;
+    enabled: boolean;
+    templateConfigured: boolean;
+    templateId: string | null;
+    robotCodeConfigured: boolean;
+    robotCodeMasked: string | null;
+    appBaseUrlConfigured: boolean;
+    deliveryApi: string;
+  };
+};
 
 export default function AdminPanel() {
   const { user, isAuthenticated, loading } = useAuth();
@@ -161,6 +182,9 @@ export default function AdminPanel() {
   const { data: approvalConfigs, refetch: refetchApprovalConfigs } = trpc.admin.approvalConfigs.list.useQuery(undefined, {
     enabled: isAuthenticated && isSystemAdminRole(user?.role),
   });
+  const { data: dingtalkStatus, refetch: refetchDingtalkStatus } = trpc.admin.dingtalkStatus.useQuery(undefined, {
+    enabled: isAuthenticated && isSystemAdminRole(user?.role),
+  });
   const [approvalDrafts, setApprovalDrafts] = useState<Record<ApprovalConfigType, ApprovalDraft>>(() => Object.fromEntries(
     APPROVAL_CONFIG_TYPES.map((item) => [item.key, { enabled: false, processCode: '', defaultDeptId: '' }]),
   ) as Record<ApprovalConfigType, ApprovalDraft>);
@@ -177,7 +201,11 @@ export default function AdminPanel() {
     })) as Record<ApprovalConfigType, ApprovalDraft>);
   }, [approvalConfigs]);
   const saveApprovalConfig = trpc.admin.approvalConfigs.upsert.useMutation({
-    onSuccess: () => { void refetchApprovalConfigs(); toast.success('审批配置已更新'); },
+    onSuccess: () => {
+      void refetchApprovalConfigs();
+      void refetchDingtalkStatus();
+      toast.success('审批配置已更新');
+    },
     onError: (err) => toast.error(err.message),
   });
   const enabledApprovalCount = APPROVAL_CONFIG_TYPES.filter((item) => approvalDrafts[item.key]?.enabled).length;
@@ -196,6 +224,12 @@ export default function AdminPanel() {
 
   const adminCount = (users as UserRow[] | undefined)?.filter((u) => isSystemAdminRole(u.role)).length ?? 0;
   const canCreateCount = (users as UserRow[] | undefined)?.filter((u) => systemRoleCanCreateProject(u)).length ?? 0;
+  const ding = dingtalkStatus as DingtalkStatus | undefined;
+  const visibleApprovalStatuses = APPROVAL_CONFIG_TYPES.map((item) => {
+    const config = ding?.approvals.configs.find((row) => row.businessType === item.key);
+    return { ...item, ready: !!config?.enabled && !!config?.hasProcessCode };
+  });
+  const visibleApprovalReadyCount = visibleApprovalStatuses.filter((item) => item.ready).length;
 
   return (
     <div className="min-h-screen bg-background">
@@ -253,6 +287,76 @@ export default function AdminPanel() {
               <p><strong>系统角色</strong>：只管理系统边界，分为 owner/admin/member/external/viewer；业务分工放在项目内角色。</p>
               <p><strong>项目创建权限（canCreateProject）</strong>：控制用户是否可以新建项目。可单独授权给非 admin 用户（如产品经理、项目负责人）。</p>
               <p><strong>项目内角色</strong>：在各项目的「成员」标签页中单独设置（owner/manager/pm/rd_hw 等），与系统角色相互独立。</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-card border border-border">
+          <div className="px-4 py-3 border-b border-border flex items-center gap-2">
+            <Bot size={14} className="text-primary" />
+            <h2 className="text-base text-foreground flex-1">钉钉通知状态</h2>
+            <Badge variant={ding?.interactiveCard.ready ? 'default' : 'secondary'} className="text-[10px]">
+              {ding?.interactiveCard.ready ? '原生卡片可用' : '待配置'}
+            </Badge>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => refetchDingtalkStatus()}
+              className="h-8 w-8 p-0"
+              title="刷新状态"
+            >
+              <RefreshCw size={13} />
+            </Button>
+          </div>
+          <div className="p-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="border border-border bg-secondary/40 p-3">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="text-sm text-foreground">工作通知</span>
+                <Badge variant={ding?.workNotice.ready ? 'default' : 'secondary'} className="text-[10px]">
+                  {ding?.workNotice.ready ? '可用' : '缺配置'}
+                </Badge>
+              </div>
+              <div className="space-y-1 text-xs text-muted-foreground">
+                <p>应用凭证：{ding?.app.configured ? '已配置' : '缺失'}</p>
+                <p>AgentId：{ding?.workNotice.agentConfigured ? '已配置' : '缺失'}</p>
+                <p>CorpId：{ding?.app.corpIdConfigured ? '已配置' : '缺失'}</p>
+              </div>
+            </div>
+
+            <div className="border border-border bg-secondary/40 p-3">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="text-sm text-foreground">OA 审批</span>
+                <Badge variant={ding?.approvals.ready ? 'default' : 'secondary'} className="text-[10px]">
+                  {ding ? `${visibleApprovalReadyCount}/${APPROVAL_CONFIG_TYPES.length}` : '—'}
+                </Badge>
+              </div>
+              <div className="space-y-1 text-xs text-muted-foreground">
+                {visibleApprovalStatuses.map((item) => {
+                  return (
+                    <p key={item.key} className="flex items-center justify-between gap-3">
+                      <span>{item.label}</span>
+                      <span className={item.ready ? 'text-[color:var(--success)]' : 'text-muted-foreground'}>
+                        {item.ready ? '已启用' : '未启用'}
+                      </span>
+                    </p>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="border border-border bg-secondary/40 p-3">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="text-sm text-foreground">原生互动卡片</span>
+                <Badge variant={ding?.interactiveCard.ready ? 'default' : 'secondary'} className="text-[10px]">
+                  {ding?.interactiveCard.ready ? '可用' : '缺配置'}
+                </Badge>
+              </div>
+              <div className="space-y-1 text-xs text-muted-foreground">
+                <p>开关：{ding?.interactiveCard.enabled ? '已开启' : '已关闭'}</p>
+                <p className="break-all">模板：{ding?.interactiveCard.templateId || '未配置'}</p>
+                <p>机器人：{ding?.interactiveCard.robotCodeConfigured ? ding.interactiveCard.robotCodeMasked : '未配置'}</p>
+                <p>入口：{ding?.interactiveCard.deliveryApi || '—'}</p>
+              </div>
             </div>
           </div>
         </div>
