@@ -13,6 +13,7 @@ describe("built-in automation rule matching", () => {
       "overdue_reminder",
       "due_soon_reminder",
       "task_blocked_notify",
+      "task_assignment",
       "gate_prereq_incomplete",
       "high_severity_issue",
       "status_change_notify",
@@ -188,6 +189,19 @@ describe("built-in automation rule matching", () => {
   it("task_blocked_notify fires only on transition into blocked", () => {
     expect(isAutomationRuleMatch("task_blocked_notify", { action: "task.update_meta", entityType: "task", before: { status: "in_progress" }, after: { status: "blocked" } })).toBe(true);
     expect(isAutomationRuleMatch("task_blocked_notify", { action: "task.update_meta", entityType: "task", before: { status: "blocked" }, after: { status: "blocked" } })).toBe(false);
+  });
+
+  it("task_assignment fires for active unassigned tasks only", () => {
+    const ev = (extra: Record<string, unknown>) => ({
+      action: "scheduled" as const,
+      entityType: "task" as const,
+      entityId: "p1:design:d1:unassigned",
+      after: { status: "todo", unassigned: true, taskId: "d1", ...extra },
+    });
+    expect(isAutomationRuleMatch("task_assignment", ev({}), {})).toBe(true);
+    expect(isAutomationRuleMatch("task_assignment", ev({ unassigned: false }), {})).toBe(false);
+    expect(isAutomationRuleMatch("task_assignment", ev({ status: "done" }), {})).toBe(false);
+    expect(isAutomationRuleMatch("task_assignment", ev({ status: "skipped" }), {})).toBe(false);
   });
 
   it("gate_prereq_incomplete fires for approaching gate when not ready", () => {

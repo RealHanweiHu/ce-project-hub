@@ -28,6 +28,7 @@ import {
   buildDeliverableReviewActionPath,
   buildIssueValidationActionPath,
   buildProjectActionPath,
+  buildTaskAssignmentActionPath,
   buildTaskCompletionActionPath,
 } from "../../shared/action-links";
 
@@ -325,6 +326,13 @@ function actionPathForAutomationEvent(event: AutomationEvent, projectId: string 
   if (!projectId) return ENV.appBaseUrl ? "/" : null;
   if (event.entityType === "task") {
     const parsed = parseTaskTarget(event, projectId);
+    if (event.after?.assignmentAction === true && parsed.phaseId && parsed.taskId) {
+      return buildTaskAssignmentActionPath({
+        projectId,
+        phaseId: parsed.phaseId,
+        taskId: parsed.taskId,
+      });
+    }
     if (parsed.phaseId && parsed.taskId) {
       return buildTaskCompletionActionPath({
         projectId,

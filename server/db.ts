@@ -4122,6 +4122,56 @@ export async function getBlockedTasks(projectIds?: string[]): Promise<TaskWithCo
   return rows as TaskWithContext[];
 }
 
+/**
+ * Return active tasks that cannot find their owner yet.
+ * These are not action items themselves; the scheduler asks the PM/owner to assign them.
+ */
+export async function getUnassignedActiveTasks(projectIds?: string[]): Promise<TaskWithContext[]> {
+  const db = await getDb();
+  if (!db) return [];
+  if (projectIds && projectIds.length === 0) return [];
+  const baseConditions = [
+    eq(projects.archived, false),
+    isNull(projectTasks.assigneeUserId),
+    drizzleSql`${projectTasks.status} NOT IN ('done','skipped','pending_approval')`,
+  ];
+  const whereClause = projectIds
+    ? and(...baseConditions, inArray(projectTasks.projectId, projectIds))
+    : and(...baseConditions);
+  const rows = await db
+    .select({
+      id: projectTasks.id,
+      projectId: projectTasks.projectId,
+      phaseId: projectTasks.phaseId,
+      taskId: projectTasks.taskId,
+      completed: projectTasks.completed,
+      instructions: projectTasks.instructions,
+      visibleRoles: projectTasks.visibleRoles,
+      assigneeUserId: projectTasks.assigneeUserId,
+      dueDate: projectTasks.dueDate,
+      status: projectTasks.status,
+      priority: projectTasks.priority,
+      completedAt: projectTasks.completedAt,
+      statusChangedAt: projectTasks.statusChangedAt,
+      updatedBy: projectTasks.updatedBy,
+      createdAt: projectTasks.createdAt,
+      updatedAt: projectTasks.updatedAt,
+      projectName: projects.name,
+      projectNumber: projects.projectNumber,
+      projectCategory: projects.category,
+    })
+    .from(projectTasks)
+    .innerJoin(projects, eq(projectTasks.projectId, projects.id))
+    .where(whereClause)
+    .orderBy(
+      drizzleSql`CASE ${projectTasks.priority} WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END`,
+      drizzleSql`${projectTasks.dueDate} IS NULL`,
+      projectTasks.dueDate,
+      projectTasks.projectId
+    );
+  return rows as TaskWithContext[];
+}
+
 // ── 个人每日摘要：状态扫描型聚合输入 ────────────────────────────────────────
 
 export const PERSONAL_DAILY_DIGEST_ITEM_KINDS = [

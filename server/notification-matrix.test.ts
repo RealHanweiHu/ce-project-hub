@@ -5,6 +5,7 @@ import { ACTION_ITEM_KINDS } from "../drizzle/schema";
 import {
   getNotificationPolicy,
   NOTIFICATION_MATRIX,
+  NOTIFICATION_EVENT_KEYS,
   type NotificationEventKey,
 } from "../shared/notification-matrix";
 import { AUTOMATION_RULE_KEYS } from "./automation/rules";
@@ -42,6 +43,15 @@ describe("notification matrix", () => {
   it("rejects missing registry entries at the type boundary", () => {
     const key: NotificationEventKey = "high_severity_issue";
     expect(getNotificationPolicy(key).tier).toBe("immediate_action");
+  });
+
+  it("keeps actionable matrix events backed by code paths", () => {
+    const backed = new Set([...AUTOMATION_RULE_KEYS, ...ACTION_ITEM_KINDS]);
+    const explicitGatewayEvents = new Set(["mention", "gate_ready_notify"]);
+    const unbacked = NOTIFICATION_EVENT_KEYS
+      .filter((key) => NOTIFICATION_MATRIX[key].requiresAction)
+      .filter((key) => !backed.has(key) && !explicitGatewayEvents.has(key));
+    expect(unbacked).toEqual([]);
   });
 
   it("keeps personal DingTalk work notifications behind the gateway", () => {

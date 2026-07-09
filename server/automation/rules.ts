@@ -6,6 +6,7 @@ export const AUTOMATION_RULE_KEYS = [
   "high_severity_issue",
   "status_change_notify",
   "task_blocked_notify",
+  "task_assignment",
   "gate_prereq_incomplete",
   "mp_release_broadcast",
   "delay_impact_notify",
@@ -97,6 +98,11 @@ const taskBlockedConfigSchema = z.object({
   pushGroup: z.boolean().default(false),
 });
 
+const taskAssignmentConfigSchema = z.object({
+  cadenceHours: z.number().int().min(1).default(24),
+  pushGroup: z.boolean().default(false),
+});
+
 const gatePrereqConfigSchema = z.object({
   leadDays: z.number().int().min(1).default(3),
   cadenceHours: z.number().int().min(1).default(24),
@@ -149,6 +155,7 @@ export type StatusChangeConfig = z.infer<typeof statusChangeConfigSchema>;
 export type MpReleaseConfig = z.infer<typeof mpReleaseConfigSchema>;
 export type DueSoonConfig = z.infer<typeof dueSoonConfigSchema>;
 export type TaskBlockedConfig = z.infer<typeof taskBlockedConfigSchema>;
+export type TaskAssignmentConfig = z.infer<typeof taskAssignmentConfigSchema>;
 export type GatePrereqConfig = z.infer<typeof gatePrereqConfigSchema>;
 export type DelayImpactConfig = z.infer<typeof delayImpactConfigSchema>;
 export type ExceptionEscalationConfig = z.infer<typeof exceptionEscalationConfigSchema>;
@@ -162,6 +169,7 @@ export type AutomationRuleConfig =
   | MpReleaseConfig
   | DueSoonConfig
   | TaskBlockedConfig
+  | TaskAssignmentConfig
   | GatePrereqConfig
   | DelayImpactConfig
   | ExceptionEscalationConfig
@@ -214,6 +222,17 @@ export const AUTOMATION_RULES = [
     recipientRoles: ["pm", "assignee"],
     matches: (event, _config) => matchesTaskBlocked(event),
     buildMessage: (event, _config, ctx) => buildTaskBlockedMessage(event, ctx),
+  },
+  {
+    key: "task_assignment",
+    label: "未分派任务兜底",
+    triggerType: "scheduled",
+    defaultEnabled: true,
+    defaultConfig: taskAssignmentConfigSchema.parse({}),
+    configSchema: taskAssignmentConfigSchema,
+    recipientRoles: ["pm", "owner"],
+    matches: (event, _config) => matchesTaskAssignment(event),
+    buildMessage: (event, _config, ctx) => buildTaskAssignmentMessage(event, ctx),
   },
   {
     key: "gate_prereq_incomplete",
@@ -380,6 +399,12 @@ function matchesDueSoon(event: AutomationEvent, config: DueSoonConfig): boolean 
 function matchesTaskBlocked(event: AutomationEvent): boolean {
   if (event.action !== "task.update_meta" || event.entityType !== "task") return false;
   return String(event.after?.status ?? "") === "blocked" && String(event.before?.status ?? "") !== "blocked";
+}
+
+function matchesTaskAssignment(event: AutomationEvent): boolean {
+  if (event.action !== "scheduled" || event.entityType !== "task") return false;
+  if (event.after?.unassigned !== true) return false;
+  return !isClosedStatus("task", String(event.after?.status ?? ""));
 }
 
 function matchesGatePrereq(event: AutomationEvent, config: GatePrereqConfig): boolean {
@@ -572,6 +597,19 @@ function buildTaskBlockedMessage(event: AutomationEvent, ctx: AutomationMessageC
   const project = ctx.projectName ? `「${ctx.projectName}」` : "项目";
   const messageTitle = "任务被阻塞";
   const text = `${project}任务「${title}」已被标记为阻塞，请协调处理。`;
+  return { title: messageTitle, text, markdown: `#### ${messageTitle}\n${text}` };
+}
+
+function buildTaskAssignmentMessage(event: AutomationEvent, ctx: AutomationMessageContext): AutomationMessage {
+  const title = ctx.entityTitle || String(event.after?.title ?? event.after?.taskId ?? event.entityId ?? "任务");
+  const project = ctx.projectName ? `「${ctx.projectName}」` : "项目";
+  const roleHint = Array.isArray(event.after?.visibleRoles) && event.after.visibleRoles.length > 0
+    ? `，建议角色：${(event.after.visibleRoles as string[]).join(" / ")}`
+    : "";
+  const dueDate = String(event.after?.dueDate ?? "").trim();
+  const dueHint = dueDate ? `，计划截止 ${dueDate}` : "";
+  const messageTitle = "任务待分派";
+  const text = `${project}任务「${title}」尚未分派负责人${roleHint}${dueHint}，请指定唯一责任人。`;
   return { title: messageTitle, text, markdown: `#### ${messageTitle}\n${text}` };
 }
 

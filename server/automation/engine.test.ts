@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import {
   getDb, upsertUser, getUserByOpenId, createProjectWithSeed,
   updateAutomationRuleRow, listAutomationRuns, getAutomationDueTasks, getAutomationDueIssues,
-  addProjectMember,
+  getUnassignedActiveTasks, addProjectMember,
 } from "../db";
 import { runAutomation } from "./engine";
 
@@ -82,6 +82,7 @@ afterAll(async () => {
   await updateAutomationRuleRow({ ruleKey: "status_change_notify", enabled: false, config: { transitions: { issue: ["resolved", "closed"], task: [], gate: ["approved", "rejected"] }, pushGroup: false } });
   await updateAutomationRuleRow({ ruleKey: "delay_impact_notify", enabled: true, config: { minDeltaDays: 0, notifyGateImpacts: true, notifyTargetBreach: true, onlyNewTargetBreach: false, cadenceHours: 24, pushGroup: false } });
   await updateAutomationRuleRow({ ruleKey: "exception_escalation", enabled: true, config: { assigneeAfterDays: 2, pmAfterDays: 5, managerAfterDays: 10, cadenceHours: 24, pushGroup: false } });
+  await updateAutomationRuleRow({ ruleKey: "task_assignment", enabled: true, config: { cadenceHours: 24, pushGroup: false } });
   await cleanup();
 });
 beforeEach(async () => {
@@ -97,6 +98,7 @@ beforeEach(async () => {
   await updateAutomationRuleRow({ ruleKey: "status_change_notify", enabled: false, config: {} });
   await updateAutomationRuleRow({ ruleKey: "delay_impact_notify", enabled: true, config: { minDeltaDays: 0, notifyGateImpacts: true, notifyTargetBreach: true, onlyNewTargetBreach: false, cadenceHours: 24, pushGroup: false } });
   await updateAutomationRuleRow({ ruleKey: "exception_escalation", enabled: true, config: { assigneeAfterDays: 2, pmAfterDays: 5, managerAfterDays: 10, cadenceHours: 24, pushGroup: false } });
+  await updateAutomationRuleRow({ ruleKey: "task_assignment", enabled: true, config: { cadenceHours: 24, pushGroup: false } });
 });
 
 describe("automation engine integration", () => {
@@ -121,6 +123,29 @@ describe("automation engine integration", () => {
     const issues = await getAutomationDueIssues();
     expect(tasks.some((task) => task.projectId === ARCHIVED_PROJECT_ID)).toBe(false);
     expect(issues.some((issue) => issue.projectId === ARCHIVED_PROJECT_ID)).toBe(false);
+  });
+
+  it("scans active unassigned tasks but excludes archived projects", async () => {
+    const db = await getDb();
+    if (!db) throw new Error("DB not available");
+    const { sql } = await import("drizzle-orm");
+    await db.execute(sql`
+      INSERT INTO projects (id, name, category, "currentPhase", "createdBy", "pmUserId", risk, progress, archived, "projectNumber")
+      VALUES (${ARCHIVED_PROJECT_ID}, '已删除无主任务测试', 'npd', 'concept', ${pmId}, ${pmId}, 'low', 0, true, 'ARCH-UNASSIGNED')
+      ON CONFLICT (id) DO UPDATE SET archived = true
+    `);
+    await db.execute(sql`
+      INSERT INTO project_tasks ("projectId", "phaseId", "taskId", status, "assigneeUserId")
+      VALUES (${PROJECT_ID}, 'concept', 'unassigned-active-task', 'todo', NULL)
+    `);
+    await db.execute(sql`
+      INSERT INTO project_tasks ("projectId", "phaseId", "taskId", status, "assigneeUserId")
+      VALUES (${ARCHIVED_PROJECT_ID}, 'concept', 'unassigned-archived-task', 'todo', NULL)
+    `);
+
+    const tasks = await getUnassignedActiveTasks();
+    expect(tasks.some((task) => task.projectId === PROJECT_ID && task.taskId === "unassigned-active-task")).toBe(true);
+    expect(tasks.some((task) => task.projectId === ARCHIVED_PROJECT_ID)).toBe(false);
   });
 
   it("dispatches high severity issue to pm + assignee, pushes group, logs a fired run", async () => {
@@ -196,6 +221,38 @@ describe("automation engine integration", () => {
     const runs = await listAutomationRuns({ projectId: PROJECT_ID });
     expect(runs.some((r) => r.ruleKey === "overdue_reminder" && r.status === "fired")).toBe(true);
     expect(runs.some((r) => r.ruleKey === "overdue_reminder" && r.status === "skipped")).toBe(true);
+  });
+
+  it("asks the PM to assign active unowned tasks and dedups within cadence", async () => {
+    const event = {
+      action: "scheduled" as const,
+      projectId: PROJECT_ID,
+      entityType: "task" as const,
+      entityId: `${PROJECT_ID}:concept:c2:unassigned`,
+      now: "2026-06-14",
+      after: {
+        status: "todo",
+        unassigned: true,
+        assignmentAction: true,
+        phaseId: "concept",
+        taskId: "c2",
+        title: "需求澄清",
+        visibleRoles: ["pm"],
+        dueDate: "2026-06-20",
+      },
+    };
+
+    const first = makeDeps();
+    await runAutomation(event, first.deps);
+    expect(first.notes).toEqual([{ userId: pmId, title: "任务待分派" }]);
+
+    const second = makeDeps();
+    await runAutomation(event, second.deps);
+    expect(second.notes.length).toBe(0);
+
+    const runs = await listAutomationRuns({ projectId: PROJECT_ID });
+    expect(runs.some((r) => r.ruleKey === "task_assignment" && r.status === "fired")).toBe(true);
+    expect(runs.some((r) => r.ruleKey === "task_assignment" && r.status === "skipped")).toBe(true);
   });
 
   it("dedups delay impact event notifications within configured cadence", async () => {

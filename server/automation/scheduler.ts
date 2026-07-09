@@ -11,6 +11,7 @@ import {
   getApproachingGates,
   getBlockedTasks,
   getGateReadiness,
+  getUnassignedActiveTasks,
   hasAutomationRunForEntity,
   tryStartAutomationHeartbeat,
 } from "../db";
@@ -27,12 +28,13 @@ let timer: NodeJS.Timeout | null = null;
 
 export async function runScheduledAutomationScan(now = new Date()): Promise<void> {
   await ensureAutomationRuleDefaults();
-  const [tasks, issues, blockedTasks, criticalIssues, pendingReviews] = await Promise.all([
+  const [tasks, issues, blockedTasks, criticalIssues, pendingReviews, unassignedTasks] = await Promise.all([
     getAutomationDueTasks(),
     getAutomationDueIssues(),
     getBlockedTasks(),
     getAutomationCriticalIssues(),
     getAutomationPendingDeliverableReviews(),
+    getUnassignedActiveTasks(),
   ]);
   const approachingGates = await getApproachingGates();
   const today = toShanghaiISODate(now);
@@ -81,6 +83,22 @@ export async function runScheduledAutomationScan(now = new Date()): Promise<void
         title: taskDisplayTitle(task),
         exceptionType: "blocked_task",
         exceptionAgeDays: ageDays(today, toShanghaiISODate(task.statusChangedAt ?? task.updatedAt)),
+      },
+    });
+  }
+
+  for (const task of unassignedTasks) {
+    await runAutomation({
+      action: "scheduled",
+      entityType: "task",
+      projectId: task.projectId,
+      entityId: `${task.projectId}:${task.phaseId}:${task.taskId}:unassigned`,
+      now,
+      after: {
+        ...task,
+        title: taskDisplayTitle(task),
+        unassigned: true,
+        assignmentAction: true,
       },
     });
   }
