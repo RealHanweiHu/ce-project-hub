@@ -42,6 +42,7 @@ describe("dingtalk interactive cards", () => {
     expect(buildPendingActionCardParams({
       title: "任务审批",
       body: "请处理",
+      actionUrl: "https://hub.test/actions/task-approval?projectId=p1",
       buttons: [{ title: "通过", actionUrl: "https://hub.test/api/action-card/execute?token=signed-token" }],
     })).toMatchObject({
       title: "任务审批",
@@ -52,6 +53,8 @@ describe("dingtalk interactive cards", () => {
       primaryActionUrl: "https://hub.test/api/action-card/execute?token=signed-token",
       primaryActionToken: "signed-token",
       secondaryActionText: "",
+      detailActionText: "打开详情",
+      detailActionUrl: "https://hub.test/actions/task-approval?projectId=p1",
     });
 
     expect(buildHandledActionCardParams({
@@ -64,6 +67,8 @@ describe("dingtalk interactive cards", () => {
       statusText: "已处理",
       handledText: "审批已闭环",
       primaryActionText: "打开详情",
+      detailActionText: "打开详情",
+      detailActionUrl: "https://hub.test/detail",
     });
   });
 

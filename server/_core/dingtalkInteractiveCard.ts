@@ -84,6 +84,8 @@ export function buildPendingActionCardParams(input: {
     secondaryActionText: secondary?.title ?? "",
     secondaryActionUrl: secondary?.actionUrl ?? "",
     secondaryActionToken: tokenFromActionUrl(secondary?.actionUrl),
+    detailActionText: input.actionUrl ? "打开详情" : "",
+    detailActionUrl: input.actionUrl ?? "",
   });
 }
 
@@ -104,6 +106,8 @@ export function buildHandledActionCardParams(input: {
     secondaryActionText: "",
     secondaryActionUrl: "",
     secondaryActionToken: "",
+    detailActionText: input.actionUrl ? "打开详情" : "",
+    detailActionUrl: input.actionUrl ?? "",
   });
 }
 

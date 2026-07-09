@@ -28,6 +28,8 @@ Create all variables as string variables.
 | `secondaryActionText` | `驳回` | Secondary button text |
 | `secondaryActionUrl` | `https://example.com/api/action-card/execute?token=secondary` | Secondary button link |
 | `secondaryActionToken` | `secondary` | Reserved for callback-mode buttons |
+| `detailActionText` | `打开详情` | Detail link text |
+| `detailActionUrl` | `https://example.com/actions/deliverable-review?projectId=EVT-001` | Direct CE Hub page link |
 
 ## Layout
 
@@ -59,9 +61,11 @@ Create all variables as string variables.
      - Param value: `${secondaryActionToken}`
 
 6. Optional detail link
-   - Text/button: `打开详情`
-   - Link: `${primaryActionUrl}`
-   - Show when action buttons are hidden or after handled.
+   - Text/button: `${detailActionText}`
+   - Link/open URL: `${detailActionUrl}`
+   - Show while pending and after handled if the builder supports it.
+   - Do not bind this link to `${primaryActionUrl}` in Phase B. `primaryActionUrl`
+     is the one-click execution endpoint used by Phase A link-mode buttons.
 
 ## Display Rules
 
@@ -73,6 +77,7 @@ Use these rules if the builder supports conditional visibility.
 | Handled message | `status == handled` |
 | Primary button | `primaryActionText` is not empty |
 | Secondary button | `secondaryActionText` is not empty |
+| Detail link | `detailActionUrl` is not empty |
 
 If the builder does not support checking empty strings, keep both buttons visible.
 CE Hub sends empty button text only for action types that do not need a second
@@ -101,6 +106,14 @@ Use callback request / 回传请求 for action buttons.
 
 CE Hub verifies DingTalk's callback signature, executes the signed token, writes
 activity logs, and then updates all related native cards to handled.
+
+If the user needs to open the corresponding CE Hub page, add a separate
+`打开详情` link/button and configure it as link jump / 打开链接 with:
+
+- Text: `${detailActionText}`
+- Link: `${detailActionUrl}`
+
+Callback buttons do not navigate by design; they close the action in-place.
 
 ## Recommended Styling
 
