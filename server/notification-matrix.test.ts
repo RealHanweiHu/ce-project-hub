@@ -56,4 +56,33 @@ describe("notification matrix", () => {
       .map((file) => path.relative(process.cwd(), file));
     expect(offenders).toEqual([]);
   });
+
+  it("keeps direct work-message APIs behind the gateway", () => {
+    const root = path.join(process.cwd(), "server");
+    const allowed = new Set([
+      path.join(root, "_core", "dingtalkMessage.ts"),
+      path.join(root, "notification-gateway.ts"),
+    ]);
+    const offenders = serverSourceFiles(root)
+      .filter((file) => !allowed.has(file))
+      .filter((file) => {
+        const source = readFileSync(file, "utf8");
+        return source.includes("sendWorkNotification(") || source.includes("notifyUsersViaDingtalk(");
+      })
+      .map((file) => path.relative(process.cwd(), file));
+    expect(offenders).toEqual([]);
+  });
+
+  it("keeps station notifications behind notifyPersonal", () => {
+    const root = path.join(process.cwd(), "server");
+    const allowed = new Set([
+      path.join(root, "db.ts"),
+      path.join(root, "notification-gateway.ts"),
+    ]);
+    const offenders = serverSourceFiles(root)
+      .filter((file) => !allowed.has(file))
+      .filter((file) => readFileSync(file, "utf8").includes("createNotification("))
+      .map((file) => path.relative(process.cwd(), file));
+    expect(offenders).toEqual([]);
+  });
 });

@@ -95,6 +95,10 @@ export async function maybeSubmitActionExternalApproval(input: {
   if (!originator) return { submitted: false, error: "外部审批发起人不存在" };
   const dingtalkOriginatorUserId = await resolveDingtalkCorpUserId(originator, setUserDingtalkCorpId);
   if (!dingtalkOriginatorUserId) return { submitted: false, error: "外部审批发起人未匹配钉钉 userid" };
+  const approver = await getUserById(input.recipientUserId);
+  if (!approver) return { submitted: false, error: "外部审批处理人不存在" };
+  const dingtalkApproverUserId = await resolveDingtalkCorpUserId(approver, setUserDingtalkCorpId);
+  if (!dingtalkApproverUserId) return { submitted: false, error: "外部审批处理人未匹配钉钉 userid" };
 
   const snapshot = {
     "业务类型": businessLabel(input.kind),
@@ -133,6 +137,7 @@ export async function maybeSubmitActionExternalApproval(input: {
         actionItemId: input.actionItemId ?? null,
         metadata: input.metadata ?? {},
       },
+      dingtalkApproverUserIds: [dingtalkApproverUserId],
       formComponentValues,
     },
   });
@@ -142,6 +147,7 @@ export async function maybeSubmitActionExternalApproval(input: {
     originatorUserId: dingtalkOriginatorUserId,
     deptId: config.defaultDeptId,
     formComponentValues,
+    approverUserIds: [dingtalkApproverUserId],
   });
   if (!created.ok) {
     const failed = await updateExternalApprovalInstance(instance.id, {

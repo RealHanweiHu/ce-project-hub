@@ -60,6 +60,60 @@ const HIGH_RISK_MUTATIONS: CoverageCase[] = [
     kind: "function",
     markers: ["createActivityLog", 'action: "deliverable_review.reset"'],
   },
+  {
+    file: "server/routers/issues.ts",
+    name: "create",
+    kind: "routerProcedure",
+    markers: ["createActivityLog", 'action: "issue.create"', "emitAutomationEvent"],
+  },
+  {
+    file: "server/routers/issues.ts",
+    name: "update",
+    kind: "routerProcedure",
+    markers: ["createActivityLog", "issue.close", "issue.update", "emitAutomationEvent", "notifyIssueValidation"],
+  },
+  {
+    file: "server/routers/issues.ts",
+    name: "delete",
+    kind: "routerProcedure",
+    markers: ["closeIssueValidationActionItem", "createActivityLog", 'action: "issue.delete"'],
+  },
+  {
+    file: "server/db.ts",
+    name: "setTaskCompletion",
+    kind: "function",
+    markers: ["createActivityLog", "task.submit_approval", "task.complete", "task.uncomplete"],
+  },
+  {
+    file: "server/db.ts",
+    name: "decideTaskApproval",
+    kind: "function",
+    markers: ["createActivityLog", "task.approve", "task.reject"],
+  },
+  {
+    file: "server/routers/tasks.ts",
+    name: "setMeta",
+    kind: "routerProcedure",
+    markers: ["createActivityLog", 'action: "task.update_meta"', "emitAutomationEvent"],
+  },
+  {
+    file: "server/services/schedule-service.ts",
+    name: "rescheduleProjectFromTask",
+    kind: "function",
+    markers: ["createActivityLog", 'action: "task.rescheduled"', "emitAutomationEvent"],
+  },
+  {
+    file: "server/services/action-approval-submit.ts",
+    name: "maybeSubmitActionExternalApproval",
+    kind: "function",
+    markers: ["createActivityLog", 'action: "approval.submit"', "dingtalkApproverUserIds"],
+  },
+  {
+    file: "server/services/action-approval-apply.ts",
+    name: "applyIssueValidation",
+    kind: "function",
+    markers: ["createActivityLog", "dingtalk_approval", "emitAutomationEvent"],
+  },
 ];
 
 describe("activity log coverage guard", () => {
@@ -85,8 +139,31 @@ function extractRouterProcedure(source: string, name: string): string {
 function extractFunction(source: string, name: string): string {
   const start = source.indexOf(`function ${name}`);
   if (start < 0) throw new Error(`Function not found: ${name}`);
-  const signatureEnd = source.indexOf("): Promise", start);
-  const braceStart = source.indexOf("{", signatureEnd > 0 ? signatureEnd : start);
+  const paramsStart = source.indexOf("(", start);
+  if (paramsStart < 0) throw new Error(`Function params not found: ${name}`);
+  let parenDepth = 0;
+  let paramsEnd = -1;
+  for (let i = paramsStart; i < source.length; i += 1) {
+    const char = source[i];
+    if (char === "(") parenDepth += 1;
+    if (char === ")") parenDepth -= 1;
+    if (parenDepth === 0) {
+      paramsEnd = i;
+      break;
+    }
+  }
+  if (paramsEnd < 0) throw new Error(`Function params not closed: ${name}`);
+  let angleDepth = 0;
+  let braceStart = -1;
+  for (let i = paramsEnd + 1; i < source.length; i += 1) {
+    const char = source[i];
+    if (char === "<") angleDepth += 1;
+    if (char === ">") angleDepth = Math.max(0, angleDepth - 1);
+    if (char === "{" && angleDepth === 0 && source[i + 1] === "\n") {
+      braceStart = i;
+      break;
+    }
+  }
   if (braceStart < 0) throw new Error(`Function body not found: ${name}`);
   let depth = 0;
   for (let i = braceStart; i < source.length; i += 1) {
