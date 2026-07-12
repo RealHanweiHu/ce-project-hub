@@ -77,10 +77,10 @@ export const NPD_V3_CORE_PHASES: SOPPhase[] = [
     gate: "Kickoff评审",
     gateTaskId: "np3",
     color: "#a16207",
-    deliverables: ["产品需求文档 PRD", "产品规格书 PSD", "BOM v0.1"],
+    deliverables: ["产品需求文档 PRD", "BOM v0.1"],
     gateStandard: gateStandard({
       exitCriteria: ["需求与规格评审通过", "初版 BOM 与关键供应商明确"],
-      requiredDeliverables: ["产品需求文档 PRD", "产品规格书 PSD", "BOM v0.1"],
+      requiredDeliverables: ["产品需求文档 PRD", "BOM v0.1"],
       responsibleRoles: ["产品经理", "R&D", "采购"],
     }),
     tasks: [
@@ -212,10 +212,10 @@ export const NPD_V3_CORE_PHASES: SOPPhase[] = [
     gate: "EVT评审",
     gateTaskId: "ne3",
     color: "#7c3aed",
-    deliverables: ["EVT 样机", "功能测试报告 (FT)"],
+    deliverables: ["EVT 样机", "功能/性能测试报告"],
     gateStandard: gateStandard({
       exitCriteria: ["主要功能 Pass Rate ≥ 95%", "Issue List 无未关闭 P0/P1（系统自动检查）", "性能初测达标"],
-      requiredDeliverables: ["功能测试报告 (FT)"],
+      requiredDeliverables: ["功能/性能测试报告"],
       responsibleRoles: ["EE", "QA"],
     }),
     tasks: [

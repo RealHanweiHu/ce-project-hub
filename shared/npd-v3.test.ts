@@ -13,6 +13,8 @@ import {
   SOP_TEMPLATE_VERSION_LEGACY,
   getPhasesForCategory,
 } from "./sop-templates";
+import { getDeliverableTemplatePath } from "./deliverable-templates";
+import { TASK_DELIVERABLES } from "./task-deliverables";
 
 const coreTasks = NPD_V3_CORE_PHASES.flatMap((phase) => phase.tasks);
 const countTasks = (phases: { tasks: unknown[] }[]) =>
@@ -182,5 +184,61 @@ describe("NPD v3 附加包与档位", () => {
         packs: ["nope", "battery", "battery"],
       } as unknown as NpdTemplateConfig)
     ).toEqual({ tier: "standard", packs: ["battery"] });
+  });
+});
+
+describe("NPD v3 交付物词表", () => {
+  it("每个核心、轻量和附加包非 Gate 任务都有交付物", () => {
+    const phases = [...NPD_V3_CORE_PHASES, ...NPD_V3_LITE_PHASES];
+    const gateIds = new Set(phases.map((phase) => phase.gateTaskId));
+    const tasks = [
+      ...phases.flatMap((phase) => phase.tasks),
+      ...NPD_ADDON_PACKS.flatMap((pack) => pack.tasks.map((entry) => entry.task)),
+    ];
+    for (const task of tasks) {
+      if (gateIds.has(task.id)) continue;
+      expect(TASK_DELIVERABLES[task.id]?.length, `missing deliverables for ${task.id}`)
+        .toBeGreaterThan(0);
+    }
+  });
+
+  it("合并任务只要求合并后的单一证据，不复活被瘦身的旧交付物", () => {
+    expect(TASK_DELIVERABLES.nc1).toEqual(["立项申请书"]);
+    expect(TASK_DELIVERABLES.np1).toEqual(["产品需求文档 PRD"]);
+    expect(TASK_DELIVERABLES.np2).toEqual(["BOM v0.1"]);
+    expect(TASK_DELIVERABLES.ne2).toEqual(["功能/性能测试报告"]);
+    expect(TASK_DELIVERABLES.nlc1).toEqual(["立项申请书"]);
+    expect(TASK_DELIVERABLES.nlp1).toEqual(["产品需求文档 PRD", "BOM v0.1"]);
+    expect(TASK_DELIVERABLES.nld3).toEqual(["EE 原理图 & PCB Layout"]);
+    expect(TASK_DELIVERABLES.nle1).toEqual(["Build Record", "功能/性能测试报告"]);
+    expect(TASK_DELIVERABLES.nlpv1).toEqual([
+      "SOP/WI作业指导书",
+      "包装与物流验证报告",
+      "良率报告",
+    ]);
+    const planning = NPD_V3_CORE_PHASES.find((phase) => phase.id === "planning")!;
+    expect(planning.deliverables).toEqual(["产品需求文档 PRD", "BOM v0.1"]);
+    expect(planning.gateStandard.requiredDeliverables).toEqual(["产品需求文档 PRD", "BOM v0.1"]);
+    const evt = NPD_V3_CORE_PHASES.find((phase) => phase.id === "evt")!;
+    expect(evt.deliverables).toEqual(["EVT 样机", "功能/性能测试报告"]);
+    expect(evt.gateStandard.requiredDeliverables).toEqual(["功能/性能测试报告"]);
+  });
+
+  it("v3 阶段、Gate 和任务引用的每个交付物都有现成模板", () => {
+    for (const config of [
+      { tier: "standard", packs: ["battery", "cert", "software", "mold"] },
+      { tier: "lite", packs: ["battery", "cert", "software", "mold"] },
+    ] as const) {
+      for (const phase of getNpdV3EffectivePhases(config)) {
+        const names = new Set([
+          ...phase.deliverables,
+          ...phase.gateStandard.requiredDeliverables,
+          ...phase.tasks.flatMap((task) => TASK_DELIVERABLES[task.id] ?? []),
+        ]);
+        for (const name of names) {
+          expect(getDeliverableTemplatePath(name), `${config.tier}/${phase.id}: ${name}`).not.toBeNull();
+        }
+      }
+    }
   });
 });
