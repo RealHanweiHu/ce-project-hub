@@ -1,9 +1,9 @@
 import { and, eq } from "drizzle-orm";
 import { projectTasks } from "../../drizzle/schema";
 import { computeDelayImpact, type DelayImpact } from "../../shared/delay-impact";
-import { scheduleForCategory, buildSchedTasks } from "../../shared/schedule-graph";
-import { getPhasesForCategory } from "../../shared/sop-templates";
-import { rescheduleFrom, type CalendarExceptions, type Schedule } from "../../shared/scheduling";
+import { buildSchedTasks } from "../../shared/schedule-graph";
+import { getEffectivePhasesForProjectLike } from "../../shared/npd-v3";
+import { generateSchedule, rescheduleFrom, type CalendarExceptions, type Schedule } from "../../shared/scheduling";
 import { emitAutomationEvent } from "../automation/events";
 import { createActivityLog, getCalendarExceptions, getDb, getProjectById, refreshProjectTaskStatuses } from "../db";
 import { taskDisplayTitle } from "../task-title";
@@ -15,7 +15,11 @@ export async function applyProjectSchedule(projectId: string): Promise<number> {
   const project = await getProjectById(projectId);
   if (!project?.startDate) return 0;
   const cal = await getCalendarExceptions();
-  const schedule = scheduleForCategory(project.category, project.startDate, cal);
+  const schedule = generateSchedule(
+    buildSchedTasks(getEffectivePhasesForProjectLike(project)),
+    project.startDate,
+    cal,
+  );
   let n = 0;
   for (const [taskId, d] of Object.entries(schedule)) {
     await db.update(projectTasks)
@@ -65,7 +69,7 @@ async function loadEffectiveScheduleContext(projectId: string): Promise<Effectiv
     }
   }
 
-  const phases = getPhasesForCategory(project.category);
+  const phases = getEffectivePhasesForProjectLike(project);
   const schedTasks = buildSchedTasks(phases).filter((t) => effectiveIds.has(t.id));
   const gateTaskIds = new Set(phases.map((p) => p.gateTaskId).filter((id) => effectiveIds.has(id)));
   const gateNames: Record<string, string> = {};

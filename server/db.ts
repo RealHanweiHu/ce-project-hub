@@ -51,7 +51,10 @@ import {
 import { buildRevisionChangelogSnapshot, REVISION_CHANGE_STATUSES, type RevisionChangeEntry } from "../shared/changelog-snapshot";
 import { normalizeFileType, normalizeFileVersion } from "../shared/file-types";
 import { ENV } from './_core/env';
-import { getEffectivePhasesForProjectLike } from "../shared/npd-v3";
+import {
+  getEffectivePhasesForProjectLike,
+  type ProjectTemplateLike,
+} from "../shared/npd-v3";
 import { getPhasesForCategory, getReleaseGatePhase } from "../shared/sop-templates";
 import { computeDownstreamImpact, type DownstreamImpactRow, type VariantStatus } from "../shared/oem-variant";
 import { computeGateReadiness, type GateReadiness } from "../shared/gate-readiness";
@@ -901,7 +904,7 @@ function maxRiskLevel(a: RiskLevel, b: RiskLevel): RiskLevel {
 }
 
 function forecastProjectEnd(
-  project: Pick<ProjectRow, "category" | "startDate">,
+  project: Pick<ProjectRow, "category" | "startDate" | "sopTemplateVersion" | "customFields">,
   rows: Array<{
     taskId: string;
     status: string;
@@ -918,7 +921,7 @@ function forecastProjectEnd(
   const hasScheduleSignal = !!project.startDate || effectiveRows.some((row) => row.startDate || row.dueDate || row.completedAt);
   if (!hasScheduleSignal) return null;
   const rowIds = new Set(effectiveRows.map((row) => row.taskId));
-  const schedTasks = buildSchedTasks(getPhasesForCategory(project.category)).filter((task) => rowIds.has(task.id));
+  const schedTasks = buildSchedTasks(getEffectivePhasesForProjectLike(project)).filter((task) => rowIds.has(task.id));
   if (schedTasks.length === 0) return maxISODate(effectiveRows.map((row) => row.dueDate));
   const states: ForecastTaskState[] = effectiveRows.map((row) => ({
     id: row.taskId,
@@ -1801,7 +1804,7 @@ export type PhaseTestReadiness = {
 };
 
 function isFormalTestPhase(phaseId: string): boolean {
-  return phaseId === "evt" || phaseId === "dvt" || phaseId === "pvt";
+  return phaseId === "evt" || phaseId === "dvt" || phaseId === "verification" || phaseId === "pvt";
 }
 
 export async function getProjectTestPlans(projectId: string, phaseId?: string): Promise<ProjectTestPlan[]> {
@@ -2908,7 +2911,7 @@ export async function confirmGateReview(input: {
       }
       // 3) 仅当复审的是「当前阶段」且存在下一阶段时才推进
       if (project.currentPhase === input.phaseId) {
-        const phases = getPhasesForCategory(project.category);
+        const phases = getEffectivePhasesForProjectLike(project);
         const idx = phases.findIndex((p) => p.id === input.phaseId);
         const next = idx >= 0 && idx < phases.length - 1 ? phases[idx + 1] : null;
         if (next) {
@@ -3235,9 +3238,13 @@ function toTaskDbPatch(patch: TaskMetaPatch, current?: Pick<ProjectTask, "status
   return dbPatch;
 }
 
-function getTaskDependencyMap(category: string | undefined): Map<string, string[]> {
+function getTaskDependencyMap(
+  category: string | undefined,
+  projectLike?: ProjectTemplateLike,
+): Map<string, string[]> {
+  const phases = projectLike ? getEffectivePhasesForProjectLike(projectLike) : getPhasesForCategory(category);
   return new Map(
-    buildSchedTasks(getPhasesForCategory(category)).map((task) => [task.id, task.dependsOn ?? []])
+    buildSchedTasks(phases).map((task) => [task.id, task.dependsOn ?? []])
   );
 }
 
@@ -3259,7 +3266,7 @@ function automaticTaskStatus(
     if (!dependency) return true;
     return dependency.status !== "done" && dependency.status !== "skipped" && !dependency.completed;
   });
-  if (unresolvedDependency) return "blocked";
+  if (unresolvedDependency) return "todo";
 
   if (task.startDate && task.startDate <= todayISO) return "in_progress";
   if (task.assigneeUserId) return "in_progress";
@@ -3270,9 +3277,10 @@ function automaticTaskStatus(
 export function applyAutomaticTaskStatuses(
   rows: ProjectTask[],
   category: string | undefined,
-  todayISO = todayInShanghaiISO()
+  todayISO = todayInShanghaiISO(),
+  projectLike?: ProjectTemplateLike,
 ): ProjectTask[] {
-  const dependencies = getTaskDependencyMap(category);
+  const dependencies = getTaskDependencyMap(category, projectLike);
   const rowsByTaskId = new Map(rows.map((row) => [row.taskId, row]));
   const now = new Date();
 
@@ -3303,7 +3311,7 @@ export async function refreshProjectTaskStatuses(
   const rows: ProjectTask[] = await db.select().from(projectTasks).where(eq(projectTasks.projectId, projectId));
   if (rows.length === 0) return 0;
 
-  const nextRows = applyAutomaticTaskStatuses(rows, project.category, todayISO);
+  const nextRows = applyAutomaticTaskStatuses(rows, project.category, todayISO, project);
   const rowsById = new Map(rows.map((row) => [row.id, row]));
   let changed = 0;
 
@@ -3942,7 +3950,8 @@ export async function getProjectEffectiveProcess(projectId: string): Promise<Eff
       nodePhaseId: override.nodePhaseId,
       deliverableName: override.deliverableName,
       action: override.action,
-    }))
+    })),
+    getEffectivePhasesForProjectLike(project),
   );
 }
 
@@ -4871,7 +4880,12 @@ export async function getApproachingGates(): Promise<Array<{
 }>> {
   const db = await getDb();
   if (!db) return [];
-  const projs = await db.select({ id: projects.id, category: projects.category }).from(projects).where(eq(projects.archived, false));
+  const projs = await db.select({
+    id: projects.id,
+    category: projects.category,
+    sopTemplateVersion: projects.sopTemplateVersion,
+    customFields: projects.customFields,
+  }).from(projects).where(eq(projects.archived, false));
   if (projs.length === 0) return [];
   const projectIds = projs.map((p) => p.id);
   const allTasks = await db.select({ projectId: projectTasks.projectId, taskId: projectTasks.taskId, status: projectTasks.status, dueDate: projectTasks.dueDate, completed: projectTasks.completed })
@@ -4884,7 +4898,7 @@ export async function getApproachingGates(): Promise<Array<{
   }
   const out: Array<{ projectId: string; phaseId: string; gateTaskId: string; gateName: string; dueDate: string; status: string }> = [];
   for (const p of projs) {
-    const phases = getPhasesForCategory(p.category);
+    const phases = getEffectivePhasesForProjectLike(p);
     const rows = tasksByProject.get(p.id) ?? [];
     const byTask = new Map(rows.map((r) => [r.taskId, r]));
     for (const phase of phases) {
@@ -4907,7 +4921,7 @@ export async function getGateReadiness(projectId: string, phaseId: string): Prom
     getProjectEffectiveProcess(projectId),
   ]);
   if (!project) return null;
-  const phase = getPhasesForCategory(project.category).find((p) => p.id === phaseId);
+  const phase = getEffectivePhasesForProjectLike(project).find((p) => p.id === phaseId);
   if (!phase) return null;
 
   // 裁剪集成：被裁阶段的 Gate 视为 N/A（不阻塞）；非裁剪阶段的应交付物用"有效提交集"（含归集+override）。
@@ -6406,7 +6420,12 @@ export async function getAutomationGatePrereqs(): Promise<Array<{
 }>> {
   const db = await getDb();
   if (!db) return [];
-  const projs = await db.select({ id: projects.id, category: projects.category }).from(projects).where(eq(projects.archived, false));
+  const projs = await db.select({
+    id: projects.id,
+    category: projects.category,
+    sopTemplateVersion: projects.sopTemplateVersion,
+    customFields: projects.customFields,
+  }).from(projects).where(eq(projects.archived, false));
   if (projs.length === 0) return [];
   const projectIds = projs.map((p) => p.id);
   const allTasks = await db.select({ projectId: projectTasks.projectId, taskId: projectTasks.taskId, status: projectTasks.status, dueDate: projectTasks.dueDate, completed: projectTasks.completed })
@@ -6419,7 +6438,7 @@ export async function getAutomationGatePrereqs(): Promise<Array<{
   }
   const out: Array<{ projectId: string; taskId: string; phaseId: string; dueDate: string | null; status: string; incompletePrereqCount: number; title: string }> = [];
   for (const p of projs) {
-    const phases = getPhasesForCategory(p.category);
+    const phases = getEffectivePhasesForProjectLike(p);
     const rows = tasksByProject.get(p.id) ?? [];
     const byTask = new Map(rows.map((r) => [r.taskId, r]));
     const isDone = (id: string) => { const r = byTask.get(id); return r ? (r.status === "done" || r.status === "skipped" || !!r.completed) : false; };

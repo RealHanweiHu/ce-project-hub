@@ -66,15 +66,18 @@ export const SCHEDULE_GRAPH: G = {
   om1: [6, "op5"], om2: [8, "om1"], om3: [8, "om1"], om4: [3, "om2", "om3"],
 };
 
-/** 把某 category 的阶段（按顺序）转成排期任务；工期/依赖取自 SCHEDULE_GRAPH，缺省 1 天、无依赖。 */
-export function buildSchedTasks(phases: Array<{ bufferDays?: number; tasks: Array<{ id: string }> }>): SchedTask[] {
+/** 把阶段按顺序转成排期任务；模板内联工期/依赖优先，旧模板回退 SCHEDULE_GRAPH。 */
+export function buildSchedTasks(phases: Array<{
+  bufferDays?: number;
+  tasks: Array<{ id: string; durationDays?: number; dependsOn?: string[] }>;
+}>): SchedTask[] {
   const out: SchedTask[] = [];
   for (const phase of phases) {
     const phaseIds = new Set(phase.tasks.map((t) => t.id));
     for (const t of phase.tasks) {
       const g = SCHEDULE_GRAPH[t.id];
-      const durationDays = g ? g[0] : 1;
-      const dependsOn = g ? (g.slice(1) as string[]) : [];
+      const durationDays = t.durationDays ?? g?.[0] ?? 1;
+      const dependsOn = t.dependsOn ?? (g ? (g.slice(1) as string[]) : []);
       const isEntry = dependsOn.length === 0 || dependsOn.every((d) => !phaseIds.has(d));
       out.push({ id: t.id, durationDays, dependsOn, lagDays: isEntry ? phase.bufferDays ?? 0 : 0 });
     }
