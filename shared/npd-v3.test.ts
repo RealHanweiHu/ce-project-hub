@@ -3,6 +3,7 @@ import {
   NPD_ADDON_PACKS,
   NPD_V3_CORE_PHASES,
   NPD_V3_LITE_PHASES,
+  getEffectivePhasesForProjectLike,
   getNpdV3EffectivePhases,
   normalizeNpdTemplateConfig,
   type NpdTemplateConfig,
@@ -240,5 +241,32 @@ describe("NPD v3 交付物词表", () => {
         }
       }
     }
+  });
+});
+
+describe("v3 版本路由与项目级访问器", () => {
+  it("getPhasesForCategory 只把 NPD 2026-07-v3 路由到 25 项核心模板", () => {
+    expect(countTasks(getPhasesForCategory("npd", "2026-07-v3"))).toBe(25);
+    expect(getPhasesForCategory("eco", "2026-07-v3")).toEqual(getPhasesForCategory("eco"));
+  });
+
+  it("NPD v1/v2 存量模板保持原任务数", () => {
+    expect(countTasks(getPhasesForCategory("npd", "2026-07-v1"))).toBe(55);
+    expect(countTasks(getPhasesForCategory("npd", "2026-07-v2"))).toBe(53);
+  });
+
+  it("项目级访问器仅对 v3 NPD 应用档位和附加包", () => {
+    const v3 = getEffectivePhasesForProjectLike({
+      category: "npd",
+      sopTemplateVersion: "2026-07-v3",
+      customFields: { npdTemplate: { tier: "lite", packs: ["battery"] } },
+    });
+    expect(countTasks(v3)).toBe(17);
+    const v2 = getEffectivePhasesForProjectLike({
+      category: "npd",
+      sopTemplateVersion: "2026-07-v2",
+      customFields: { npdTemplate: { tier: "lite", packs: ["battery"] } },
+    });
+    expect(countTasks(v2)).toBe(53);
   });
 });

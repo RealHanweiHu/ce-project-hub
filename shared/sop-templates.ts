@@ -1,6 +1,8 @@
 // SOP Templates for different project categories.
 // Shared by frontend display code and backend project seeding.
 
+import { NPD_V3_CORE_PHASES } from './npd-v3';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Gate 不通过（rejected）的唯一语义 —— 2026-07-05 拍板（CEH-16）
 //
@@ -1194,9 +1196,14 @@ export const CATEGORY_MAP: Record<ProjectCategory, ProjectCategoryConfig> = {
  * Get the SOP phases for a project based on its category.
  * Falls back to NPD phases if category is not set.
  */
-export const getPhasesForCategory = (category?: string): SOPPhase[] => {
-  if (!category) return NPD_PHASES;
-  return CATEGORY_MAP[category as ProjectCategory]?.phases || NPD_PHASES;
+export const getPhasesForCategory = (category?: string, templateVersion?: string | null): SOPPhase[] => {
+  const resolvedCategory = (category && CATEGORY_MAP[category as ProjectCategory])
+    ? category as ProjectCategory
+    : 'npd';
+  if (resolvedCategory === 'npd' && normalizeSopTemplateVersion(templateVersion) === SOP_TEMPLATE_VERSION_NPD_V3) {
+    return NPD_V3_CORE_PHASES;
+  }
+  return CATEGORY_MAP[resolvedCategory]?.phases || NPD_PHASES;
 };
 
 /** 定位某 category 的「MP Release 前置 Gate」所在 phase；未定义返回 null。 */

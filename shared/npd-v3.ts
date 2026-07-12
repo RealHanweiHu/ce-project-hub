@@ -5,7 +5,13 @@
 //   ①改变状态 ②明确责任（独立责任人+截止） ③形成决策 ④产生审计证据。
 // 过了判据还须回答：为什么不能作为①任务内检查项 ②操作指南 ③附加包？答不上来就不准进核心。
 // 55→25 映射依据：docs/superpowers/specs/2026-07-12-npd-template-slimming-tiering-design.md
-import type { SOPGateStandard, SOPPhase, SOPTask } from "./sop-templates";
+import {
+  SOP_TEMPLATE_VERSION_NPD_V3,
+  getPhasesForCategory,
+  type SOPGateStandard,
+  type SOPPhase,
+  type SOPTask,
+} from "./sop-templates";
 
 const gateStandard = (overrides: Partial<SOPGateStandard>): SOPGateStandard => ({
   entryCriteria: [],
@@ -803,4 +809,22 @@ export function getNpdV3EffectivePhases(config?: unknown): SOPPhase[] {
       },
     };
   });
+}
+
+export interface ProjectTemplateLike {
+  category?: string | null;
+  sopTemplateVersion?: string | null;
+  customFields?: unknown;
+}
+
+/** 按项目版本、档位和附加包返回生效阶段；非 NPD v3 项目保持原模板。 */
+export function getEffectivePhasesForProjectLike(project: ProjectTemplateLike): SOPPhase[] {
+  if (
+    project.category === "npd" &&
+    project.sopTemplateVersion === SOP_TEMPLATE_VERSION_NPD_V3
+  ) {
+    const customFields = (project.customFields ?? {}) as Record<string, unknown>;
+    return getNpdV3EffectivePhases(customFields.npdTemplate);
+  }
+  return getPhasesForCategory(project.category ?? undefined, project.sopTemplateVersion);
 }
