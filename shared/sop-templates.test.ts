@@ -7,7 +7,11 @@ import {
   NPD_PHASES,
   OBT_PHASES,
   PROJECT_CATEGORIES,
+  SOP_TEMPLATE_VERSION_CURRENT,
+  SOP_TEMPLATE_VERSION_NPD_V3,
+  getDefaultTemplateVersionForCategory,
   getReleaseGatePhase,
+  normalizeSopTemplateVersion,
   type SOPPhase,
 } from "./sop-templates";
 
@@ -100,5 +104,18 @@ describe("SOP templates", () => {
     expect(phase(OBT_PHASES, "sample").deliverables).toContain("客户签样记录");
     expect(phase(OBT_PHASES, "pvt").deliverables).toContain("客户放行记录");
     expect(task(OBT_PHASES, "sample", "os4").owner).toBe("项目经理");
+  });
+});
+
+describe("NPD v3 版本路由", () => {
+  it("v3 常量与 normalize", () => {
+    expect(SOP_TEMPLATE_VERSION_NPD_V3).toBe("2026-07-v3");
+    expect(normalizeSopTemplateVersion("2026-07-v3")).toBe("2026-07-v3");
+  });
+
+  it("新建默认版本：npd 用 v3，其余用 current", () => {
+    expect(getDefaultTemplateVersionForCategory("npd")).toBe("2026-07-v3");
+    expect(getDefaultTemplateVersionForCategory("eco")).toBe(SOP_TEMPLATE_VERSION_CURRENT);
+    expect(getDefaultTemplateVersionForCategory("derivative")).toBe(SOP_TEMPLATE_VERSION_CURRENT);
   });
 });

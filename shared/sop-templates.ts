@@ -34,6 +34,8 @@ export interface SOPTask {
   durationDays?: number;
   /** 自动排期：前置任务 id（finish-to-start；可指向上一阶段 gateTaskId）。缺省=阶段入口。 */
   dependsOn?: string[];
+  /** light=一句话/照片/链接可闭环；heavy=需上传文件。缺省视为 light。 */
+  evidence?: 'light' | 'heavy';
 }
 
 export interface SOPGateStandard {
@@ -74,6 +76,26 @@ export interface SOPPhase {
 // Project Category Definition
 // ─────────────────────────────────────────────────────────────────────────────
 export type ProjectCategory = 'npd' | 'eco' | 'idr' | 'jdm' | 'obt';
+
+export const SOP_TEMPLATE_VERSION_LEGACY = '2026-07-v1' as const;
+export const SOP_TEMPLATE_VERSION_CURRENT = '2026-07-v2' as const;
+export const SOP_TEMPLATE_VERSION_NPD_V3 = '2026-07-v3' as const;
+export const SOP_TEMPLATE_VERSIONS = [
+  SOP_TEMPLATE_VERSION_LEGACY,
+  SOP_TEMPLATE_VERSION_CURRENT,
+  SOP_TEMPLATE_VERSION_NPD_V3,
+] as const;
+export type SopTemplateVersion = (typeof SOP_TEMPLATE_VERSIONS)[number];
+
+export function normalizeSopTemplateVersion(version?: string | null): SopTemplateVersion {
+  if (version === SOP_TEMPLATE_VERSION_LEGACY) return SOP_TEMPLATE_VERSION_LEGACY;
+  if (version === SOP_TEMPLATE_VERSION_NPD_V3) return SOP_TEMPLATE_VERSION_NPD_V3;
+  return SOP_TEMPLATE_VERSION_CURRENT;
+}
+
+export function getDefaultTemplateVersionForCategory(category?: string | null): SopTemplateVersion {
+  return category === 'npd' ? SOP_TEMPLATE_VERSION_NPD_V3 : SOP_TEMPLATE_VERSION_CURRENT;
+}
 
 export interface ProjectCategoryConfig {
   id: ProjectCategory;
