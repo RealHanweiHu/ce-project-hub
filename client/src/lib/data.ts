@@ -255,6 +255,8 @@ export interface Project {
 /** 新建项目向导专用字段；不进入持久化 Project 聚合。 */
 export type ProjectCreateDraft = Omit<Project, 'id' | 'phases'> & {
   npdTemplate?: import('@shared/npd-v3').NpdTemplateConfig;
+  npdAttributes?: import('@shared/npd-v3').NpdProjectAttributes;
+  npdTemplateDowngradeReason?: string;
 };
 
 import { NPD_PHASES } from '@shared/sop-templates';

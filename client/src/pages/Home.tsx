@@ -24,6 +24,11 @@ import { getLoginUrl } from '@/const';
 import { useQueryClient } from '@tanstack/react-query';
 import { getQueryKey } from '@trpc/react-query';
 import { isSystemAdminRole } from '@shared/system-roles';
+import {
+  normalizeNpdTemplateConfig,
+  recommendNpdTemplateConfig,
+  type NpdProjectAttributes,
+} from '@shared/npd-v3';
 import { useProjectData } from '@/hooks/useProjectData';
 import { NotificationBell } from '@/components/NotificationBell';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
@@ -732,7 +737,12 @@ export default function Home() {
   }, []);
 
   const handleAddProject = async (data: ProjectCreateDraft) => {
-    const { npdTemplate, ...projectData } = data;
+    const {
+      npdTemplate,
+      npdAttributes,
+      npdTemplateDowngradeReason,
+      ...projectData
+    } = data;
     const newProject = normalizeProject({
       ...projectData,
       id: nanoid(8),
@@ -741,7 +751,9 @@ export default function Home() {
     try {
       await createMutation.mutateAsync({
         ...projectToApiInput(newProject),
-        ...(newProject.category === 'npd' ? { npdTemplate } : {}),
+        ...(newProject.category === 'npd'
+          ? { npdTemplate, npdAttributes, npdTemplateDowngradeReason }
+          : {}),
       });
       invalidateProjects();
       // 立项即引导:跳到新项目并自动打开立项向导(开始日/PM 已预填,补齐各角色 → 派任务+通知)
@@ -797,8 +809,36 @@ export default function Home() {
       phases: freshPhases,
       phaseDates: undefined,
     } as Project);
+    const storedNpdTemplate = category === 'npd'
+      ? (source.customFields?.npdTemplate as ({ attributes?: Partial<NpdProjectAttributes> } & Record<string, unknown>) | undefined)
+      : undefined;
+    const npdTemplate = normalizeNpdTemplateConfig(storedNpdTemplate);
+    const storedAttributes = storedNpdTemplate?.attributes;
+    const npdAttributes: NpdProjectAttributes = {
+      hasBattery: storedAttributes?.hasBattery ?? npdTemplate.packs.includes('battery'),
+      needsCert: storedAttributes?.needsCert ?? npdTemplate.packs.includes('cert'),
+      hasFirmware: storedAttributes?.hasFirmware ?? npdTemplate.packs.includes('software'),
+      needsNewMold: storedAttributes?.needsNewMold ?? npdTemplate.packs.includes('mold'),
+      isNewPlatform: storedAttributes?.isNewPlatform ?? false,
+    };
+    const recommendation = recommendNpdTemplateConfig({
+      ...npdAttributes,
+      safetyRiskLevel: cloned.risk === 'high' ? 'high' : 'standard',
+      regulatoryRiskLevel: cloned.risk === 'high' ? 'high' : 'standard',
+    });
+    const tierRank = { lite: 0, standard: 1, full: 2 } as const;
+    const isDowngrade = tierRank[npdTemplate.tier] < tierRank[recommendation.tier];
+    const storedDowngradeReason = typeof storedNpdTemplate?.downgradeReason === 'string'
+      ? storedNpdTemplate.downgradeReason.trim()
+      : '';
+    const npdTemplateDowngradeReason = isDowngrade
+      ? storedDowngradeReason || '克隆沿用源项目流程配置'
+      : undefined;
     try {
-      await createMutation.mutateAsync(projectToApiInput(cloned));
+      await createMutation.mutateAsync({
+        ...projectToApiInput(cloned),
+        ...(category === 'npd' ? { npdTemplate, npdAttributes, npdTemplateDowngradeReason } : {}),
+      });
       invalidateProjects();
       setSelectedProjectId(cloned.id);
       setView('projects');

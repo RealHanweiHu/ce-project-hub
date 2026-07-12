@@ -43,7 +43,10 @@ import { buildActionCardExecutePath, buildProjectActionPath, buildTaskCompletion
 import { cancelAndRecordProjectMeeting, syncAndRecordProjectMeeting } from "../services/project-meeting-lifecycle";
 import { createActionCardToken } from "../action-card-tokens";
 import { notifyPersonal } from "../notification-gateway";
-import { normalizeNpdTemplateConfig } from "../../shared/npd-v3";
+import {
+  normalizeNpdTemplateConfig,
+  recommendNpdTemplateConfig,
+} from "../../shared/npd-v3";
 
 const DEFAULT_MEETING = { enabled: true, weekday: 3, time: "15:00", durationMin: 60, title: "项目周会" };
 const isoDateInput = z.string().refine(isISODate, "日期必须是有效的 YYYY-MM-DD");
@@ -155,11 +158,21 @@ const projectInputSchema = z.object({
   customFields: z.record(z.string(), z.unknown()).optional(),
 });
 
+const npdAttributesSchema = z.object({
+  hasBattery: z.boolean(),
+  needsCert: z.boolean(),
+  hasFirmware: z.boolean(),
+  needsNewMold: z.boolean(),
+  isNewPlatform: z.boolean(),
+});
+
 const projectCreateInputSchema = projectInputSchema.extend({
   npdTemplate: z.object({
     tier: z.enum(["lite", "standard", "full"]).default("standard"),
     packs: z.array(z.enum(["battery", "cert", "software", "mold"])).default([]),
   }).optional(),
+  npdAttributes: npdAttributesSchema.optional(),
+  npdTemplateDowngradeReason: z.string().trim().min(4).max(1000).optional(),
 });
 
 async function getConfirmedProductDefinitionSnapshotIfAvailable(productId: string, actorId: number) {
@@ -501,9 +514,47 @@ export const projectsRouter = router({
       const handoffSnapshot = input.productId
         ? await getConfirmedProductDefinitionSnapshotIfAvailable(input.productId, ctx.user.id)
         : null;
+      let npdTemplateAudit: Record<string, unknown> | null = null;
+      if (input.category === "npd") {
+        if (!input.npdAttributes) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "NPD 创建必须完成项目属性问答" });
+        }
+        const recommendation = recommendNpdTemplateConfig({
+          ...input.npdAttributes,
+          safetyRiskLevel: input.risk === "high" ? "high" : "standard",
+          regulatoryRiskLevel: input.risk === "high" ? "high" : "standard",
+        });
+        const chosen = normalizeNpdTemplateConfig(input.npdTemplate);
+        const missingLockedPacks = recommendation.lockedPacks.filter(
+          (pack) => !chosen.packs.includes(pack)
+        );
+        if (missingLockedPacks.length > 0) {
+          const labels = missingLockedPacks.map((pack) =>
+            pack === "battery" ? "电池安全包" : "认证包"
+          );
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `红线附加包不可取消：${labels.join("、")}`,
+          });
+        }
+        const tierRank = { lite: 0, standard: 1, full: 2 } as const;
+        const downgradeReason = input.npdTemplateDowngradeReason?.trim() || null;
+        if (tierRank[chosen.tier] < tierRank[recommendation.tier] && !downgradeReason) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "降档需填写理由（推荐档位高于所选档位）",
+          });
+        }
+        npdTemplateAudit = {
+          ...chosen,
+          recommended: recommendation,
+          attributes: input.npdAttributes,
+          downgradeReason,
+        };
+      }
       const sopTemplateVersion = getDefaultTemplateVersionForCategory(input.category);
       const customFields = input.category === "npd"
-        ? { ...(input.customFields ?? {}), npdTemplate: normalizeNpdTemplateConfig(input.npdTemplate) }
+        ? { ...(input.customFields ?? {}), npdTemplate: npdTemplateAudit }
         : (input.customFields ?? {});
       await createProjectWithSeed({
         id: input.id,
@@ -548,6 +599,7 @@ export const projectsRouter = router({
           category: input.category,
           projectNumber: input.projectNumber,
           sopTemplateVersion,
+          npdTemplate: npdTemplateAudit,
         },
       });
       // 默认周会配置 + 尝试建钉钉日程（降级安全，绝不阻断建项目）

@@ -13,6 +13,13 @@ const PROJ_A = `kickoff-e2e-a-${Date.now()}`; // 创建时已填开始日(向导
 const PROJ_B = `kickoff-e2e-b-${Date.now()}`; // 创建时未填开始日(向导第1步设日期)
 const CREATOR = 983001;
 const PM_USER = 983002;
+const NPD_ATTRIBUTES = {
+  hasBattery: false,
+  needsCert: false,
+  hasFirmware: false,
+  needsNewMold: false,
+  isNewPlatform: false,
+} as const;
 
 function makeCtx(userId: number): TrpcContext {
   return {
@@ -57,6 +64,7 @@ describe("立项向导端到端(create → kickoff)", () => {
       id: PROJ_A, name: "E2E-A", projectNumber: PROJ_A, category: "npd",
       risk: "low", currentPhase: "concept", progress: 0,
       startDate: "2026-07-07", targetDate: null, pmUserId: null,
+      npdAttributes: NPD_ATTRIBUTES,
     });
     // 向导:已有开始日 → 跳过第1步,提交时 startDate 与 project.startDate 相同
     const r = await caller.projects.kickoff({
@@ -79,6 +87,7 @@ describe("立项向导端到端(create → kickoff)", () => {
       id: PROJ_B, name: "E2E-B", projectNumber: PROJ_B, category: "npd",
       risk: "low", currentPhase: "concept", progress: 0,
       startDate: null, targetDate: null, pmUserId: null,
+      npdAttributes: NPD_ATTRIBUTES,
     });
     const r = await caller.projects.kickoff({
       projectId: PROJ_B,

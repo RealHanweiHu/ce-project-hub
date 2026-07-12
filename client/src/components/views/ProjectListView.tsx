@@ -34,7 +34,9 @@ import { isSystemAdminRole } from '@shared/system-roles';
 import {
   NPD_ADDON_PACKS,
   getNpdV3EffectivePhases,
+  recommendNpdTemplateConfig,
   type NpdAddonPackId,
+  type NpdProjectAttributes,
   type NpdTemplateTier,
 } from '@shared/npd-v3';
 
@@ -71,8 +73,40 @@ const NPD_TIER_OPTIONS: ReadonlyArray<{
 }> = [
   { id: 'lite', label: '轻量', code: 'LITE', meta: '15 项 · 6 阶段', desc: '成熟方案 / 低风险' },
   { id: 'standard', label: '标准', code: 'STD', meta: '25 项 · 7 阶段', desc: '常规新品 / 完整主线' },
-  { id: 'full', label: '完整', code: 'FULL', meta: '32 项上限 · 7 阶段', desc: '全新平台 / 高复杂度' },
+  { id: 'full', label: '强监管', code: 'REG', meta: '32 项上限 · 7 阶段', desc: '红线风险 / 全新平台' },
 ];
+
+type NpdAttributeKey = keyof Pick<
+  NpdProjectAttributes,
+  'hasBattery' | 'needsCert' | 'hasFirmware' | 'needsNewMold' | 'isNewPlatform'
+>;
+
+const EMPTY_NPD_ATTRIBUTES: Pick<NpdProjectAttributes, NpdAttributeKey> = {
+  hasBattery: false,
+  needsCert: false,
+  hasFirmware: false,
+  needsNewMold: false,
+  isNewPlatform: false,
+};
+
+const NPD_ATTRIBUTE_OPTIONS: ReadonlyArray<{
+  id: NpdAttributeKey;
+  label: string;
+  desc: string;
+  redline?: boolean;
+}> = [
+  { id: 'hasBattery', label: '含锂电 / 受压腔体', desc: '电池安全包将强制锁定', redline: true },
+  { id: 'needsCert', label: '出口 / 强制认证', desc: '目标市场认证包将强制锁定', redline: true },
+  { id: 'hasFirmware', label: '含固件 / APP', desc: '默认加入软件包，仍可取消' },
+  { id: 'needsNewMold', label: '需要开新模', desc: '默认加入模具包，仍可取消' },
+  { id: 'isNewPlatform', label: '全新平台', desc: '非成熟平台的简单衍生项目' },
+];
+
+const NPD_TIER_RANK: Record<NpdTemplateTier, number> = {
+  lite: 0,
+  standard: 1,
+  full: 2,
+};
 
 // ── Kanban stage columns (display-only) ─────────────────────────────────────────
 // The 6 canonical lifecycle stages. Each project's currentPhase is mapped onto one of
@@ -373,15 +407,45 @@ export function ProjectListView({
     risk: 'low' as 'low' | 'medium' | 'high',
   };
   const [form, setForm] = useState(emptyForm);
-  const [npdTier, setNpdTier] = useState<NpdTemplateTier>('standard');
-  const [npdPacks, setNpdPacks] = useState<NpdAddonPackId[]>([]);
+  const [npdAttributes, setNpdAttributes] = useState({ ...EMPTY_NPD_ATTRIBUTES });
+  const [npdTierOverride, setNpdTierOverride] = useState<NpdTemplateTier | null>(null);
+  const [npdPackOverrides, setNpdPackOverrides] = useState<Partial<Record<NpdAddonPackId, boolean>>>({});
+  const [npdTemplateDowngradeReason, setNpdTemplateDowngradeReason] = useState('');
+
+  const npdRecommendation = useMemo(
+    () => recommendNpdTemplateConfig({
+      ...npdAttributes,
+      safetyRiskLevel: form.risk === 'high' ? 'high' : 'standard',
+      regulatoryRiskLevel: form.risk === 'high' ? 'high' : 'standard',
+    }),
+    [
+      npdAttributes,
+      form.risk,
+    ],
+  );
+  const npdTier = npdTierOverride ?? npdRecommendation.tier;
+  const npdPacks = useMemo(
+    () => NPD_ADDON_PACKS
+      .map((pack) => pack.id)
+      .filter((packId) => {
+        if (npdRecommendation.lockedPacks.includes(packId)) return true;
+        const override = npdPackOverrides[packId];
+        return override ?? npdRecommendation.packs.includes(packId);
+      }),
+    [npdPackOverrides, npdRecommendation.lockedPacks, npdRecommendation.packs],
+  );
+  const isNpdDowngrade = NPD_TIER_RANK[npdTier] < NPD_TIER_RANK[npdRecommendation.tier];
+  const trimmedNpdDowngradeReason = npdTemplateDowngradeReason.trim();
+  const hasValidNpdDowngradeReason = !isNpdDowngrade || trimmedNpdDowngradeReason.length >= 4;
 
   const resetWizard = () => {
     setStep(1);
     setSelectedCategory('npd');
     setForm(emptyForm);
-    setNpdTier('standard');
-    setNpdPacks([]);
+    setNpdAttributes({ ...EMPTY_NPD_ATTRIBUTES });
+    setNpdTierOverride(null);
+    setNpdPackOverrides({});
+    setNpdTemplateDowngradeReason('');
   };
 
   const handleClose = () => {
@@ -391,6 +455,10 @@ export function ProjectListView({
 
   const handleCreate = async () => {
     if (!form.name.trim()) return;
+    if (selectedCategory === 'npd' && !hasValidNpdDowngradeReason) {
+      toast.error('降档需填写至少 4 个字的理由');
+      return;
+    }
     const firstPhaseId = sopPhases[0]?.id || 'concept';
     // 关联产品:选了已有 → 用它;否则填了新产品名 → 先建档再关联
     let productId: string | null = form.productId || null;
@@ -401,15 +469,27 @@ export function ProjectListView({
       } catch { /* 建产品失败不阻断建项目 */ }
     }
     try {
-      await onAddProject({
+      const lockedPacks = new Set(npdRecommendation.lockedPacks);
+      const submittedNpdPacks = NPD_ADDON_PACKS
+        .map((pack) => pack.id)
+        .filter((packId) => npdPacks.includes(packId) || lockedPacks.has(packId));
+      const projectDraft: ProjectCreateDraft & {
+        npdAttributes?: Pick<NpdProjectAttributes, NpdAttributeKey>;
+        npdTemplateDowngradeReason?: string;
+      } = {
         code: form.code, name: form.name, type: form.type, pmUserId: form.pmUserId,
         startDate: form.startDate, targetDate: form.targetDate, risk: form.risk,
         productId,
         pm: '',
         currentPhase: firstPhaseId,
         category: selectedCategory,
-        npdTemplate: selectedCategory === 'npd' ? { tier: npdTier, packs: npdPacks } : undefined,
-      });
+        npdTemplate: selectedCategory === 'npd' ? { tier: npdTier, packs: submittedNpdPacks } : undefined,
+        npdAttributes: selectedCategory === 'npd' ? npdAttributes : undefined,
+        npdTemplateDowngradeReason: selectedCategory === 'npd' && isNpdDowngrade && trimmedNpdDowngradeReason
+          ? trimmedNpdDowngradeReason
+          : undefined,
+      };
+      await onAddProject(projectDraft);
       handleClose();
     } catch (error) {
       toast.error(error instanceof Error && error.message ? error.message : '创建项目失败，请稍后重试');
@@ -427,6 +507,9 @@ export function ProjectListView({
     () => sopPhases.reduce((total, phase) => total + phase.tasks.length, 0),
     [sopPhases],
   );
+  const isStepAdvanceBlocked = (selectedCategory === 'npd' && !hasValidNpdDowngradeReason)
+    || (step === 2 && !form.name.trim());
+  const isCreateBlocked = selectedCategory === 'npd' && !hasValidNpdDowngradeReason;
 
   // ── Derived per-project presentation model ───────────────────────────────────
   interface Row {
@@ -967,7 +1050,7 @@ export function ProjectListView({
                       <div className="flex items-center justify-between gap-3 border-b border-border bg-card px-4 py-3">
                         <div>
                           <Kicker>流程配置 · PROCESS PROFILE</Kicker>
-                          <p className="mt-1 text-[11px] text-muted-foreground">先选主流程，再按产品实际增加专业工作包。</p>
+                          <p className="mt-1 text-[11px] text-muted-foreground">回答 5 个产品问题，系统推荐最小必要流程。</p>
                         </div>
                         <div className="shrink-0 rounded-[6px] border border-border bg-secondary px-2.5 py-1.5 text-right">
                           <div className="text-[10px] font-semibold tracking-[0.12em] text-muted-foreground">ACTIVE SCOPE</div>
@@ -978,20 +1061,94 @@ export function ProjectListView({
                       </div>
 
                       <div className="space-y-4 p-4">
+                        <fieldset>
+                          <legend className="mb-2.5 flex w-full items-end justify-between gap-3">
+                            <span>
+                              <Kicker>产品属性 · 5 QUESTIONS</Kicker>
+                              <span className="mt-1 block text-[11px] text-muted-foreground">只标记本项目真实涉及的边界。</span>
+                            </span>
+                            <span className="text-[10px] font-semibold text-muted-foreground num">
+                              {Object.values(npdAttributes).filter(Boolean).length} / 5 YES
+                            </span>
+                          </legend>
+                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            {NPD_ATTRIBUTE_OPTIONS.map((option) => {
+                              const checked = npdAttributes[option.id];
+                              return (
+                                <label
+                                  key={option.id}
+                                  className={cn(
+                                    'flex cursor-pointer items-start gap-2.5 rounded-[7px] border bg-card px-3 py-2.5 transition-colors',
+                                    checked
+                                      ? 'border-[color:var(--acc-border)] bg-[color:var(--acc-soft)]'
+                                      : 'border-border hover:bg-secondary/60',
+                                  )}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={(event) => setNpdAttributes((current) => ({
+                                      ...current,
+                                      [option.id]: event.target.checked,
+                                    }))}
+                                    className="mt-0.5 h-3.5 w-3.5 accent-primary"
+                                  />
+                                  <span className="min-w-0 flex-1">
+                                    <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                                      {option.label}
+                                      {option.redline && (
+                                        <span className="rounded-[4px] bg-[color:var(--warning-soft)] px-1.5 py-0.5 text-[9px] font-bold text-[color:var(--warning)]">红线</span>
+                                      )}
+                                    </span>
+                                    <span className="mt-1 block text-[10px] leading-relaxed text-muted-foreground">{option.desc}</span>
+                                  </span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </fieldset>
+
+                        <div className="rounded-[8px] border border-[color:var(--acc-border)] bg-[color:var(--acc-soft)] px-3.5 py-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <Kicker>系统推荐 · RECOMMENDED</Kicker>
+                              <div className="mt-1 text-sm font-semibold text-foreground">
+                                {NPD_TIER_OPTIONS.find((option) => option.id === npdRecommendation.tier)?.label}
+                                <span className="ml-2 text-[10px] font-medium text-muted-foreground">
+                                  + {npdRecommendation.packs.length} 个工作包
+                                </span>
+                              </div>
+                            </div>
+                            {npdTierOverride !== null && (
+                              <button
+                                type="button"
+                                onClick={() => setNpdTierOverride(null)}
+                                className="shrink-0 text-[10px] font-semibold text-primary hover:underline"
+                              >
+                                恢复推荐
+                              </button>
+                            )}
+                          </div>
+                          <ul className="mt-2 space-y-1 text-[10px] leading-relaxed text-muted-foreground">
+                            {npdRecommendation.reasons.map((reason) => (
+                              <li key={reason} className="flex gap-1.5">
+                                <span aria-hidden="true" className="text-primary">—</span>
+                                <span>{reason}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+
                         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                           {NPD_TIER_OPTIONS.map((option) => {
                             const active = npdTier === option.id;
+                            const recommended = npdRecommendation.tier === option.id;
                             return (
                               <button
                                 key={option.id}
                                 type="button"
                                 aria-pressed={active}
-                                onClick={() => {
-                                  setNpdTier(option.id);
-                                  if (option.id === 'full') {
-                                    setNpdPacks(NPD_ADDON_PACKS.map((pack) => pack.id));
-                                  }
-                                }}
+                                onClick={() => setNpdTierOverride(option.id)}
                                 className={cn(
                                   'relative rounded-[8px] border bg-card p-3 text-left transition-colors',
                                   active
@@ -1004,7 +1161,12 @@ export function ProjectListView({
                                     <span className="text-sm font-semibold text-foreground">{option.label}</span>
                                     <span className="ml-2 text-[9px] font-bold tracking-[0.14em] text-muted-foreground num">{option.code}</span>
                                   </div>
-                                  {active && <Check size={13} className="mt-0.5 shrink-0 text-primary" />}
+                                  <span className="flex items-center gap-1.5">
+                                    {recommended && (
+                                      <span className="rounded-[4px] bg-primary px-1.5 py-0.5 text-[9px] font-bold text-primary-foreground">推荐</span>
+                                    )}
+                                    {active && <Check size={13} className="shrink-0 text-primary" />}
+                                  </span>
                                 </div>
                                 <div className="mt-2 text-[11px] font-medium text-foreground num">{option.meta}</div>
                                 <div className="mt-1 text-[10px] text-muted-foreground">{option.desc}</div>
@@ -1012,6 +1174,33 @@ export function ProjectListView({
                             );
                           })}
                         </div>
+
+                        {isNpdDowngrade && (
+                          <div className="rounded-[8px] border border-[color:var(--warning)]/45 bg-[color:var(--warning-soft)] px-3.5 py-3">
+                            <label htmlFor="npd-downgrade-reason" className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                              <AlertTriangle size={13} className="text-[color:var(--warning)]" />
+                              降档理由 *
+                            </label>
+                            <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+                              当前选择低于系统推荐，请留下可审计的判断依据（至少 4 个字）。
+                            </p>
+                            <textarea
+                              id="npd-downgrade-reason"
+                              value={npdTemplateDowngradeReason}
+                              onChange={(event) => setNpdTemplateDowngradeReason(event.target.value)}
+                              rows={2}
+                              placeholder="例：已沿用通过认证的成熟平台"
+                              aria-invalid={!hasValidNpdDowngradeReason}
+                              className="mt-2 w-full resize-none rounded-[7px] border border-[color:var(--warning)]/45 bg-card px-3 py-2 text-xs outline-none focus:border-[color:var(--warning)]"
+                            />
+                            <div className={cn(
+                              'mt-1 text-right text-[9px] font-semibold num',
+                              hasValidNpdDowngradeReason ? 'text-[color:var(--success)]' : 'text-[color:var(--warning)]',
+                            )}>
+                              {trimmedNpdDowngradeReason.length} / 4 MIN
+                            </div>
+                          </div>
+                        )}
 
                         <div className="border-t border-border pt-4">
                           <div className="mb-2.5 flex items-end justify-between gap-3">
@@ -1024,27 +1213,37 @@ export function ProjectListView({
                           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                             {NPD_ADDON_PACKS.map((pack) => {
                               const active = npdPacks.includes(pack.id);
+                              const locked = npdRecommendation.lockedPacks.includes(pack.id);
                               return (
                                 <label
                                   key={pack.id}
+                                  title={locked ? '红线属性已锁定，不可取消' : undefined}
                                   className={cn(
                                     'flex cursor-pointer items-start gap-2.5 rounded-[7px] border bg-card px-3 py-2.5 transition-colors',
                                     active
                                       ? 'border-[color:var(--acc-border)] bg-[color:var(--acc-soft)]'
                                       : 'border-border hover:bg-secondary/60',
+                                    locked && 'cursor-not-allowed',
                                   )}
                                 >
                                   <input
                                     type="checkbox"
                                     checked={active}
-                                    onChange={(event) => setNpdPacks((current) => event.target.checked
-                                      ? current.includes(pack.id) ? current : [...current, pack.id]
-                                      : current.filter((id) => id !== pack.id))}
+                                    disabled={locked}
+                                    onChange={(event) => setNpdPackOverrides((current) => ({
+                                      ...current,
+                                      [pack.id]: event.target.checked,
+                                    }))}
                                     className="mt-0.5 h-3.5 w-3.5 accent-primary"
                                   />
                                   <span className="min-w-0 flex-1">
                                     <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
                                       {pack.name}
+                                      {locked && (
+                                        <span className="inline-flex items-center gap-1 rounded-[4px] bg-[color:var(--warning-soft)] px-1.5 py-0.5 text-[9px] font-bold text-[color:var(--warning)]">
+                                          <Lock size={9} /> 锁定
+                                        </span>
+                                      )}
                                       {pack.redline && (
                                         <span className="rounded-[4px] bg-[color:var(--warning-soft)] px-1.5 py-0.5 text-[9px] font-bold text-[color:var(--warning)]">受控</span>
                                       )}
@@ -1152,6 +1351,32 @@ export function ProjectListView({
                       />
                     )}
                   </div>
+                  {selectedCategory === 'npd' && isNpdDowngrade && (
+                    <div className="rounded-[8px] border border-[color:var(--warning)]/45 bg-[color:var(--warning-soft)] px-3.5 py-3">
+                      <label htmlFor="npd-downgrade-reason-step2" className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                        <AlertTriangle size={13} className="text-[color:var(--warning)]" />
+                        风险升级后需补充降档理由 *
+                      </label>
+                      <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+                        当前选择低于最新推荐档位，理由会随项目配置留痕。
+                      </p>
+                      <textarea
+                        id="npd-downgrade-reason-step2"
+                        value={npdTemplateDowngradeReason}
+                        onChange={(event) => setNpdTemplateDowngradeReason(event.target.value)}
+                        rows={2}
+                        placeholder="请填写至少 4 个字"
+                        aria-invalid={!hasValidNpdDowngradeReason}
+                        className="mt-2 w-full resize-none rounded-[7px] border border-[color:var(--warning)]/45 bg-card px-3 py-2 text-xs outline-none focus:border-[color:var(--warning)]"
+                      />
+                      <div className={cn(
+                        'mt-1 text-right text-[9px] font-semibold num',
+                        hasValidNpdDowngradeReason ? 'text-[color:var(--success)]' : 'text-[color:var(--warning)]',
+                      )}>
+                        {trimmedNpdDowngradeReason.length} / 4 MIN
+                      </div>
+                    </div>
+                  )}
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <Kicker className="mb-1.5">开始日期</Kicker>
@@ -1189,6 +1414,20 @@ export function ProjectListView({
                         {form.pmUserId && <span className="mr-3">PM: {userList?.find(u => u.id === form.pmUserId)?.name || userList?.find(u => u.id === form.pmUserId)?.username || ''}</span>}
                         {form.startDate && <span>{form.startDate} → {form.targetDate || '?'}</span>}
                       </div>
+                      {selectedCategory === 'npd' && (
+                        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
+                          <span className="font-semibold text-foreground">
+                            {NPD_TIER_OPTIONS.find((option) => option.id === npdTier)?.label}
+                          </span>
+                          <span>·</span>
+                          <span>{npdPacks.length} 个附加包</span>
+                          {npdRecommendation.lockedPacks.length > 0 && (
+                            <span className="inline-flex items-center gap-1 text-[color:var(--warning)]">
+                              <Lock size={9} /> {npdRecommendation.lockedPacks.length} 个红线包已锁定
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -1240,12 +1479,13 @@ export function ProjectListView({
               {step < 3 ? (
                 <button
                   onClick={() => {
-                    if (step === 2 && !form.name.trim()) return;
+                    if (isStepAdvanceBlocked) return;
                     setStep((step + 1) as WizardStep);
                   }}
+                  disabled={isStepAdvanceBlocked}
                   className={cn(
                     'flex items-center gap-1.5 rounded-[7px] bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:opacity-90',
-                    step === 2 && !form.name.trim() && 'cursor-not-allowed opacity-50',
+                    isStepAdvanceBlocked && 'cursor-not-allowed opacity-50',
                   )}
                 >
                   下一步
@@ -1254,7 +1494,11 @@ export function ProjectListView({
               ) : (
                 <button
                   onClick={handleCreate}
-                  className="flex items-center gap-1.5 rounded-[7px] bg-primary px-5 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:opacity-90"
+                  disabled={isCreateBlocked}
+                  className={cn(
+                    'flex items-center gap-1.5 rounded-[7px] bg-primary px-5 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:opacity-90',
+                    isCreateBlocked && 'cursor-not-allowed opacity-50',
+                  )}
                 >
                   <Check size={14} />
                   创建项目

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import {
   activityLogs,
   projectPhases,
@@ -19,6 +19,10 @@ const IDS = {
   directLite: `npdv3-lite-${SUFFIX}`,
   secondSeed: `npdv3-seed-${SUFFIX}`,
   routerStandard: `npdv3-router-${SUFFIX}`,
+  missingLockedPack: `npdv3-lock-${SUFFIX}`,
+  missingDowngradeReason: `npdv3-down-${SUFFIX}`,
+  missingAttributes: `npdv3-attrs-${SUFFIX}`,
+  validDowngrade: `npdv3-audit-${SUFFIX}`,
 };
 const ALL_IDS = Object.values(IDS);
 
@@ -90,6 +94,13 @@ describe("NPD v3 create seeding", () => {
         npdTemplate: { tier: "lite", packs: ["battery"] },
       },
       npdTemplate: { tier: "standard", packs: [] },
+      npdAttributes: {
+        hasBattery: false,
+        needsCert: false,
+        hasFirmware: false,
+        needsNewMold: true,
+        isNewPlatform: false,
+      },
     })).resolves.toEqual({ success: true });
 
     const db = await getDb();
@@ -106,5 +117,123 @@ describe("NPD v3 create seeding", () => {
     const phases = await db!.select().from(projectPhases)
       .where(eq(projectPhases.projectId, IDS.routerStandard));
     expect(phases).toHaveLength(7);
+  });
+
+  it("含锂电项目缺电池安全包时拒绝创建", async () => {
+    const caller = projectsRouter.createCaller({
+      user: { id: OWNER, role: "member", name: "NPD v3 creator", canCreateProject: true },
+    } as any);
+
+    await expect(caller.create({
+      id: IDS.missingLockedPack,
+      name: "NPD v3 missing battery pack",
+      projectNumber: IDS.missingLockedPack,
+      category: "npd",
+      risk: "low",
+      currentPhase: "concept",
+      progress: 0,
+      npdAttributes: {
+        hasBattery: true,
+        needsCert: false,
+        hasFirmware: false,
+        needsNewMold: false,
+        isNewPlatform: false,
+      },
+      npdTemplate: { tier: "lite", packs: [] },
+    } as any)).rejects.toThrow(/电池安全包/);
+  });
+
+  it("推荐 full 却提交 lite 且无降档理由时拒绝创建", async () => {
+    const caller = projectsRouter.createCaller({
+      user: { id: OWNER, role: "member", name: "NPD v3 creator", canCreateProject: true },
+    } as any);
+
+    await expect(caller.create({
+      id: IDS.missingDowngradeReason,
+      name: "NPD v3 missing downgrade reason",
+      projectNumber: IDS.missingDowngradeReason,
+      category: "npd",
+      risk: "low",
+      currentPhase: "concept",
+      progress: 0,
+      npdAttributes: {
+        hasBattery: true,
+        needsCert: true,
+        hasFirmware: false,
+        needsNewMold: false,
+        isNewPlatform: false,
+      },
+      npdTemplate: { tier: "lite", packs: ["battery", "cert"] },
+    } as any)).rejects.toThrow(/降档.*理由/);
+  });
+
+  it("NPD 创建缺少项目属性问答时拒绝创建", async () => {
+    const caller = projectsRouter.createCaller({
+      user: { id: OWNER, role: "member", name: "NPD v3 creator", canCreateProject: true },
+    } as any);
+
+    await expect(caller.create({
+      id: IDS.missingAttributes,
+      name: "NPD v3 missing attributes",
+      projectNumber: IDS.missingAttributes,
+      category: "npd",
+      risk: "low",
+      currentPhase: "concept",
+      progress: 0,
+      npdTemplate: { tier: "standard", packs: [] },
+    })).rejects.toThrow(/项目属性/);
+  });
+
+  it("有理由降档时持久化推荐差异并写入创建活动审计", async () => {
+    const caller = projectsRouter.createCaller({
+      user: { id: OWNER, role: "member", name: "NPD v3 creator", canCreateProject: true },
+    } as any);
+    const downgradeReason = "沿用已量产平台，经负责人确认后降档";
+    const attributes = {
+      hasBattery: false,
+      needsCert: false,
+      hasFirmware: false,
+      needsNewMold: false,
+      isNewPlatform: true,
+    };
+
+    await expect(caller.create({
+      id: IDS.validDowngrade,
+      name: "NPD v3 audited downgrade",
+      projectNumber: IDS.validDowngrade,
+      category: "npd",
+      risk: "low",
+      currentPhase: "concept",
+      progress: 0,
+      npdAttributes: attributes,
+      npdTemplate: { tier: "lite", packs: [] },
+      npdTemplateDowngradeReason: downgradeReason,
+    })).resolves.toEqual({ success: true });
+
+    const db = await getDb();
+    const [project] = await db!.select().from(projects)
+      .where(eq(projects.id, IDS.validDowngrade));
+    expect(project.customFields).toMatchObject({
+      npdTemplate: {
+        tier: "lite",
+        packs: [],
+        recommended: { tier: "full" },
+        attributes,
+        downgradeReason,
+      },
+    });
+
+    const [log] = await db!.select().from(activityLogs).where(and(
+      eq(activityLogs.projectId, IDS.validDowngrade),
+      eq(activityLogs.action, "project.create"),
+    ));
+    expect(log.meta).toMatchObject({
+      npdTemplate: {
+        tier: "lite",
+        recommended: { tier: "full" },
+        attributes,
+        downgradeReason,
+      },
+    });
   });
 });

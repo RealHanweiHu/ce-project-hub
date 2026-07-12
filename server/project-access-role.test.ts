@@ -30,6 +30,18 @@ const DRAFT_PRODUCT = `draft-product-${Date.now()}`;
 const OWNER = 980001;
 const MANAGER_PM = 980002;
 const VIEWER_PM = 980003;
+const NPD_ATTRIBUTES = {
+  hasBattery: false,
+  needsCert: false,
+  hasFirmware: false,
+  needsNewMold: false,
+  isNewPlatform: false,
+} as const;
+const BATTERY_CERT_ATTRIBUTES = {
+  ...NPD_ATTRIBUTES,
+  hasBattery: true,
+  needsCert: true,
+} as const;
 
 function makeCtx(userId: number, canCreateProject = false): TrpcContext {
   return {
@@ -160,6 +172,7 @@ describe("project create validation", () => {
       risk: "low",
       currentPhase: "concept",
       progress: 0,
+      npdAttributes: NPD_ATTRIBUTES,
     });
 
     const project = await getProjectById(OPTIONAL_PROJECT);
@@ -188,6 +201,7 @@ describe("project create validation", () => {
       risk: "low",
       currentPhase: "concept",
       progress: 0,
+      npdAttributes: NPD_ATTRIBUTES,
     });
 
     const project = await getProjectById(DRAFT_PRODUCT_PROJECT);
@@ -206,6 +220,7 @@ describe("project create validation", () => {
       risk: "low",
       currentPhase: "concept",
       progress: 0,
+      npdAttributes: NPD_ATTRIBUTES,
       startDate: "2026-13-99",
     })).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
@@ -243,6 +258,8 @@ describe("project create validation", () => {
       risk: "low",
       currentPhase: "concept",
       progress: 0,
+      npdAttributes: BATTERY_CERT_ATTRIBUTES,
+      npdTemplate: { tier: "full", packs: ["battery", "cert"] },
     });
 
     const project = await getProjectById(HANDOFF_PROJECT);

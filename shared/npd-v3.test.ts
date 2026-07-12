@@ -6,6 +6,7 @@ import {
   getEffectivePhasesForProjectLike,
   getNpdV3EffectivePhases,
   normalizeNpdTemplateConfig,
+  recommendNpdTemplateConfig,
   type NpdTemplateConfig,
 } from "./npd-v3";
 import {
@@ -185,6 +186,46 @@ describe("NPD v3 附加包与档位", () => {
         packs: ["nope", "battery", "battery"],
       } as unknown as NpdTemplateConfig)
     ).toEqual({ tier: "standard", packs: ["battery"] });
+  });
+});
+
+describe("recommendNpdTemplateConfig 自动分档", () => {
+  it("含锂电+出口 → 强监管(full)，电池/认证锁定", () => {
+    const r = recommendNpdTemplateConfig({
+      hasBattery: true, needsCert: true, hasFirmware: true, needsNewMold: false,
+      safetyRiskLevel: "standard", regulatoryRiskLevel: "standard", isNewPlatform: false,
+    });
+    expect(r.tier).toBe("full");
+    expect(r.packs).toEqual(expect.arrayContaining(["battery", "cert", "software"]));
+    expect(r.lockedPacks).toEqual(["battery", "cert"]);
+    expect(r.reasons.join("")).toContain("锂电");
+  });
+
+  it("高安全风险单独触发强监管", () => {
+    const r = recommendNpdTemplateConfig({
+      hasBattery: false, needsCert: false, hasFirmware: false, needsNewMold: false,
+      safetyRiskLevel: "high", regulatoryRiskLevel: "standard", isNewPlatform: false,
+    });
+    expect(r.tier).toBe("full");
+  });
+
+  it("无电池无新模低风险简单新品 → 轻量", () => {
+    const r = recommendNpdTemplateConfig({
+      hasBattery: false, needsCert: false, hasFirmware: true, needsNewMold: false,
+      safetyRiskLevel: "standard", regulatoryRiskLevel: "standard", isNewPlatform: false,
+    });
+    expect(r.tier).toBe("lite");
+    expect(r.packs).toEqual(["software"]);
+    expect(r.lockedPacks).toEqual([]);
+  });
+
+  it("其余落标准：有新模但风险 standard", () => {
+    const r = recommendNpdTemplateConfig({
+      hasBattery: false, needsCert: false, hasFirmware: false, needsNewMold: true,
+      safetyRiskLevel: "standard", regulatoryRiskLevel: "standard", isNewPlatform: false,
+    });
+    expect(r.tier).toBe("standard");
+    expect(r.packs).toEqual(["mold"]);
   });
 });
 

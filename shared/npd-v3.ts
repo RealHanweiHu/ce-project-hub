@@ -436,6 +436,74 @@ export interface NpdTemplateConfig {
   packs: NpdAddonPackId[];
 }
 
+export interface NpdProjectAttributes {
+  hasBattery: boolean;
+  needsCert: boolean;
+  hasFirmware: boolean;
+  needsNewMold: boolean;
+  safetyRiskLevel?: string | null;
+  regulatoryRiskLevel?: string | null;
+  isNewPlatform: boolean;
+}
+
+export interface NpdTemplateRecommendation {
+  tier: NpdTemplateTier;
+  packs: NpdAddonPackId[];
+  /** 红线锁定：向导中不可取消、服务端强制校验。 */
+  lockedPacks: NpdAddonPackId[];
+  reasons: string[];
+}
+
+/** 设计 §7：最小必要流程推导。纯函数，前端实时预览与服务端校验共用。 */
+export function recommendNpdTemplateConfig(
+  attrs: NpdProjectAttributes
+): NpdTemplateRecommendation {
+  const packs: NpdAddonPackId[] = [];
+  const lockedPacks: NpdAddonPackId[] = [];
+  const reasons: string[] = [];
+
+  if (attrs.hasBattery) {
+    packs.push("battery");
+    lockedPacks.push("battery");
+    reasons.push("含锂电/受压腔体 → 电池安全包锁定（红线）");
+  }
+  if (attrs.needsCert) {
+    packs.push("cert");
+    lockedPacks.push("cert");
+    reasons.push("有目标市场认证需求 → 认证包锁定（红线）");
+  }
+  if (attrs.hasFirmware) {
+    packs.push("software");
+    reasons.push("含固件/APP → 软件包默认勾选");
+  }
+  if (attrs.needsNewMold) {
+    packs.push("mold");
+    reasons.push("需开新模 → 模具包默认勾选");
+  }
+
+  const highRisk =
+    attrs.safetyRiskLevel === "high" || attrs.regulatoryRiskLevel === "high";
+  let tier: NpdTemplateTier;
+  if (highRisk || (attrs.hasBattery && attrs.needsCert) || attrs.isNewPlatform) {
+    tier = "full";
+    reasons.push(
+      highRisk
+        ? "安全/法规风险为高 → 强监管档"
+        : attrs.isNewPlatform
+          ? "全新平台 → 强监管档"
+          : "电池+认证双红线 → 强监管档"
+    );
+  } else if (!attrs.hasBattery && !attrs.needsNewMold) {
+    tier = "lite";
+    reasons.push("无电池、无新模、常规风险 → 轻量档");
+  } else {
+    tier = "standard";
+    reasons.push("常规组合 → 标准档");
+  }
+
+  return { tier, packs, lockedPacks, reasons };
+}
+
 export interface NpdAddonPack {
   id: NpdAddonPackId;
   name: string;
