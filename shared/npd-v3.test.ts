@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { NPD_V3_CORE_PHASES } from "./npd-v3";
+import {
+  NPD_ADDON_PACKS,
+  NPD_V3_CORE_PHASES,
+  NPD_V3_LITE_PHASES,
+  getNpdV3EffectivePhases,
+  normalizeNpdTemplateConfig,
+  type NpdTemplateConfig,
+} from "./npd-v3";
 import {
   PROJECT_CATEGORIES,
   SOP_TEMPLATE_VERSION_CURRENT,
@@ -8,6 +15,8 @@ import {
 } from "./sop-templates";
 
 const coreTasks = NPD_V3_CORE_PHASES.flatMap((phase) => phase.tasks);
+const countTasks = (phases: { tasks: unknown[] }[]) =>
+  phases.reduce((total, phase) => total + phase.tasks.length, 0);
 
 describe("NPD v3 核心模板", () => {
   it("复杂度预算：核心恰好 25 个任务、7 个阶段、每阶段有 gateTaskId", () => {
@@ -60,5 +69,118 @@ describe("NPD v3 核心模板", () => {
         expect(task.evidence, `${task.id} missing evidence`).toBeDefined();
       }
     }
+  });
+});
+
+describe("NPD v3 附加包与档位", () => {
+  it("四个包共 7 个任务；battery/cert 标红线", () => {
+    expect(NPD_ADDON_PACKS.flatMap((pack) => pack.tasks)).toHaveLength(7);
+    expect(NPD_ADDON_PACKS.find((pack) => pack.id === "battery")?.redline).toBe(true);
+    expect(NPD_ADDON_PACKS.find((pack) => pack.id === "cert")?.redline).toBe(true);
+    expect(NPD_ADDON_PACKS.find((pack) => pack.id === "software")?.redline).toBeFalsy();
+  });
+
+  it("轻量档 15 任务、6 阶段，且三条核心红线保留", () => {
+    expect(countTasks(NPD_V3_LITE_PHASES)).toBe(15);
+    expect(NPD_V3_LITE_PHASES.map((phase) => phase.id)).toEqual([
+      "concept",
+      "planning",
+      "design",
+      "verification",
+      "pvt",
+      "mp",
+    ]);
+    const ids = new Set(NPD_V3_LITE_PHASES.flatMap((phase) => phase.tasks.map((task) => task.id)));
+    for (const id of ["npv2", "npv5", "nm1"]) expect(ids.has(id)).toBe(true);
+    for (const id of ["nlc1", "nlp1", "nld3", "nle1", "nlpv1"]) expect(ids.has(id)).toBe(true);
+    for (const id of ["nc1", "nc2", "np1", "np2", "nd3", "nd4", "ne1", "ne2", "nv1", "npv1", "npv3", "npv4"]) {
+      expect(ids.has(id), `lite should not reuse merged core id ${id}`).toBe(false);
+    }
+    expect(ids.has("ne3")).toBe(false);
+    expect(NPD_V3_LITE_PHASES.find((phase) => phase.id === "planning")?.gateStandard.requiredDeliverables)
+      .toEqual(["产品需求文档 PRD", "BOM v0.1"]);
+    expect(NPD_V3_LITE_PHASES.find((phase) => phase.id === "design")?.gateStandard.requiredDeliverables)
+      .toEqual(["结构 3D 设计", "EE 原理图 & PCB Layout"]);
+    expect(NPD_V3_LITE_PHASES.find((phase) => phase.id === "verification")?.gateStandard.requiredDeliverables)
+      .toEqual(["功能/性能测试报告", "可靠性测试报告"]);
+  });
+
+  it("复杂度预算：standard=25、常规双红线包=29、四包全开=32", () => {
+    expect(countTasks(getNpdV3EffectivePhases({ tier: "standard", packs: [] }))).toBe(25);
+    expect(countTasks(getNpdV3EffectivePhases({ tier: "standard", packs: ["battery", "cert"] }))).toBe(29);
+    expect(
+      countTasks(
+        getNpdV3EffectivePhases({
+          tier: "full",
+          packs: ["battery", "cert", "software", "mold"],
+        })
+      )
+    ).toBe(32);
+  });
+
+  it("包任务插在目标阶段 Gate 前，并成为 Gate 前置", () => {
+    const phases = getNpdV3EffectivePhases({ tier: "standard", packs: ["battery"] });
+    const planning = phases.find((phase) => phase.id === "planning")!;
+    const ids = planning.tasks.map((task) => task.id);
+    expect(ids.indexOf("pb1")).toBeLessThan(ids.indexOf("np3"));
+    expect(planning.tasks.find((task) => task.id === "np3")?.dependsOn).toContain("pb1");
+    expect(planning.gateStandard.requiredDeliverables).toContain("电芯厂质量审核或复用资质确认");
+  });
+
+  it("lite + battery：pb1/pb2 落到对应阶段，共 17 个任务", () => {
+    const phases = getNpdV3EffectivePhases({ tier: "lite", packs: ["battery"] });
+    expect(countTasks(phases)).toBe(17);
+    expect(phases.find((phase) => phase.id === "planning")?.tasks.map((task) => task.id)).toContain("pb1");
+    expect(phases.find((phase) => phase.id === "design")?.tasks.map((task) => task.id)).toContain("pb2");
+  });
+
+  it("lite 把 DVT 包任务和 Gate 必交物映射到 verification", () => {
+    const phases = getNpdV3EffectivePhases({
+      tier: "lite",
+      packs: ["cert", "software", "mold"],
+    });
+    const verification = phases.find((phase) => phase.id === "verification")!;
+    expect(verification.tasks.map((task) => task.id)).toEqual(
+      expect.arrayContaining(["pc2", "ps2", "pmo1"])
+    );
+    expect(verification.gateStandard.requiredDeliverables).toEqual(
+      expect.arrayContaining(["认证报告", "软件完整测试报告", "模具T1样品"])
+    );
+    expect(verification.tasks.find((task) => task.id === "nv3")?.dependsOn).toEqual(
+      expect.arrayContaining(["pc2", "ps2", "pmo1"])
+    );
+  });
+
+  it("每种档位/附加包组合的 dependsOn 都引用生效任务", () => {
+    const tiers = ["lite", "standard", "full"] as const;
+    const packCombos = [
+      [],
+      ["battery"],
+      ["cert"],
+      ["software"],
+      ["mold"],
+      ["battery", "cert", "software", "mold"],
+    ] as const;
+    for (const tier of tiers) {
+      for (const packs of packCombos) {
+        const phases = getNpdV3EffectivePhases({ tier, packs: [...packs] });
+        const ids = new Set(phases.flatMap((phase) => phase.tasks.map((task) => task.id)));
+        for (const task of phases.flatMap((phase) => phase.tasks)) {
+          for (const dependencyId of task.dependsOn ?? []) {
+            expect(ids.has(dependencyId), `${tier}/${packs.join("+")}/${task.id} -> ${dependencyId}`).toBe(true);
+          }
+        }
+      }
+    }
+  });
+
+  it("normalize：非法值回退 standard/空包并去重", () => {
+    expect(normalizeNpdTemplateConfig(undefined)).toEqual({ tier: "standard", packs: [] });
+    expect(
+      normalizeNpdTemplateConfig({
+        tier: "x",
+        packs: ["nope", "battery", "battery"],
+      } as unknown as NpdTemplateConfig)
+    ).toEqual({ tier: "standard", packs: ["battery"] });
   });
 });
