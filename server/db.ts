@@ -51,7 +51,7 @@ import {
 import { buildRevisionChangelogSnapshot, REVISION_CHANGE_STATUSES, type RevisionChangeEntry } from "../shared/changelog-snapshot";
 import { normalizeFileType, normalizeFileVersion } from "../shared/file-types";
 import { ENV } from './_core/env';
-import { getSopPhasesForCategory } from "./sop-data";
+import { getEffectivePhasesForProjectLike } from "../shared/npd-v3";
 import { getPhasesForCategory, getReleaseGatePhase } from "../shared/sop-templates";
 import { computeDownstreamImpact, type DownstreamImpactRow, type VariantStatus } from "../shared/oem-variant";
 import { computeGateReadiness, type GateReadiness } from "../shared/gate-readiness";
@@ -361,7 +361,11 @@ export async function createProjectWithSeed(
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const phases = getSopPhasesForCategory(category);
+  const phases = getEffectivePhasesForProjectLike({
+    category,
+    sopTemplateVersion: project.sopTemplateVersion,
+    customFields: project.customFields,
+  });
   // 安全网：currentPhase 必须是该 category 真实存在的阶段（如 jdm→input / obt→intake），
   // 否则（如非 UI 调用方沿用默认 "concept"）落到不存在的阶段。缺省取首阶段。
   const seeded = phases.some((p) => p.id === project.currentPhase)
@@ -1603,11 +1607,16 @@ export async function upsertProjectTask(
 export async function seedProjectPhasesAndTasks(
   projectId: string,
   category: string,
-  createdBy: number
+  createdBy: number,
+  templateVersion?: string | null,
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const phases = getSopPhasesForCategory(category);
+  const project = await getProjectById(projectId);
+  const phases = getEffectivePhasesForProjectLike(project ?? {
+    category,
+    sopTemplateVersion: templateVersion,
+  });
   for (const phase of phases) {
     // Insert phase record
     await db.insert(projectPhases).values({ projectId, phaseId: phase.id });

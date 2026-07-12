@@ -68,9 +68,9 @@ describe("立项向导端到端(create → kickoff)", () => {
     expect(r.success).toBe(true);
 
     const tasks = await getProjectTasks(PROJ_A);
-    const c1 = tasks.find((t) => t.taskId === "c1");
-    expect(c1?.assigneeUserId).toBe(PM_USER); // visibleRoles 首位 pm → 派给产品经理
-    expect(c1?.dueDate).toBeTruthy();          // 创建时已生成排期
+    const nc1 = tasks.find((t) => t.taskId === "nc1");
+    expect(nc1?.assigneeUserId).toBe(PM_USER); // visibleRoles 首位 pm → 派给产品经理
+    expect(nc1?.dueDate).toBeTruthy();          // 创建时已生成排期
   });
 
   it("创建时未填开始日:kickoff 设开始日,生成排期并派任务(含创建者兼任)", async () => {
@@ -92,12 +92,12 @@ describe("立项向导端到端(create → kickoff)", () => {
     expect(r.success).toBe(true);
 
     const tasks = await getProjectTasks(PROJ_B);
-    const c1 = tasks.find((t) => t.taskId === "c1");
-    const d3 = tasks.find((t) => t.taskId === "d3"); // 电子原理图 → rd_hw
-    expect(c1?.assigneeUserId).toBe(CREATOR);  // 创建者兼任也要派到
-    expect(d3?.assigneeUserId).toBe(PM_USER);
-    expect(c1?.dueDate).toBeTruthy();           // kickoff 设开始日 → 生成排期
-    expect(d3?.dueDate).toBeTruthy();
+    const nc1 = tasks.find((t) => t.taskId === "nc1");
+    const nd3 = tasks.find((t) => t.taskId === "nd3"); // 电子原理图 → rd_hw
+    expect(nc1?.assigneeUserId).toBe(CREATOR);  // 创建者兼任也要派到
+    expect(nd3?.assigneeUserId).toBe(PM_USER);
+    expect(nc1?.dueDate).toBeTruthy();           // kickoff 设开始日 → 生成排期
+    expect(nd3?.dueDate).toBeTruthy();
   });
 
   it("从未排期的项目:日期未变重跑向导也应自愈补排", async () => {
@@ -115,6 +115,6 @@ describe("立项向导端到端(create → kickoff)", () => {
       notify: false,
     });
     const tasks = await getProjectTasks(PROJ_A);
-    expect(tasks.find((t) => t.taskId === "c1")?.dueDate).toBeTruthy();
+    expect(tasks.find((t) => t.taskId === "nc1")?.dueDate).toBeTruthy();
   });
 });

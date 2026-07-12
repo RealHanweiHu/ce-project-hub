@@ -31,7 +31,10 @@ import { ENV } from "../_core/env";
 import { storageDelete } from "../storage";
 import { getProjectMembers, getProjectRolesForUser } from "../db";
 import { taskDisplayTitle } from "../task-title";
-import { getPhasesForCategory } from "../../shared/sop-templates";
+import {
+  getDefaultTemplateVersionForCategory,
+  getPhasesForCategory,
+} from "../../shared/sop-templates";
 import { isSystemAdminRole, systemRoleCanCreateProject } from "../../shared/system-roles";
 import { PROJECT_MEMBER_ROLES, type ProjectMemberRole } from "../../drizzle/schema";
 import { getEffectiveProjectRoleById as getEffectiveRole, pickHigherProjectRole } from "../project-access";
@@ -40,6 +43,7 @@ import { buildActionCardExecutePath, buildProjectActionPath, buildTaskCompletion
 import { cancelAndRecordProjectMeeting, syncAndRecordProjectMeeting } from "../services/project-meeting-lifecycle";
 import { createActionCardToken } from "../action-card-tokens";
 import { notifyPersonal } from "../notification-gateway";
+import { normalizeNpdTemplateConfig } from "../../shared/npd-v3";
 
 const DEFAULT_MEETING = { enabled: true, weekday: 3, time: "15:00", durationMin: 60, title: "项目周会" };
 const isoDateInput = z.string().refine(isISODate, "日期必须是有效的 YYYY-MM-DD");
@@ -149,6 +153,13 @@ const projectInputSchema = z.object({
   riskOverrideReason: z.string().trim().max(1000).nullable().optional(),
   /** 自定义字段值 fieldKey -> value */
   customFields: z.record(z.string(), z.unknown()).optional(),
+});
+
+const projectCreateInputSchema = projectInputSchema.extend({
+  npdTemplate: z.object({
+    tier: z.enum(["lite", "standard", "full"]).default("standard"),
+    packs: z.array(z.enum(["battery", "cert", "software", "mold"])).default([]),
+  }).optional(),
 });
 
 async function getConfirmedProductDefinitionSnapshotIfAvailable(productId: string, actorId: number) {
@@ -477,7 +488,7 @@ export const projectsRouter = router({
 
   /** Create a new project (requires canCreateProject or admin role) */
   create: protectedProcedure
-    .input(projectInputSchema)
+    .input(projectCreateInputSchema)
     .mutation(async ({ ctx, input }) => {
       // Check if user has permission to create projects
       const canCreate = systemRoleCanCreateProject(ctx.user);
@@ -490,6 +501,10 @@ export const projectsRouter = router({
       const handoffSnapshot = input.productId
         ? await getConfirmedProductDefinitionSnapshotIfAvailable(input.productId, ctx.user.id)
         : null;
+      const sopTemplateVersion = getDefaultTemplateVersionForCategory(input.category);
+      const customFields = input.category === "npd"
+        ? { ...(input.customFields ?? {}), npdTemplate: normalizeNpdTemplateConfig(input.npdTemplate) }
+        : (input.customFields ?? {});
       await createProjectWithSeed({
         id: input.id,
         name: input.name,
@@ -498,10 +513,12 @@ export const projectsRouter = router({
         pmUserId: input.pmUserId ?? null,
         productId: input.productId ?? null,
         productDefinitionSnapshotId: handoffSnapshot?.id ?? null,
+        sopTemplateVersion,
         description: input.description ?? null,
         customer: input.customer ?? null,
         background: input.background ?? null,
         value: input.value ?? null,
+        customFields,
         risk: "low",
         currentPhase: input.currentPhase,
         progress: input.progress,
@@ -530,6 +547,7 @@ export const projectsRouter = router({
           name: input.name,
           category: input.category,
           projectNumber: input.projectNumber,
+          sopTemplateVersion,
         },
       });
       // 默认周会配置 + 尝试建钉钉日程（降级安全，绝不阻断建项目）
