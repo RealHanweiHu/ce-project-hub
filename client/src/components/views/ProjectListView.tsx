@@ -19,7 +19,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import {
-  Project, PHASE_MAP, HEALTH_CONFIG,
+  Project, PHASE_MAP, HEALTH_CONFIG, type ProjectCreateDraft,
   computePhaseProgress, computeOverallProgress, getProjectPhases,
 } from '@/lib/data';
 import {
@@ -31,11 +31,17 @@ import {
 import { cn } from '@/lib/utils';
 import { useBoardPrefs } from '@/hooks/useBoardPrefs';
 import { isSystemAdminRole } from '@shared/system-roles';
+import {
+  NPD_ADDON_PACKS,
+  getNpdV3EffectivePhases,
+  type NpdAddonPackId,
+  type NpdTemplateTier,
+} from '@shared/npd-v3';
 
 interface ProjectListViewProps {
   projects: Project[];
   onSelectProject: (id: string) => void;
-  onAddProject: (project: Omit<Project, 'id' | 'phases'>) => void;
+  onAddProject: (project: ProjectCreateDraft) => Promise<void>;
   onDeleteProject: (id: string) => void;
   onCloneProject?: (sourceId: string, overrides: Partial<Omit<Project, 'id' | 'phases'>>) => void;
   /** Whether the current user can create new projects */
@@ -54,6 +60,18 @@ const STEP_LABELS: Record<WizardStep, string> = {
 const PRODUCT_TYPES = [
   '汽车充气泵', '自行车充气泵', '户外充气泵', '车载吸尘器',
   '暴力风扇', '胎压计', '机械式打气筒', '组件',
+];
+
+const NPD_TIER_OPTIONS: ReadonlyArray<{
+  id: NpdTemplateTier;
+  label: string;
+  code: string;
+  meta: string;
+  desc: string;
+}> = [
+  { id: 'lite', label: '轻量', code: 'LITE', meta: '15 项 · 6 阶段', desc: '成熟方案 / 低风险' },
+  { id: 'standard', label: '标准', code: 'STD', meta: '25 项 · 7 阶段', desc: '常规新品 / 完整主线' },
+  { id: 'full', label: '完整', code: 'FULL', meta: '32 项上限 · 7 阶段', desc: '全新平台 / 高复杂度' },
 ];
 
 // ── Kanban stage columns (display-only) ─────────────────────────────────────────
@@ -265,7 +283,7 @@ export function ProjectListView({
     // 类别没有对应此列的阶段（如 OBT 拖到 EVT 列）→ 明确提示，而不是写入非法阶段。
     let targetPhase: string | null = null;
     if (stageChanged) {
-      const candidate = getPhasesForCategory(project.category).find((ph) => stageBucket(ph.id) === toStage);
+      const candidate = getProjectPhases(project).find((ph) => stageBucket(ph.id) === toStage);
       if (!candidate) {
         const catName = CATEGORY_MAP[project.category as ProjectCategory]?.name ?? project.category;
         toast.error(`「${catName}」流程没有对应「${stageLabel(toStage)}」列的阶段，无法回退到此列`);
@@ -355,11 +373,15 @@ export function ProjectListView({
     risk: 'low' as 'low' | 'medium' | 'high',
   };
   const [form, setForm] = useState(emptyForm);
+  const [npdTier, setNpdTier] = useState<NpdTemplateTier>('standard');
+  const [npdPacks, setNpdPacks] = useState<NpdAddonPackId[]>([]);
 
   const resetWizard = () => {
     setStep(1);
     setSelectedCategory('npd');
     setForm(emptyForm);
+    setNpdTier('standard');
+    setNpdPacks([]);
   };
 
   const handleClose = () => {
@@ -369,8 +391,7 @@ export function ProjectListView({
 
   const handleCreate = async () => {
     if (!form.name.trim()) return;
-    const phases = getPhasesForCategory(selectedCategory);
-    const firstPhaseId = phases[0]?.id || 'concept';
+    const firstPhaseId = sopPhases[0]?.id || 'concept';
     // 关联产品:选了已有 → 用它;否则填了新产品名 → 先建档再关联
     let productId: string | null = form.productId || null;
     if (!productId && form.newProductName.trim()) {
@@ -379,19 +400,33 @@ export function ProjectListView({
         productId = res.id;
       } catch { /* 建产品失败不阻断建项目 */ }
     }
-    onAddProject({
-      code: form.code, name: form.name, type: form.type, pmUserId: form.pmUserId,
-      startDate: form.startDate, targetDate: form.targetDate, risk: form.risk,
-      productId,
-      pm: '',
-      currentPhase: firstPhaseId,
-      category: selectedCategory,
-    });
-    handleClose();
+    try {
+      await onAddProject({
+        code: form.code, name: form.name, type: form.type, pmUserId: form.pmUserId,
+        startDate: form.startDate, targetDate: form.targetDate, risk: form.risk,
+        productId,
+        pm: '',
+        currentPhase: firstPhaseId,
+        category: selectedCategory,
+        npdTemplate: selectedCategory === 'npd' ? { tier: npdTier, packs: npdPacks } : undefined,
+      });
+      handleClose();
+    } catch (error) {
+      toast.error(error instanceof Error && error.message ? error.message : '创建项目失败，请稍后重试');
+    }
   };
 
   const categoryConfig = CATEGORY_MAP[selectedCategory];
-  const sopPhases = getPhasesForCategory(selectedCategory);
+  const sopPhases = useMemo(
+    () => selectedCategory === 'npd'
+      ? getNpdV3EffectivePhases({ tier: npdTier, packs: npdPacks })
+      : getPhasesForCategory(selectedCategory),
+    [selectedCategory, npdTier, npdPacks],
+  );
+  const sopTaskCount = useMemo(
+    () => sopPhases.reduce((total, phase) => total + phase.tasks.length, 0),
+    [sopPhases],
+  );
 
   // ── Derived per-project presentation model ───────────────────────────────────
   interface Row {
@@ -406,7 +441,7 @@ export function ProjectListView({
     isStarred: boolean;
   }
   const rows: Row[] = useMemo(() => projects.map((project) => {
-    const phases = project.category ? getPhasesForCategory(project.category) : getProjectPhases(project);
+    const phases = getProjectPhases(project);
     const phaseObj = phases.find((p) => p.id === project.currentPhase) || PHASE_MAP[project.currentPhase];
     const catId = project.category || 'npd';
     const catConfig = CATEGORY_MAP[catId as ProjectCategory];
@@ -617,7 +652,7 @@ export function ProjectListView({
         <DialogContent className="max-w-[min(460px,calc(100vw-1.5rem))] gap-0 overflow-hidden p-0">
           {detailRow && (() => {
             const p = detailRow.project;
-            const phases = p.category ? getPhasesForCategory(p.category) : getProjectPhases(p);
+            const phases = getProjectPhases(p);
             const curIdx = phases.findIndex((ph) => ph.id === p.currentPhase);
             const health = HEALTH_CONFIG[p.risk];
             const changeLog = (p.changeLog || []).slice(0, 5);
@@ -926,6 +961,104 @@ export function ProjectListView({
                       );
                     })}
                   </div>
+
+                  {selectedCategory === 'npd' && (
+                    <section className="overflow-hidden rounded-[10px] border border-border bg-secondary/40">
+                      <div className="flex items-center justify-between gap-3 border-b border-border bg-card px-4 py-3">
+                        <div>
+                          <Kicker>流程配置 · PROCESS PROFILE</Kicker>
+                          <p className="mt-1 text-[11px] text-muted-foreground">先选主流程，再按产品实际增加专业工作包。</p>
+                        </div>
+                        <div className="shrink-0 rounded-[6px] border border-border bg-secondary px-2.5 py-1.5 text-right">
+                          <div className="text-[10px] font-semibold tracking-[0.12em] text-muted-foreground">ACTIVE SCOPE</div>
+                          <div className="mt-0.5 text-xs font-semibold text-foreground num">
+                            {sopPhases.length} STG · {sopTaskCount} TASKS
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-4 p-4">
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                          {NPD_TIER_OPTIONS.map((option) => {
+                            const active = npdTier === option.id;
+                            return (
+                              <button
+                                key={option.id}
+                                type="button"
+                                aria-pressed={active}
+                                onClick={() => {
+                                  setNpdTier(option.id);
+                                  if (option.id === 'full') {
+                                    setNpdPacks(NPD_ADDON_PACKS.map((pack) => pack.id));
+                                  }
+                                }}
+                                className={cn(
+                                  'relative rounded-[8px] border bg-card p-3 text-left transition-colors',
+                                  active
+                                    ? 'border-primary bg-[color:var(--acc-soft)] shadow-[inset_3px_0_0_var(--primary)]'
+                                    : 'border-border hover:border-[color:var(--acc-border)] hover:bg-secondary/60',
+                                )}
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <div>
+                                    <span className="text-sm font-semibold text-foreground">{option.label}</span>
+                                    <span className="ml-2 text-[9px] font-bold tracking-[0.14em] text-muted-foreground num">{option.code}</span>
+                                  </div>
+                                  {active && <Check size={13} className="mt-0.5 shrink-0 text-primary" />}
+                                </div>
+                                <div className="mt-2 text-[11px] font-medium text-foreground num">{option.meta}</div>
+                                <div className="mt-1 text-[10px] text-muted-foreground">{option.desc}</div>
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        <div className="border-t border-border pt-4">
+                          <div className="mb-2.5 flex items-end justify-between gap-3">
+                            <div>
+                              <Kicker>附加工作包 · ADD-ON MODULES</Kicker>
+                              <p className="mt-1 text-[11px] text-muted-foreground">只勾选项目真实涉及的专业工作线。</p>
+                            </div>
+                            <span className="text-[10px] font-semibold text-muted-foreground num">{npdPacks.length} / {NPD_ADDON_PACKS.length} ACTIVE</span>
+                          </div>
+                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            {NPD_ADDON_PACKS.map((pack) => {
+                              const active = npdPacks.includes(pack.id);
+                              return (
+                                <label
+                                  key={pack.id}
+                                  className={cn(
+                                    'flex cursor-pointer items-start gap-2.5 rounded-[7px] border bg-card px-3 py-2.5 transition-colors',
+                                    active
+                                      ? 'border-[color:var(--acc-border)] bg-[color:var(--acc-soft)]'
+                                      : 'border-border hover:bg-secondary/60',
+                                  )}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={active}
+                                    onChange={(event) => setNpdPacks((current) => event.target.checked
+                                      ? current.includes(pack.id) ? current : [...current, pack.id]
+                                      : current.filter((id) => id !== pack.id))}
+                                    className="mt-0.5 h-3.5 w-3.5 accent-primary"
+                                  />
+                                  <span className="min-w-0 flex-1">
+                                    <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                                      {pack.name}
+                                      {pack.redline && (
+                                        <span className="rounded-[4px] bg-[color:var(--warning-soft)] px-1.5 py-0.5 text-[9px] font-bold text-[color:var(--warning)]">受控</span>
+                                      )}
+                                    </span>
+                                    <span className="mt-1 block text-[10px] leading-relaxed text-muted-foreground">{pack.desc}</span>
+                                  </span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                  )}
                 </div>
               )}
 
@@ -935,7 +1068,7 @@ export function ProjectListView({
                   <div className="flex items-center gap-2 rounded-[8px] border border-[color:var(--acc-border)] bg-[color:var(--acc-soft)] px-3 py-2">
                     <span>{categoryConfig.icon}</span>
                     <span className="text-xs font-medium text-primary">
-                      {categoryConfig.name} · {categoryConfig.phaseCount} 个阶段 · {categoryConfig.typicalDuration}
+                      {categoryConfig.name} · {sopPhases.length} 个阶段 · {sopTaskCount} 个任务 · {categoryConfig.typicalDuration}
                     </span>
                   </div>
 
@@ -1060,7 +1193,7 @@ export function ProjectListView({
                   </div>
 
                   <div>
-                    <Kicker className="mb-3">{categoryConfig.name} SOP 流程 · {sopPhases.length} 个阶段</Kicker>
+                    <Kicker className="mb-3">{categoryConfig.name} SOP 流程 · {sopPhases.length} 个阶段 · {sopTaskCount} 个任务</Kicker>
                     <div className="space-y-2">
                       {sopPhases.map((phase, idx) => (
                         <div key={phase.id} className="flex items-start gap-3 rounded-[8px] border border-border bg-card p-3">

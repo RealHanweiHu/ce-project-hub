@@ -225,6 +225,8 @@ export interface Project {
   productId?: string | null;
   /** 创建/更新项目时锁定的产品定义快照 */
   productDefinitionSnapshotId?: number | null;
+  /** 建项时冻结的 SOP 模板版本。 */
+  sopTemplateVersion?: string;
   /** 立项基础信息 */
   description?: string | null;
   customer?: string | null;
@@ -250,7 +252,13 @@ export interface Project {
   customFields?: Record<string, unknown>;
 }
 
+/** 新建项目向导专用字段；不进入持久化 Project 聚合。 */
+export type ProjectCreateDraft = Omit<Project, 'id' | 'phases'> & {
+  npdTemplate?: import('@shared/npd-v3').NpdTemplateConfig;
+};
+
 import { NPD_PHASES } from '@shared/sop-templates';
+import { getEffectivePhasesForProjectLike } from '@shared/npd-v3';
 
 export const SOP_PHASES: SOPPhase[] = NPD_PHASES;
 
@@ -343,6 +351,9 @@ export const registerGetPhasesForCategory = (fn: (cat?: string) => SOPPhase[]) =
   _getPhasesForCategory = fn;
 };
 export const getProjectPhases = (project: Project): SOPPhase[] => {
+  if (project.category === 'npd' && project.sopTemplateVersion === '2026-07-v3') {
+    return getEffectivePhasesForProjectLike(project);
+  }
   if (_getPhasesForCategory) return _getPhasesForCategory(project.category as string | undefined);
   return SOP_PHASES;
 };
@@ -524,4 +535,3 @@ export const CATEGORY_LABELS: Record<IssueCategory, string> = {
   performance: '性能',
   other:       '其他',
 };
-

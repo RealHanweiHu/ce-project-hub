@@ -14,6 +14,7 @@ import type { TaskFocus } from '@/components/views/TaskListView';
 import { nanoid } from 'nanoid';
 import {
   Project, normalizeProject, Issue, GateReview, ChangeRecord, PhaseData,
+  type ProjectCreateDraft,
 } from '@/lib/data';
 import { buildPhasesDataForCategory, getPhasesForCategory } from '@/lib/sop-templates';
 import { trpc } from '@/lib/trpc';
@@ -180,6 +181,7 @@ function projectToApiInput(p: Project) {
 function rowToProject(row: {
   id: string; name: string; projectNumber: string; category: string;
   productId?: string | null; productDefinitionSnapshotId?: number | null;
+  sopTemplateVersion?: string | null;
   pmUserId?: number | null; risk: string; currentPhase: string; progress: number;
   accessRole?: string | null; canDeleteProject?: boolean; canEditProjectInfo?: boolean;
   riskOverrideRisk?: 'low' | 'medium' | 'high' | null;
@@ -187,6 +189,7 @@ function rowToProject(row: {
   riskOverrideUpdatedAt?: string | Date | null;
   riskOverrideUpdatedBy?: number | null;
   startDate: string | null; targetDate: string | null;
+  customFields?: Record<string, unknown> | null;
 }): Project {
   return normalizeProject({
     id: row.id,
@@ -199,6 +202,7 @@ function rowToProject(row: {
     canDeleteProject: !!row.canDeleteProject,
     canEditProjectInfo: !!row.canEditProjectInfo,
     productId: row.productId ?? null,
+    sopTemplateVersion: row.sopTemplateVersion ?? undefined,
     productDefinitionSnapshotId: row.productDefinitionSnapshotId ?? null,
     risk: (row.risk as 'low' | 'medium' | 'high') || 'low',
     riskOverrideRisk: row.riskOverrideRisk ?? null,
@@ -209,6 +213,7 @@ function rowToProject(row: {
     startDate: row.startDate || '',
     targetDate: row.targetDate || '',
     type: '',
+    customFields: row.customFields ?? {},
     phases: {},
   } as Project);
 }
@@ -726,14 +731,18 @@ export default function Home() {
     if (at) setLastSavedAt(at);
   }, []);
 
-  const handleAddProject = async (data: Omit<Project, 'id' | 'phases'>) => {
+  const handleAddProject = async (data: ProjectCreateDraft) => {
+    const { npdTemplate, ...projectData } = data;
     const newProject = normalizeProject({
-      ...data,
+      ...projectData,
       id: nanoid(8),
       phases: {},
     } as Project);
     try {
-      await createMutation.mutateAsync(projectToApiInput(newProject));
+      await createMutation.mutateAsync({
+        ...projectToApiInput(newProject),
+        ...(newProject.category === 'npd' ? { npdTemplate } : {}),
+      });
       invalidateProjects();
       // 立项即引导:跳到新项目并自动打开立项向导(开始日/PM 已预填,补齐各角色 → 派任务+通知)
       setSelectedProjectId(newProject.id);
@@ -747,8 +756,9 @@ export default function Home() {
         pmUserId: newProject.pmUserId ?? null,
         startDate: newProject.startDate || null,
       });
-    } catch {
+    } catch (error) {
       setSaveStatus('error');
+      throw error;
     }
   };
 
