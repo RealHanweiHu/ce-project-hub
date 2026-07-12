@@ -732,7 +732,7 @@ export function normalizeNpdTemplateConfig(raw?: unknown): NpdTemplateConfig {
       NPD_ADDON_PACK_IDS.includes(pack as NpdAddonPackId)
     )
     : [];
-  return { tier, packs: [...new Set(packs)] };
+  return { tier, packs: Array.from(new Set(packs)) };
 }
 
 /** lite 没有 EVT/DVT 阶段，包任务与必交物都归入 verification。 */
@@ -765,7 +765,7 @@ function packDeliverablesForPhase(
 }
 
 function uniqueStrings(values: string[]): string[] {
-  return [...new Set(values)];
+  return Array.from(new Set(values));
 }
 
 export function getNpdV3EffectivePhases(config?: unknown): SOPPhase[] {
