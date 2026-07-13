@@ -10,6 +10,7 @@ import {
 import { trpc } from '@/lib/trpc';
 import { useQueryClient } from '@tanstack/react-query';
 import { getQueryKey } from '@trpc/react-query';
+import { toast } from 'sonner';
 
 // Role metadata for display
 const ROLE_META: Record<string, {
@@ -253,24 +254,60 @@ export function MembersPanel({ projectId, canManage }: MembersPanelProps) {
   const [showInvite, setShowInvite] = useState(false);
   const [selectedUser, setSelectedUser] = useState<SearchUser | null>(null);
   const [inviteRole, setInviteRole] = useState<AssignableRole>('viewer');
+  const [inviteExtraRoles, setInviteExtraRoles] = useState<AssignableRole[]>([]);
   const [inviteJobTitle, setInviteJobTitle] = useState('');
   const [inviteError, setInviteError] = useState('');
   const [inviteSuccess, setInviteSuccess] = useState('');
   const [editingUserId, setEditingUserId] = useState<number | null>(null);
   const [editRole, setEditRole] = useState<AssignableRole>('viewer');
+  const [editExtraRoles, setEditExtraRoles] = useState<AssignableRole[]>([]);
   const [editJobTitle, setEditJobTitle] = useState('');
+  const [removingUserId, setRemovingUserId] = useState<number | null>(null);
+  const [replacementUserId, setReplacementUserId] = useState<number | null>(null);
+  const [delegationRole, setDelegationRole] = useState<AssignableRole>('qa');
+  const [delegationFromUserId, setDelegationFromUserId] = useState<number | ''>('');
+  const [delegationToUserId, setDelegationToUserId] = useState<number | ''>('');
+  const [delegationStartDate, setDelegationStartDate] = useState('');
+  const [delegationEndDate, setDelegationEndDate] = useState('');
+  const [delegationReason, setDelegationReason] = useState('');
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: getQueryKey(trpc.members.list) });
   };
 
   const { data: members = [], isLoading } = trpc.members.list.useQuery({ projectId });
+  const delegations = trpc.delegations.list.useQuery({ projectId }, { enabled: canManage });
+  const createDelegation = trpc.delegations.create.useMutation({
+    onSuccess: () => {
+      delegations.refetch();
+      setDelegationReason('');
+      toast.success('代理人已生效');
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const revokeDelegation = trpc.delegations.revoke.useMutation({
+    onSuccess: () => delegations.refetch(),
+    onError: (error) => toast.error(error.message),
+  });
+  const staffingGaps = trpc.staffing.gaps.useQuery(
+    { projectId },
+    { enabled: canManage },
+  );
+  const transferGap = trpc.staffing.transfer.useMutation({
+    onSuccess: () => {
+      staffingGaps.refetch();
+      invalidate();
+      toast.success('已移交');
+    },
+    onError: (error) => toast.error(`移交失败：${error.message}`),
+  });
 
   const inviteMutation = trpc.members.invite.useMutation({
     onSuccess: (res) => {
       invalidate();
       setInviteSuccess(res.updated ? '已更新该成员的角色' : '邀请成功！对方现在可以访问此项目');
       setSelectedUser(null);
+      setInviteExtraRoles([]);
       setInviteJobTitle('');
       setInviteError('');
       setTimeout(() => { setInviteSuccess(''); setShowInvite(false); }, 2000);
@@ -282,10 +319,19 @@ export function MembersPanel({ projectId, canManage }: MembersPanelProps) {
 
   const updateRoleMutation = trpc.members.updateRole.useMutation({
     onSuccess: () => { invalidate(); setEditingUserId(null); },
+    onError: (error) => toast.error(`保存角色失败：${error.message}`),
   });
 
-  const removeMutation = trpc.members.remove.useMutation({
-    onSuccess: () => { invalidate(); },
+  const handoffPreview = trpc.members.handoffPreview.useQuery(
+    { projectId, userId: removingUserId ?? 0 },
+    { enabled: removingUserId != null },
+  );
+  const handoffAndRemoveMutation = trpc.members.handoffAndRemove.useMutation({
+    onSuccess: () => {
+      invalidate();
+      setRemovingUserId(null);
+      setReplacementUserId(null);
+    },
   });
 
   const handleInvite = () => {
@@ -295,6 +341,7 @@ export function MembersPanel({ projectId, canManage }: MembersPanelProps) {
       projectId,
       userId: selectedUser.id,
       role: inviteRole,
+      extraRoles: inviteExtraRoles.filter((role) => role !== inviteRole),
       jobTitle: inviteJobTitle.trim() || undefined,
     });
   };
@@ -302,6 +349,7 @@ export function MembersPanel({ projectId, canManage }: MembersPanelProps) {
   const handleEditStart = (member: typeof members[0]) => {
     setEditingUserId(member.userId);
     setEditRole(member.role as AssignableRole);
+    setEditExtraRoles((member.extraRoles ?? []) as AssignableRole[]);
     setEditJobTitle(member.jobTitle || '');
   };
 
@@ -310,6 +358,7 @@ export function MembersPanel({ projectId, canManage }: MembersPanelProps) {
       projectId,
       userId,
       role: editRole,
+      extraRoles: editExtraRoles.filter((role) => role !== editRole),
       jobTitle: editJobTitle || null,
     });
   };
@@ -349,6 +398,31 @@ export function MembersPanel({ projectId, canManage }: MembersPanelProps) {
             >
               <X size={16} />
             </button>
+          </div>
+
+          <div>
+            <label className="block text-[10px] num uppercase tracking-wider text-muted-foreground mb-2">
+              兼任角色（可选）
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {ASSIGNABLE_ROLES.filter((role) => role !== inviteRole).map((role) => {
+                const meta = ROLE_META[role];
+                const selected = inviteExtraRoles.includes(role);
+                return (
+                  <button
+                    key={role}
+                    type="button"
+                    onClick={() => setInviteExtraRoles(selected
+                      ? inviteExtraRoles.filter((item) => item !== role)
+                      : [...inviteExtraRoles, role])}
+                    className={`flex items-center gap-1 px-2 py-1 text-[10px] border ${selected ? `${meta.bg} ${meta.border} ${meta.color}` : 'bg-card border-border text-muted-foreground'}`}
+                  >
+                    {meta.icon}{meta.label}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-1 text-[10px] text-muted-foreground">主角色用于展示；实际权限按主角色与兼任角色合并。</p>
           </div>
 
           {/* User search */}
@@ -448,6 +522,112 @@ export function MembersPanel({ projectId, canManage }: MembersPanelProps) {
 
       {/* 角色职权矩阵已按需求移除：不在项目详情显示角色具体职权 */}
 
+      {canManage && (staffingGaps.data?.length ?? 0) > 0 && (
+        <div className="rounded-[10px] border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] p-4">
+          <div className="text-sm font-semibold text-foreground">待补岗位与临时承接</div>
+          <p className="mt-1 text-xs text-muted-foreground">空岗任务已由项目经理临时承接；岗位补齐后可在这里移交未完成任务。</p>
+          <div className="mt-3 space-y-2">
+            {staffingGaps.data?.map((gap) => {
+              const candidate = members.find((member) => member.userId === gap.candidateUserId);
+              return (
+                <div key={gap.role} className="flex items-center justify-between gap-3 rounded border border-border bg-card px-3 py-2 text-xs">
+                  <span>{ROLE_META[gap.role]?.label ?? gap.role} · {gap.taskCount} 项临时承接任务</span>
+                  {candidate ? (
+                    <button
+                      disabled={transferGap.isPending}
+                      onClick={() => transferGap.mutate({ projectId, role: gap.role, toUserId: candidate.userId })}
+                      className="rounded bg-primary px-2.5 py-1 text-primary-foreground disabled:opacity-50"
+                    >移交给 {candidate.userName || candidate.userEmail}</button>
+                  ) : (
+                    <span className="text-[color:var(--warning)]">待补人</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {canManage && (
+        <div className="rounded-[10px] border border-border bg-card p-4">
+          <div className="text-sm font-semibold text-foreground">岗位代理</div>
+          <p className="mt-1 text-xs text-muted-foreground">适合休假、兼职支援或待补岗位；到期后权限自动失效。</p>
+          <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-3">
+            <select value={delegationRole} onChange={(event) => setDelegationRole(event.target.value as AssignableRole)} className="rounded border border-border bg-card px-2 py-1.5 text-xs">
+              {ASSIGNABLE_ROLES.filter((role) => role !== 'viewer').map((role) => <option key={role} value={role}>{ROLE_META[role].label}</option>)}
+            </select>
+            <select value={delegationFromUserId} onChange={(event) => setDelegationFromUserId(event.target.value ? Number(event.target.value) : '')} className="rounded border border-border bg-card px-2 py-1.5 text-xs">
+              <option value="">待补岗位（无原持有人）</option>
+              {members.map((member) => <option key={member.userId} value={member.userId}>由 {member.userName || member.userEmail}</option>)}
+            </select>
+            <select value={delegationToUserId} onChange={(event) => setDelegationToUserId(event.target.value ? Number(event.target.value) : '')} className="rounded border border-border bg-card px-2 py-1.5 text-xs">
+              <option value="">选择代理人</option>
+              {members.map((member) => <option key={member.userId} value={member.userId}>{member.userName || member.userEmail}</option>)}
+            </select>
+            <input type="date" value={delegationStartDate} onChange={(event) => setDelegationStartDate(event.target.value)} className="rounded border border-border bg-card px-2 py-1.5 text-xs" />
+            <input type="date" value={delegationEndDate} onChange={(event) => setDelegationEndDate(event.target.value)} className="rounded border border-border bg-card px-2 py-1.5 text-xs" />
+            <input value={delegationReason} onChange={(event) => setDelegationReason(event.target.value)} placeholder="代理原因" className="rounded border border-border bg-card px-2 py-1.5 text-xs" />
+          </div>
+          <button
+            disabled={!delegationToUserId || !delegationStartDate || !delegationEndDate || delegationReason.trim().length < 2 || createDelegation.isPending}
+            onClick={() => delegationToUserId && createDelegation.mutate({
+              projectId, role: delegationRole, fromUserId: delegationFromUserId || null,
+              toUserId: delegationToUserId, startDate: delegationStartDate, endDate: delegationEndDate,
+              reason: delegationReason.trim(),
+            })}
+            className="mt-2 rounded bg-primary px-3 py-1.5 text-xs text-primary-foreground disabled:opacity-50"
+          >建立代理</button>
+          <div className="mt-3 space-y-1.5">
+            {delegations.data?.filter((item) => item.active).map((item) => {
+              const target = members.find((member) => member.userId === item.toUserId);
+              return (
+                <div key={item.id} className="flex items-center justify-between rounded border border-border bg-secondary/30 px-2.5 py-1.5 text-xs">
+                  <span>{ROLE_META[item.role]?.label ?? item.role} → {target?.userName || target?.userEmail || `用户${item.toUserId}`} · {item.startDate} 至 {item.endDate}</span>
+                  <button onClick={() => revokeDelegation.mutate({ projectId, id: item.id })} className="text-muted-foreground hover:text-destructive">撤销</button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {removingUserId != null && canManage && (
+        <div className="space-y-3 rounded-[10px] border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] p-4">
+          <div>
+            <div className="text-sm font-semibold text-foreground">先交接责任，再移除成员</div>
+            <div className="mt-1 text-xs text-muted-foreground">系统会原子转移任务、待审批、条件项、行动项、费用、关闭移交责任及 PM 身份；任一步失败都不会移除成员。</div>
+          </div>
+          {handoffPreview.data && (
+            <div className="flex flex-wrap gap-2 text-[10px] text-muted-foreground">
+              {Object.entries(handoffPreview.data).map(([key, value]) => (
+                (typeof value === 'number' && value > 0) || (key === 'isProjectManager' && value)
+                  ? <span key={key} className="rounded border border-border bg-card px-2 py-1">{key === 'isProjectManager' ? '项目经理身份' : `${key}: ${value}`}</span>
+                  : null
+              ))}
+            </div>
+          )}
+          <select
+            value={replacementUserId ?? ''}
+            onChange={(event) => setReplacementUserId(event.target.value ? Number(event.target.value) : null)}
+            className="w-full rounded border border-border bg-card px-3 py-2 text-sm"
+          >
+            <option value="">选择责任接收人</option>
+            {members.filter((member) => member.userId !== removingUserId).map((member) => (
+              <option key={member.userId} value={member.userId}>{member.userName || member.userEmail}</option>
+            ))}
+          </select>
+          {handoffAndRemoveMutation.error && <div className="text-xs text-destructive">{handoffAndRemoveMutation.error.message}</div>}
+          <div className="flex gap-2">
+            <button
+              disabled={!replacementUserId || handoffAndRemoveMutation.isPending}
+              onClick={() => replacementUserId && handoffAndRemoveMutation.mutate({ projectId, userId: removingUserId, replacementUserId })}
+              className="rounded bg-primary px-3 py-1.5 text-xs text-primary-foreground disabled:opacity-50"
+            >确认交接并移除</button>
+            <button onClick={() => { setRemovingUserId(null); setReplacementUserId(null); }} className="rounded border border-border bg-card px-3 py-1.5 text-xs">取消</button>
+          </div>
+        </div>
+      )}
+
       {/* Member List */}
       {isLoading ? (
         <div className="flex items-center justify-center py-12">
@@ -476,7 +656,7 @@ export function MembersPanel({ projectId, canManage }: MembersPanelProps) {
                       </div>
                     </div>
                     <div>
-                      <label className="block text-[10px] num uppercase tracking-wider text-muted-foreground mb-2">角色</label>
+                      <label className="block text-[10px] num uppercase tracking-wider text-muted-foreground mb-2">主角色</label>
                       <div className="flex flex-wrap gap-2">
                         {ASSIGNABLE_ROLES.map((role) => {
                           const m = ROLE_META[role];
@@ -489,6 +669,27 @@ export function MembersPanel({ projectId, canManage }: MembersPanelProps) {
                                   ? `${m.bg} ${m.border} border-2 ${m.color}`
                                   : 'bg-card border-border text-muted-foreground hover:border-border'
                               }`}
+                            >
+                              {m.icon}{m.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] num uppercase tracking-wider text-muted-foreground mb-2">兼任角色</label>
+                      <div className="flex flex-wrap gap-2">
+                        {ASSIGNABLE_ROLES.filter((role) => role !== editRole).map((role) => {
+                          const m = ROLE_META[role];
+                          const selected = editExtraRoles.includes(role);
+                          return (
+                            <button
+                              key={role}
+                              type="button"
+                              onClick={() => setEditExtraRoles(selected
+                                ? editExtraRoles.filter((item) => item !== role)
+                                : [...editExtraRoles, role])}
+                              className={`flex items-center gap-1 px-2.5 py-1 text-[11px] border ${selected ? `${m.bg} ${m.border} ${m.color}` : 'bg-card border-border text-muted-foreground'}`}
                             >
                               {m.icon}{m.label}
                             </button>
@@ -532,6 +733,14 @@ export function MembersPanel({ projectId, canManage }: MembersPanelProps) {
                         <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] num border ${meta.color} ${meta.bg} ${meta.border}`}>
                           {meta.icon}{meta.label}
                         </span>
+                        {(member.extraRoles ?? []).map((role) => {
+                          const extra = ROLE_META[role] || ROLE_META.viewer;
+                          return (
+                            <span key={role} className={`inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] num border border-dashed ${extra.color} ${extra.bg} ${extra.border}`}>
+                              {extra.icon}兼任·{extra.label}
+                            </span>
+                          );
+                        })}
                       </div>
                       <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-3">
                         {member.userEmail && <span className="num">{member.userEmail}</span>}
@@ -557,11 +766,7 @@ export function MembersPanel({ projectId, canManage }: MembersPanelProps) {
                           <Edit3 size={14} />
                         </button>
                         <button
-                          onClick={() => {
-                            if (confirm(`确认移除成员 ${member.userName || member.userEmail}？`)) {
-                              removeMutation.mutate({ projectId, userId: member.userId });
-                            }
-                          }}
+                          onClick={() => { setRemovingUserId(member.userId); setReplacementUserId(null); }}
                           className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-[color:var(--destructive-soft)] transition-colors"
                           title="移除成员"
                         >

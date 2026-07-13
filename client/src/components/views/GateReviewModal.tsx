@@ -5,7 +5,7 @@ import {
 } from '@/components/ui/dialog';
 import {
   Flag, CheckCircle2, AlertCircle, XCircle, Users, Calendar,
-  FileText, ClipboardCheck, Plus, ChevronDown, ChevronRight, RotateCcw,
+  FileText, ClipboardCheck, Plus, Trash2, ChevronDown, ChevronRight, RotateCcw,
 } from 'lucide-react';
 import { GateReview } from '@/lib/data';
 import { GATE_DECISIONS } from '@shared/const';
@@ -14,6 +14,17 @@ import { GateReadinessChecklist } from './GateReadinessChecklist';
 import type { SOPGateStandard } from '@/lib/sop-templates';
 import { GateStandardPanel } from '@/components/shared/GateStandardPanel';
 import { nanoid } from 'nanoid';
+import { trpc } from '@/lib/trpc';
+import { toast } from 'sonner';
+import {
+  GATE_SIGNOFF_REQUIREMENT_LABELS,
+  GATE_SIGNOFF_STATUS_LABELS,
+  type GateSignoffSlot,
+} from '@shared/gate-signoffs';
+import { StabilityGatePanel } from './StabilityGatePanel';
+import { certificationRequirementLabel } from '@shared/certification';
+import { CloseHandoffPanel } from './CloseHandoffPanel';
+import type { ProjectMemberRole } from '@shared/project-roles';
 
 // ── Decision config ───────────────────────────────────────────────────────────
 export const DECISION_CONFIG: Record<GateReview['decision'], {
@@ -152,6 +163,9 @@ interface ReviewFormState {
   participants: string;
   decision: GateReview['decision'];
   conditions: string;
+  conditionOwnerUserId: number | null;
+  conditionDueDate: string;
+  conditionItems: Array<{ description: string; ownerUserId: number | null; dueDate: string }>;
   notes: string;
 }
 
@@ -160,19 +174,30 @@ function NewReviewForm({
   allowedDecisions,
   onSubmit,
   onCancel,
+  signoffsReady = true,
+  projectId,
 }: {
   roundNumber: number;
   /** 可选的决议项：管理层三项全开；项目经理（仅召集权）只能记录「不通过」 */
   allowedDecisions: GateReview['decision'][];
   onSubmit: (form: ReviewFormState) => void;
   onCancel: () => void;
+  signoffsReady?: boolean;
+  projectId?: string;
 }) {
+  const { data: members = [] } = trpc.members.list.useQuery(
+    { projectId: projectId || '' },
+    { enabled: !!projectId },
+  );
   const today = toLocalISODate();
   const [form, setForm] = useState<ReviewFormState>({
     reviewDate: today,
     participants: '',
     decision: allowedDecisions.includes('approved') ? 'approved' : allowedDecisions[0],
     conditions: '',
+    conditionOwnerUserId: null,
+    conditionDueDate: '',
+    conditionItems: [{ description: '', ownerUserId: null, dueDate: '' }],
     notes: '',
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -181,8 +206,14 @@ function NewReviewForm({
     const e: Record<string, string> = {};
     if (!form.reviewDate) e.reviewDate = '请填写评审日期';
     if (!form.participants.trim()) e.participants = '请填写参与人员';
-    if (form.decision === 'conditional' && !form.conditions.trim()) {
-      e.conditions = '有条件通过需填写具体条件';
+    if (form.decision === 'conditional') {
+      if (form.conditionItems.length === 0) e.conditions = '至少需要一条通过条件';
+      form.conditionItems.forEach((item, index) => {
+        if (!item.description.trim() || !item.ownerUserId || !item.dueDate) e[`condition-${index}`] = `条件 ${index + 1} 的内容、负责人和截止日期必须完整`;
+      });
+    }
+    if (form.decision !== 'rejected' && !signoffsReady) {
+      e.decision = '必签会签未完成，管理层暂不能拍板';
     }
     setErrors(e);
     return Object.keys(e).length === 0;
@@ -227,6 +258,7 @@ function NewReviewForm({
             </button>
           ))}
         </div>
+        {errors.decision && <p className="mt-1 text-[11px] text-destructive">{errors.decision}</p>}
       </div>
 
       {/* Date */}
@@ -264,20 +296,25 @@ function NewReviewForm({
 
       {/* Conditions */}
       {form.decision === 'conditional' && (
-        <div>
-          <label className="text-[10px] uppercase tracking-widest text-[color:var(--warning)] mb-1.5 flex items-center gap-1.5">
-            <AlertCircle size={10} /> 通过条件 <span className="text-destructive">*</span>
-          </label>
-          <textarea
-            value={form.conditions}
-            onChange={(e) => setForm((f) => ({ ...f, conditions: e.target.value }))}
-            rows={3}
-            placeholder="请列明需满足的具体条件..."
-            className={`w-full text-sm rounded-[7px] border px-3 py-2 outline-none resize-none transition-colors ${
-              errors.conditions ? 'border-destructive bg-[color:var(--destructive-soft)]' : 'border-[color:var(--warning)] bg-[color:var(--warning-soft)] focus:border-[color:var(--warning)]'
-            }`}
-          />
-          {errors.conditions && <p className="text-xs text-destructive mt-1">{errors.conditions}</p>}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <label className="text-[10px] uppercase tracking-widest text-[color:var(--warning)] flex items-center gap-1.5">
+              <AlertCircle size={10} /> 逐项通过条件 <span className="text-destructive">*</span>
+            </label>
+            <button type="button" onClick={() => setForm((f) => ({ ...f, conditionItems: [...f.conditionItems, { description: '', ownerUserId: null, dueDate: '' }] }))} className="inline-flex items-center gap-1 rounded-[6px] border border-border px-2 py-1 text-[10px]"><Plus size={11} />添加条件</button>
+          </div>
+          {form.conditionItems.map((item, index) => (
+            <div key={index} className={`space-y-2 rounded-[8px] border p-3 ${errors[`condition-${index}`] ? 'border-destructive bg-[color:var(--destructive-soft)]' : 'border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)]'}`}>
+              <div className="flex items-center justify-between"><span className="text-[10px] font-semibold text-[color:var(--warning)]">条件 {index + 1}</span>{form.conditionItems.length > 1 && <button type="button" onClick={() => setForm((f) => ({ ...f, conditionItems: f.conditionItems.filter((_, itemIndex) => itemIndex !== index) }))} className="text-muted-foreground hover:text-destructive"><Trash2 size={12} /></button>}</div>
+              <textarea value={item.description} onChange={(event) => setForm((f) => ({ ...f, conditionItems: f.conditionItems.map((row, itemIndex) => itemIndex === index ? { ...row, description: event.target.value } : row) }))} rows={2} placeholder="单条、可验证的关闭条件" className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none" />
+              <div className="grid grid-cols-2 gap-2">
+                <select value={item.ownerUserId ?? ''} onChange={(event) => setForm((f) => ({ ...f, conditionItems: f.conditionItems.map((row, itemIndex) => itemIndex === index ? { ...row, ownerUserId: event.target.value ? Number(event.target.value) : null } : row) }))} className="rounded-[7px] border border-border bg-card px-2 py-2 text-xs"><option value="">跟进负责人</option>{members.map((member) => <option key={member.userId} value={member.userId}>{member.userName || member.mentionName || `用户 #${member.userId}`}</option>)}</select>
+                <input type="date" value={item.dueDate} onChange={(event) => setForm((f) => ({ ...f, conditionItems: f.conditionItems.map((row, itemIndex) => itemIndex === index ? { ...row, dueDate: event.target.value } : row) }))} className="rounded-[7px] border border-border bg-card px-2 py-2 text-xs" />
+              </div>
+              {errors[`condition-${index}`] && <p className="text-[10px] text-destructive">{errors[`condition-${index}`]}</p>}
+            </div>
+          ))}
+          {errors.conditions && <p className="text-xs text-destructive">{errors.conditions}</p>}
         </div>
       )}
 
@@ -295,6 +332,11 @@ function NewReviewForm({
         />
       </div>
 
+      {form.decision !== 'rejected' && !signoffsReady && (
+        <div className="text-xs text-amber-600" role="status">
+          必签会签未完成或就绪数据未加载，暂不能提交「通过/有条件通过」；可先提交「拒绝」，或完成会签/等待就绪数据后重试。
+        </div>
+      )}
       <div className="flex gap-2 pt-1">
         <button
           onClick={onCancel}
@@ -304,11 +346,14 @@ function NewReviewForm({
         </button>
         <button
           onClick={handleSubmit}
+          aria-disabled={form.decision !== 'rejected' && !signoffsReady}
+          disabled={form.decision !== 'rejected' && !signoffsReady}
           className="flex-1 px-3 py-2 text-sm font-semibold text-white rounded-[7px] transition-colors flex items-center justify-center gap-1.5"
           style={{
             background:
               form.decision === 'approved' ? 'var(--success)' :
               form.decision === 'conditional' ? 'var(--warning)' : 'var(--destructive)',
+            opacity: form.decision !== 'rejected' && !signoffsReady ? 0.5 : 1,
           }}
         >
           {selectedCfg.icon}
@@ -336,6 +381,7 @@ interface GateReviewModalProps {
   canEditDeliverables?: boolean;
   canQualityGateBlock?: boolean;
   canNpiGateBlock?: boolean;
+  onTaskClick?: (phaseId: string, taskId: string) => void;
   onConfirm: (review: GateReview) => void;
   onCancel: () => void;
   readOnly?: boolean;
@@ -344,14 +390,87 @@ interface GateReviewModalProps {
 }
 
 export function GateReviewModal({
-  open, phaseId, phaseName, gateName, gateStandard, existingReviews = [], blockers = [], projectId, gateTaskId, canEditDeliverables = false, canQualityGateBlock = false, canNpiGateBlock = false, onConfirm, onCancel, readOnly = false, canDecide = true,
+  open, phaseId, phaseName, gateName, gateStandard, existingReviews = [], blockers = [], projectId, gateTaskId, canEditDeliverables = false, canQualityGateBlock = false, canNpiGateBlock = false, onTaskClick, onConfirm, onCancel, readOnly = false, canDecide = true,
 }: GateReviewModalProps) {
   // readOnly（无 canGateReview 权限）绝不能进表单：否则用户填完提交被静默丢弃
   const [showForm, setShowForm] = useState(existingReviews.length === 0 && !readOnly);
   const latestReview = existingReviews[existingReviews.length - 1];
   const nextRound = existingReviews.length + 1;
+  const utils = trpc.useUtils();
+  const signoffsQuery = trpc.gateReviews.signoffs.useQuery(
+    { projectId: projectId || '', phaseId },
+    { enabled: !!projectId },
+  );
+  const myRoleQuery = trpc.members.myRole.useQuery(
+    { projectId: projectId || '' },
+    { enabled: !!projectId },
+  );
+  const [signoffNotes, setSignoffNotes] = useState<Partial<Record<GateSignoffSlot, string>>>({});
+  const [signoffRoles, setSignoffRoles] = useState<Partial<Record<GateSignoffSlot, ProjectMemberRole>>>({});
+  const signoffMutation = trpc.gateReviews.sign.useMutation({
+    onSuccess: async () => {
+      if (projectId) await utils.gateReviews.signoffs.invalidate({ projectId, phaseId });
+      toast.success('会签已记录');
+    },
+    onError: (error) => toast.error(error.message || '会签失败'),
+  });
+  const addRequirementMutation = trpc.gateReviews.addRequirement.useMutation({
+    onSuccess: async () => {
+      if (projectId) await utils.gateReviews.signoffs.invalidate({ projectId, phaseId });
+      toast.success('项目级加签已生效；如本轮已开启，系统已按新矩阵重开');
+    },
+    onError: (error) => toast.error(error.message || '加签失败'),
+  });
+  const signoffSlots = signoffsQuery.data?.slots ?? [];
+  const stabilityReadiness = trpc.stability.readiness.useQuery(
+    { projectId: projectId || '' },
+    { enabled: !!projectId && gateTaskId === 'project_close_review' },
+  );
+  const certificationCoverage = trpc.certificates.coverage.useQuery(
+    { projectId: projectId || '' },
+    { enabled: !!projectId && gateTaskId === 'project_close_review' },
+  );
+  const conditionsReadiness = trpc.conditions.readiness.useQuery(
+    { projectId: projectId || '' },
+    { enabled: !!projectId && gateTaskId === 'project_close_review' },
+  );
+  const handoffReadiness = trpc.handoffs.readiness.useQuery(
+    { projectId: projectId || '' },
+    { enabled: !!projectId && gateTaskId === 'project_close_review' },
+  );
+  // 查询报错/未返回时不得默认"会签就绪"——四眼 UI 的空数据必须按未就绪处理
+  const signoffsReady = !!projectId && signoffsQuery.data != null && signoffSlots.every((slot) =>
+    slot.requirement !== 'required' || slot.status === 'approved'
+  ) && !signoffSlots.some((slot) => slot.status === 'rejected');
+  const approvalReady = signoffsReady && (gateTaskId !== 'project_close_review' || (
+    stabilityReadiness.data?.ready === true &&
+    certificationCoverage.data?.covered === true &&
+    conditionsReadiness.data?.ready === true &&
+    handoffReadiness.data?.ready === true
+  ));
+
+  const submitSignoff = (slot: GateSignoffSlot, status: 'approved' | 'conditional' | 'rejected') => {
+    if (!projectId) return;
+    const note = signoffNotes[slot]?.trim() || null;
+    if ((status === 'conditional' || status === 'rejected') && !note) {
+      toast.error('有条件同意或拒绝必须填写说明');
+      return;
+    }
+    signoffMutation.mutate({ projectId, phaseId, slot, status, note, actedAsRole: signoffRoles[slot] || undefined });
+  };
+
+  const addRequiredSignoff = (slot: GateSignoffSlot) => {
+    if (!projectId) return;
+    const reason = window.prompt('请输入项目级加签原因');
+    if (!reason?.trim()) return;
+    addRequirementMutation.mutate({ projectId, phaseId, slot, requirement: 'required', reason: reason.trim() });
+  };
 
   const handleSubmit = (form: ReviewFormState) => {
+    const conditionItems = form.decision === 'conditional'
+      ? form.conditionItems.map((item) => ({ description: item.description.trim(), ownerUserId: item.ownerUserId!, dueDate: item.dueDate }))
+      : [];
+    const firstCondition = conditionItems[0];
     const review: GateReview = {
       id: `gr_${nanoid(8)}`,
       phaseId,
@@ -360,7 +479,10 @@ export function GateReviewModal({
       reviewDate: form.reviewDate,
       participants: form.participants,
       decision: form.decision,
-      conditions: form.conditions,
+      conditions: conditionItems.map((item, index) => `${index + 1}. ${item.description}`).join('\n'),
+      conditionOwnerUserId: firstCondition?.ownerUserId ?? null,
+      conditionDueDate: firstCondition?.dueDate ?? null,
+      conditionItems,
       notes: form.notes,
       createdAt: new Date().toISOString(),
       roundNumber: nextRound,
@@ -403,6 +525,7 @@ export function GateReviewModal({
             canEdit={canEditDeliverables}
             canQualityGateBlock={canQualityGateBlock}
             canNpiGateBlock={canNpiGateBlock}
+            onTaskClick={onTaskClick}
           />
         ) : blockers.length > 0 ? (
           <div className="border border-[color:var(--warning)] bg-[color:var(--warning-soft)] rounded-[9px] p-3 mb-4">
@@ -413,6 +536,88 @@ export function GateReviewModal({
             <div className="text-[11px] text-[color:var(--warning)] mt-1.5">建议补齐后通过;如需放行,请选「有条件通过」并在条件里写明例外项的责任人与截止日期。</div>
           </div>
         ) : null}
+
+        {projectId && gateTaskId === 'project_close_review' && (
+          <>
+            <StabilityGatePanel projectId={projectId} canEdit={canEditDeliverables} />
+            <div className="mb-4"><CloseHandoffPanel projectId={projectId} /></div>
+            {((certificationCoverage.data?.missing.length ?? 0) > 0 || (conditionsReadiness.data?.openCount ?? 0) > 0 || (handoffReadiness.data?.blockers.length ?? 0) > 0) && (
+              <div className="mb-4 rounded-[9px] border border-[color:var(--warning)] bg-[color:var(--warning-soft)] p-3 text-xs text-[color:var(--warning)]">
+                <div className="font-semibold">Close Gate 增量硬卡未满足</div>
+                <ul className="mt-1 list-disc space-y-1 pl-4">
+                  {certificationCoverage.data?.missing.map((item) => <li key={`${item.type}:${item.market ?? '*'}`}>证书缺口：{certificationRequirementLabel(item)}</li>)}
+                  {conditionsReadiness.data?.blockers.map((item) => <li key={item}>条件项未闭环：{item}</li>)}
+                  {handoffReadiness.data?.blockers.map((item) => <li key={item}>量产移交未完成：{item}</li>)}
+                </ul>
+              </div>
+            )}
+          </>
+        )}
+
+        {projectId && (
+          <div className="mb-4 rounded-[9px] border border-border p-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div>
+                <div className="text-[10px] uppercase tracking-widest text-muted-foreground">风险会签 · 第 {signoffsQuery.data?.roundNumber ?? nextRound} 轮</div>
+                <div className="mt-0.5 text-xs text-muted-foreground">{signoffsQuery.data?.roundStatus === 'preview' ? '矩阵预览；首次签字时冻结整轮要求。' : '本轮要求已冻结。'} 必签全部同意后，管理层才能给出通过结论。</div>
+              </div>
+              <span className={`text-[10px] font-semibold ${signoffsReady ? 'text-[color:var(--success)]' : 'text-[color:var(--warning)]'}`}>
+                {signoffsReady ? '会签就绪' : '会签未完成'}
+              </span>
+            </div>
+            {signoffsQuery.isLoading ? (
+              <div className="py-3 text-center text-xs text-muted-foreground">加载会签槽位…</div>
+            ) : (
+              <div className="space-y-2">
+                {signoffSlots.map((slot) => (
+                  <div key={slot.slot} className="rounded-[7px] border border-border bg-secondary/30 p-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-foreground">{slot.label}</span>
+                        <span className={`rounded px-1.5 py-0.5 text-[9px] ${slot.requirement === 'required' ? 'bg-[color:var(--destructive-soft)] text-destructive' : 'bg-secondary text-muted-foreground'}`}>
+                          {GATE_SIGNOFF_REQUIREMENT_LABELS[slot.requirement]}
+                        </span>
+                      </div>
+                      <span className={`text-[10px] font-medium ${slot.status === 'approved' ? 'text-[color:var(--success)]' : slot.status === 'rejected' ? 'text-destructive' : 'text-muted-foreground'}`}>
+                        {GATE_SIGNOFF_STATUS_LABELS[slot.status]}
+                        {slot.signerName ? ` · ${slot.signerName}` : ''}
+                      </span>
+                    </div>
+                    {slot.note && <p className="mt-1 text-[11px] text-muted-foreground">{slot.note}</p>}
+                    {signoffsQuery.data?.canAddRequirement && slot.requirement !== 'required' && (
+                      <button type="button" onClick={() => addRequiredSignoff(slot.slot)} className="mt-1 text-[10px] text-primary hover:underline">设为本项目必签</button>
+                    )}
+                    {slot.canSign && slot.requirement !== 'not_applicable' && (
+                      <div className="mt-2 space-y-2">
+                        {(myRoleQuery.data?.roles.length ?? 0) > 1 && (
+                          <select
+                            value={signoffRoles[slot.slot] ?? ''}
+                            onChange={(event) => setSignoffRoles((roles) => ({ ...roles, [slot.slot]: event.target.value as ProjectMemberRole }))}
+                            className="w-full rounded-[6px] border border-border bg-card px-2 py-1.5 text-xs"
+                          >
+                            <option value="">选择本次签字角色</option>
+                            {myRoleQuery.data?.roles.map((role) => <option key={role} value={role}>{role}</option>)}
+                          </select>
+                        )}
+                        <input
+                          value={signoffNotes[slot.slot] ?? ''}
+                          onChange={(event) => setSignoffNotes((notes) => ({ ...notes, [slot.slot]: event.target.value }))}
+                          placeholder="会签说明（有条件/拒绝时必填）"
+                          className="w-full rounded-[6px] border border-border bg-card px-2 py-1.5 text-xs outline-none focus:border-[color:var(--acc-border)]"
+                        />
+                        <div className="flex gap-1.5">
+                          <button type="button" onClick={() => submitSignoff(slot.slot, 'approved')} className="rounded-[6px] bg-[color:var(--success-soft)] px-2 py-1 text-[10px] font-medium text-[color:var(--success)]">同意</button>
+                          <button type="button" onClick={() => submitSignoff(slot.slot, 'conditional')} className="rounded-[6px] bg-[color:var(--warning-soft)] px-2 py-1 text-[10px] font-medium text-[color:var(--warning)]">有条件</button>
+                          <button type="button" onClick={() => submitSignoff(slot.slot, 'rejected')} className="rounded-[6px] bg-[color:var(--destructive-soft)] px-2 py-1 text-[10px] font-medium text-destructive">拒绝</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {gateStandard && (
           <div className="border border-border rounded-[9px] p-3 mb-4">
@@ -451,6 +656,8 @@ export function GateReviewModal({
               allowedDecisions={canDecide ? [...GATE_DECISIONS] : ['rejected']}
               onSubmit={handleSubmit}
               onCancel={() => existingReviews.length > 0 ? setShowForm(false) : onCancel()}
+              signoffsReady={!canDecide || approvalReady}
+              projectId={projectId}
             />
           </div>
         ) : (

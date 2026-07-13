@@ -1,11 +1,43 @@
 import { describe, expect, it } from "vitest";
 import {
+  AUTOMATION_NOTIFICATION_LAYERING_DEFAULT_CHANGES,
   AUTOMATION_RULES,
   exceptionEscalationRoles,
   getAutomationRule,
   isAutomationRuleMatch,
   parseAutomationRuleConfig,
 } from "./rules";
+
+describe("通知分层默认值（2026-07-12 设计）", () => {
+  const byKey = Object.fromEntries(AUTOMATION_RULES.map((rule) => [rule.key, rule]));
+
+  it("FYI 类个人推送默认关/转群", () => {
+    expect(byKey.status_change_notify.defaultEnabled).toBe(false);
+    expect(byKey.phase_advanced_notify.recipientRoles).toEqual(["group"]);
+  });
+
+  it("个人摘要承接到期提醒，散发式到期/逾期规则默认关闭", () => {
+    expect(byKey.overdue_reminder.defaultEnabled).toBe(false);
+    expect(byKey.due_soon_reminder.defaultEnabled).toBe(false);
+    expect(byKey.overdue_reminder.defaultConfig.notifyRoles).toEqual(["assignee"]);
+    expect(byKey.due_soon_reminder.defaultConfig.notifyRoles).toEqual(["assignee"]);
+    // 责任人层 day2 起升级（day0 每日 ping 与降噪目标相反；逾期类责任人由每日摘要覆盖）
+    expect(byKey.exception_escalation.defaultConfig).toMatchObject({
+      assigneeAfterDays: 2,
+      pmAfterDays: 2,
+      managerAfterDays: 7,
+    });
+  });
+
+  it("只迁移系统生成且仍等于旧默认值的存量规则", () => {
+    expect(AUTOMATION_NOTIFICATION_LAYERING_DEFAULT_CHANGES).toEqual(expect.arrayContaining([
+      expect.objectContaining({ ruleKey: "overdue_reminder", legacyEnabled: true, nextEnabled: false }),
+      expect.objectContaining({ ruleKey: "due_soon_reminder", legacyEnabled: true, nextEnabled: false }),
+      expect.objectContaining({ ruleKey: "exception_escalation", legacyEnabled: true }),
+    ]));
+    expect(AUTOMATION_NOTIFICATION_LAYERING_DEFAULT_CHANGES.every((change) => change.onlyWhenSystemManaged)).toBe(true);
+  });
+});
 
 describe("built-in automation rule matching", () => {
   it("keeps exactly the built-in rule keys (MVP + NPD 生命周期三事件)", () => {
@@ -23,7 +55,25 @@ describe("built-in automation rule matching", () => {
       "definition_confirmed_notify",
       "gate_decision_notify",
       "phase_advanced_notify",
+      "weekly_meeting_reminder",
+      "task_ready_notify",
     ]);
+  });
+
+  it("uses the Asia/Shanghai day boundary independent of host timezone", () => {
+    const atShanghaiNextDay = new Date("2026-06-20T16:30:00Z");
+    const event = {
+      action: "scheduled" as const,
+      entityType: "task" as const,
+      after: { dueDate: "2026-06-20", status: "in_progress" },
+      now: atShanghaiNextDay,
+    };
+    expect(isAutomationRuleMatch("overdue_reminder", event, { graceDays: 0 })).toBe(true);
+    expect(isAutomationRuleMatch("due_soon_reminder", event, { dueSoonDays: 2 })).toBe(false);
+  });
+
+  it("rejects dueSoonDays beyond the 14-day candidate window", () => {
+    expect(() => parseAutomationRuleConfig("due_soon_reminder", { dueSoonDays: 15 })).toThrow();
   });
 
   it("matches overdue tasks according to graceDays and scope", () => {
@@ -191,6 +241,21 @@ describe("built-in automation rule matching", () => {
     expect(isAutomationRuleMatch("task_blocked_notify", { action: "task.update_meta", entityType: "task", before: { status: "blocked" }, after: { status: "blocked" } })).toBe(false);
   });
 
+  it("task_ready_notify only matches a real transition into done", () => {
+    expect(isAutomationRuleMatch("task_ready_notify", {
+      action: "task.update_meta",
+      entityType: "task",
+      before: { status: "in_progress" },
+      after: { status: "done" },
+    })).toBe(true);
+    expect(isAutomationRuleMatch("task_ready_notify", {
+      action: "task.update_meta",
+      entityType: "task",
+      before: { status: "done" },
+      after: { status: "done" },
+    })).toBe(false);
+  });
+
   it("task_assignment fires for active unassigned tasks only", () => {
     const ev = (extra: Record<string, unknown>) => ({
       action: "scheduled" as const,
@@ -231,7 +296,7 @@ describe("built-in automation rule matching", () => {
       graceDays: 2,
       cadenceHours: 24,
       scope: "issues",
-      notifyRoles: ["assignee", "pm"],
+      notifyRoles: ["assignee"],
     });
   });
 
@@ -247,8 +312,17 @@ describe("built-in automation rule matching", () => {
     expect(isAutomationRuleMatch("exception_escalation", ev(1), config)).toBe(false);
     expect(isAutomationRuleMatch("exception_escalation", ev(2), config)).toBe(true);
     expect(exceptionEscalationRoles(ev(2), parseAutomationRuleConfig("exception_escalation", config) as any)).toEqual(["assignee"]);
-    expect(exceptionEscalationRoles(ev(5), parseAutomationRuleConfig("exception_escalation", config) as any)).toEqual(["assignee", "pm"]);
-    expect(exceptionEscalationRoles(ev(10), parseAutomationRuleConfig("exception_escalation", config) as any)).toEqual(["assignee", "pm", "manager"]);
+    expect(exceptionEscalationRoles(ev(5), parseAutomationRuleConfig("exception_escalation", config) as any)).toEqual(["pm"]);
+    expect(exceptionEscalationRoles(ev(10), parseAutomationRuleConfig("exception_escalation", config) as any)).toEqual(["manager"]);
+
+    const overdueEvent = {
+      ...ev(2),
+      after: { status: "in_progress", exceptionType: "overdue_task", exceptionAgeDays: 2 },
+    };
+    expect(exceptionEscalationRoles(
+      overdueEvent,
+      parseAutomationRuleConfig("exception_escalation", config) as any,
+    )).toEqual([]);
 
     expect(
       isAutomationRuleMatch("exception_escalation", ev(10), {

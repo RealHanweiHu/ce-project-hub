@@ -12,6 +12,8 @@ import {
   type SOPPhase,
   type SOPTask,
 } from "./sop-templates";
+import { resolveDerivativeEffectivePhases } from "./derivative-phase-resolver";
+import { TASK_DELIVERABLES } from "./task-deliverables";
 
 const gateStandard = (overrides: Partial<SOPGateStandard>): SOPGateStandard => ({
   entryCriteria: [],
@@ -431,6 +433,19 @@ export const NPD_V3_CORE_PHASES: SOPPhase[] = [
 export type NpdAddonPackId = "battery" | "cert" | "software" | "mold";
 export type NpdTemplateTier = "lite" | "standard" | "full";
 
+export const NPD_TIER_RANK: Readonly<Record<NpdTemplateTier, number>> = Object.freeze({
+  lite: 0,
+  standard: 1,
+  full: 2,
+});
+
+export function isNpdTierDowngrade(
+  chosen: NpdTemplateTier,
+  recommended: NpdTemplateTier,
+): boolean {
+  return NPD_TIER_RANK[chosen] < NPD_TIER_RANK[recommended];
+}
+
 export interface NpdTemplateConfig {
   tier: NpdTemplateTier;
   packs: NpdAddonPackId[];
@@ -836,13 +851,55 @@ function uniqueStrings(values: string[]): string[] {
   return Array.from(new Set(values));
 }
 
+const NPD_EFFECTIVE_PHASE_CACHE = new Map<string, SOPPhase[]>();
+
+function cloneEffectivePhases(phases: SOPPhase[]): SOPPhase[] {
+  return phases.map((phase) => ({
+    ...phase,
+    deliverables: [...phase.deliverables],
+    tasks: phase.tasks.map((task) => ({
+      ...task,
+      visibleRoles: task.visibleRoles ? [...task.visibleRoles] : task.visibleRoles,
+      dependsOn: task.dependsOn ? [...task.dependsOn] : task.dependsOn,
+    })),
+    gateStandard: {
+      ...phase.gateStandard,
+      entryCriteria: [...phase.gateStandard.entryCriteria],
+      exitCriteria: [...phase.gateStandard.exitCriteria],
+      requiredDeliverables: [...phase.gateStandard.requiredDeliverables],
+      responsibleRoles: [...phase.gateStandard.responsibleRoles],
+      evidenceRequirements: [...phase.gateStandard.evidenceRequirements],
+      exceptionStrategy: [...phase.gateStandard.exceptionStrategy],
+    },
+  }));
+}
+
+function freezeEffectivePhases(phases: SOPPhase[]): SOPPhase[] {
+  for (const phase of phases) {
+    for (const task of phase.tasks) {
+      if (task.visibleRoles) Object.freeze(task.visibleRoles);
+      if (task.dependsOn) Object.freeze(task.dependsOn);
+      Object.freeze(task);
+    }
+    Object.freeze(phase.tasks);
+    Object.freeze(phase.deliverables);
+    for (const value of Object.values(phase.gateStandard)) {
+      if (Array.isArray(value)) Object.freeze(value);
+    }
+    Object.freeze(phase.gateStandard);
+    Object.freeze(phase);
+  }
+  return Object.freeze(phases) as unknown as SOPPhase[];
+}
+
 export function getNpdV3EffectivePhases(config?: unknown): SOPPhase[] {
   const { tier, packs } = normalizeNpdTemplateConfig(config);
+  const cacheKey = `${tier}|${[...packs].sort().join(",")}`;
+  const cached = NPD_EFFECTIVE_PHASE_CACHE.get(cacheKey);
+  if (cached) return cached;
   const base = tier === "lite" ? NPD_V3_LITE_PHASES : NPD_V3_CORE_PHASES;
-  if (packs.length === 0) return base;
-
   const activePacks = NPD_ADDON_PACKS.filter((pack) => packs.includes(pack.id));
-  return base.map((phase) => {
+  const composed = activePacks.length === 0 ? base : base.map((phase) => {
     const extraTasks = activePacks.flatMap((pack) =>
       pack.tasks
         .filter((entry) => effectivePhaseTarget(entry.phaseId, tier) === phase.id)
@@ -877,6 +934,9 @@ export function getNpdV3EffectivePhases(config?: unknown): SOPPhase[] {
       },
     };
   });
+  const frozen = freezeEffectivePhases(cloneEffectivePhases(composed));
+  NPD_EFFECTIVE_PHASE_CACHE.set(cacheKey, frozen);
+  return frozen;
 }
 
 export interface ProjectTemplateLike {
@@ -887,12 +947,99 @@ export interface ProjectTemplateLike {
 
 /** 按项目版本、档位和附加包返回生效阶段；非 NPD v3 项目保持原模板。 */
 export function getEffectivePhasesForProjectLike(project: ProjectTemplateLike): SOPPhase[] {
+  const customFields = (project.customFields ?? {}) as Record<string, unknown>;
   if (
     project.category === "npd" &&
     project.sopTemplateVersion === SOP_TEMPLATE_VERSION_NPD_V3
   ) {
-    const customFields = (project.customFields ?? {}) as Record<string, unknown>;
     return getNpdV3EffectivePhases(customFields.npdTemplate);
   }
+  if (project.category === "derivative") {
+    const derivativePhases = resolveDerivativeEffectivePhases(
+      customFields.derivativeReuseStrategy,
+      project.sopTemplateVersion,
+    );
+    if (derivativePhases) return derivativePhases;
+  }
   return getPhasesForCategory(project.category ?? undefined, project.sopTemplateVersion);
+}
+
+/** 查询项目实际生效模板中的任务证据级别；无标注或找不到任务时按轻证据处理。 */
+export function getTaskEvidenceLevel(
+  project: ProjectTemplateLike,
+  phaseId: string,
+  taskId: string,
+): "light" | "heavy" {
+  const phase = getEffectivePhasesForProjectLike(project).find((entry) => entry.id === phaseId);
+  return phase?.tasks.find((task) => task.id === taskId)?.evidence ?? "light";
+}
+
+/** 路线图三条永久红线；激活的 battery/cert 包任务在项目维度追加。 */
+export const NPD_V3_CORE_REDLINE_TASK_IDS = Object.freeze([
+  "npv2",
+  "npv5",
+  "nm1",
+] as const);
+
+export interface NpdV3RedlinePolicy {
+  taskIds: ReadonlySet<string>;
+  auditDeliverables: ReadonlySet<string>;
+}
+
+/**
+ * Resolve non-tailorable tasks/evidence from the project's actual v3 tier and
+ * active packs. Legacy NPD and non-NPD projects intentionally have no policy.
+ */
+export function getNpdV3RedlinePolicy(project: ProjectTemplateLike): NpdV3RedlinePolicy {
+  const taskIds = new Set<string>();
+  const auditDeliverables = new Set<string>();
+  if (
+    project.category !== "npd" ||
+    project.sopTemplateVersion !== SOP_TEMPLATE_VERSION_NPD_V3
+  ) {
+    return { taskIds, auditDeliverables };
+  }
+
+  const customFields = (project.customFields ?? {}) as Record<string, unknown>;
+  const config = normalizeNpdTemplateConfig(customFields.npdTemplate);
+  const phases = getEffectivePhasesForProjectLike(project);
+  const effectiveTaskIds = new Set(
+    phases.flatMap((phase) => phase.tasks.map((task) => task.id))
+  );
+  for (const taskId of NPD_V3_CORE_REDLINE_TASK_IDS) {
+    if (effectiveTaskIds.has(taskId)) taskIds.add(taskId);
+  }
+
+  const activeRedlinePacks = NPD_ADDON_PACKS.filter(
+    (pack) => pack.redline && config.packs.includes(pack.id)
+  );
+  for (const pack of activeRedlinePacks) {
+    for (const { task } of pack.tasks) {
+      if (effectiveTaskIds.has(task.id)) taskIds.add(task.id);
+    }
+    for (const deliverables of Object.values(pack.gateRequiredDeliverables ?? {})) {
+      for (const deliverable of deliverables) auditDeliverables.add(deliverable);
+    }
+  }
+
+  for (const taskId of Array.from(taskIds)) {
+    for (const deliverable of TASK_DELIVERABLES[taskId] ?? []) {
+      auditDeliverables.add(deliverable);
+    }
+  }
+  for (const phase of phases) {
+    if (!taskIds.has(phase.gateTaskId)) continue;
+    for (const deliverable of phase.gateStandard.requiredDeliverables ?? []) {
+      auditDeliverables.add(deliverable);
+    }
+  }
+
+  return { taskIds, auditDeliverables };
+}
+
+export function isNpdV3RedlineAuditDeliverable(
+  project: ProjectTemplateLike,
+  deliverableName: string,
+): boolean {
+  return getNpdV3RedlinePolicy(project).auditDeliverables.has(deliverableName);
 }

@@ -11,6 +11,8 @@ import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { projectsRouter } from "./routers/projects";
 import { membersRouter } from "./routers/members";
+import { delegationsRouter } from "./routers/delegations";
+import { staffingRouter } from "./routers/staffing";
 import { adminRouter } from "./routers/admin";
 import { tasksRouter } from "./routers/tasks";
 import { issuesRouter } from "./routers/issues";
@@ -34,6 +36,16 @@ import { tailoringRouter } from "./routers/tailoring";
 import { deliverableReviewsRouter } from "./routers/deliverableReviews";
 import { workbenchRouter } from "./routers/workbench";
 import { analyticsRouter } from "./routers/analytics";
+import { stabilityRouter } from "./routers/stability";
+import { certificatesRouter } from "./routers/certificates";
+import { conditionsRouter } from "./routers/conditions";
+import { handoffsRouter } from "./routers/handoffs";
+import { expensesRouter } from "./routers/expenses";
+import { productGovernanceRouter } from "./routers/productGovernance";
+import { productWaiversRouter } from "./routers/productWaivers";
+import { transitionsRouter } from "./routers/transitions";
+import { terminationRouter } from "./routers/termination";
+import { sopGovernanceRouter } from "./routers/sopGovernance";
 import * as db from "./db";
 import { getDb } from "./db";
 import { users } from "../drizzle/schema";
@@ -311,6 +323,8 @@ export const appRouter = router({
 
   projects: projectsRouter,
   members: membersRouter,
+  delegations: delegationsRouter,
+  staffing: staffingRouter,
   admin: adminRouter,
   tasks: tasksRouter,
   tailoring: tailoringRouter,
@@ -331,6 +345,16 @@ export const appRouter = router({
   meetings: meetingsRouter,
   workbench: workbenchRouter,
   analytics: analyticsRouter,
+  stability: stabilityRouter,
+  certificates: certificatesRouter,
+  conditions: conditionsRouter,
+  handoffs: handoffsRouter,
+  expenses: expensesRouter,
+  productGovernance: productGovernanceRouter,
+  productWaivers: productWaiversRouter,
+  transitions: transitionsRouter,
+  termination: terminationRouter,
+  sopGovernance: sopGovernanceRouter,
   products: productsRouter,
   bom: bomRouter,
   comments: commentsRouter,

@@ -8,6 +8,13 @@ export type ActionItemSlaPolicy = {
 };
 
 export const ACTION_ITEM_SLA_POLICIES = {
+  task_ready: {
+    label: "任务可以开始",
+    // “可以开始”是温和承诺提醒，不沿用审批类 24h 高压节奏。
+    remindOwnerAfterHours: 48,
+    escalatePmAfterHours: 48,
+    escalateManagerAfterHours: 96,
+  },
   task_approval: {
     label: "任务审批",
     remindOwnerAfterHours: 24,
@@ -52,6 +59,18 @@ export const ACTION_ITEM_SLA_POLICIES = {
   },
   mp_release_confirm: {
     label: "MP Release 发布确认",
+    remindOwnerAfterHours: 24,
+    escalatePmAfterHours: 24,
+    escalateManagerAfterHours: 48,
+  },
+  condition_followup: {
+    label: "条件项跟进",
+    remindOwnerAfterHours: 24,
+    escalatePmAfterHours: 24,
+    escalateManagerAfterHours: 48,
+  },
+  handoff_acceptance: {
+    label: "量产移交接收",
     remindOwnerAfterHours: 24,
     escalatePmAfterHours: 24,
     escalateManagerAfterHours: 48,

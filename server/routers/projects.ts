@@ -2,8 +2,10 @@ import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import {
   getAllActiveProjects,
+  getArchivedProjects,
   getProjectsByMember,
   getProjectById,
+  setProjectLifecycle,
   getProductById,
   createProjectWithSeed,
   updateProject,
@@ -20,6 +22,11 @@ import {
   getLatestProductDefinitionSnapshot,
   getProductDefinitionSnapshotById,
   listProductDefinitionChanges,
+  applyDerivativeReuseStrategyToProject,
+  getLatestProjectChangeScopeDeclaration,
+  createProjectChangeScopeDeclarationVersion,
+  confirmProjectChangeScopeDeclaration,
+  evaluateProductCertificationCoverage,
 } from "../db";
 import { PROJECT_CATEGORIES } from "../../drizzle/schema";
 import { applyProjectSchedule } from "../services/schedule-service";
@@ -33,20 +40,31 @@ import { getProjectMembers, getProjectRolesForUser } from "../db";
 import { taskDisplayTitle } from "../task-title";
 import {
   getDefaultTemplateVersionForCategory,
-  getPhasesForCategory,
+  SOP_TEMPLATE_VERSION_CURRENT,
 } from "../../shared/sop-templates";
 import { isSystemAdminRole, systemRoleCanCreateProject } from "../../shared/system-roles";
 import { PROJECT_MEMBER_ROLES, type ProjectMemberRole } from "../../drizzle/schema";
 import { getEffectiveProjectRoleById as getEffectiveRole, pickHigherProjectRole } from "../project-access";
 import { isISODate } from "../../shared/scheduling";
-import { buildActionCardExecutePath, buildProjectActionPath, buildTaskCompletionActionPath, toAbsoluteAppUrl } from "../../shared/action-links";
+import { buildProjectActionPath, buildTaskCompletionActionPath, toAbsoluteAppUrl } from "../../shared/action-links";
 import { cancelAndRecordProjectMeeting, syncAndRecordProjectMeeting } from "../services/project-meeting-lifecycle";
-import { createActionCardToken } from "../action-card-tokens";
 import { notifyPersonal } from "../notification-gateway";
 import {
+  PROJECT_SOP_RISK_LEVELS,
+  EMPTY_CHANGE_SCOPE_DECLARATION,
+  deriveSopRiskAssessment,
+} from "../../shared/sop-risk";
+import { certificationRequirementLabel } from "../../shared/certification";
+import {
+  NPD_ADDON_PACKS,
+  getEffectivePhasesForProjectLike,
+  isNpdTierDowngrade,
   normalizeNpdTemplateConfig,
   recommendNpdTemplateConfig,
+  type ProjectTemplateLike,
 } from "../../shared/npd-v3";
+import { todayShanghai as todayInShanghaiISO } from "../../shared/shanghai-date";
+import { redlineKindForTask } from "../../shared/redline-four-eyes";
 
 const DEFAULT_MEETING = { enabled: true, weekday: 3, time: "15:00", durationMin: 60, title: "项目周会" };
 const isoDateInput = z.string().refine(isISODate, "日期必须是有效的 YYYY-MM-DD");
@@ -59,7 +77,7 @@ function getStoredMeetingConfig(project: { meetingConfig?: unknown }): typeof DE
 
 /** 按角色分配未分配任务 + (可选)逐人发钉钉通知。assignByRole / kickoff 共用。 */
 async function assignAndNotify(
-  project: { id: string; name: string; category: string; dingtalkChatId?: string | null },
+  project: ProjectTemplateLike & { id: string; name: string; category: string; dingtalkChatId?: string | null },
   actorId: number,
   notify: boolean,
   roleOverrides?: Record<string, number>
@@ -79,27 +97,18 @@ async function assignAndNotify(
         const title = taskDisplayTitle({
           taskId: i.taskId,
           phaseId: i.phaseId,
-          projectCategory: project.category,
+          projectLike: project,
           instructions: i.instructions,
         });
-        const actionUrl = toAbsoluteAppUrl(
+        const taskUrl = toAbsoluteAppUrl(
+          buildProjectActionPath({ projectId: project.id, tab: "tasks", phaseId: i.phaseId, taskId: i.taskId }),
+          ENV.appBaseUrl,
+        );
+        const completeUrl = toAbsoluteAppUrl(
           buildTaskCompletionActionPath({ projectId: project.id, phaseId: i.phaseId, taskId: i.taskId }),
           ENV.appBaseUrl,
         );
-        let completeUrl = actionUrl;
-        try {
-          const token = await createActionCardToken({
-            kind: "task_complete",
-            userId,
-            projectId: project.id,
-            phaseId: i.phaseId,
-            taskId: i.taskId,
-          });
-          completeUrl = toAbsoluteAppUrl(buildActionCardExecutePath(token), ENV.appBaseUrl);
-        } catch (error) {
-          console.warn("[assign] action-card complete link failed (non-fatal):", error);
-        }
-        lineParts.push(`- [${title}${i.dueDate ? `（截止 ${i.dueDate}）` : ""}](${actionUrl}) · [完成](${completeUrl})`);
+        lineParts.push(`- [${title}${i.dueDate ? `（截止 ${i.dueDate}）` : ""}](${taskUrl}) · [处理](${completeUrl})`);
       }
       const lines = lineParts.join("\n");
       const md = `### 项目「${project.name}」任务分配\n你被指派以下 ${items.length} 项任务：\n${lines}`;
@@ -131,6 +140,22 @@ async function assignAndNotify(
 
 const riskLevelEnum = z.enum(["low", "medium", "high"]);
 const riskEnum = riskLevelEnum.default("low");
+const derivativeReuseLevelEnum = z.enum(["direct_reuse", "adapt_verify", "light_modify", "redevelop"]);
+
+const changeScopeDeclarationSchema = z.object({
+  batteryCellChange: z.boolean().default(false),
+  batteryPackOrBmsChange: z.boolean().default(false),
+  protectionParameterChange: z.boolean().default(false),
+  powerOrThermalBoundaryChange: z.boolean().default(false),
+  pressurizedStructureChange: z.boolean().default(false),
+  targetMarketExpansion: z.boolean().default(false),
+  criticalSafetySupplierChange: z.boolean().default(false),
+  safetyRelatedSoftwareChange: z.boolean().default(false),
+  eolTestChange: z.boolean().default(false),
+  otherSafetyOrRegulatoryChange: z.boolean().default(false),
+  targetMarkets: z.array(z.string().trim().min(1).max(32)).max(32).default([]),
+  notes: z.string().trim().max(2000).nullable().optional(),
+}).default(EMPTY_CHANGE_SCOPE_DECLARATION);
 
 const projectInputSchema = z.object({
   id: z.string(),
@@ -141,6 +166,13 @@ const projectInputSchema = z.object({
   pmUserId: z.number().int().nullable().optional(),
   /** 关联产品(产品库 id);NPD 新产品可暂空 */
   productId: z.string().nullable().optional(),
+  safetyRiskLevel: z.enum(PROJECT_SOP_RISK_LEVELS).optional(),
+  regulatoryRiskLevel: z.enum(PROJECT_SOP_RISK_LEVELS).optional(),
+  changeScopeDeclaration: changeScopeDeclarationSchema.optional(),
+  customerInputVersion: z.string().trim().max(128).nullable().optional(),
+  customerPartNumber: z.string().trim().max(128).nullable().optional(),
+  commercialBoundary: z.string().trim().max(5000).nullable().optional(),
+  customerSignoffOwnerUserId: z.number().int().nullable().optional(),
   risk: riskEnum,
   currentPhase: z.string().default("concept"),
   progress: z.number().default(0),
@@ -273,8 +305,8 @@ function buildHandoffRoleBuckets(
     .sort((a, b) => b.itemCount - a.itemCount || a.label.localeCompare(b.label, "zh-CN"));
 }
 
-function getHandoffTaskPhaseId(category: string, role: string): string {
-  const phases = getPhasesForCategory(category);
+function getHandoffTaskPhaseId(project: ProjectTemplateLike, role: string): string {
+  const phases = getEffectivePhasesForProjectLike(project);
   const planning = phases.find((phase) => phase.id === "planning")?.id ?? phases[1]?.id ?? phases[0]?.id ?? "planning";
   const design = phases.find((phase) => phase.id === "design")?.id ?? phases[2]?.id ?? planning;
   return ["rd_hw", "rd_sw", "rd_mech", "qa", "pe", "mfg", "battery_safety"].includes(role)
@@ -333,6 +365,8 @@ export const projectsRouter = router({
     const all = isAdmin ? await getAllActiveProjects() : await getProjectsByMember(ctx.user.id);
     const portfolio = await getPortfolio(ctx.user.id);
     const autoRiskByProject = new Map(portfolio.map((p) => [p.id, p.risk]));
+    // §5 统一状态口径：列表进度用服务端摘要覆盖存量列，杜绝客户端重算的 0% 路径
+    const portfolioById = new Map(portfolio.map((p) => [p.id, p]));
     // Resolve every project's effective role from a single membership query +
     // in-memory pm/owner/admin overrides, instead of an N+1 of getEffectiveRole
     // (each of which re-fetched the project and ran a per-project member query).
@@ -344,8 +378,11 @@ export const projectsRouter = router({
       if (!role && isAdmin) role = "manager";
       const effectiveRole = role ?? "viewer";
       const isExternal = effectiveRole === "external_customer" || effectiveRole === "supplier";
+      const summary = portfolioById.get(row.id);
       return {
         ...row,
+        progress: summary?.progress ?? row.progress ?? 0,
+        phaseProgress: summary?.phaseProgress ?? [],
         risk: isExternal ? "low" : autoRiskByProject.get(row.id) ?? "low",
         riskOverrideRisk: isExternal ? null : row.riskOverrideRisk,
         riskOverrideReason: isExternal ? null : row.riskOverrideReason,
@@ -359,6 +396,88 @@ export const projectsRouter = router({
         canEditProjectInfo: ROLE_PERMISSIONS[effectiveRole].canEditProjectInfo,
       };
     });
+  }),
+
+  /**
+   * §5 单项目状态摘要：进度/阶段进度/下一里程碑（Gate+缺口）/阻断清单，
+   * 总览焦点三卡与 Gate 缺口清单的唯一数据源。
+   */
+  statusSummary: protectedProcedure
+    .input(z.object({ projectId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const role = await getEffectiveRole(input.projectId, ctx.user.id);
+      if (!role || !ROLE_PERMISSIONS[role].canView) {
+        throw new TRPCError({ code: "FORBIDDEN" });
+      }
+      const project = await getProjectById(input.projectId);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+      const { getProjectProgressSummary, getGateReadiness, getProjectTasks } = await import("../db");
+      const [summary, readiness, tasks] = await Promise.all([
+        getProjectProgressSummary(input.projectId),
+        getGateReadiness(input.projectId, project.currentPhase).catch(() => null),
+        getProjectTasks(input.projectId, project.currentPhase),
+      ]);
+      const phases = getEffectivePhasesForProjectLike(project);
+      const phase = phases.find((item) => item.id === project.currentPhase) ?? null;
+      // health/计数与组合看板同源（设计4 §5：单一口径，不再让总览页自己聚合）
+      const portfolioRow = (await getPortfolio(ctx.user.id)).find((row) => row.id === input.projectId) ?? null;
+      const gateTask = phase ? tasks.find((task) => task.taskId === phase.gateTaskId) ?? null : null;
+      const gaps = (readiness?.dimensions ?? [])
+        .filter((dim) => !dim.ok)
+        .map((dim) => ({ dimension: dim.dimension, summary: dim.summary, blockers: dim.blockers }));
+      const taskNameById = new Map((phase?.tasks ?? []).map((task) => [task.id, task.name]));
+      const overdueRedline = tasks.filter((task) =>
+        task.status !== "done" && task.status !== "skipped" &&
+        task.dueDate && task.dueDate < todayInShanghaiISO() &&
+        redlineKindForTask(project, task.taskId) != null
+      ).map((task) => ({
+        taskId: task.taskId,
+        name: taskNameById.get(task.taskId) ?? task.taskId,
+        assigneeUserId: task.assigneeUserId ?? null,
+        dueDate: task.dueDate,
+      }));
+      return {
+        projectId: project.id,
+        currentPhase: project.currentPhase,
+        progress: summary.progress,
+        phaseProgress: summary.phaseProgress,
+        health: portfolioRow
+          ? { ragLevel: portfolioRow.ragLevel, risk: portfolioRow.risk, reasons: portfolioRow.ragReasons }
+          : null,
+        blockerCount: (readiness?.blockerCount ?? 0),
+        counts: portfolioRow ? {
+          taskTotal: portfolioRow.taskTotal,
+          taskDone: portfolioRow.taskDone,
+          openIssues: portfolioRow.openIssues,
+          criticalIssues: portfolioRow.criticalIssues,
+          overdueTasks: portfolioRow.overdueTasks,
+        } : null,
+        nextGate: phase ? {
+          phaseId: phase.id,
+          gateName: phase.gate,
+          gateTaskId: phase.gateTaskId,
+          dueDate: gateTask?.dueDate ?? null,
+          ready: readiness?.ready ?? null,
+          gapCount: readiness?.blockerCount ?? gaps.reduce((n, g) => n + g.blockers.length, 0),
+          gaps,
+        } : null,
+        overdueRedlineTasks: overdueRedline,
+      };
+    }),
+
+  archivedList: protectedProcedure.query(async ({ ctx }) => {
+    const rows = await getArchivedProjects(ctx.user.id, isSystemAdminRole(ctx.user.role));
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      projectNumber: row.projectNumber,
+      category: row.category,
+      lifecycle: row.lifecycle,
+      lifecycleReason: row.lifecycleReason,
+      lifecycleChangedAt: row.lifecycleChangedAt,
+      targetDate: row.targetDate,
+      productId: row.productId,
+    }));
   }),
 
   /** Get a single project by id (owner or member with canView) */
@@ -465,7 +584,7 @@ export const projectsRouter = router({
       const generated: Array<{ phaseId: string; taskId: string; role: string; label: string }> = [];
 
       for (const bucket of roleBuckets) {
-        const phaseId = getHandoffTaskPhaseId(project.category, bucket.role);
+        const phaseId = getHandoffTaskPhaseId(project, bucket.role);
         const taskId = `pd_${bucket.role}`.slice(0, 32);
         const assigneeUserId = roleToUser.get(bucket.role) ?? null;
         const visibleRoles = Array.from(new Set([bucket.role, "pm", "project_manager", "manager", "owner"]));
@@ -511,35 +630,84 @@ export const projectsRouter = router({
           message: '您没有创建项目的权限。请联系管理员授权。',
         });
       }
+      const baselineRequired = ["eco", "derivative", "idr"].includes(input.category);
+      const linkedProduct = input.productId ? await getProductById(input.productId) : undefined;
+      if (baselineRequired && !input.productId) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "ECO/DRV/IDR 必须选择已有产品和已发布基线版本" });
+      }
+      if (input.productId && !linkedProduct) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "关联产品不存在" });
+      }
+      if (baselineRequired && !linkedProduct?.currentRevisionId) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "所选产品没有已发布 Revision，不能作为本轨道基线" });
+      }
+      if (["jdm", "obt"].includes(input.category)) {
+        const missing = [
+          !input.customerInputVersion?.trim() && "客户输入版本",
+          !input.customerPartNumber?.trim() && "客户料号",
+          !input.commercialBoundary?.trim() && "商务边界",
+          !input.customerSignoffOwnerUserId && "客户签核责任人",
+        ].filter(Boolean);
+        if (missing.length > 0) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: `JDM/OBT 入口未冻结：${missing.join("、")}` });
+        }
+      }
       const handoffSnapshot = input.productId
         ? await getConfirmedProductDefinitionSnapshotIfAvailable(input.productId, ctx.user.id)
         : null;
+      const changeScopeDeclaration = changeScopeDeclarationSchema.parse(input.changeScopeDeclaration ?? EMPTY_CHANGE_SCOPE_DECLARATION);
+      const certificateCoverage = linkedProduct ? await evaluateProductCertificationCoverage({
+        productId: linkedProduct.id,
+        projectId: input.id,
+        declaration: changeScopeDeclaration,
+        baselineTargetMarkets: linkedProduct.targetMarkets ?? [],
+        baseRevisionId: baselineRequired ? linkedProduct.currentRevisionId : null,
+      }) : null;
+      const riskAssessment = deriveSopRiskAssessment({
+        declaration: changeScopeDeclaration,
+        baselineTargetMarkets: linkedProduct?.targetMarkets ?? [],
+        manualSafetyRiskLevel: input.risk === "high" ? "high" : (input.safetyRiskLevel ?? "standard"),
+        manualRegulatoryRiskLevel: input.risk === "high" ? "high" : (input.regulatoryRiskLevel ?? "standard"),
+        certificateCoverageMissingReasons: certificateCoverage?.missing.map(certificationRequirementLabel) ?? [],
+      });
       let npdTemplateAudit: Record<string, unknown> | null = null;
       if (input.category === "npd") {
         if (!input.npdAttributes) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "NPD 创建必须完成项目属性问答" });
         }
-        const recommendation = recommendNpdTemplateConfig({
+        const effectiveNpdAttributes = {
           ...input.npdAttributes,
-          safetyRiskLevel: input.risk === "high" ? "high" : "standard",
-          regulatoryRiskLevel: input.risk === "high" ? "high" : "standard",
+          hasBattery: input.npdAttributes.hasBattery ||
+            changeScopeDeclaration.batteryCellChange ||
+            changeScopeDeclaration.batteryPackOrBmsChange ||
+            changeScopeDeclaration.protectionParameterChange ||
+            changeScopeDeclaration.pressurizedStructureChange,
+          needsCert: input.npdAttributes.needsCert ||
+            changeScopeDeclaration.targetMarketExpansion ||
+            changeScopeDeclaration.targetMarkets.length > 0,
+          hasFirmware: input.npdAttributes.hasFirmware ||
+            changeScopeDeclaration.safetyRelatedSoftwareChange,
+        };
+        const recommendation = recommendNpdTemplateConfig({
+          ...effectiveNpdAttributes,
+          safetyRiskLevel: riskAssessment.safetyRiskLevel,
+          regulatoryRiskLevel: riskAssessment.regulatoryRiskLevel,
         });
         const chosen = normalizeNpdTemplateConfig(input.npdTemplate);
         const missingLockedPacks = recommendation.lockedPacks.filter(
           (pack) => !chosen.packs.includes(pack)
         );
         if (missingLockedPacks.length > 0) {
-          const labels = missingLockedPacks.map((pack) =>
-            pack === "battery" ? "电池安全包" : "认证包"
+          const labels = missingLockedPacks.map((packId) =>
+            NPD_ADDON_PACKS.find((pack) => pack.id === packId)?.name ?? packId
           );
           throw new TRPCError({
             code: "BAD_REQUEST",
             message: `红线附加包不可取消：${labels.join("、")}`,
           });
         }
-        const tierRank = { lite: 0, standard: 1, full: 2 } as const;
         const downgradeReason = input.npdTemplateDowngradeReason?.trim() || null;
-        if (tierRank[chosen.tier] < tierRank[recommendation.tier] && !downgradeReason) {
+        if (isNpdTierDowngrade(chosen.tier, recommendation.tier) && !downgradeReason) {
           throw new TRPCError({
             code: "BAD_REQUEST",
             message: "降档需填写理由（推荐档位高于所选档位）",
@@ -548,13 +716,16 @@ export const projectsRouter = router({
         npdTemplateAudit = {
           ...chosen,
           recommended: recommendation,
-          attributes: input.npdAttributes,
+          attributes: effectiveNpdAttributes,
           downgradeReason,
         };
       }
       const sopTemplateVersion = getDefaultTemplateVersionForCategory(input.category);
       const customFields = input.category === "npd"
-        ? { ...(input.customFields ?? {}), npdTemplate: npdTemplateAudit }
+        ? {
+            ...(input.customFields ?? {}),
+            npdTemplate: npdTemplateAudit,
+          }
         : (input.customFields ?? {});
       await createProjectWithSeed({
         id: input.id,
@@ -563,8 +734,17 @@ export const projectsRouter = router({
         category: input.category,
         pmUserId: input.pmUserId ?? null,
         productId: input.productId ?? null,
+        baseRevisionId: baselineRequired ? linkedProduct?.currentRevisionId ?? null : null,
         productDefinitionSnapshotId: handoffSnapshot?.id ?? null,
         sopTemplateVersion,
+        safetyRiskLevel: riskAssessment.safetyRiskLevel,
+        regulatoryRiskLevel: riskAssessment.regulatoryRiskLevel,
+        customerInputVersion: input.customerInputVersion ?? null,
+        customerPartNumber: input.customerPartNumber ?? null,
+        commercialBoundary: input.commercialBoundary ?? null,
+        customerSignoffOwnerUserId: input.customerSignoffOwnerUserId ?? null,
+        inputBaselineFrozenAt: ["jdm", "obt"].includes(input.category) ? new Date() : null,
+        inputBaselineFrozenBy: ["jdm", "obt"].includes(input.category) ? ctx.user.id : null,
         description: input.description ?? null,
         customer: input.customer ?? null,
         background: input.background ?? null,
@@ -577,7 +757,7 @@ export const projectsRouter = router({
         targetDate: input.targetDate ?? null,
         createdBy: ctx.user.id,
         archived: false,
-      }, input.category, ctx.user.id);
+      }, input.category, ctx.user.id, { declaration: changeScopeDeclaration, assessment: riskAssessment });
       // 选了项目经理且不是创建者本人 → 自动加入项目成员并赋 project_manager 角色（否则对方看不到项目）
       if (input.pmUserId && input.pmUserId !== ctx.user.id) {
         try { await ensureProjectMember(input.id, input.pmUserId, "project_manager", ctx.user.id); }
@@ -599,6 +779,7 @@ export const projectsRouter = router({
           category: input.category,
           projectNumber: input.projectNumber,
           sopTemplateVersion,
+          riskAssessment,
           npdTemplate: npdTemplateAudit,
         },
       });
@@ -636,6 +817,36 @@ export const projectsRouter = router({
       if (riskOverrideTouched && nextRiskOverrideRisk && !nextRiskOverrideReason) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "手动覆盖健康度时必须填写原因" });
       }
+      if (input.category !== existing.category) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "项目轨道不能直接改写；请使用受控转轨流程" });
+      }
+      if (input.currentPhase !== existing.currentPhase) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "项目阶段不能通过通用编辑修改；回退请使用阶段移动，通过 Gate 评审才能前进",
+        });
+      }
+      if (
+        (existing.safetyRiskLevel === "high" && input.safetyRiskLevel === "standard") ||
+        (existing.regulatoryRiskLevel === "high" && input.regulatoryRiskLevel === "standard")
+      ) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "系统或项目已升级为高风险，不能通过项目编辑降级；降级需走 QA/认证联合审批" });
+      }
+      const baselineRequired = ["eco", "derivative", "idr"].includes(input.category);
+      const linkedProduct = input.productId ? await getProductById(input.productId) : undefined;
+      if (baselineRequired && (!linkedProduct || !linkedProduct.currentRevisionId)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "ECO/DRV/IDR 必须保留已有产品和已发布基线 Revision" });
+      }
+      if (["jdm", "obt"].includes(input.category) && existing.inputBaselineFrozenAt) {
+        const baselineChanged =
+          (input.customerInputVersion ?? null) !== (existing.customerInputVersion ?? null) ||
+          (input.customerPartNumber ?? null) !== (existing.customerPartNumber ?? null) ||
+          (input.commercialBoundary ?? null) !== (existing.commercialBoundary ?? null) ||
+          (input.customerSignoffOwnerUserId ?? null) !== (existing.customerSignoffOwnerUserId ?? null);
+        if (baselineChanged) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "JDM/OBT 客户输入基线已冻结；变更请走变更记录与重新签核" });
+        }
+      }
 
       let productDefinitionSnapshotId = existing.productDefinitionSnapshotId ?? null;
       if (input.productId) {
@@ -656,6 +867,24 @@ export const projectsRouter = router({
         nextStartDate !== (existing.startDate ?? null) ||
         nextTargetDate !== (existing.targetDate ?? null);
       const meetingConfig = getStoredMeetingConfig(existing);
+      let nextCustomFields: Record<string, unknown> | undefined;
+      if (input.customFields !== undefined) {
+        nextCustomFields = { ...input.customFields };
+        if (existing.category === "npd") {
+          const existingCustomFields = existing.customFields &&
+            typeof existing.customFields === "object" &&
+            !Array.isArray(existing.customFields)
+            ? existing.customFields as Record<string, unknown>
+            : {};
+          // 档位与附加包在立项时冻结；通用元数据编辑只能改其它自定义字段。
+          // 后续若允许变更，必须走专用 mutation，重跑推荐/红线校验并 reconcile 任务。
+          if (Object.prototype.hasOwnProperty.call(existingCustomFields, "npdTemplate")) {
+            nextCustomFields.npdTemplate = existingCustomFields.npdTemplate;
+          } else {
+            delete nextCustomFields.npdTemplate;
+          }
+        }
+      }
 
       if (pmChanged && existing.dingtalkEventId) {
         try { await cancelAndRecordProjectMeeting(existing); }
@@ -668,12 +897,18 @@ export const projectsRouter = router({
         category: input.category,
         pmUserId: nextPmUserId,
         productId: input.productId ?? null,
+        baseRevisionId: baselineRequired ? linkedProduct?.currentRevisionId ?? existing.baseRevisionId : existing.baseRevisionId,
         productDefinitionSnapshotId,
+        safetyRiskLevel: existing.safetyRiskLevel === "high" || input.safetyRiskLevel === "high" ? "high" : "standard",
+        regulatoryRiskLevel: existing.regulatoryRiskLevel === "high" || input.regulatoryRiskLevel === "high" ? "high" : "standard",
+        customerInputVersion: input.customerInputVersion ?? existing.customerInputVersion ?? null,
+        customerPartNumber: input.customerPartNumber ?? existing.customerPartNumber ?? null,
+        commercialBoundary: input.commercialBoundary ?? existing.commercialBoundary ?? null,
+        customerSignoffOwnerUserId: input.customerSignoffOwnerUserId ?? existing.customerSignoffOwnerUserId ?? null,
         description: input.description ?? null,
         customer: input.customer ?? null,
         background: input.background ?? null,
         value: input.value ?? null,
-        currentPhase: input.currentPhase,
         progress: input.progress,
         startDate: nextStartDate,
         targetDate: nextTargetDate,
@@ -684,7 +919,7 @@ export const projectsRouter = router({
           riskOverrideUpdatedAt: nextRiskOverrideRisk ? new Date() : null,
           riskOverrideUpdatedBy: nextRiskOverrideRisk ? ctx.user.id : null,
         } : {}),
-        ...(input.customFields !== undefined ? { customFields: input.customFields } : {}),
+        ...(nextCustomFields !== undefined ? { customFields: nextCustomFields } : {}),
       });
       // 项目经理变更 → 确保新项目经理是成员(否则换了负责人后对方看不到项目)
       if (input.pmUserId && input.pmUserId !== existing.pmUserId && input.pmUserId !== existing.createdBy) {
@@ -707,8 +942,82 @@ export const projectsRouter = router({
           name: input.name,
           projectNumber: input.projectNumber,
           category: input.category,
-          currentPhase: input.currentPhase,
+          currentPhase: existing.currentPhase,
         },
+      });
+      return { success: true };
+    }),
+
+  /** Latest structured scope declaration and deterministic risk assessment. */
+  riskScope: protectedProcedure
+    .input(z.object({ projectId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const role = await getEffectiveRole(input.projectId, ctx.user.id);
+      if (!role || !ROLE_PERMISSIONS[role].canView) throw new TRPCError({ code: "FORBIDDEN" });
+      return getLatestProjectChangeScopeDeclaration(input.projectId);
+    }),
+
+  /** Create a new declaration version; risk can only stay level or move upward here. */
+  setRiskScope: protectedProcedure
+    .input(z.object({ projectId: z.string(), declaration: changeScopeDeclarationSchema }))
+    .mutation(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+      const role = await getEffectiveRole(input.projectId, ctx.user.id);
+      if (!role || !ROLE_PERMISSIONS[role].canEditProjectInfo) throw new TRPCError({ code: "FORBIDDEN" });
+      const product = project.productId ? await getProductById(project.productId) : null;
+      const certificateCoverage = project.productId ? await evaluateProductCertificationCoverage({
+        productId: project.productId,
+        projectId: project.id,
+        declaration: input.declaration,
+        baselineTargetMarkets: product?.targetMarkets ?? [],
+        baseRevisionId: project.baseRevisionId,
+        resultRevisionId: project.resultRevisionId,
+      }) : null;
+      const assessment = deriveSopRiskAssessment({
+        declaration: input.declaration,
+        baselineTargetMarkets: product?.targetMarkets ?? [],
+        // Existing high is a one-way ratchet. A future QA+cert downgrade workflow
+        // may lower it; ordinary project editing cannot.
+        manualSafetyRiskLevel: project.safetyRiskLevel as "standard" | "high",
+        manualRegulatoryRiskLevel: project.regulatoryRiskLevel as "standard" | "high",
+        certificateCoverageMissingReasons: certificateCoverage?.missing.map(certificationRequirementLabel) ?? [],
+      });
+      const row = await createProjectChangeScopeDeclarationVersion({
+        projectId: input.projectId,
+        declaration: input.declaration,
+        assessment,
+        declaredBy: ctx.user.id,
+      });
+      await createActivityLog({
+        projectId: input.projectId,
+        userId: ctx.user.id,
+        action: "project.risk_scope_version",
+        entityType: "risk_scope",
+        entityId: String(row.id),
+        meta: { version: row.version, assessment },
+      });
+      return row;
+    }),
+
+  /** Professional confirmation of the latest declaration. */
+  confirmRiskScope: protectedProcedure
+    .input(z.object({ projectId: z.string(), version: z.number().int().positive(), kind: z.enum(["engineering", "qa_or_cert"]) }))
+    .mutation(async ({ ctx, input }) => {
+      const role = await getEffectiveRole(input.projectId, ctx.user.id);
+      const isAdmin = isSystemAdminRole(ctx.user.role);
+      const allowed = input.kind === "engineering"
+        ? ["rd_hw", "rd_sw", "rd_mech"].includes(role ?? "")
+        : ["qa", "cert", "battery_safety"].includes(role ?? "");
+      if (!isAdmin && !allowed) throw new TRPCError({ code: "FORBIDDEN", message: "当前角色不能确认该风险声明" });
+      await confirmProjectChangeScopeDeclaration({ ...input, confirmedBy: ctx.user.id });
+      await createActivityLog({
+        projectId: input.projectId,
+        userId: ctx.user.id,
+        action: "project.risk_scope_confirm",
+        entityType: "risk_scope",
+        entityId: String(input.version),
+        meta: { kind: input.kind, version: input.version },
       });
       return { success: true };
     }),
@@ -734,7 +1043,7 @@ export const projectsRouter = router({
       // 阶段守卫：move 只承担「回退」；前进推进必须走 gateReviews.confirmAndAdvance
       // （评审记录、gate task 完成、自动化事件都挂在那条路径上）。系统管理员也不例外。
       if (input.currentPhase !== undefined && input.currentPhase !== existing.currentPhase) {
-        const phases = getPhasesForCategory(existing.category);
+        const phases = getEffectivePhasesForProjectLike(existing);
         const toIdx = phases.findIndex((p) => p.id === input.currentPhase);
         if (toIdx < 0) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "非法阶段：不在该项目类型的 SOP 阶段列表中" });
@@ -750,6 +1059,16 @@ export const projectsRouter = router({
       if (input.currentPhase !== undefined) patch.currentPhase = input.currentPhase;
       if (input.pmUserId !== undefined) patch.pmUserId = input.pmUserId;
       if (input.productId !== undefined) patch.productId = input.productId;
+      if (["eco", "derivative", "idr"].includes(existing.category) && input.productId !== undefined) {
+        if (!input.productId) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "该轨道不能解除产品基线" });
+        }
+        const product = await getProductById(input.productId);
+        if (!product?.currentRevisionId) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "目标产品没有已发布基线 Revision" });
+        }
+        patch.baseRevisionId = product.currentRevisionId;
+      }
       const pmChanged = input.pmUserId !== undefined && input.pmUserId !== (existing.pmUserId ?? null);
       const meetingConfig = getStoredMeetingConfig(existing);
       if (pmChanged) patch.dingtalkEventId = null;
@@ -815,6 +1134,100 @@ export const projectsRouter = router({
     }),
 
   /**
+   * DRV 流程策略确认应用：保存模块复用等级，并同步项目任务构成。
+   * 该动作会新增模板任务、跳过裁剪任务、恢复重新纳入的任务，并刷新排期/负责人。
+   */
+  /**
+   * 项目生命周期：暂停（可恢复，退出自动化扫描）/ 恢复 / 终止（终局，理由必填，连带归档）。
+   * 权限同量产发布；善后说明（模具/物料/客户承诺处置）记入活动日志。
+   */
+  setLifecycle: protectedProcedure
+    .input(z.object({
+      projectId: z.string(),
+      lifecycle: z.enum(["active", "paused", "terminated"]),
+      reason: z.string().optional(),
+      aftercare: z.string().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const result = await setProjectLifecycle({
+          projectId: input.projectId,
+          lifecycle: input.lifecycle,
+          reason: input.reason,
+          actor: { id: ctx.user.id, role: ctx.user.role },
+        });
+        await createActivityLog({
+          projectId: input.projectId,
+          userId: ctx.user.id,
+          action: "project.lifecycle_change",
+          entityType: "project",
+          entityId: input.projectId,
+          meta: {
+            from: result.from,
+            to: result.to,
+            reason: input.reason ?? null,
+            aftercare: input.aftercare ?? null,
+          },
+        });
+        return { success: true, ...result };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "生命周期变更失败";
+        throw new TRPCError({ code: "BAD_REQUEST", message });
+      }
+    }),
+
+  applyDerivativeStrategy: protectedProcedure
+    .input(z.object({
+      projectId: z.string(),
+      strategy: z.record(z.string(), derivativeReuseLevelEnum),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+      const role = await getEffectiveRole(input.projectId, ctx.user.id);
+      if (!role || !ROLE_PERMISSIONS[role].canEditProjectInfo) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "仅 Owner/管理层/PM 可应用流程策略" });
+      }
+      if (project.category !== "derivative") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "流程策略仅适用于 DRV 产品迭代/衍生开发项目" });
+      }
+
+      try {
+        const result = await applyDerivativeReuseStrategyToProject(input.projectId, input.strategy, ctx.user.id);
+        let scheduled = 0;
+        if (project.startDate) {
+          try { scheduled = await applyProjectSchedule(input.projectId); }
+          catch (e) { console.warn("[derivative-strategy] schedule failed (non-fatal):", e); }
+        }
+        const assignments = await assignTasksByRole(input.projectId, ctx.user.id);
+        await createActivityLog({
+          projectId: input.projectId,
+          userId: ctx.user.id,
+          action: "project.derivative_strategy_apply",
+          entityType: "project",
+          entityId: input.projectId,
+          meta: {
+            strategy: input.strategy,
+            effectiveTasks: result.effectiveTasks,
+            skippedTasks: result.skippedTasks,
+            insertedTasks: result.insertedTasks,
+            restoredTasks: result.restoredTasks,
+            obsoleteSkippedTasks: result.obsoleteSkippedTasks,
+            completedSkippedTasks: result.completedSkippedTasks,
+            autoExemptedDeliverables: result.autoExemptedDeliverables,
+            restoredDeliverables: result.restoredDeliverables,
+            scheduled,
+            assigned: assignments.length,
+          },
+        });
+        return { success: true, ...result, scheduled, assigned: assignments.length };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "流程策略应用失败";
+        throw new TRPCError({ code: "BAD_REQUEST", message });
+      }
+    }),
+
+  /**
    * 立项向导:一步完成「设置开始日(生成排期) + 各角色配人 + 按角色分配任务 + 钉钉通知」。
    * 需 canEditProjectInfo。
    */
@@ -823,7 +1236,11 @@ export const projectsRouter = router({
       projectId: z.string(),
       startDate: isoDateInput.nullable().optional(),
       staffing: z.array(z.object({
-        role: z.enum(PROJECT_MEMBER_ROLES),
+        // 治理身份（owner/manager）不走 staffing：canEditProjectInfo 级入口不得授予管理层
+        role: z.enum(PROJECT_MEMBER_ROLES).refine(
+          (r) => r !== "owner" && r !== "manager",
+          { message: "staffing 不能指派 owner/manager 治理角色" },
+        ),
         userId: z.number().int(),
       })).default([]),
       notify: z.boolean().default(true),
@@ -849,20 +1266,20 @@ export const projectsRouter = router({
         } catch (e) { console.warn("[kickoff] schedule failed (non-fatal):", e); }
       }
 
-      // 2) 各角色配人(去重;跳过创建者本人,避免覆盖 owner)
+      // 2) 各角色配人；同一自然人的第二岗位追加到 extraRoles。
+      // 创建者也落成员岗位，其 owner 身份仍由 createdBy 独立推导。
       let staffed = 0;
       const seen = new Set<string>();
       for (const s of input.staffing) {
         const key = `${s.role}:${s.userId}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        if (s.userId === project.createdBy) continue;
         try { if (await ensureProjectMember(input.projectId, s.userId, s.role, ctx.user.id)) staffed += 1; }
         catch (e) { console.warn("[kickoff] staffing failed (non-fatal):", e); }
       }
 
       // 3) 按角色分配任务 + 通知。向导显式分工直接传入:
-      // 成员表一人一角色,创建者兼任/一人多角色时 ensureProjectMember 落不了库,派任务不能只靠成员表。
+      // 显式分工仍优先，保证本次向导选择立即作用于派工。
       const staffingMap: Record<string, number> = {};
       for (const s of input.staffing) staffingMap[s.role] = s.userId;
       const r = await assignAndNotify(

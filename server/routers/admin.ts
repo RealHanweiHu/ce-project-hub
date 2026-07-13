@@ -61,6 +61,8 @@ import {
   notifications,
   automationRules,
   calendarExceptions as calendarExceptionsTable,
+  PROJECT_MEMBER_ROLES,
+  projectRoleFallbackReviewers,
 } from "../../drizzle/schema";
 import { eq, desc, and, notInArray, or, like, inArray, sql as drizzleSql } from "drizzle-orm";
 
@@ -76,6 +78,47 @@ const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
 });
 
 export const adminRouter = router({
+  fallbackReviewers: router({
+    list: adminProcedure.query(async () => {
+      const db = await getDb();
+      if (!db) return [];
+      return db.select({
+        id: projectRoleFallbackReviewers.id,
+        role: projectRoleFallbackReviewers.role,
+        userId: projectRoleFallbackReviewers.userId,
+        active: projectRoleFallbackReviewers.active,
+        userName: users.name,
+        userEmail: users.email,
+      }).from(projectRoleFallbackReviewers)
+        .leftJoin(users, eq(projectRoleFallbackReviewers.userId, users.id))
+        .orderBy(projectRoleFallbackReviewers.role, users.name);
+    }),
+    upsert: adminProcedure
+      .input(z.object({ role: z.enum(PROJECT_MEMBER_ROLES), userId: z.number().int().positive(), active: z.boolean().default(true) }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const [user] = await db.select({ role: users.role }).from(users).where(eq(users.id, input.userId)).limit(1);
+        if (!user || isSystemExternalRole(user.role)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "兜底审核人必须是内部账号" });
+        }
+        const [row] = await db.insert(projectRoleFallbackReviewers).values({
+          role: input.role, userId: input.userId, active: input.active, createdBy: ctx.user.id,
+        }).onConflictDoUpdate({
+          target: [projectRoleFallbackReviewers.role, projectRoleFallbackReviewers.userId],
+          set: { active: input.active, updatedAt: new Date() },
+        }).returning();
+        return row;
+      }),
+    remove: adminProcedure
+      .input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        await db.update(projectRoleFallbackReviewers).set({ active: false }).where(eq(projectRoleFallbackReviewers.id, input.id));
+        return { success: true };
+      }),
+  }),
   /**
    * Search registered users for project invite.
    * Returns up to 10 matches on name/username/email, excluding existing members.
@@ -371,8 +414,11 @@ export const adminRouter = router({
         await tx.update(customerVariants)
           .set({ createdBy: replacementUserId })
           .where(eq(customerVariants.createdBy, input.userId));
+        // updatedBy 是"此规则被人工定制过"的唯一标记（syncAutomationRuleDefaultChanges
+        // 只强改 updatedBy IS NULL 的系统行）：置空会让被删用户定制过的规则在下次
+        // 引擎启动时被默认值迁移静默覆盖，改挂到接管人名下保住标记。
         await tx.update(automationRules)
-          .set({ updatedBy: null })
+          .set({ updatedBy: replacementUserId })
           .where(eq(automationRules.updatedBy, input.userId));
 
         await tx.delete(users).where(eq(users.id, input.userId));

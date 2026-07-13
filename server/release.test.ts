@@ -6,8 +6,23 @@ import {
   createProjectGateReview, createProjectFile, upsertProjectTask,
   createProjectTestPlan, createProjectTestReport, reviewProjectTestReport,
   createProjectNpiReadinessCheck,
+  confirmGateReview,
+  createProjectStabilityReport,
+  confirmProjectStabilityReport,
+  getMpReleaseByProjectId,
+  listProjectConditions,
+  createProjectChangeScopeDeclarationVersion,
+  createProductCertificate,
+  reviewProductCertificate,
+  createProjectCondition,
+  resolveProjectCondition,
+  saveProjectCloseHandoffDraft,
+  submitProjectCloseHandoff,
+  acceptProjectCloseHandoff,
+  getProjectCloseHandoffReadiness,
 } from "./db";
 import { getReleaseGatePhase } from "../shared/sop-templates";
+import { EMPTY_CHANGE_SCOPE_DECLARATION, deriveSopRiskAssessment } from "../shared/sop-risk";
 import { submitDeliverableReview, reviewDeliverable } from "./deliverable-review-service";
 
 const PID = "rel_test_product";
@@ -18,6 +33,7 @@ const deps = { notifyDingtalk: async () => {} };
 async function cleanup() {
   const db = await getDb(); if (!db) return;
   const { sql } = await import("drizzle-orm");
+  await db.execute(sql`DELETE FROM action_items WHERE "projectId" = ${PRJ}`);
   await db.execute(sql`DELETE FROM mp_releases WHERE "productId" = ${PID}`);
   await db.execute(sql`DELETE FROM product_revisions WHERE "productId" = ${PID}`);
   await db.execute(sql`DELETE FROM project_deliverable_reviews WHERE "projectId" = ${PRJ}`);
@@ -55,8 +71,8 @@ async function completeDeliverables(projectId: string = PRJ) {
       projectId, phaseId: phase.id, taskId: phase.gateTaskId, deliverableName: name,
       name: `${name}.pdf`, mimeType: "application/pdf", size: 1, storageKey: `${projectId}/${name}`, storageUrl: `/storage/${projectId}/${name}`, uploadedBy: 1,
     });
-    await submitDeliverableReview({ projectId, phaseId: phase.id, deliverableName: name, reviewerUserId: 1, submittedBy: 1 }, deps);
-    await reviewDeliverable({ projectId, phaseId: phase.id, deliverableName: name, decision: "approved", reviewedBy: 1, note: null }, deps);
+    await submitDeliverableReview({ projectId, phaseId: phase.id, deliverableName: name, reviewerUserId: 2, submittedBy: 1 }, deps);
+    await reviewDeliverable({ projectId, phaseId: phase.id, deliverableName: name, decision: "approved", reviewedBy: 2, note: null }, deps);
   }
   await completePvtTestReports(projectId);
   await completePvtNpiReadiness(projectId);
@@ -190,8 +206,11 @@ describe("MP Release 硬闸口", () => {
     expect(row.acceptedBy).toBe(2);
     expect(row.conditionsSnapshot).toBe("补一份老化报告");
     expect(row.followUpOwner).toBe(2);
+    const conditions = await listProjectConditions(PRJ);
+    expect(conditions.some((condition) => condition.sourceType === "release" && condition.status === "open" && condition.ownerUserId === 2)).toBe(true);
     const prj = await getProjectById(PRJ);
-    expect(prj?.archived).toBe(true);
+    expect(prj?.archived).toBe(false);
+    expect(prj?.currentPhase).toBe("mp");
     const product = await getProductById(PID);
     expect(product?.lifecycleState).toBe("mass_production");
     expect((await listProductRevisions(PID)).length).toBe(1);
@@ -204,6 +223,7 @@ const PRJ2 = "rel_test_project2";
 async function cleanup2() {
   const db = await getDb(); if (!db) return;
   const { sql } = await import("drizzle-orm");
+  await db.execute(sql`DELETE FROM action_items WHERE "projectId" = ${PRJ2}`);
   await db.execute(sql`DELETE FROM mp_releases WHERE "productId" = ${PID2}`);
   await db.execute(sql`DELETE FROM product_revisions WHERE "productId" = ${PID2}`);
   await db.execute(sql`DELETE FROM project_deliverable_reviews WHERE "projectId" = ${PRJ2}`);
@@ -248,10 +268,109 @@ describe("MP Release 正常发布（approved 普通路径）", () => {
     expect(row.followUpOwner).toBeNull();
     expect(row.dueDate).toBeNull();
     const prj = await getProjectById(PRJ2);
-    expect(prj?.archived).toBe(true);
+    expect(prj?.archived).toBe(false);
+    expect(prj?.currentPhase).toBe("mp");
     const product = await getProductById(PID2);
     expect(product?.lifecycleState).toBe("mass_production");
     await expect(releaseProject({ projectId: PRJ2, actor: ACTOR })).rejects.toThrow(/已发布/);
+    const release = await getMpReleaseByProjectId(PRJ2);
+    const addDays = (iso: string, days: number) => {
+      const date = new Date(`${iso}T00:00:00Z`);
+      date.setUTCDate(date.getUTCDate() + days);
+      return date.toISOString().slice(0, 10);
+    };
+    const releaseDay = release!.releasedAt.toISOString().slice(0, 10);
+    await expect(createProjectStabilityReport({
+      projectId: PRJ2, revisionId: release!.revisionId,
+      periodStart: releaseDay, periodEnd: addDays(releaseDay, 6),
+      outputQuantity: 0, targetOutputQuantity: 0,
+      fpyBasisPoints: 0, targetFpyBasisPoints: 0,
+      capacityAttainmentBasisPoints: 10000,
+      qualityEvents: null, summary: "空指标不能作为稳定证据", createdBy: 1,
+    })).rejects.toThrow(/目标产量/);
+    const first = await createProjectStabilityReport({
+      projectId: PRJ2, revisionId: release!.revisionId,
+      periodStart: releaseDay, periodEnd: addDays(releaseDay, 6),
+      outputQuantity: 100, targetOutputQuantity: 100,
+      fpyBasisPoints: 9800, targetFpyBasisPoints: 9700,
+      capacityAttainmentBasisPoints: 10000,
+      qualityEvents: "无", summary: "第一期稳定", createdBy: 1,
+    });
+    const second = await createProjectStabilityReport({
+      projectId: PRJ2, revisionId: release!.revisionId,
+      periodStart: addDays(releaseDay, 7), periodEnd: addDays(releaseDay, 13),
+      outputQuantity: 120, targetOutputQuantity: 100,
+      fpyBasisPoints: 9850, targetFpyBasisPoints: 9700,
+      capacityAttainmentBasisPoints: 10000,
+      qualityEvents: "无", summary: "第二期稳定", createdBy: 1,
+    });
+    await confirmProjectStabilityReport(first.id, PRJ2, 1);
+    await confirmProjectStabilityReport(second.id, PRJ2, 1);
+    const closeInput = {
+      projectId: PRJ2,
+      phaseId: "mp",
+      gateTaskId: "project_close_review",
+      phaseName: "量产稳定与移交",
+      gateName: "项目关闭移交评审",
+      reviewDate: "2026-07-10",
+      decision: "approved",
+      createdBy: 1,
+    } as const;
+
+    const declaration = { ...EMPTY_CHANGE_SCOPE_DECLARATION, batteryCellChange: true };
+    await createProjectChangeScopeDeclarationVersion({
+      projectId: PRJ2,
+      declaration,
+      assessment: deriveSopRiskAssessment({ declaration, certificateCoverageMissingReasons: ["UN38.3", "MSDS", "电池安全认证"] }),
+      declaredBy: 1,
+    });
+    await expect(confirmGateReview(closeInput)).rejects.toThrow(/证书覆盖/);
+
+    for (const type of ["un38_3", "msds", "battery_safety"] as const) {
+      const certificate = await createProductCertificate({
+        productId: PID2, projectId: PRJ2, revisionId: null,
+        type, scopeType: "project", certificateNumber: `${PRJ2}-${type}`,
+        issuingBody: "Release Test Lab", targetMarkets: [], validFrom: releaseDay,
+        validUntil: addDays(releaseDay, 365), evidenceFileId: null,
+        evidenceReference: `DCC-${type}`, reuseApproved: false, reuseBasis: null, createdBy: 1,
+      });
+      await reviewProductCertificate({ id: certificate.id, status: "valid", reviewedBy: 1 });
+    }
+    const condition = await createProjectCondition({
+      projectId: PRJ2, sourceType: "waiver", sourceId: null,
+      title: "稳定期临时让步", description: "关闭前必须补齐证据",
+      ownerUserId: 1, dueDate: addDays(releaseDay, 20), linkedEcoProjectId: null,
+      resolutionNote: null, createdBy: 1,
+    });
+    await expect(confirmGateReview(closeInput)).rejects.toThrow(/未闭环条件项/);
+    await resolveProjectCondition({ id: condition.id, projectId: PRJ2, resolution: "closed", note: "证据已补齐", resolvedBy: 1 });
+
+    await expect(confirmGateReview(closeInput)).rejects.toThrow(/量产移交/);
+    await saveProjectCloseHandoffDraft({
+      projectId: PRJ2,
+      maintenanceOwnerUserId: 1,
+      afterSalesOwnerUserId: 1,
+      scopeSummary: "产品维护承接量产版本、售后分流和所有后续 ECO 决策。",
+      items: [
+        { itemKey: "controlled_documents", completed: true, evidenceReference: "DCC-RELEASE-PACK" },
+        { itemKey: "maintenance_scope", completed: true, evidenceReference: "OPS-RACI-001" },
+        { itemKey: "after_sales_process", completed: true, evidenceReference: "SOP-AFTER-SALES-001" },
+        { itemKey: "eco_process", completed: true, evidenceReference: "SOP-ECO-001" },
+      ],
+      savedBy: 1,
+    });
+    await submitProjectCloseHandoff(PRJ2, 1);
+    expect((await getProjectCloseHandoffReadiness(PRJ2)).ready).toBe(false);
+    await acceptProjectCloseHandoff(PRJ2, 1);
+    expect((await getProjectCloseHandoffReadiness(PRJ2)).ready).toBe(true);
+
+    const close = await confirmGateReview(closeInput);
+    expect(close.closed).toBe(true);
+    expect((await getProjectById(PRJ2))?.archived).toBe(true);
+    const maintained = await getProductById(PID2);
+    expect(maintained?.lifecycleState).toBe("maintenance");
+    expect(maintained?.maintenanceOwnerUserId).toBe(1);
+    expect(maintained?.afterSalesOwnerUserId).toBe(1);
   });
 });
 
@@ -261,6 +380,7 @@ const PRJ3 = "rel_test_project3";
 async function cleanup3() {
   const db = await getDb(); if (!db) return;
   const { sql } = await import("drizzle-orm");
+  await db.execute(sql`DELETE FROM action_items WHERE "projectId" = ${PRJ3}`);
   await db.execute(sql`DELETE FROM mp_releases WHERE "productId" = ${PID3}`);
   await db.execute(sql`DELETE FROM product_revisions WHERE "productId" = ${PID3}`);
   await db.execute(sql`DELETE FROM project_changelog WHERE "projectId" = ${PRJ3}`);

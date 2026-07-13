@@ -5,7 +5,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import {
   Package, Plus, Loader2, Cpu, Boxes, CheckCircle2, Save,
-  History, PlusCircle, Trash2, Search, Pencil, X,
+  History, PlusCircle, Trash2, Search, Pencil, X, Headphones, AlertTriangle,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
@@ -27,6 +27,9 @@ import {
 import { toast } from 'sonner';
 import { LinearCard, PageHeader, SegToggle } from '@/components/linear/primitives';
 import { cn } from '@/lib/utils';
+import { ProductOperationsPanel } from './ProductOperationsPanel';
+import { ProductLifecycleGovernancePanel } from './ProductLifecycleGovernancePanel';
+import { ProductWaiverPanel } from './ProductWaiverPanel';
 import {
   findBestMatchingProductCategory,
   normalizeProductCategory,
@@ -43,6 +46,11 @@ type ProductRow = {
   platformId: string | null;
   targetMarkets: string[] | null;
   lifecycleState: string;
+  createdBy: number;
+  productManagerUserId: number | null;
+  currentRevisionId: number | null;
+  maintenanceOwnerUserId: number | null;
+  afterSalesOwnerUserId: number | null;
 };
 
 type DefinitionStatus = {
@@ -1102,6 +1110,42 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
                   )}
                 </div>
               )}
+            </AccordionContent>
+          </AccordionItem>
+
+          <AccordionItem value="operations">
+            <AccordionTrigger className="text-foreground">
+              <span className="flex items-center gap-2">
+                <Headphones size={15} className="text-muted-foreground" />
+                <span className="text-base text-foreground">量产维护 · 售后 / ECO</span>
+              </span>
+            </AccordionTrigger>
+            <AccordionContent>
+              <ProductOperationsPanel product={product} />
+            </AccordionContent>
+          </AccordionItem>
+
+          <AccordionItem value="governance">
+            <AccordionTrigger className="text-foreground">
+              <span className="flex items-center gap-2">
+                <History size={15} className="text-muted-foreground" />
+                <span className="text-base text-foreground">版本运营 · OTA / EOL</span>
+              </span>
+            </AccordionTrigger>
+            <AccordionContent>
+              <ProductLifecycleGovernancePanel product={product} />
+            </AccordionContent>
+          </AccordionItem>
+
+          <AccordionItem value="waivers">
+            <AccordionTrigger className="text-foreground">
+              <span className="flex items-center gap-2">
+                <AlertTriangle size={15} className="text-[color:var(--warning)]" />
+                <span className="text-base text-foreground">量产让步 · 临时代料</span>
+              </span>
+            </AccordionTrigger>
+            <AccordionContent>
+              <ProductWaiverPanel product={product} />
             </AccordionContent>
           </AccordionItem>
 

@@ -3,6 +3,7 @@ import { AlertTriangle, Bug, CheckCircle2, ClipboardCheck, FileCheck2, Plus, XCi
 import { toast } from "sonner";
 import { LinearCard } from "@/components/linear/primitives";
 import { trpc } from "@/lib/trpc";
+import { MANAGEMENT_VALIDATION_PHASES } from "@shared/management-kpis";
 
 type TestPlanPanelProps = {
   projectId: string;
@@ -16,7 +17,7 @@ type TestCaseStatus = "planned" | "passed" | "failed" | "blocked" | "waived";
 type TestReportResult = "pass" | "fail" | "conditional";
 type TestReportReviewStatus = "pending" | "approved" | "rejected";
 
-const FORMAL_TEST_PHASES = new Set(["evt", "dvt", "pvt"]);
+const FORMAL_TEST_PHASES = new Set<string>(MANAGEMENT_VALIDATION_PHASES);
 
 const PLAN_STATUS_LABEL: Record<TestPlanStatus, string> = {
   draft: "草稿",

@@ -2,6 +2,7 @@ import { trpc } from '@/lib/trpc';
 
 export type ProjectPermissions = {
   role: string;
+  roles: string[];
   canView: boolean;
   canEditTasks: boolean;
   canEditIssues: boolean;
@@ -26,6 +27,7 @@ export type ProjectPermissions = {
 
 const FULL_PERMISSIONS: ProjectPermissions = {
   role: 'owner',
+  roles: ['owner'],
   canView: true,
   canEditTasks: true,
   canEditIssues: true,
@@ -49,6 +51,7 @@ const FULL_PERMISSIONS: ProjectPermissions = {
 
 const NO_PERMISSIONS: ProjectPermissions = {
   role: 'viewer',
+  roles: [],
   canView: false,
   canEditTasks: false,
   canEditIssues: false,
@@ -93,6 +96,7 @@ export function useProjectPermission(projectId: string | null) {
 
   return {
     role: data.role,
+    roles: data.roles,
     ...data.permissions,
     isLoading: false,
   };

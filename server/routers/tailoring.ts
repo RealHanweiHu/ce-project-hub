@@ -14,9 +14,29 @@ import {
 } from "../db";
 import { protectedProcedure, router } from "../_core/trpc";
 import { ROLE_PERMISSIONS } from "./members";
-import { getDeliverableLibrary } from "../../shared/effective-process";
 import { getEffectiveProjectRoleById as getUserProjectRole } from "../project-access";
 import { isSystemAdminRole } from "../../shared/system-roles";
+import {
+  getEffectivePhasesForProjectLike,
+  getNpdV3RedlinePolicy,
+  isNpdV3RedlineAuditDeliverable,
+  type ProjectTemplateLike,
+} from "../../shared/npd-v3";
+import {
+  isHighRiskProtectedDeliverable,
+  isHighRiskProtectedTask,
+  isHighSopRisk,
+  phaseContainsHighRiskControls,
+} from "../../shared/sop-risk";
+import { reconcileTaskReadyActionItems } from "../automation/taskReady";
+
+async function reconcileTaskReadyAfterTailoring(projectId: string): Promise<void> {
+  const project = await getProjectById(projectId);
+  if (!project) return;
+  await reconcileTaskReadyActionItems(project).catch((error) => {
+    console.warn("[task-ready] reconcile after tailoring failed:", error);
+  });
+}
 
 const tailoringTargetSchema = z.union([
   z.object({ scope: z.literal("phase"), phaseId: z.string().min(1) }),
@@ -48,6 +68,19 @@ function assertAdmin(user: { role: string }) {
   }
 }
 
+function getEffectiveDeliverableLibrary(project: ProjectTemplateLike): string[] {
+  const names = new Set<string>();
+  for (const phase of getEffectivePhasesForProjectLike(project)) {
+    for (const name of [
+      ...(phase.deliverables ?? []),
+      ...(phase.gateStandard?.requiredDeliverables ?? []),
+    ]) {
+      if (name.trim()) names.add(name);
+    }
+  }
+  return Array.from(names);
+}
+
 export const tailoringRouter = router({
   list: protectedProcedure
     .input(z.object({ projectId: z.string() }))
@@ -64,7 +97,39 @@ export const tailoringRouter = router({
       targets: z.array(tailoringTargetSchema).min(1),
     }))
     .mutation(async ({ ctx, input }) => {
-      await assertCanProposeOrOverride(input.projectId, ctx.user);
+      const project = await assertCanProposeOrOverride(input.projectId, ctx.user);
+      const phases = getEffectivePhasesForProjectLike(project);
+      const redlineTaskIds = getNpdV3RedlinePolicy(project).taskIds;
+      const redlineTargets = input.targets.filter((target) => {
+        const phase = phases.find((item) => item.id === target.phaseId);
+        if (!phase) return false;
+        if (target.scope === "phase") {
+          return phase.tasks.some((task) => redlineTaskIds.has(task.id));
+        }
+        return redlineTaskIds.has(target.taskId) &&
+          phase.tasks.some((task) => task.id === target.taskId);
+      });
+      if (redlineTargets.length > 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "NPD v3 红线任务不可裁剪（安全/认证、量产放行、客户放行）",
+        });
+      }
+      if (isHighSopRisk(project)) {
+        const protectedTargets = input.targets.filter((target) => {
+          const phase = phases.find((item) => item.id === target.phaseId);
+          if (!phase) return false;
+          if (target.scope === "phase") return phaseContainsHighRiskControls(phase);
+          const task = phase.tasks.find((item) => item.id === target.taskId);
+          return !!task && isHighRiskProtectedTask(task);
+        });
+        if (protectedTargets.length > 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "高安全/高法规项目不能裁剪安全、认证或验证控制项",
+          });
+        }
+      }
       const id = await createProjectTailoringRequest({
         projectId: input.projectId,
         reasonType: input.reasonType,
@@ -105,6 +170,9 @@ export const tailoringRouter = router({
         entityId: String(input.id),
         meta: { decision: input.decision },
       });
+      if (input.decision === "approved") {
+        await reconcileTaskReadyAfterTailoring(projectId);
+      }
       return { success: true } as const;
     }),
 
@@ -127,6 +195,7 @@ export const tailoringRouter = router({
         entityType: "tailoring",
         entityId: String(input.id),
       });
+      await reconcileTaskReadyAfterTailoring(projectId);
       return { success: true } as const;
     }),
 
@@ -143,7 +212,7 @@ export const tailoringRouter = router({
     .input(z.object({ projectId: z.string() }))
     .query(async ({ ctx, input }) => {
       const project = await assertCanView(input.projectId, ctx.user);
-      return getDeliverableLibrary(project.category);
+      return getEffectiveDeliverableLibrary(project);
     }),
 
   deliverableOverrides: protectedProcedure
@@ -162,7 +231,30 @@ export const tailoringRouter = router({
       reason: z.string().max(500).nullable().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
-      await assertCanProposeOrOverride(input.projectId, ctx.user);
+      const project = await assertCanProposeOrOverride(input.projectId, ctx.user);
+      const phases = getEffectivePhasesForProjectLike(project);
+      if (!phases.some((phase) => phase.id === input.nodePhaseId)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "交付物提交节点不存在" });
+      }
+      if (
+        input.action !== "clear" &&
+        !getEffectiveDeliverableLibrary(project).includes(input.deliverableName)
+      ) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "交付物不在当前项目生效资源库中" });
+      }
+      if (
+        input.action === "remove" &&
+        isNpdV3RedlineAuditDeliverable(project, input.deliverableName)
+      ) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "NPD v3 红线审计交付物不可移除" });
+      }
+      if (
+        input.action === "remove" &&
+        isHighSopRisk(project) &&
+        isHighRiskProtectedDeliverable(input.deliverableName)
+      ) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "高安全/高法规项目不能移除安全、认证或验证交付物" });
+      }
       await setDeliverableOverride({
         projectId: input.projectId,
         nodePhaseId: input.nodePhaseId,

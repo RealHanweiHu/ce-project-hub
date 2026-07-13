@@ -7,11 +7,6 @@ import superjson from "superjson";
 import App from "./App";
 import { getLoginUrl } from "./const";
 import "./index.css";
-import { registerGetPhasesForCategory } from "./lib/data";
-import { getPhasesForCategory } from "./lib/sop-templates";
-
-// Register category-aware phase resolver to avoid circular imports
-registerGetPhasesForCategory(getPhasesForCategory);
 
 const queryClient = new QueryClient();
 

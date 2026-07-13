@@ -1,4 +1,7 @@
-import { and, desc, eq, inArray, sql as drizzleSql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql as drizzleSql, or } from "drizzle-orm";
+import { classifyMyWork } from "../../shared/my-work";
+import { resolveTaskName } from "../../shared/sop-template-resolution";
+import { todayShanghai } from "../../shared/shanghai-date";
 import { protectedProcedure, router } from "../_core/trpc";
 import {
   getDb,
@@ -21,6 +24,7 @@ import {
   type ProjectMemberRole,
 } from "../../drizzle/schema";
 import { isSystemAdminRole } from "../../shared/system-roles";
+import { normalizeExtraRoles } from "../../shared/project-roles";
 
 type WorkbenchRole = {
   projectId: string;
@@ -30,6 +34,7 @@ type WorkbenchRole = {
   currentPhase: string;
   targetDate: string | null;
   role: ProjectMemberRole;
+  roles: ProjectMemberRole[];
   pmUserId: number | null;
 };
 
@@ -48,12 +53,15 @@ const ROLE_TASK_ALIASES: Partial<Record<ProjectMemberRole, ProjectMemberRole[]>>
   pm: ["pm"],
 };
 
-function roleMatchesTask(role: ProjectMemberRole | undefined, visibleRoles: string[] | null): boolean {
-  if (!role || EXTERNAL_ROLES.has(role)) return false;
+function rolesMatchTask(memberRoles: Iterable<ProjectMemberRole> | undefined, visibleRoles: string[] | null): boolean {
+  if (!memberRoles) return false;
   const roles = visibleRoles ?? [];
   if (roles.length === 0) return false;
-  const aliases = ROLE_TASK_ALIASES[role] ?? [role];
-  return aliases.some((alias) => roles.includes(alias));
+  return Array.from(memberRoles).some((role) => {
+    if (EXTERNAL_ROLES.has(role)) return false;
+    const aliases = ROLE_TASK_ALIASES[role] ?? [role];
+    return aliases.some((alias) => roles.includes(alias));
+  });
 }
 
 export const workbenchRouter = router({
@@ -85,6 +93,7 @@ export const workbenchRouter = router({
       .select({
         projectId: projectMembers.projectId,
         role: projectMembers.role,
+        extraRoles: projectMembers.extraRoles,
         projectName: projects.name,
         projectNumber: projects.projectNumber,
         category: projects.category,
@@ -111,18 +120,21 @@ export const workbenchRouter = router({
 
     const roleByProject = new Map<string, WorkbenchRole>();
     for (const row of memberRows) {
-      roleByProject.set(row.projectId, row);
+      roleByProject.set(row.projectId, {
+        ...row,
+        roles: [row.role, ...normalizeExtraRoles(row.role, row.extraRoles)],
+      });
     }
     for (const row of ownedRows) {
       if (!roleByProject.has(row.projectId)) {
-        roleByProject.set(row.projectId, { ...row, role: "owner" });
+        roleByProject.set(row.projectId, { ...row, role: "owner", roles: ["owner"] });
       }
     }
     const roles = Array.from(roleByProject.values());
     const projectIds = roles.map((role) => role.projectId);
-    const roleByProjectId = new Map(roles.map((role) => [role.projectId, role.role]));
+    const rolesByProjectId = new Map(roles.map((role) => [role.projectId, role.roles]));
     const internalProjectIds = roles
-      .filter((role) => !EXTERNAL_ROLES.has(role.role))
+      .filter((row) => row.roles.some((role) => !EXTERNAL_ROLES.has(role)))
       .map((role) => role.projectId);
 
     const reviews = await db
@@ -141,7 +153,11 @@ export const workbenchRouter = router({
       .from(projectDeliverableReviews)
       .innerJoin(projects, eq(projectDeliverableReviews.projectId, projects.id))
       .where(and(
-        eq(projectDeliverableReviews.reviewerUserId, ctx.user.id),
+        // 待我审 + 我提交待别人审：后者供三桶"等待别人"分类（shared/my-work.ts）
+        or(
+          eq(projectDeliverableReviews.reviewerUserId, ctx.user.id),
+          eq(projectDeliverableReviews.submittedBy, ctx.user.id),
+        ),
         eq(projectDeliverableReviews.status, "pending"),
         eq(projects.archived, false),
       ))
@@ -199,6 +215,8 @@ export const workbenchRouter = router({
         projectName: projects.name,
         projectNumber: projects.projectNumber,
         projectCategory: projects.category,
+        sopTemplateVersion: projects.sopTemplateVersion,
+        customFields: projects.customFields,
       })
       .from(projectTasks)
       .innerJoin(projects, eq(projectTasks.projectId, projects.id))
@@ -218,7 +236,7 @@ export const workbenchRouter = router({
     const roleTasks = roleTaskRows
       .filter((task) =>
         task.assigneeUserId == null &&
-        roleMatchesTask(roleByProjectId.get(task.projectId), task.visibleRoles as string[] | null)
+        rolesMatchTask(rolesByProjectId.get(task.projectId), task.visibleRoles as string[] | null)
       )
       .slice(0, 80);
 
@@ -264,6 +282,22 @@ export const workbenchRouter = router({
       gateBlockers,
       portfolio,
       admin,
+      // 设计4 §6：三桶分类下沉服务端，网页"我的工作"与钉钉摘要共用同一结果
+      buckets: (() => {
+        const projectLikeById = new Map(portfolio.map((row) => [row.id, row]));
+        const enrichedTasks = (tasks as Array<{ projectId: string; phaseId: string; taskId: string }>).map((task) => ({
+          ...task,
+          title: resolveTaskName(projectLikeById.get(task.projectId) ?? { category: "npd" }, task.taskId, task.phaseId),
+        }));
+        return classifyMyWork({
+          userId: ctx.user.id,
+          today: todayShanghai(),
+          tasks: enrichedTasks as never,
+          reviews: reviews as never,
+          actionItems: actionItems as never,
+          snoozedActionItems: snoozedActionItems as never,
+        });
+      })(),
     };
   }),
 });

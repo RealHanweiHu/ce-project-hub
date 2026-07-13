@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { resolveTaskName } from '@shared/sop-template-resolution';
 import { trpc } from "@/lib/trpc";
 import { CheckCircle2, XCircle, Upload, Trash2, FileText } from "lucide-react";
 import { toast } from "sonner";
@@ -27,6 +28,7 @@ type GateBlockerRow = {
  */
 export function GateReadinessChecklist({
   projectId, phaseId, gateTaskId, canEdit = true, canQualityGateBlock = false, canNpiGateBlock = false,
+  onTaskClick,
 }: {
   projectId: string;
   phaseId: string;
@@ -34,11 +36,24 @@ export function GateReadinessChecklist({
   canEdit?: boolean;
   canQualityGateBlock?: boolean;
   canNpiGateBlock?: boolean;
+  /** 缺口行"去处理"跳转（设计4 §4：每行一键动作）。 */
+  onTaskClick?: (phaseId: string, taskId: string) => void;
 }) {
   const utils = trpc.useUtils();
   const { data: readiness, isLoading } = trpc.gateReviews.readiness.useQuery({ projectId, phaseId });
   const { data: files = [] } = trpc.files.list.useQuery({ projectId, phaseId, taskId: gateTaskId });
   const { data: gateBlockers = [] } = trpc.gateBlockers.list.useQuery({ projectId, phaseId });
+  // §4 缺口清单：前置任务缺口带名称+责任人+跳转，而不是裸 id
+  const { data: projectRow } = trpc.projects.get.useQuery({ id: projectId }, { staleTime: 30_000 });
+  const { data: phaseTasks = [] } = trpc.tasks.list.useQuery({ projectId, phaseId }, { staleTime: 5_000 });
+  const { data: userRows = [] } = trpc.admin.listUsersForSelect.useQuery(undefined, { staleTime: 60_000 });
+  const taskRowById = new Map((phaseTasks as Array<{ taskId: string; assigneeUserId: number | null }>)
+    .map((task) => [task.taskId, task]));
+  const userName = (id: number | null | undefined) => {
+    if (id == null) return null;
+    const u = (userRows as Array<{ id: number; name?: string | null; username?: string | null }>).find((x) => x.id === id);
+    return u ? (u.name || u.username || `#${id}`) : `#${id}`;
+  };
 
   const refresh = async () => {
     await Promise.all([
@@ -98,7 +113,33 @@ export function GateReadinessChecklist({
               onDelete={(id) => del.mutate({ id, projectId })}
             />
           )}
-          {dim.dimension !== "deliverables" && !dim.ok && dim.blockers.length > 0 && (
+          {dim.dimension === "prereq" && !dim.ok && dim.blockers.length > 0 && (
+            <ul className="ml-6 mt-0.5 text-xs space-y-0.5">
+              {dim.blockers.map((taskId) => {
+                const row = taskRowById.get(taskId);
+                const owner = userName(row?.assigneeUserId);
+                return (
+                  <li key={taskId} className="flex items-center gap-2 text-muted-foreground">
+                    <span className="text-foreground">
+                      {projectRow ? resolveTaskName(projectRow as never, taskId, phaseId) : taskId}
+                    </span>
+                    {owner && <span className="text-[11px]">@{owner}</span>}
+                    {!owner && <span className="text-[11px] text-[color:var(--warning)]">待指派</span>}
+                    {onTaskClick && (
+                      <button
+                        type="button"
+                        onClick={() => onTaskClick(phaseId, taskId)}
+                        className="text-[11px] text-primary hover:underline"
+                      >
+                        去处理 →
+                      </button>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          {dim.dimension !== "deliverables" && dim.dimension !== "prereq" && !dim.ok && dim.blockers.length > 0 && (
             <ul className="ml-6 mt-0.5 text-xs text-muted-foreground list-disc pl-3 space-y-0.5">
               {dim.blockers.map((b, i) => <li key={i}>{b}</li>)}
             </ul>

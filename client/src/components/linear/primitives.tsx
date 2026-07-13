@@ -66,10 +66,10 @@ export function SegToggle<T extends string>({ value, onChange, options }: {
   );
 }
 
-export function TypeBadge({ type }: { type: 'NPD' | 'ECO' | 'JDM' | string }) {
+export function TypeBadge({ type }: { type: 'NPD' | 'ECO' | 'DRV' | 'JDM' | string }) {
   const cls = type === 'NPD'
     ? 'bg-[color:var(--acc-soft)] text-primary border-[color:var(--acc-border)]'
-    : type === 'ECO' ? 'bg-secondary text-[color:var(--secondary-foreground)] border-border'
+    : type === 'ECO' || type === 'DRV' ? 'bg-secondary text-[color:var(--secondary-foreground)] border-border'
     : 'bg-card text-[color:var(--secondary-foreground)] border-border';
   return <span className={cn('inline-flex h-[22px] items-center gap-1.5 rounded-[6px] border px-2 text-[11px] font-semibold', cls)}>{type}</span>;
 }

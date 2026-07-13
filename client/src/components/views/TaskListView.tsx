@@ -8,9 +8,10 @@ import {
   AlertTriangle, Calendar, ChevronRight, RefreshCw, Loader2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { getPhasesForCategory } from '@/lib/sop-templates';
 import { toLocalISODate } from '@/lib/utils';
 import { type TaskStatus, type TaskPriority } from '@shared/const';
+import type { ProjectTemplateLike } from '@shared/npd-v3';
+import { resolveProjectPhase, resolveTaskName } from '@shared/sop-template-resolution';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -22,6 +23,8 @@ export interface TaskRow {
   projectName: string;
   projectNumber: string;
   projectCategory: string;
+  sopTemplateVersion?: string | null;
+  customFields?: unknown;
   status: TaskStatus;
   priority: TaskPriority;
   dueDate: string | null;
@@ -55,7 +58,7 @@ interface TaskListViewProps {
 
 type Tone = { color: string; bg: string; border: string };
 const STATUS_CONFIG: Record<TaskStatus, { label: string; tone: Tone }> = {
-  todo:        { label: '待处理',  tone: { color: 'var(--secondary-foreground)', bg: 'var(--secondary)', border: 'var(--border)' } },
+  todo:        { label: '待开始',  tone: { color: 'var(--secondary-foreground)', bg: 'var(--secondary)', border: 'var(--border)' } },
   in_progress: { label: '进行中',  tone: { color: 'var(--primary)', bg: 'var(--acc-soft)', border: 'var(--acc-border)' } },
   blocked:     { label: '已阻塞',  tone: { color: 'var(--destructive)', bg: 'color-mix(in srgb, var(--destructive) 10%, transparent)', border: 'color-mix(in srgb, var(--destructive) 30%, transparent)' } },
   done:        { label: '已完成',  tone: { color: 'var(--success)', bg: 'color-mix(in srgb, var(--success) 12%, transparent)', border: 'color-mix(in srgb, var(--success) 30%, transparent)' } },
@@ -70,28 +73,14 @@ const PRIORITY_CONFIG: Record<TaskPriority, { label: string; tone: Tone; dot: st
   low:      { label: '低',   tone: { color: 'var(--muted-foreground)', bg: 'var(--secondary)', border: 'var(--border)' }, dot: 'var(--muted-foreground)' },
 };
 
-// ─── Helper: resolve task display name from SOP template ─────────────────────
+// ─── Project-bound template context ─────────────────────────────────────────
 
-export function resolveTaskName(taskId: string, phaseId: string, category: string): string {
-  try {
-    const phases = getPhasesForCategory(category);
-    const phase = phases.find((p) => p.id === phaseId);
-    if (!phase) return taskId;
-    const task = phase.tasks.find((t) => t.id === taskId);
-    return task?.name ?? taskId;
-  } catch {
-    return taskId;
-  }
-}
-
-function resolvePhaseLabel(phaseId: string, category: string): string {
-  try {
-    const phases = getPhasesForCategory(category);
-    const phase = phases.find((p) => p.id === phaseId);
-    return phase ? `${phase.code} ${phase.name}` : phaseId;
-  } catch {
-    return phaseId;
-  }
+export function taskProjectLike(task: Pick<TaskRow, 'projectCategory' | 'sopTemplateVersion' | 'customFields'>): ProjectTemplateLike {
+  return {
+    category: task.projectCategory,
+    sopTemplateVersion: task.sopTemplateVersion,
+    customFields: task.customFields,
+  };
 }
 
 function isOverdue(dueDate: string | null): boolean {
@@ -169,8 +158,10 @@ export function TaskListView({
 
       {/* Rows */}
       {tasks.map((task) => {
-        const taskName = resolveTaskName(task.taskId, task.phaseId, task.projectCategory);
-        const phaseLabel = resolvePhaseLabel(task.phaseId, task.projectCategory);
+        const projectLike = taskProjectLike(task);
+        const taskName = resolveTaskName(projectLike, task.taskId, task.phaseId);
+        const phase = resolveProjectPhase(projectLike, task.phaseId);
+        const phaseLabel = phase ? `${phase.code} ${phase.name}` : task.phaseId;
         const overdue = showOverdueBadge && isOverdue(task.dueDate);
         const priorityCfg = PRIORITY_CONFIG[task.priority];
 

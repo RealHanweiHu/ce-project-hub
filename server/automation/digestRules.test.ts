@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  DIGEST_RULE_KEYS, DIGEST_RULES, healthDigestConfigSchema, personalDailyDigestConfigSchema,
+  DIGEST_RULE_KEYS, DIGEST_RULES, groupWeeklyDigestConfigSchema, healthDigestConfigSchema, personalDailyDigestConfigSchema,
   isDigestRuleKey, parseDigestRuleConfig,
 } from "./digestRules";
 
@@ -29,6 +29,7 @@ describe("digestRules", () => {
   it("isDigestRuleKey", () => {
     expect(isDigestRuleKey("health_digest")).toBe(true);
     expect(isDigestRuleKey("personal_daily_digest")).toBe(true);
+    expect(isDigestRuleKey("group_weekly_digest")).toBe(true);
     expect(isDigestRuleKey("overdue_reminder")).toBe(false);
   });
   it("parseDigestRuleConfig 合并部分配置", () => {
@@ -43,7 +44,12 @@ describe("digestRules", () => {
     expect(c.pushDingtalk).toBe(false);
     expect(c.sendHour).toBe(9);
   });
+  it("group_weekly_digest 默认周一上海 09:00 发到项目群", () => {
+    expect(groupWeeklyDigestConfigSchema.parse({})).toEqual({ sendHour: 9, weekday: 1 });
+    expect(parseDigestRuleConfig("group_weekly_digest", { sendHour: 10 })).toEqual({ sendHour: 10, weekday: 1 });
+    expect(DIGEST_RULES.find((x) => x.key === "group_weekly_digest")?.defaultEnabled).toBe(true);
+  });
   it("DIGEST_RULE_KEYS 含所有摘要规则", () => {
-    expect([...DIGEST_RULE_KEYS]).toEqual(["health_digest", "personal_daily_digest"]);
+    expect([...DIGEST_RULE_KEYS]).toEqual(["health_digest", "personal_daily_digest", "group_weekly_digest"]);
   });
 });

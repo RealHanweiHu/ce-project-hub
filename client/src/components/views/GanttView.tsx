@@ -6,7 +6,7 @@ import {
   Flag, CalendarDays, ZoomIn, ZoomOut, ChevronLeft, ChevronRight,
   Pencil, Check, X as XIcon, Lock,
 } from 'lucide-react';
-import { Project, PhaseDate, computePhaseProgress, getPhaseStatus, getProjectPhases, SOPPhase } from '@/lib/data';
+import { Project, PhaseDate, getPhaseProgress, getPhaseStatus, getProjectPhases, SOPPhase } from '@/lib/data';
 
 // ── Duration defaults (days) ──────────────────────────────────────────────────
 const PHASE_DAYS: Record<string, number> = {
@@ -167,7 +167,7 @@ export function GanttView({ project, onUpdate, onPhaseClick, readOnly = false, p
         phase,
         startDate: phaseStart,
         endDate: phaseEnd,
-        progress: computePhaseProgress(project.phases[phase.id], phase.id),
+        progress: getPhaseProgress(project, phase.id),
         status: getPhaseStatus(project, phase.id),
         isCustom,
       };

@@ -35,7 +35,7 @@ function addAll(target: Set<string>, values: Iterable<string>) {
   }
 }
 
-function phaseSubmissionTemplate(phase: SOPPhase): string[] {
+export function phaseSubmissionTemplate(phase: SOPPhase): string[] {
   const names = new Set<string>();
   addAll(names, phase.deliverables ?? []);
   addAll(names, phase.gateStandard?.requiredDeliverables ?? []);
@@ -57,9 +57,13 @@ function buildOverrideMap(overrides: DeliverableOverrideInput[]): Map<string, De
   return map;
 }
 
-export function getDeliverableLibrary(category?: string): string[] {
+export function getDeliverableLibrary(category?: string, templateVersion?: string | null): string[] {
+  return getDeliverableLibraryForPhases(getPhasesForCategory(category, templateVersion));
+}
+
+export function getDeliverableLibraryForPhases(phases: SOPPhase[]): string[] {
   const names = new Set<string>();
-  for (const phase of getPhasesForCategory(category)) {
+  for (const phase of phases) {
     addAll(names, phaseSubmissionTemplate(phase));
   }
   return Array.from(names);
@@ -69,9 +73,10 @@ export function getEffectiveProcess(
   category?: string,
   tailoredPhaseIdsInput?: Iterable<string>,
   tailoredTaskIdsInput?: Iterable<string>,
-  deliverableOverrides: DeliverableOverrideInput[] = []
+  deliverableOverrides: DeliverableOverrideInput[] = [],
+  phaseOverride?: SOPPhase[]
 ): EffectiveProcess {
-  const phases = getPhasesForCategory(category);
+  const phases = phaseOverride ?? getPhasesForCategory(category);
   const tailoredPhaseIds = toSet(tailoredPhaseIdsInput);
   const tailoredTaskIds = toSet(tailoredTaskIdsInput);
   const submissions = new Map<string, Set<string>>();

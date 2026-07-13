@@ -19,9 +19,11 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { getLoginUrl } from "@/const";
 import { trpc } from "@/lib/trpc";
-import { getPhasesForCategory, type ProjectCategory } from "@/lib/sop-templates";
 import { isSystemAdminRole } from "@shared/system-roles";
 import { buildProjectActionPath } from "@shared/action-links";
+import { getTaskEvidenceLevel, type ProjectTemplateLike } from "@shared/npd-v3";
+import { resolvePhaseName, resolveProjectTask } from "@shared/sop-template-resolution";
+import type { ProjectMemberRole } from "@shared/project-roles";
 
 type ActionKind = "task-approval" | "deliverable-review" | "task-complete" | "issue-validation" | "task-assign";
 type Decision = "approved" | "rejected";
@@ -82,16 +84,20 @@ function localDateISO(date = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
-function phaseName(projectCategory: string | null | undefined, phaseId: string) {
-  const phases = getPhasesForCategory(projectCategory as ProjectCategory | undefined);
-  return phases.find((phase) => phase.id === phaseId)?.name ?? phaseId;
+function phaseName(
+  project: ProjectTemplateLike,
+  phaseId: string,
+) {
+  return resolvePhaseName(project, phaseId);
 }
 
-function taskName(projectCategory: string | null | undefined, phaseId: string, taskId: string, instructions?: string | null) {
-  const phases = getPhasesForCategory(projectCategory as ProjectCategory | undefined);
-  const phase = phases.find((candidate) => candidate.id === phaseId);
-  const task = phase?.tasks.find((candidate) => candidate.id === taskId)
-    ?? phases.flatMap((candidate) => candidate.tasks).find((candidate) => candidate.id === taskId);
+function taskName(
+  project: ProjectTemplateLike,
+  phaseId: string,
+  taskId: string,
+  instructions?: string | null,
+) {
+  const task = resolveProjectTask(project, taskId, phaseId);
   if (task?.name) return task.name;
   const heading = instructions?.split(/\r?\n/).map((line) => line.match(/^#{1,6}\s+(.+?)\s*$/)?.[1]?.trim()).find(Boolean);
   return heading || taskId;
@@ -241,12 +247,14 @@ function TaskApprovalAction({
   const utils = trpc.useUtils();
   const { user } = useAuth();
   const [note, setNote] = useState("");
+  const [actedAsRole, setActedAsRole] = useState<ProjectMemberRole | "">("");
   const [completedDecision, setCompletedDecision] = useState<Decision | null>(null);
   const detailPath = buildProjectActionPath({ projectId, tab: "tasks", phaseId, taskId, taskTab: "approval" });
 
   const projectQuery = trpc.projects.get.useQuery({ id: projectId }, { enabled: !!projectId, staleTime: 5_000 });
   const membersQuery = trpc.members.list.useQuery({ projectId }, { enabled: !!projectId, staleTime: 10_000 });
   const tasksQuery = trpc.tasks.list.useQuery({ projectId, phaseId }, { enabled: !!projectId && !!phaseId, staleTime: 5_000 });
+  const myRoleQuery = trpc.members.myRole.useQuery({ projectId }, { enabled: !!projectId, staleTime: 5_000 });
 
   const project = projectQuery.data;
   const members = membersQuery.data ?? [];
@@ -295,7 +303,7 @@ function TaskApprovalAction({
               <Clock3 size={14} />
               明确指派给你的行动项
             </div>
-            <h1 className="text-lg font-semibold leading-7">{taskName(project.category, phaseId, taskId, task.instructions)}</h1>
+            <h1 className="text-lg font-semibold leading-7">{taskName(project, phaseId, taskId, task.instructions)}</h1>
           </div>
           <span className={`shrink-0 rounded-md border px-2.5 py-1 text-xs font-medium ${statusClass(status)}`}>
             {STATUS_LABEL[status] ?? status}
@@ -304,7 +312,7 @@ function TaskApprovalAction({
 
         <div className="space-y-3 rounded-md border border-border bg-secondary/40 p-3">
           <ContextRow label="项目" value={project.name} />
-          <ContextRow label="阶段" value={phaseName(project.category, phaseId)} />
+          <ContextRow label="阶段" value={phaseName(project, phaseId)} />
           <ContextRow label="审批人" value={memberName(members, task.approverUserId)} />
           {task.approvalRequestedBy && (
             <ContextRow label="提交人" value={memberName(members, task.approvalRequestedBy)} />
@@ -323,10 +331,16 @@ function TaskApprovalAction({
               placeholder="审批意见（可选）"
               className="resize-none"
             />
+            {(myRoleQuery.data?.roles.length ?? 0) > 1 && (
+              <select value={actedAsRole} onChange={(event) => setActedAsRole(event.target.value as ProjectMemberRole | "")} className="w-full rounded-md border border-border bg-card px-3 py-2 text-sm">
+                <option value="">选择本次签字角色</option>
+                {myRoleQuery.data?.roles.map((role) => <option key={role} value={role}>{role}</option>)}
+              </select>
+            )}
             <ActionButtons
               isPending={decide.isPending}
-              onApprove={() => decide.mutate({ projectId, phaseId, taskId, decision: "approved", note: note || null })}
-              onReject={() => decide.mutate({ projectId, phaseId, taskId, decision: "rejected", note: note || null })}
+              onApprove={() => decide.mutate({ projectId, phaseId, taskId, decision: "approved", note: note || null, actedAsRole: actedAsRole || undefined })}
+              onReject={() => decide.mutate({ projectId, phaseId, taskId, decision: "rejected", note: note || null, actedAsRole: actedAsRole || undefined })}
             />
           </div>
         )}
@@ -359,12 +373,14 @@ function DeliverableReviewAction({
   const utils = trpc.useUtils();
   const { user } = useAuth();
   const [note, setNote] = useState("");
+  const [actedAsRole, setActedAsRole] = useState<ProjectMemberRole | "">("");
   const [completedDecision, setCompletedDecision] = useState<Decision | null>(null);
   const detailPath = buildProjectActionPath({ projectId, tab: "reviews", phaseId });
 
   const projectQuery = trpc.projects.get.useQuery({ id: projectId }, { enabled: !!projectId, staleTime: 5_000 });
   const membersQuery = trpc.members.list.useQuery({ projectId }, { enabled: !!projectId, staleTime: 10_000 });
   const reviewsQuery = trpc.deliverableReviews.list.useQuery({ projectId }, { enabled: !!projectId, staleTime: 5_000 });
+  const myRoleQuery = trpc.members.myRole.useQuery({ projectId }, { enabled: !!projectId, staleTime: 5_000 });
 
   const project = projectQuery.data;
   const members = membersQuery.data ?? [];
@@ -423,7 +439,7 @@ function DeliverableReviewAction({
 
         <div className="space-y-3 rounded-md border border-border bg-secondary/40 p-3">
           <ContextRow label="项目" value={project.name} />
-          <ContextRow label="阶段" value={phaseName(project.category, phaseId)} />
+          <ContextRow label="阶段" value={phaseName(project, phaseId)} />
           <ContextRow label="审核人" value={memberName(members, review.reviewerUserId)} />
           <ContextRow label="提交人" value={memberName(members, review.submittedBy)} />
           {review.reviewNote && (
@@ -440,10 +456,16 @@ function DeliverableReviewAction({
               placeholder="审核意见（可选）"
               className="resize-none"
             />
+            {(myRoleQuery.data?.roles.length ?? 0) > 1 && (
+              <select value={actedAsRole} onChange={(event) => setActedAsRole(event.target.value as ProjectMemberRole | "")} className="w-full rounded-md border border-border bg-card px-3 py-2 text-sm">
+                <option value="">选择本次签字角色</option>
+                {myRoleQuery.data?.roles.map((role) => <option key={role} value={role}>{role}</option>)}
+              </select>
+            )}
             <ActionButtons
               isPending={decide.isPending}
-              onApprove={() => decide.mutate({ projectId, phaseId, deliverableName, decision: "approved", note: note || null })}
-              onReject={() => decide.mutate({ projectId, phaseId, deliverableName, decision: "rejected", note: note || null })}
+              onApprove={() => decide.mutate({ projectId, phaseId, deliverableName, decision: "approved", note: note || null, actedAsRole: actedAsRole || undefined })}
+              onReject={() => decide.mutate({ projectId, phaseId, deliverableName, decision: "rejected", note: note || null, actedAsRole: actedAsRole || undefined })}
             />
           </div>
         )}
@@ -475,6 +497,7 @@ function TaskCompletionAction({
 }) {
   const utils = trpc.useUtils();
   const [submitted, setSubmitted] = useState(false);
+  const [note, setNote] = useState("");
   const detailPath = buildProjectActionPath({ projectId, tab: "tasks", phaseId, taskId });
 
   const projectQuery = trpc.projects.get.useQuery({ id: projectId }, { enabled: !!projectId, staleTime: 5_000 });
@@ -488,6 +511,7 @@ function TaskCompletionAction({
     ? task?.requiresApproval ? "pending_approval" : "done"
     : task?.status ?? "todo";
   const alreadyClosed = status === "done" || status === "skipped" || task?.approvalStatus === "pending";
+  const evidenceLevel = project ? getTaskEvidenceLevel(project, phaseId, taskId) : "light";
 
   const complete = trpc.tasks.setCompleted.useMutation({
     onSuccess: async () => {
@@ -528,7 +552,7 @@ function TaskCompletionAction({
               <ListChecks size={14} />
               明确指派给你的行动项
             </div>
-            <h1 className="text-lg font-semibold leading-7">{taskName(project.category, phaseId, taskId, task.instructions)}</h1>
+            <h1 className="text-lg font-semibold leading-7">{taskName(project, phaseId, taskId, task.instructions)}</h1>
           </div>
           <span className={`shrink-0 rounded-md border px-2.5 py-1 text-xs font-medium ${
             status === "done" ? STATUS_CLASS.approved :
@@ -541,22 +565,59 @@ function TaskCompletionAction({
 
         <div className="space-y-3 rounded-md border border-border bg-secondary/40 p-3">
           <ContextRow label="项目" value={project.name} />
-          <ContextRow label="阶段" value={phaseName(project.category, phaseId)} />
+          <ContextRow label="阶段" value={phaseName(project, phaseId)} />
           <ContextRow label="负责人" value={memberName(members, task.assigneeUserId)} />
           {task.dueDate && <ContextRow label="截止" value={task.dueDate} />}
           {task.requiresApproval && <ContextRow label="审批" value={`完成后由 ${memberName(members, task.approverUserId)} 审批`} />}
         </div>
 
-        {!alreadyClosed ? (
-          <div className="mt-5">
+        {!alreadyClosed && evidenceLevel === "light" ? (
+          <div className="mt-5 space-y-3">
+            <div className="space-y-1.5">
+              <label htmlFor="completion-note" className="text-xs font-medium text-foreground">
+                一句话结论
+              </label>
+              <Textarea
+                id="completion-note"
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+                rows={2}
+                maxLength={500}
+                placeholder="例如：测试通过，关键结论和数据已记录在任务附件中"
+                className="resize-none"
+              />
+              <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                <span>随完成动作一起保存，不需要再写单独日报。</span>
+                <span>{note.length}/500</span>
+              </div>
+            </div>
             <Button
               type="button"
               disabled={complete.isPending}
-              onClick={() => complete.mutate({ projectId, phaseId, taskId, completed: true })}
+              onClick={() => complete.mutate({
+                projectId,
+                phaseId,
+                taskId,
+                completed: true,
+                completionNote: note.trim() || undefined,
+              })}
               className="h-11 w-full"
             >
               {complete.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
               {task.requiresApproval ? "提交完成并发起审批" : "标记完成"}
+            </Button>
+          </div>
+        ) : !alreadyClosed ? (
+          <div className="mt-5 space-y-3 rounded-md border border-amber-200 bg-amber-50 p-3">
+            <div className="text-sm font-medium text-amber-900">这是一项重证据任务</div>
+            <p className="text-xs leading-5 text-amber-800">
+              请由任务负责人先上传测试报告、设计包或证书，再从任务页顺手标记完成。
+            </p>
+            <Button asChild className="h-11 w-full">
+              <a href={detailPath}>
+                <ExternalLink className="h-4 w-4" />
+                去任务页上传
+              </a>
             </Button>
           </div>
         ) : (
@@ -640,7 +701,7 @@ function IssueValidationAction({
 
         <div className="space-y-3 rounded-md border border-border bg-secondary/40 p-3">
           <ContextRow label="项目" value={projectQuery.data.name} />
-          <ContextRow label="阶段" value={phaseName(projectQuery.data.category, phaseId)} />
+          <ContextRow label="阶段" value={phaseName(projectQuery.data, phaseId)} />
           <ContextRow label="等级" value={issue.severity} />
           {issue.owner && <ContextRow label="责任人" value={issue.owner} />}
           {issue.solution && <ContextRow label="方案" value={<span className="text-muted-foreground">{issue.solution}</span>} />}
@@ -744,7 +805,7 @@ function TaskAssignmentAction({
               <UserCheck size={14} />
               明确指派给你的行动项
             </div>
-            <h1 className="text-lg font-semibold leading-7">{taskName(project.category, phaseId, taskId, task.instructions)}</h1>
+            <h1 className="text-lg font-semibold leading-7">{taskName(project, phaseId, taskId, task.instructions)}</h1>
           </div>
           <span className={`shrink-0 rounded-md border px-2.5 py-1 text-xs font-medium ${assignedUserId ? STATUS_CLASS.approved : STATUS_CLASS.pending}`}>
             {assignedUserId ? "已分派" : "待分派"}
@@ -753,7 +814,7 @@ function TaskAssignmentAction({
 
         <div className="space-y-3 rounded-md border border-border bg-secondary/40 p-3">
           <ContextRow label="项目" value={project.name} />
-          <ContextRow label="阶段" value={phaseName(project.category, phaseId)} />
+          <ContextRow label="阶段" value={phaseName(project, phaseId)} />
           <ContextRow label="当前" value={memberName(members, assignedUserId)} />
           {task.dueDate && <ContextRow label="截止" value={task.dueDate} />}
         </div>

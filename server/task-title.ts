@@ -1,9 +1,17 @@
-import { getPhasesForCategory } from "../shared/sop-templates";
+import type { ProjectTemplateLike } from "../shared/npd-v3";
+import { resolveProjectTask } from "../shared/sop-template-resolution";
 
 export type TaskDisplayTitleInput = {
   taskId?: string | null;
   phaseId?: string | null;
+  /** Project-bound template context (version + tier/add-on custom fields). */
+  projectLike?: ProjectTemplateLike | null;
+  /** @deprecated Prefer projectLike; retained for historical event payloads. */
   projectCategory?: string | null;
+  /** @deprecated Prefer projectLike; retained for flat query rows. */
+  sopTemplateVersion?: string | null;
+  /** @deprecated Prefer projectLike; retained for flat query rows. */
+  customFields?: unknown;
   instructions?: string | null;
 };
 
@@ -12,19 +20,13 @@ export function taskDisplayTitle(task: TaskDisplayTitleInput): string {
   const normalizedTaskId = taskId.toLowerCase();
 
   if (normalizedTaskId) {
-    const phases = getPhasesForCategory(task.projectCategory ?? undefined);
-    const phaseId = task.phaseId?.trim();
-    const orderedPhases = phaseId
-      ? [
-          ...phases.filter((phase) => phase.id === phaseId),
-          ...phases.filter((phase) => phase.id !== phaseId),
-        ]
-      : phases;
-
-    for (const phase of orderedPhases) {
-      const matchedTask = phase.tasks.find((candidate) => candidate.id.toLowerCase() === normalizedTaskId);
-      if (matchedTask?.name) return matchedTask.name;
-    }
+    const projectLike = task.projectLike ?? {
+      category: task.projectCategory,
+      sopTemplateVersion: task.sopTemplateVersion,
+      customFields: task.customFields,
+    };
+    const matchedTask = resolveProjectTask(projectLike, taskId, task.phaseId);
+    if (matchedTask?.name) return matchedTask.name;
   }
 
   const instructionTitle = firstMarkdownHeading(task.instructions);

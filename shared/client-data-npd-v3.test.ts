@@ -1,13 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { getPhasesForCategory } from "./sop-templates";
 import {
   getProjectPhases,
   normalizeProject,
-  registerGetPhasesForCategory,
   type Project,
 } from "../client/src/lib/data";
-
-registerGetPhasesForCategory(getPhasesForCategory);
 
 const liteBatteryProject = (): Project => ({
   id: "client-v3-lite",

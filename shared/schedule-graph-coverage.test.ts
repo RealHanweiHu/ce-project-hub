@@ -1,6 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { SCHEDULE_GRAPH, scheduleForCategory } from "./schedule-graph";
-import { PROJECT_CATEGORIES } from "./sop-templates";
+import {
+  SCHEDULE_GRAPH,
+  criticalPathTasksForProject,
+  scheduleForCategory,
+  scheduleForProject,
+} from "./schedule-graph";
+import {
+  DERIVATIVE_PHASES,
+  DERIVATIVE_REUSE_MODULE_RULES,
+  PROJECT_CATEGORIES,
+  SOP_TEMPLATE_VERSION_NPD_V3,
+} from "./sop-templates";
 
 /**
  * P0：SCHEDULE_GRAPH 必须覆盖所有 category 的全部任务。
@@ -48,4 +58,54 @@ describe("SCHEDULE_GRAPH 全 category 覆盖", () => {
       }
     });
   }
+
+  it("DRV 保留投模、模具开发和 T1/T2 的关键依赖", () => {
+    const ids = new Set(DERIVATIVE_PHASES.flatMap((p) => p.tasks.map((t) => t.id)));
+    const depsOf = (taskId: string) => SCHEDULE_GRAPH[taskId].slice(1);
+
+    expect([...ids]).toEqual(expect.arrayContaining(["dd5", "dd7", "dd8", "dv2", "dv3", "dv7"]));
+    expect(depsOf("dd7")).toEqual(expect.arrayContaining(["dd5", "dd6", "dd9"]));
+    expect(depsOf("dd8")).toEqual(["dd7"]);
+    expect(depsOf("dv2")).toEqual(["dd8"]);
+    expect(depsOf("dv3")).toEqual(["dv2"]);
+    expect(depsOf("dv7")).toContain("dv6");
+  });
+});
+
+describe("project-aware schedule graph", () => {
+  const liteBatteryProject = {
+    category: "npd",
+    sopTemplateVersion: SOP_TEMPLATE_VERSION_NPD_V3,
+    customFields: { npdTemplate: { tier: "lite", packs: ["battery"] } },
+  };
+
+  it("schedules lite-only and add-on tasks from the effective process", () => {
+    const schedule = scheduleForProject(liteBatteryProject, "2026-03-02");
+    expect(schedule.nle1).toBeDefined();
+    expect(schedule.pb2).toBeDefined();
+    expect(schedule.ne1).toBeUndefined();
+  });
+
+  it("computes a non-empty critical path contained by the effective task set", () => {
+    const schedule = scheduleForProject(liteBatteryProject, "2026-03-02");
+    const critical = criticalPathTasksForProject(liteBatteryProject);
+    expect(critical.size).toBeGreaterThan(0);
+    expect(Array.from(critical).every((taskId) => taskId in schedule)).toBe(true);
+  });
+
+  it("contracts derivative dependencies from the full graph after strategy tasks are removed", () => {
+    const allDirectReuse = Object.fromEntries(
+      DERIVATIVE_REUSE_MODULE_RULES.map((rule) => [rule.id, "direct_reuse"])
+    );
+    const project = {
+      category: "derivative",
+      customFields: { derivativeReuseStrategy: allDirectReuse },
+    };
+    const schedule = scheduleForProject(project, "2026-03-02");
+
+    expect(schedule.dd1).toBeUndefined();
+    expect(schedule.dd6.start >= schedule.di6.due).toBe(true);
+    const critical = criticalPathTasksForProject(project);
+    expect(Array.from(critical).every((taskId) => taskId in schedule)).toBe(true);
+  });
 });

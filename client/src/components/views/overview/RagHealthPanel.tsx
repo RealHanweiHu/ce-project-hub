@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { type RagLevel } from "@shared/health";
 import type { PortfolioTableRow } from "./PortfolioTable";
-import { PHASE_MAP } from "@/lib/data";
+import { resolvePhaseName } from "@shared/sop-template-resolution";
 import { Activity, ChevronRight } from "lucide-react";
 
 const LABEL: Record<RagLevel, string> = { green: "绿", amber: "黄", red: "红" };
@@ -42,7 +42,7 @@ export function RagHealthPanel({ rows, onSelectProject }: { rows: PortfolioTable
             <span className={`w-2 h-2 rounded-full shrink-0 ${level === "red" ? "bg-[color:var(--destructive)]" : "bg-[color:var(--warning)]"}`} />
             <div className="min-w-0 flex-1">
               <div className="text-sm font-medium text-foreground truncate">{row.name}</div>
-              <div className="text-[10px] num text-muted-foreground">{PHASE_MAP[row.currentPhase]?.name ?? row.currentPhase}</div>
+              <div className="text-[10px] num text-muted-foreground">{resolvePhaseName(row, row.currentPhase)}</div>
             </div>
             <ChevronRight size={13} className="text-muted-foreground shrink-0" />
           </div>

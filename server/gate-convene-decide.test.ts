@@ -72,6 +72,13 @@ describe("Gate 召集/决策权拆分", () => {
     })).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
+  it("管理层也不能经 create 旁路写通过，必须走原子裁决", async () => {
+    await expect(gates(OWNER).create({
+      projectId: PROJ, phaseId: "evt", phaseName: "EVT", gateName: "EVT Gate",
+      reviewDate: "2026-07-06", decision: "approved",
+    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
   it("project_manager 不能 confirmAndAdvance", async () => {
     await expect(gates(PM).confirmAndAdvance({
       projectId: PROJ, phaseId: "evt", phaseName: "EVT", gateName: "EVT Gate",
@@ -102,7 +109,7 @@ describe("Gate 召集/决策权拆分", () => {
     })).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
-  it("管理层把 rejected 改成 approved 也必须过就绪度校验（封堵 update 绕过）", async () => {
+  it("管理层也不能覆盖历史 decision；正式更正必须开新一轮", async () => {
     const db = await getDb();
     const [row] = await db!.select().from(projectGateReviews).where(eq(projectGateReviews.projectId, PROJ));
     await expect(gates(OWNER).update({

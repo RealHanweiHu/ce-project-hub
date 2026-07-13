@@ -38,7 +38,7 @@ describe("notification gateway delivery pressure", () => {
       priority: "normal",
     }, deps);
 
-    expect(result).toEqual({ site: 1, dingtalk: 0 });
+    expect(result).toEqual({ site: 1, dingtalk: 0, failed: 0, skipped: 1, errors: [] });
     expect(site).toHaveLength(1);
     expect(dingtalk).toHaveLength(0);
   });
@@ -67,7 +67,23 @@ describe("notification gateway delivery pressure", () => {
       priority: "normal",
     }, deps);
 
-    expect(result).toEqual({ site: 1, dingtalk: 0 });
+    expect(result).toEqual({ site: 1, dingtalk: 0, failed: 0, skipped: 1, errors: [] });
     expect(dingtalk).toHaveLength(0);
+  });
+
+  it("uses the real DingTalk dispatch result", async () => {
+    const { deps } = depsFor([profile({ userId: 7 })], new Date("2026-07-07T04:00:00Z"));
+    deps.notifyDingtalk = async () => ({
+      channel: "work_notice", attempted: 1, delivered: 0, failed: 1, skipped: 0, error: "remote rejected",
+    });
+
+    const result = await notifyPersonal({
+      eventKey: "critical_issue",
+      userIds: [7],
+      title: "P0 问题",
+      priority: "critical",
+    }, deps);
+
+    expect(result).toEqual({ site: 1, dingtalk: 0, failed: 1, skipped: 0, errors: ["remote rejected"] });
   });
 });

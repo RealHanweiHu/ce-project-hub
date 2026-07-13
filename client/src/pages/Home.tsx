@@ -13,10 +13,10 @@ import {
 import type { TaskFocus } from '@/components/views/TaskListView';
 import { nanoid } from 'nanoid';
 import {
-  Project, normalizeProject, Issue, GateReview, ChangeRecord, PhaseData,
+  Project, normalizeProject, getProjectPhases, Issue, GateReview, ChangeRecord, PhaseData,
   type ProjectCreateDraft,
 } from '@/lib/data';
-import { buildPhasesDataForCategory, getPhasesForCategory } from '@/lib/sop-templates';
+import { buildPhasesDataForProject } from '@/lib/sop-templates';
 import { trpc } from '@/lib/trpc';
 import { toast } from 'sonner';
 import { useAuth } from '@/_core/hooks/useAuth';
@@ -25,6 +25,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { getQueryKey } from '@trpc/react-query';
 import { isSystemAdminRole } from '@shared/system-roles';
 import {
+  isNpdTierDowngrade,
   normalizeNpdTemplateConfig,
   recommendNpdTemplateConfig,
   type NpdProjectAttributes,
@@ -167,6 +168,13 @@ function projectToApiInput(p: Project) {
     category: category || 'npd',
     pmUserId: pmUserId ?? null,
     productId: p.productId ?? null,
+    changeScopeDeclaration: p.changeScopeDeclaration,
+    safetyRiskLevel: p.safetyRiskLevel ?? 'standard',
+    regulatoryRiskLevel: p.regulatoryRiskLevel ?? 'standard',
+    customerInputVersion: p.customerInputVersion ?? null,
+    customerPartNumber: p.customerPartNumber ?? null,
+    commercialBoundary: p.commercialBoundary ?? null,
+    customerSignoffOwnerUserId: p.customerSignoffOwnerUserId ?? null,
     description: p.description ?? null,
     customer: p.customer ?? null,
     background: p.background ?? null,
@@ -187,33 +195,57 @@ function rowToProject(row: {
   id: string; name: string; projectNumber: string; category: string;
   productId?: string | null; productDefinitionSnapshotId?: number | null;
   sopTemplateVersion?: string | null;
+  safetyRiskLevel?: 'standard' | 'high' | null;
+  regulatoryRiskLevel?: 'standard' | 'high' | null;
+  customerInputVersion?: string | null;
+  customerPartNumber?: string | null;
+  commercialBoundary?: string | null;
+  customerSignoffOwnerUserId?: number | null;
+  inputBaselineFrozenAt?: string | Date | null;
+  inputBaselineFrozenBy?: number | null;
   pmUserId?: number | null; risk: string; currentPhase: string; progress: number;
+  phaseProgress?: Array<{ phaseId: string; total: number; done: number; progress: number }>;
   accessRole?: string | null; canDeleteProject?: boolean; canEditProjectInfo?: boolean;
   riskOverrideRisk?: 'low' | 'medium' | 'high' | null;
   riskOverrideReason?: string | null;
   riskOverrideUpdatedAt?: string | Date | null;
   riskOverrideUpdatedBy?: number | null;
   startDate: string | null; targetDate: string | null;
+  lifecycle?: 'active' | 'paused' | 'terminated' | null;
+  lifecycleReason?: string | null;
   customFields?: Record<string, unknown> | null;
 }): Project {
   return normalizeProject({
     id: row.id,
     name: row.name,
     code: row.projectNumber || '',
-    category: (row.category as 'npd' | 'eco' | 'idr' | 'jdm' | 'obt') || 'npd',
+    category: (row.category as 'npd' | 'eco' | 'derivative' | 'idr' | 'jdm' | 'obt') || 'npd',
     pm: '',
     pmUserId: row.pmUserId ?? null,
     accessRole: row.accessRole ?? null,
     canDeleteProject: !!row.canDeleteProject,
     canEditProjectInfo: !!row.canEditProjectInfo,
+    // §5 服务端统一口径：列表进度直读摘要，不再客户端重算
+    progress: row.progress ?? 0,
+    phaseProgress: row.phaseProgress ?? [],
     productId: row.productId ?? null,
     sopTemplateVersion: row.sopTemplateVersion ?? undefined,
     productDefinitionSnapshotId: row.productDefinitionSnapshotId ?? null,
+    safetyRiskLevel: row.safetyRiskLevel ?? 'standard',
+    regulatoryRiskLevel: row.regulatoryRiskLevel ?? 'standard',
+    customerInputVersion: row.customerInputVersion ?? null,
+    customerPartNumber: row.customerPartNumber ?? null,
+    commercialBoundary: row.commercialBoundary ?? null,
+    customerSignoffOwnerUserId: row.customerSignoffOwnerUserId ?? null,
+    inputBaselineFrozenAt: row.inputBaselineFrozenAt ? new Date(row.inputBaselineFrozenAt).toISOString() : null,
+    inputBaselineFrozenBy: row.inputBaselineFrozenBy ?? null,
     risk: (row.risk as 'low' | 'medium' | 'high') || 'low',
     riskOverrideRisk: row.riskOverrideRisk ?? null,
     riskOverrideReason: row.riskOverrideReason ?? null,
     riskOverrideUpdatedAt: row.riskOverrideUpdatedAt ? new Date(row.riskOverrideUpdatedAt).toISOString() : null,
     riskOverrideUpdatedBy: row.riskOverrideUpdatedBy ?? null,
+    lifecycle: row.lifecycle ?? 'active',
+    lifecycleReason: row.lifecycleReason ?? null,
     currentPhase: row.currentPhase || 'concept',
     startDate: row.startDate || '',
     targetDate: row.targetDate || '',
@@ -431,18 +463,24 @@ function ProjectDetailWrapper({
             const numId = parseInt(gate.id, 10);
             const isNew = isNaN(numId) || !oldGates.find((g) => g.id === gate.id);
             if (isNew) {
-              ops.push(
-                createGateReviewMutation.mutateAsync({
-                  projectId, phaseId,
-                  phaseName: gate.phaseName || '',
-                  gateName: gate.gateName || '',
-                  reviewDate: gate.reviewDate,
-                  participants: gate.participants || null,
-                  decision: gate.decision as 'approved' | 'conditional' | 'rejected',
-                  conditions: gate.conditions || null,
-                  notes: gate.notes || null,
-                })
-              );
+              // 通过/有条件通过只能由 confirmAndAdvance 原子落库；这里仅保留
+              // 历史本地状态兼容所需的「不通过会议记录」写入，避免绕过阶段推进守卫。
+              if (gate.decision === 'rejected') {
+                ops.push(
+                  createGateReviewMutation.mutateAsync({
+                    projectId, phaseId,
+                    phaseName: gate.phaseName || '',
+                    gateName: gate.gateName || '',
+                    reviewDate: gate.reviewDate,
+                    participants: gate.participants || null,
+                    decision: 'rejected',
+                    conditions: gate.conditions || null,
+                    conditionOwnerUserId: gate.conditionOwnerUserId ?? null,
+                    conditionDueDate: gate.conditionDueDate ?? null,
+                    notes: gate.notes || null,
+                  })
+                );
+              }
             } else {
               const old = oldGates.find((g) => g.id === gate.id);
               if (old && JSON.stringify(old) !== JSON.stringify(gate)) {
@@ -451,8 +489,9 @@ function ProjectDetailWrapper({
                     id: numId, projectId,
                     reviewDate: gate.reviewDate,
                     participants: gate.participants || null,
-                    decision: gate.decision as 'approved' | 'conditional' | 'rejected',
                     conditions: gate.conditions || null,
+                    conditionOwnerUserId: gate.conditionOwnerUserId ?? null,
+                    conditionDueDate: gate.conditionDueDate ?? null,
                     notes: gate.notes || null,
                   })
                 );
@@ -798,9 +837,9 @@ export default function Home() {
     const source = projects.find((p) => p.id === sourceId);
     if (!source) return;
     const category = source.category || 'npd';
-    const phases = getPhasesForCategory(category);
+    const phases = getProjectPhases(source);
     const firstPhaseId = phases[0]?.id || 'concept';
-    const freshPhases = buildPhasesDataForCategory(category, firstPhaseId);
+    const freshPhases = buildPhasesDataForProject(source, firstPhaseId);
     const cloned = normalizeProject({
       ...source,
       ...overrides,
@@ -826,8 +865,7 @@ export default function Home() {
       safetyRiskLevel: cloned.risk === 'high' ? 'high' : 'standard',
       regulatoryRiskLevel: cloned.risk === 'high' ? 'high' : 'standard',
     });
-    const tierRank = { lite: 0, standard: 1, full: 2 } as const;
-    const isDowngrade = tierRank[npdTemplate.tier] < tierRank[recommendation.tier];
+    const isDowngrade = isNpdTierDowngrade(npdTemplate.tier, recommendation.tier);
     const storedDowngradeReason = typeof storedNpdTemplate?.downgradeReason === 'string'
       ? storedNpdTemplate.downgradeReason.trim()
       : '';

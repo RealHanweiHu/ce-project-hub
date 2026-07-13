@@ -32,8 +32,10 @@ describe("computeManagementKpis", () => {
           name: "Platform Pump",
           projectNumber: "NPD-002",
           category: "npd",
-          customer: null,
-          currentPhase: "dvt",
+          sopTemplateVersion: "2026-07-v3",
+          customFields: { npdTemplate: { tier: "lite", packs: [] } },
+          customer: "Internal",
+          currentPhase: "verification",
           targetDate: "2026-08-01",
           projectedEnd: "2026-07-20",
           ragLevel: "green",
@@ -61,6 +63,7 @@ describe("computeManagementKpis", () => {
       validationItems: [
         { projectId: "p1", phaseId: "evt", status: "passed" },
         { projectId: "p1", phaseId: "dvt", status: "failed", relatedIssueStatus: "closed" },
+        { projectId: "p2", phaseId: "verification", status: "passed" },
         { projectId: "p1", phaseId: "pvt", status: "blocked", relatedIssueStatus: "open" },
       ],
       bomCosts: [
@@ -74,10 +77,14 @@ describe("computeManagementKpis", () => {
     expect(result.p0p1Aging.openCount).toBe(1);
     expect(result.p0p1Aging.over14Days).toBe(1);
     expect(result.validationClosure.byPhase.find((row) => row.phaseId === "dvt")?.closureRatePct).toBe(100);
+    expect(result.validationClosure.byPhase.find((row) => row.phaseId === "verification"))
+      .toMatchObject({ total: 1, closed: 1, closureRatePct: 100 });
     expect(result.validationClosure.byPhase.find((row) => row.phaseId === "pvt")?.closureRatePct).toBe(0);
     expect(result.bomCostDelta.rows[0].delta).toBe(3.5);
     expect(result.bomCostDelta.rows[0].deltaPct).toBe(18);
     expect(result.customerRiskRanking.rows[0].projectId).toBe("p1");
+    expect(result.customerRiskRanking.rows.find((row) => row.projectId === "p2")?.phaseName)
+      .toBe("样机验证");
   });
 
   it("parses common cost strings", () => {

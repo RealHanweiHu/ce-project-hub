@@ -122,6 +122,33 @@ function computeStart(t: SchedTask, sched: Schedule, startDate: string, idsInSco
   return addWorkingDays(start, t.lagDays ?? 0, cal);
 }
 
+/**
+ * 依赖收缩：把排期域缩小到 keepIds 时，被剔除任务（skipped）的前置透传给它的后继，
+ * 避免"前置全部被裁"的任务回退到项目开始日（排期坍塌）。环安全：遇环终止展开。
+ */
+export function contractSchedTasks(tasks: SchedTask[], keepIds: Set<string>): SchedTask[] {
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  const expand = (t: SchedTask): string[] => {
+    const out: string[] = [];
+    const seen = new Set<string>([t.id]);
+    const stack = [...(t.dependsOn ?? [])];
+    while (stack.length) {
+      const id = stack.pop()!;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      if (keepIds.has(id)) {
+        if (!out.includes(id)) out.push(id);
+        continue;
+      }
+      stack.push(...(byId.get(id)?.dependsOn ?? []));
+    }
+    return out;
+  };
+  return tasks
+    .filter((t) => keepIds.has(t.id))
+    .map((t) => ({ ...t, dependsOn: expand(t) }));
+}
+
 /** 从 startDate 正向生成整套任务起止日 */
 export function generateSchedule(tasks: SchedTask[], startDate: string, cal?: CalendarExceptions): Schedule {
   const byId = new Map(tasks.map((t) => [t.id, t]));

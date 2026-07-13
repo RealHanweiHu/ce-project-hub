@@ -1,13 +1,16 @@
 // 全部项目表：可排序/筛选/下钻。rows 由父组件传入（源自 projects.portfolio）。
 import { useMemo, useState } from "react";
-import { HEALTH_CONFIG, PHASE_MAP } from "@/lib/data";
+import { HEALTH_CONFIG } from "@/lib/data";
 import { CATEGORY_MAP } from "@/lib/sop-templates";
 import { ProgressBar } from "@/components/shared/ProgressBar";
 import { ChevronRight, ArrowUpDown } from "lucide-react";
 import { isProjectedOverdue, type RagLevel } from "@shared/health";
+import { resolvePhaseName } from "@shared/sop-template-resolution";
 
 export type PortfolioTableRow = {
   id: string; name: string; projectNumber: string; category: string; risk: string;
+  sopTemplateVersion?: string | null;
+  customFields?: unknown;
   ragLevel: RagLevel;
   ragReasons: string[];
   customer: string | null;
@@ -36,12 +39,22 @@ export type PortfolioTableRow = {
   releaseDeliverableTotal: number;
   releaseHardBlockers: number;
   releaseConditions: string | null;
+  expenseCurrency?: string | null;
+  expenseCurrencyCount?: number;
+  expenseBudgetMinor?: number | null;
+  expenseActualMinor?: number | null;
+  expenseVarianceMinor?: number | null;
 };
 
 const progressOf = (r: PortfolioTableRow) => (r.taskTotal > 0 ? Math.round((r.taskDone / r.taskTotal) * 100) : 0);
 const isOverdue = (r: PortfolioTableRow) => isProjectedOverdue(r.projectedEnd, r.targetDate);
 const HEALTH_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2 };
-type SortKey = "name" | "progress" | "risk" | "overdueTasks" | "blockedTasks" | "openIssues" | "projectedEnd";
+type SortKey = "name" | "progress" | "risk" | "overdueTasks" | "blockedTasks" | "openIssues" | "projectedEnd" | "expenseVarianceMinor";
+
+function fmtMinor(currency: string | null | undefined, value: number | null | undefined) {
+  if (value == null) return "—";
+  return `${currency ?? ""} ${(value / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`.trim();
+}
 
 export function PortfolioTable({ rows, onSelectProject }: { rows: PortfolioTableRow[]; onSelectProject: (id: string) => void }) {
   const [healthFilter, setHealthFilter] = useState("");
@@ -58,7 +71,7 @@ export function PortfolioTable({ rows, onSelectProject }: { rows: PortfolioTable
         case "progress": cmp = progressOf(a) - progressOf(b); break;
         case "risk": cmp = (HEALTH_ORDER[a.risk] ?? 9) - (HEALTH_ORDER[b.risk] ?? 9); break;
         case "projectedEnd": cmp = (a.projectedEnd ?? "9999").localeCompare(b.projectedEnd ?? "9999"); break;
-        default: cmp = (a[sortKey] as number) - (b[sortKey] as number);
+        default: cmp = ((a[sortKey] as number | null | undefined) ?? 0) - ((b[sortKey] as number | null | undefined) ?? 0);
       }
       return sortAsc ? cmp : -cmp;
     });
@@ -79,11 +92,11 @@ export function PortfolioTable({ rows, onSelectProject }: { rows: PortfolioTable
           <option value="">全部健康</option><option value="high">红灯</option><option value="medium">黄灯</option><option value="low">绿灯</option>
         </select>
         <select value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className="rounded-[7px] border border-border bg-card px-2 py-1.5">
-          <option value="">全部类型</option><option value="npd">新产品开发</option><option value="eco">迭代升级</option><option value="idr">外观翻新</option>
+          <option value="">全部类型</option><option value="npd">新产品开发</option><option value="eco">工程变更</option><option value="derivative">产品迭代/衍生开发</option><option value="idr">外观翻新</option>
         </select>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full text-sm min-w-[860px]">
+        <table className="w-full text-sm min-w-[1040px]">
           <thead>
             <tr className="border-b border-border bg-secondary text-[10px] num uppercase tracking-wider text-muted-foreground">
               <th className="text-left px-3 py-2.5">{sortBtn("name", "项目")}</th>
@@ -94,6 +107,7 @@ export function PortfolioTable({ rows, onSelectProject }: { rows: PortfolioTable
               <th className="text-center px-3 py-2.5">{sortBtn("overdueTasks", "逾期")}</th>
               <th className="text-center px-3 py-2.5">{sortBtn("blockedTasks", "阻塞")}</th>
               <th className="text-center px-3 py-2.5">{sortBtn("openIssues", "开放问题")}</th>
+              <th className="text-left px-3 py-2.5">{sortBtn("expenseVarianceMinor", "预算偏差")}</th>
               <th className="text-left px-3 py-2.5">{sortBtn("projectedEnd", "预计完成")}</th>
               <th className="px-3 py-2.5"></th>
             </tr>
@@ -111,7 +125,7 @@ export function PortfolioTable({ rows, onSelectProject }: { rows: PortfolioTable
                     <div className="text-[10px] num text-muted-foreground">{r.projectNumber || "—"}{r.pmName ? ` · PM ${r.pmName}` : ""}</div>
                   </td>
                   <td className="px-3 py-2.5">{cat ? <span className={`text-[10px] num px-1.5 py-0.5 border ${cat.borderColor} ${cat.color} ${cat.textColor}`}>{cat.badge}</span> : r.category}</td>
-                  <td className="px-3 py-2.5 text-xs text-[color:var(--secondary-foreground)]">{PHASE_MAP[r.currentPhase]?.name ?? r.currentPhase}</td>
+                  <td className="px-3 py-2.5 text-xs text-[color:var(--secondary-foreground)]">{resolvePhaseName(r, r.currentPhase)}</td>
                   <td className="px-3 py-2.5">
                     <div className="flex items-center gap-2"><div className="flex-1 min-w-[60px]"><ProgressBar value={prog} color="bg-primary" height="h-1.5" /></div><span className="text-[11px] num text-muted-foreground">{prog}%</span></div>
                     <div className="text-[10px] num text-muted-foreground">{r.taskDone}/{r.taskTotal}</div>
@@ -121,6 +135,18 @@ export function PortfolioTable({ rows, onSelectProject }: { rows: PortfolioTable
                   <td className="px-3 py-2.5 text-center"><Cell n={r.blockedTasks} tone="amber" /></td>
                   <td className="px-3 py-2.5 text-center"><Cell n={r.openIssues} tone="rose" /></td>
                   <td className="px-3 py-2.5 text-xs num">
+                    {(r.expenseCurrencyCount ?? 0) > 1 ? (
+                      <span className="text-[color:var(--warning)]">多币种</span>
+                    ) : (r.expenseCurrencyCount ?? 0) === 1 ? (
+                      <div>
+                        <span className={(r.expenseVarianceMinor ?? 0) > 0 ? "text-[color:var(--destructive)]" : "text-[color:var(--success)]"}>
+                          {(r.expenseVarianceMinor ?? 0) > 0 ? "+" : ""}{fmtMinor(r.expenseCurrency, r.expenseVarianceMinor)}
+                        </span>
+                        <span className="block text-[9px] text-muted-foreground">实际 {fmtMinor(r.expenseCurrency, r.expenseActualMinor)} / 预算 {fmtMinor(r.expenseCurrency, r.expenseBudgetMinor)}</span>
+                      </div>
+                    ) : <span className="text-muted-foreground">—</span>}
+                  </td>
+                  <td className="px-3 py-2.5 text-xs num">
                     <span className={overdue ? "text-[color:var(--destructive)]" : "text-[color:var(--secondary-foreground)]"}>{r.projectedEnd || "未排期"}</span>
                     {overdue && <span className="block text-[9px] text-[color:var(--destructive)]">超目标 {r.targetDate}</span>}
                   </td>
@@ -128,7 +154,7 @@ export function PortfolioTable({ rows, onSelectProject }: { rows: PortfolioTable
                 </tr>
               );
             })}
-            {filtered.length === 0 && <tr><td colSpan={10} className="px-3 py-10 text-center text-muted-foreground text-sm">暂无项目</td></tr>}
+            {filtered.length === 0 && <tr><td colSpan={11} className="px-3 py-10 text-center text-muted-foreground text-sm">暂无项目</td></tr>}
           </tbody>
         </table>
       </div>

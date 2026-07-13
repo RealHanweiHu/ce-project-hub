@@ -1,8 +1,8 @@
-import type { ExternalApprovalInstance, ProjectIssue } from "../../drizzle/schema";
+import { PROJECT_MEMBER_ROLES, type ExternalApprovalInstance, type ProjectIssue, type ProjectMemberRole } from "../../drizzle/schema";
 import type { NormalizedApprovalStatus } from "../_core/dingtalkApproval";
 import {
   createActivityLog,
-  decideTaskApproval,
+  getProjectById,
   getProjectIssues,
   getProjectTasks,
   updateProjectIssue,
@@ -10,6 +10,7 @@ import {
 import {
   actionDedupeKey,
   closeActionItems,
+  closeActionItemsWithCards,
   notifyActionItem,
   taskActionEntityId,
 } from "../action-item-notify";
@@ -19,6 +20,7 @@ import { emitAutomationEvent } from "../automation/events";
 import { buildProjectActionPath } from "../../shared/action-links";
 import { taskDisplayTitle } from "../task-title";
 import { isActionExternalApprovalType, type ActionExternalApprovalType } from "./action-approval-submit";
+import { finalizeTaskApproval } from "../task-approval-service";
 
 type ActionApprovalPayload = {
   kind: ActionExternalApprovalType;
@@ -48,6 +50,13 @@ function positiveInt(value: unknown): number | null {
   return null;
 }
 
+function metadataProjectRole(metadata: Record<string, unknown>, key: string): ProjectMemberRole | null {
+  const value = metadataString(metadata, key);
+  return value && (PROJECT_MEMBER_ROLES as readonly string[]).includes(value)
+    ? value as ProjectMemberRole
+    : null;
+}
+
 function parseActionPayload(instance: ExternalApprovalInstance): ActionApprovalPayload | null {
   const request = toRecord(instance.requestSnapshot);
   const action = toRecord(request.action);
@@ -71,22 +80,39 @@ async function applyTaskApproval(payload: ActionApprovalPayload, status: Extract
   const phaseId = metadataString(payload.metadata, "phaseId");
   const taskId = metadataString(payload.metadata, "taskId");
   if (!phaseId || !taskId) throw new Error("任务审批回调缺少 phaseId/taskId");
-  const tasks = await getProjectTasks(payload.projectId, phaseId);
+  const [tasks, project] = await Promise.all([
+    getProjectTasks(payload.projectId, phaseId),
+    getProjectById(payload.projectId),
+  ]);
   const task = tasks.find((item) => item.taskId === taskId);
+  if (!task || task.approverUserId !== payload.recipientUserId) {
+    throw new Error("任务审批人已变更或任务不存在");
+  }
   const decision = status === "approved" ? "approved" : "rejected";
-  await decideTaskApproval(payload.projectId, phaseId, taskId, decision, payload.recipientUserId, "钉钉审批回调", false);
+  const finalized = await finalizeTaskApproval({
+    projectId: payload.projectId,
+    phaseId,
+    taskId,
+    decision,
+    actor: payload.recipientUserId,
+    note: "钉钉审批回调",
+    isProxy: false,
+    actedAsRole: metadataProjectRole(payload.metadata, "actedAsRole"),
+    viaDelegationId: positiveInt(payload.metadata.viaDelegationId),
+  });
+  const taskBefore = finalized.taskBefore;
   const entityId = taskActionEntityId(payload.projectId, phaseId, taskId);
   await closeActionItems({ kind: "task_approval", entityType: "task", entityId });
-  if (decision === "rejected" && task?.approvalRequestedBy) {
+  if (decision === "rejected" && taskBefore.approvalRequestedBy) {
     await notifyActionItem({
       kind: "task_rework",
       projectId: payload.projectId,
       entityType: "task",
       entityId,
-      dedupeKey: actionDedupeKey({ kind: "task_rework", entityId, recipientUserId: task.approvalRequestedBy }),
-      recipientUserId: task.approvalRequestedBy,
+      dedupeKey: actionDedupeKey({ kind: "task_rework", projectId: payload.projectId, entityId, recipientUserId: taskBefore.approvalRequestedBy }),
+      recipientUserId: taskBefore.approvalRequestedBy,
       title: "任务审批被驳回",
-      body: `「${taskDisplayTitle(task)}」钉钉审批未通过。`,
+      body: `「${taskDisplayTitle({ ...taskBefore, projectLike: project })}」钉钉审批未通过。`,
       actionPath: buildProjectActionPath({
         projectId: payload.projectId,
         tab: "tasks",
@@ -94,10 +120,41 @@ async function applyTaskApproval(payload: ActionApprovalPayload, status: Extract
         taskId,
         taskTab: "approval",
       }),
-      priority: task.priority === "critical" ? "critical" : "high",
+      priority: taskBefore.priority === "critical" ? "critical" : "high",
       metadata: { phaseId, taskId, rejectedBy: payload.recipientUserId },
     });
   } else if (decision === "approved") {
+    const beforeEvent = {
+      ...taskBefore,
+      projectId: payload.projectId,
+      phaseId,
+      taskId,
+      status: "pending_approval",
+      projectCategory: finalized.project.category,
+    } as unknown as Record<string, unknown>;
+    await emitAutomationEvent({
+      action: "task.update_meta",
+      projectId: payload.projectId,
+      entityType: "task",
+      entityId,
+      actorId: payload.recipientUserId,
+      before: beforeEvent,
+      after: { ...beforeEvent, status: "done", completed: true },
+    });
+    await closeActionItemsWithCards({
+      kind: "task_ready",
+      entityType: "task",
+      entityId,
+    }, {
+      title: "任务审批已通过",
+      message: "任务已完成，这条“可以开始”卡片已闭环。",
+      actionPath: buildProjectActionPath({
+        projectId: payload.projectId,
+        tab: "tasks",
+        phaseId,
+        taskId,
+      }),
+    });
     await notifyGateReadyIfReady({
       projectId: payload.projectId,
       phaseId,
@@ -118,6 +175,8 @@ async function applyDeliverableReview(payload: ActionApprovalPayload, status: Ex
     decision: status === "approved" ? "approved" : "rejected",
     reviewedBy: payload.recipientUserId,
     note: "钉钉审批回调",
+    actedAsRole: metadataProjectRole(payload.metadata, "actedAsRole"),
+    viaDelegationId: positiveInt(payload.metadata.viaDelegationId),
   });
 }
 

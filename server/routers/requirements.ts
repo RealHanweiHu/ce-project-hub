@@ -25,6 +25,7 @@ import { ROLE_PERMISSIONS } from "./members";
 import { getEffectiveProjectRoleById as getEffectiveRole } from "../project-access";
 import { canRoleViewInternalWorkspace } from "../file-visibility";
 import { isSystemAdminRole } from "../../shared/system-roles";
+import { emitAutomationEvent } from "../automation/events";
 
 /** 鉴权:项目内需求按项目角色;无项目(产品/全局 backlog)归 admin 或创建人。 */
 async function assertCanEditRequirement(
@@ -244,6 +245,35 @@ export const requirementsRouter = router({
           relatedTaskId: req.linkedTaskId ?? null,
           productId,
           creatorId: ctx.user.id,
+        });
+        const afterIssue = {
+          id: issueId,
+          projectId: input.projectId,
+          phaseId,
+          title: req.title,
+          description: req.description ?? null,
+          severity: req.priority,
+          status: "open",
+          category: "other",
+          relatedTaskId: req.linkedTaskId ?? null,
+          productId,
+          creatorId: ctx.user.id,
+        };
+        await createActivityLog({
+          projectId: input.projectId,
+          userId: ctx.user.id,
+          action: "issue.create",
+          entityType: "issue",
+          entityId: String(issueId),
+          meta: { phaseId, title: req.title, severity: req.priority, after: afterIssue, source: "requirement.convert" },
+        });
+        await emitAutomationEvent({
+          action: "issue.create",
+          projectId: input.projectId,
+          entityType: "issue",
+          entityId: issueId,
+          actorId: ctx.user.id,
+          after: afterIssue,
         });
         convertedId = String(issueId);
       } else if (input.target === "change") {

@@ -5,6 +5,7 @@ import {
   createProjectWithSeed,
   getDb,
   getGateReadiness,
+  getPortfolio,
   refreshProjectTaskStatuses,
 } from "./db";
 import { applyProjectSchedule } from "./services/schedule-service";
@@ -80,7 +81,7 @@ describe("NPD v3 gate readiness and status derivation", () => {
     );
   });
 
-  it("包任务在 lite 依赖未完成时保持 todo，完成后才可进入 in_progress", async () => {
+  it("已人工开始的包任务在 lite 依赖未完成时保持 todo，完成后才可进入 in_progress", async () => {
     const db = await getDb();
     await db!.update(projectTasks).set({
       status: "todo",
@@ -89,8 +90,9 @@ describe("NPD v3 gate readiness and status derivation", () => {
       startDate: null,
       dueDate: null,
       assigneeUserId: null,
+      actualStartedAt: null,
     }).where(eq(projectTasks.projectId, PID));
-    await db!.update(projectTasks).set({ assigneeUserId: OWNER })
+    await db!.update(projectTasks).set({ assigneeUserId: OWNER, actualStartedAt: new Date() })
       .where(and(eq(projectTasks.projectId, PID), eq(projectTasks.taskId, "pc2")));
 
     await refreshProjectTaskStatuses(PID, "2026-07-12");
@@ -119,5 +121,18 @@ describe("NPD v3 gate readiness and status derivation", () => {
     for (const dependencyId of ["pc2", "ps2", "pmo1"]) {
       expect(byId.get("nv3")!.startDate! >= byId.get(dependencyId)!.dueDate!).toBe(true);
     }
+  });
+
+  it("portfolio 对 lite verification 使用实际 Gate 与实际 Gate 总数", async () => {
+    const db = await getDb();
+    await db!.update(projects).set({ currentPhase: "verification" })
+      .where(eq(projects.id, PID));
+
+    const portfolio = await getPortfolio(OWNER);
+    const row = portfolio.find((item) => item.id === PID);
+    expect(row).toBeDefined();
+    expect(row?.gatePhaseId).toBe("verification");
+    expect(row?.gateName).toBe("验证评审");
+    expect(row?.gateTaskTotal).toBe(6);
   });
 });

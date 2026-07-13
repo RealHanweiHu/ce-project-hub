@@ -5,10 +5,10 @@
 // (风险预警 / 组合进度 on the left, 即将 Gate / 阶段分布 on the right).
 import type React from "react";
 import { useMemo } from "react";
-import { AlertTriangle, CalendarClock, Gauge, TrendingDown, ShieldAlert, Factory, Users } from "lucide-react";
+import { AlertTriangle, CalendarClock, Gauge, TrendingDown, ShieldAlert, Factory, Users, WalletCards } from "lucide-react";
 import { trpc } from "@/lib/trpc";
-import { getPhasesForCategory } from "@/lib/sop-templates";
-import { PHASE_MAP } from "@/lib/data";
+import { getEffectivePhasesForProjectLike } from "@shared/npd-v3";
+import { resolvePhaseName } from "@shared/sop-template-resolution";
 import { isProjectedOverdue, type RagLevel } from "@shared/health";
 import { LinearCard, LinearBar, StatusDot } from "@/components/linear/primitives";
 import type { PortfolioTableRow } from "./PortfolioTable";
@@ -123,6 +123,8 @@ export function PortfolioDashboard({
         onSelectProject={onSelectProject}
       />
 
+      <ExpenseVarianceBoard rows={rows} onSelectProject={onSelectProject} />
+
       {/* Two balanced, equal-height columns — boards keep a fixed height so adding/removing
           content never changes the overall page length (content overflows + scrolls in place). */}
       <div className="grid grid-cols-1 items-stretch gap-[18px] lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
@@ -154,7 +156,7 @@ function buildDashboard(rows: PortfolioTableRow[]) {
   // Phase distribution (kept verbatim from prior buildDashboard).
   const phaseMap = new Map<string, { id: string; code: string; name: string; count: number; color: string; order: number }>();
   rows.forEach((row) => {
-    const phases = getPhasesForCategory(row.category);
+    const phases = getEffectivePhasesForProjectLike(row);
     const phaseIndex = phases.findIndex((item) => item.id === row.currentPhase);
     const phase = phaseIndex >= 0 ? phases[phaseIndex] : null;
     const key = phase?.id ?? row.currentPhase;
@@ -237,7 +239,7 @@ function buildFocusItems(rows: PortfolioTableRow[], scored: ScoredProject[]): Fo
       key: `crit-${critical.id}`,
       tone: "red",
       title: `${critical.name} · ${critical.criticalIssues} 项 P0/P1 问题`,
-      detail: `${critical.projectNumber || "—"} · ${PHASE_MAP[critical.currentPhase]?.name ?? critical.currentPhase}${critical.pmName ? ` · ${critical.pmName}` : ""}`,
+      detail: `${critical.projectNumber || "—"} · ${resolvePhaseName(critical, critical.currentPhase)}${critical.pmName ? ` · ${critical.pmName}` : ""}`,
       projectId: critical.id,
     });
   }
@@ -251,7 +253,7 @@ function buildFocusItems(rows: PortfolioTableRow[], scored: ScoredProject[]): Fo
       key: `delay-${delayed.id}`,
       tone: "amber",
       title: `${delayed.name} · 逾期 ${delayed.overdueTasks} · 阻塞 ${delayed.blockedTasks}`,
-      detail: `${delayed.projectNumber || "—"} · ${PHASE_MAP[delayed.currentPhase]?.name ?? delayed.currentPhase}`,
+      detail: `${delayed.projectNumber || "—"} · ${resolvePhaseName(delayed, delayed.currentPhase)}`,
       projectId: delayed.id,
       drill: delayed.overdueTasks >= delayed.blockedTasks ? "overdue" : "blocked",
     });
@@ -281,7 +283,7 @@ function buildFocusItems(rows: PortfolioTableRow[], scored: ScoredProject[]): Fo
       key: `att-${s.row.id}`,
       tone: s.level === "red" ? "red" : "amber",
       title: `${s.row.name} · ${s.reasons[0] ?? "需关注"}`,
-      detail: `${s.row.projectNumber || "—"} · ${PHASE_MAP[s.row.currentPhase]?.name ?? s.row.currentPhase}`,
+      detail: `${s.row.projectNumber || "—"} · ${resolvePhaseName(s.row, s.row.currentPhase)}`,
       projectId: s.row.id,
     });
   }
@@ -338,7 +340,7 @@ function ManagementKpiBoard({
       tone: data.p0p1Aging.over14Days > 0 ? "red" : data.p0p1Aging.openCount > 0 ? "amber" : "green",
     },
     {
-      label: "EVT/DVT/PVT 关闭",
+      label: "验证阶段关闭",
       value: fmtPct(closureRate),
       sub: `${closureClosed}/${closureTotal} test case`,
       tone: closureRate != null && closureRate < 80 ? "amber" : "green",
@@ -376,7 +378,7 @@ function ManagementKpiBoard({
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium text-foreground">{row.projectName}</div>
                     <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                      {row.customer} · {PHASE_MAP[row.currentPhase]?.name ?? row.currentPhase}
+                      {row.customer} · {row.phaseName}
                     </div>
                     <div className="mt-1 flex flex-wrap gap-1">
                       {row.criticalIssues > 0 && <Tag tone="rose">P0/P1 {row.criticalIssues}</Tag>}
@@ -422,7 +424,7 @@ function ManagementKpiBoard({
           </div>
         </Panel>
 
-        <Panel title="验证关闭率" sub="EVT / DVT / PVT" className="min-h-[280px]">
+        <Panel title="验证关闭率" sub="验证 / EVT / DVT / PVT" className="min-h-[280px]">
           <div className="space-y-3 p-4">
             {closure.map((row) => (
               <div key={row.phaseId} className="space-y-1.5">
@@ -618,6 +620,72 @@ function FocusBand({
   );
 }
 
+function formatMinor(currency: string | null | undefined, value: number | null | undefined) {
+  if (value == null) return "—";
+  return `${currency ?? ""} ${(value / 100).toLocaleString("zh-CN", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`.trim();
+}
+
+function ExpenseVarianceBoard({
+  rows,
+  onSelectProject,
+}: {
+  rows: PortfolioTableRow[];
+  onSelectProject: (id: string) => void;
+}) {
+  const expenseRows = rows
+    .filter((row) => (row.expenseCurrencyCount ?? 0) > 0)
+    .sort((a, b) => (b.expenseVarianceMinor ?? Number.NEGATIVE_INFINITY) - (a.expenseVarianceMinor ?? Number.NEGATIVE_INFINITY));
+
+  return (
+    <Panel title="项目费用偏差" sub="Budget vs Actual">
+      {expenseRows.length === 0 ? (
+        <div className="flex items-center gap-2 px-4 py-5 text-sm text-muted-foreground">
+          <WalletCards size={15} />
+          当前范围暂无已登记的项目费用。
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2">
+          {expenseRows.map((row) => {
+            const multiCurrency = (row.expenseCurrencyCount ?? 0) > 1;
+            const variance = row.expenseVarianceMinor ?? 0;
+            return (
+              <button
+                key={row.id}
+                onClick={() => onSelectProject(row.id)}
+                className="flex items-center gap-3 border-b border-border px-4 py-3 text-left transition-colors hover:bg-secondary lg:odd:border-r"
+              >
+                <WalletCards size={15} className="shrink-0 text-muted-foreground" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[13.5px] font-semibold">{row.name}</div>
+                  <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                    {multiCurrency
+                      ? `${row.expenseCurrencyCount} 个币种 · 请进入项目分币种查看`
+                      : `预算 ${formatMinor(row.expenseCurrency, row.expenseBudgetMinor)} · 实际 ${formatMinor(row.expenseCurrency, row.expenseActualMinor)}`}
+                  </div>
+                </div>
+                <span
+                  className={`num shrink-0 text-[12px] font-semibold ${
+                    multiCurrency
+                      ? "text-muted-foreground"
+                      : variance > 0
+                        ? "text-[color:var(--destructive)]"
+                        : "text-[color:var(--success)]"
+                  }`}
+                >
+                  {multiCurrency ? "多币种" : `${variance > 0 ? "+" : ""}${formatMinor(row.expenseCurrency, variance)}`}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 // ── 风险预警 ───────────────────────────────────────────────────────────────────
 function RiskAlertsBoard({
   rows, onSelectProject,
@@ -651,7 +719,7 @@ function RiskAlertsBoard({
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[13.5px] font-semibold">{row.name}</div>
                 <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">
-                  {row.projectNumber || "—"} · {PHASE_MAP[row.currentPhase]?.name ?? row.currentPhase}
+                  {row.projectNumber || "—"} · {resolvePhaseName(row, row.currentPhase)}
                   {row.pmName ? ` · ${row.pmName}` : ""}
                   {reasons.length ? ` · ${reasons[0]}` : ""}
                 </div>
@@ -693,7 +761,7 @@ function ProgressBoard({
               </div>
               <span className="inline-flex w-fit items-center gap-1.5 whitespace-nowrap rounded-[6px] border border-border bg-secondary px-2 py-0.5 text-[11px] font-medium text-[color:var(--secondary-foreground)]">
                 <span className="h-1.5 w-1.5 shrink-0 rounded-[2px] bg-primary" />
-                {PHASE_MAP[row.currentPhase]?.name ?? row.currentPhase}
+                {resolvePhaseName(row, row.currentPhase)}
               </span>
               <div className="flex items-center gap-2">
                 <LinearBar value={prog} className="flex-1" />

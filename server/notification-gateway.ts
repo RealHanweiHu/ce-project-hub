@@ -1,6 +1,7 @@
 import { ENV } from "./_core/env";
 import {
   notifyUsersViaDingtalk as defaultNotifyDingtalk,
+  type DispatchResult,
   type WorkNotificationButton,
   type WorkNotificationOptions,
 } from "./_core/dingtalkMessage";
@@ -18,9 +19,17 @@ import { toAbsoluteAppUrl } from "../shared/action-links";
 
 export type NotifyPersonalDeps = {
   createNotification?: typeof defaultCreateNotification;
-  notifyDingtalk?: (userIds: number[], title: string, markdown: string, options?: WorkNotificationOptions) => Promise<void>;
+  notifyDingtalk?: (userIds: number[], title: string, markdown: string, options?: WorkNotificationOptions) => Promise<DispatchResult | void>;
   getDeliveryProfiles?: (userIds: number[]) => Promise<Map<number, NotificationDeliveryProfile>>;
   now?: Date;
+};
+
+export type PersonalDispatchResult = {
+  site: number;
+  dingtalk: number;
+  failed: number;
+  skipped: number;
+  errors: string[];
 };
 
 export type NotifyPersonalInput = {
@@ -49,12 +58,15 @@ export type NotifyPersonalInput = {
 export async function notifyPersonal(
   input: NotifyPersonalInput,
   deps: NotifyPersonalDeps = {},
-): Promise<{ site: number; dingtalk: number }> {
+): Promise<PersonalDispatchResult> {
   const policy = getNotificationPolicy(input.eventKey);
   const uniqueUserIds = Array.from(new Set(input.userIds.filter((id) => Number.isInteger(id) && id > 0)));
-  if (uniqueUserIds.length === 0) return { site: 0, dingtalk: 0 };
+  if (uniqueUserIds.length === 0) return { site: 0, dingtalk: 0, failed: 0, skipped: 0, errors: [] };
 
   let site = 0;
+  let failed = 0;
+  let skipped = 0;
+  const errors: string[] = [];
   if (policy.personalChannels.includes("site")) {
     const createNotification = deps.createNotification ?? defaultCreateNotification;
     for (const userId of uniqueUserIds) {
@@ -82,7 +94,8 @@ export async function notifyPersonal(
       profiles: await getDeliveryProfiles(uniqueUserIds),
       now: deps.now ?? new Date(),
     });
-    if (dingtalkUserIds.length === 0) return { site, dingtalk: 0 };
+    skipped += uniqueUserIds.length - dingtalkUserIds.length;
+    if (dingtalkUserIds.length === 0) return { site, dingtalk: 0, failed, skipped, errors };
     const actionUrl = input.actionUrl ?? (
       input.actionPath ? toAbsoluteAppUrl(input.actionPath, ENV.appBaseUrl) : null
     );
@@ -104,22 +117,29 @@ export async function notifyPersonal(
       : false;
     if (deliveredNative) {
       dingtalk = dingtalkUserIds.length;
-      return { site, dingtalk };
+      return { site, dingtalk, failed, skipped, errors };
     }
     if (input.bestEffortDingtalk) {
       try {
-        await notifyDingtalk(dingtalkUserIds, input.title, markdown, options);
-        dingtalk = dingtalkUserIds.length;
-      } catch {
-        dingtalk = 0;
+        const result = await notifyDingtalk(dingtalkUserIds, input.title, markdown, options);
+        dingtalk = result?.delivered ?? dingtalkUserIds.length;
+        failed += result?.failed ?? 0;
+        skipped += result?.skipped ?? 0;
+        if (result?.error) errors.push(result.error);
+      } catch (error) {
+        failed += dingtalkUserIds.length;
+        errors.push(error instanceof Error ? error.message : String(error));
       }
     } else {
-      await notifyDingtalk(dingtalkUserIds, input.title, markdown, options);
-      dingtalk = dingtalkUserIds.length;
+      const result = await notifyDingtalk(dingtalkUserIds, input.title, markdown, options);
+      dingtalk = result?.delivered ?? dingtalkUserIds.length;
+      failed += result?.failed ?? 0;
+      skipped += result?.skipped ?? 0;
+      if (result?.error) errors.push(result.error);
     }
   }
 
-  return { site, dingtalk };
+  return { site, dingtalk, failed, skipped, errors };
 }
 
 function withActionLink(markdown: string, actionUrl: string | null): string {

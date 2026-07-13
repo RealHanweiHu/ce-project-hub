@@ -1,6 +1,7 @@
 import type { ActivityLog } from "../../drizzle/schema";
 import type { DelayImpact } from "../../shared/delay-impact";
 import {
+  advanceAutomationHeartbeatCursor,
   finishAutomationHeartbeat,
   getAutomationHeartbeat,
   getLatestActivityLogId,
@@ -8,6 +9,7 @@ import {
   tryStartAutomationHeartbeat,
 } from "../db";
 import { runAutomation } from "./engine";
+import type { AutomationRunSummary } from "./engine";
 import type { AutomationEvent } from "./rules";
 
 export const ACTIVITY_LOG_TAILER_KEY = "activity_log_tailer";
@@ -32,7 +34,8 @@ type TailerDeps = {
   getLatestActivityLogId?: typeof getLatestActivityLogId;
   listActivityLogsAfter?: typeof listActivityLogsAfter;
   finishAutomationHeartbeat?: typeof finishAutomationHeartbeat;
-  runAutomation?: typeof runAutomation;
+  advanceAutomationHeartbeatCursor?: typeof advanceAutomationHeartbeatCursor;
+  runAutomation?: (event: AutomationEvent) => Promise<AutomationRunSummary | void>;
 };
 
 function intervalMs(): number {
@@ -87,6 +90,7 @@ export async function runActivityLogTailerOnce(deps: TailerDeps = {}): Promise<R
   const getLatestId = deps.getLatestActivityLogId ?? getLatestActivityLogId;
   const listLogs = deps.listActivityLogsAfter ?? listActivityLogsAfter;
   const finishHeartbeat = deps.finishAutomationHeartbeat ?? finishAutomationHeartbeat;
+  const advanceCursor = deps.advanceAutomationHeartbeatCursor ?? advanceAutomationHeartbeatCursor;
   const dispatch = deps.runAutomation ?? runAutomation;
   const startedAt = Date.now();
   const locked = await tryStart(ACTIVITY_LOG_TAILER_KEY, LOCK_STALE_MS);
@@ -117,12 +121,16 @@ export async function runActivityLogTailerOnce(deps: TailerDeps = {}): Promise<R
     for (const log of logs) {
       const event = activityLogToAutomationEvent(log);
       if (event) {
-        await dispatch(event);
+        const summary = await dispatch(event);
+        if (summary && summary.errors > 0) {
+          throw new Error(`activity ${log.id} automation failed for ${summary.errors} rule(s)`);
+        }
         processed += 1;
       } else {
         skipped += 1;
       }
       lastCursorId = log.id;
+      await advanceCursor(ACTIVITY_LOG_TAILER_KEY, lastCursorId);
     }
 
     await finishHeartbeat({
@@ -155,6 +163,7 @@ export function activityLogToAutomationEvent(log: ActivityLog): AutomationEvent 
     case "issue.create":
       return {
         action: "issue.create",
+        sourceActivityLogId: log.id,
         projectId: log.projectId,
         entityType: "issue",
         entityId,
@@ -166,6 +175,7 @@ export function activityLogToAutomationEvent(log: ActivityLog): AutomationEvent 
     case "issue.close":
       return {
         action: log.action,
+        sourceActivityLogId: log.id,
         projectId: log.projectId,
         entityType: "issue",
         entityId,
@@ -176,6 +186,7 @@ export function activityLogToAutomationEvent(log: ActivityLog): AutomationEvent 
     case "task.update_meta":
       return {
         action: "task.update_meta",
+        sourceActivityLogId: log.id,
         projectId: log.projectId,
         entityType: "task",
         entityId: taskEntityId(log),
@@ -183,9 +194,44 @@ export function activityLogToAutomationEvent(log: ActivityLog): AutomationEvent 
         before,
         after: after ?? mergePatch(before, meta.patch),
       };
+    case "task.complete":
+    case "task.uncomplete":
+    case "task.submit_approval":
+    case "task.approve":
+    case "task.reject": {
+      const statusByAction: Record<string, string> = {
+        "task.complete": "done",
+        "task.uncomplete": "todo",
+        "task.submit_approval": "pending_approval",
+        "task.approve": "done",
+        "task.reject": "todo",
+      };
+      const previousByAction: Record<string, string> = {
+        "task.complete": "in_progress",
+        "task.uncomplete": "done",
+        "task.submit_approval": "in_progress",
+        "task.approve": "pending_approval",
+        "task.reject": "pending_approval",
+      };
+      return {
+        action: "task.update_meta",
+        sourceActivityLogId: log.id,
+        projectId: log.projectId,
+        entityType: "task",
+        entityId: taskEntityId(log),
+        actorId,
+        before: before ?? { status: previousByAction[log.action] },
+        after: after ?? {
+          ...pickFields(meta, ["phaseId", "title", "projectCategory"]),
+          taskId: entityId,
+          status: statusByAction[log.action],
+        },
+      };
+    }
     case "task.rescheduled":
       return {
         action: "task.rescheduled",
+        sourceActivityLogId: log.id,
         projectId: log.projectId,
         entityType: "task",
         entityId: taskEntityId(log),
@@ -197,6 +243,7 @@ export function activityLogToAutomationEvent(log: ActivityLog): AutomationEvent 
     case "gate.create":
       return {
         action: "gate.create",
+        sourceActivityLogId: log.id,
         projectId: log.projectId,
         entityType: "gate_review",
         entityId,
@@ -207,6 +254,7 @@ export function activityLogToAutomationEvent(log: ActivityLog): AutomationEvent 
     case "gate.update":
       return {
         action: "gate.update",
+        sourceActivityLogId: log.id,
         projectId: log.projectId,
         entityType: "gate_review",
         entityId,
@@ -217,6 +265,7 @@ export function activityLogToAutomationEvent(log: ActivityLog): AutomationEvent 
     case "phase.advance":
       return {
         action: "phase.advanced",
+        sourceActivityLogId: log.id,
         projectId: log.projectId,
         entityType: "phase",
         entityId: entityId ?? (typeof meta.phaseId === "string" ? meta.phaseId : null),
@@ -227,6 +276,7 @@ export function activityLogToAutomationEvent(log: ActivityLog): AutomationEvent 
     case "mp.release":
       return {
         action: "mp.release",
+        sourceActivityLogId: log.id,
         projectId: log.projectId,
         entityType: "mp_release",
         entityId,
@@ -237,6 +287,7 @@ export function activityLogToAutomationEvent(log: ActivityLog): AutomationEvent 
     case "product.definition_confirmed":
       return {
         action: "product.definition_confirmed",
+        sourceActivityLogId: log.id,
         projectId: log.projectId,
         entityType: "product_definition",
         entityId,
@@ -252,6 +303,7 @@ export function activityLogToAutomationEvent(log: ActivityLog): AutomationEvent 
 function taskEntityId(log: ActivityLog): string | number | null {
   const meta = asRecord(log.meta);
   const phaseId = typeof meta?.phaseId === "string" ? meta.phaseId : null;
+  if (typeof log.entityId === "string" && log.entityId.startsWith(`${log.projectId}:`)) return log.entityId;
   if (phaseId && log.entityId) return `${log.projectId}:${phaseId}:${log.entityId}`;
   return log.entityId ?? null;
 }

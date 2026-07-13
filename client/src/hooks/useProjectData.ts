@@ -71,6 +71,12 @@ export function useProjectData(projectId: string | null) {
       { enabled, staleTime: 10_000 }
     );
 
+  // §5 统一状态口径：进度/阶段进度只消费服务端摘要，客户端不再重算
+  const { data: statusSummary } = trpc.projects.statusSummary.useQuery(
+    { projectId: projectId! },
+    { enabled, staleTime: 5_000 }
+  );
+
   const isLoading =
     loadingProject ||
     loadingTasks ||
@@ -127,6 +133,7 @@ export function useProjectData(projectId: string | null) {
           startDate: t.startDate ? String(t.startDate).slice(0, 10) : null,
           dueDate: t.dueDate ? String(t.dueDate).slice(0, 10) : null,
           taskStatus: t.status ?? "todo",
+          completionNote: (t as { completionNote?: string | null }).completionNote ?? null,
           taskPriority: t.priority ?? "medium",
           deliverables: (t.deliverables as Record<string, boolean> | null) ?? {},
           requiresApproval: t.requiresApproval ?? false,
@@ -173,6 +180,8 @@ export function useProjectData(projectId: string | null) {
           participants: g.participants ?? "",
           decision: (g.decision as GateReview["decision"]) ?? "conditional",
           conditions: g.conditions ?? "",
+          conditionOwnerUserId: g.conditionOwnerUserId ?? null,
+          conditionDueDate: g.conditionDueDate ?? null,
           notes: g.notes ?? "",
           createdAt: g.createdAt ? new Date(g.createdAt).toISOString() : "",
           roundNumber: g.roundNumber ?? 1,
@@ -237,7 +246,7 @@ export function useProjectData(projectId: string | null) {
       id: projectRow.id,
       name: projectRow.name,
       code: projectRow.projectNumber ?? '',
-      category: (projectRow.category as 'npd' | 'eco' | 'idr' | 'jdm' | 'obt') ?? 'npd',
+      category: (projectRow.category as 'npd' | 'eco' | 'derivative' | 'idr' | 'jdm' | 'obt') ?? 'npd',
       pm: '',  // pmName resolved in UI via listUsersForSelect
       pmUserId: projectRow.pmUserId ?? null,
       productId: (projectRow as { productId?: string | null }).productId ?? null,
@@ -255,6 +264,8 @@ export function useProjectData(projectId: string | null) {
         ? new Date((projectRow as { riskOverrideUpdatedAt?: string | Date }).riskOverrideUpdatedAt!).toISOString()
         : null,
       riskOverrideUpdatedBy: (projectRow as { riskOverrideUpdatedBy?: number | null }).riskOverrideUpdatedBy ?? null,
+      lifecycle: (projectRow as { lifecycle?: 'active' | 'paused' | 'terminated' }).lifecycle ?? 'active',
+      lifecycleReason: (projectRow as { lifecycleReason?: string | null }).lifecycleReason ?? null,
       currentPhase: projectRow.currentPhase ?? 'concept',
       startDate: projectRow.startDate ?? '',
       targetDate: projectRow.targetDate ?? '',
@@ -265,8 +276,10 @@ export function useProjectData(projectId: string | null) {
       taskVisibleRoles: Object.keys(taskVisibleRoles).length > 0 ? taskVisibleRoles : undefined,
       changeLog,
       customFields: (projectRow as { customFields?: Record<string, unknown> }).customFields ?? {},
+      progress: statusSummary?.progress ?? (projectRow as { progress?: number }).progress ?? 0,
+      phaseProgress: statusSummary?.phaseProgress ?? [],
     } as Project);
-  }, [projectRow, taskRows, issueRows, gateRows, changeRows, phaseRows, fileRows]);
+  }, [projectRow, taskRows, issueRows, gateRows, changeRows, phaseRows, fileRows, statusSummary]);
 
   return { project, isLoading };
 }

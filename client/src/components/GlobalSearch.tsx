@@ -6,10 +6,6 @@ import { Search, FolderKanban, CheckSquare, BookOpen, AlertTriangle, ChevronRigh
 import { Project } from '@/lib/data';
 import { getProjectPhases } from '@/lib/data';
 import { getPhasesForCategory } from '@/lib/sop-templates';
-import { registerGetPhasesForCategory } from '@/lib/data';
-
-// Register the category resolver once
-registerGetPhasesForCategory(getPhasesForCategory);
 
 type ResultType = 'project' | 'task' | 'sop' | 'issue';
 
@@ -132,7 +128,11 @@ export function GlobalSearch({ open, onClose, projects, onNavigate }: GlobalSear
     }
 
     // ── SOP match (global SOP library) ────────────────────────────────────
-    const allPhases = getPhasesForCategory('npd');
+    // Prefer the effective processes represented by real projects so lite and
+    // add-on tasks are searchable. The static template is only a no-project fallback.
+    const allPhases = projects.length > 0
+      ? projects.flatMap((project) => getProjectPhases(project))
+      : getPhasesForCategory();
     for (const phase of allPhases) {
       for (const task of phase.tasks) {
         if (

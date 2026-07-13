@@ -13,6 +13,11 @@ export interface SOPTask {
    * Non-empty = only listed roles (plus owner/manager/pm who always see everything).
    */
   visibleRoles?: string[];
+  /** 排期依赖（finish-to-start 前置任务 id）。 */
+  dependsOn?: string[];
+  durationDays?: number;
+  /** 证据级别：light=一句话/照片/链接；heavy=需上传文件。 */
+  evidence?: 'light' | 'heavy';
 }
 
 export interface SOPGateStandard {
@@ -47,6 +52,8 @@ export interface TaskDetails {
   startDate?: string | null;     // YYYY-MM-DD（自动排期生成）
   dueDate?: string | null;       // YYYY-MM-DD
   taskStatus?: string;           // TaskStatus (renamed to avoid collision with IssueStatus)
+  /** 轻证据一句话结论（完成时提交，§3 已完成态首屏展示）。 */
+  completionNote?: string | null;
   taskPriority?: string;         // TaskPriority
   deliverables?: Record<string, boolean>; // 交付物名称 → 是否完成
   // 逐任务审批闸门（默认 requiresApproval=false → 零回归）
@@ -164,6 +171,9 @@ export interface GateReview {
   participants: string;     // comma-separated names
   decision: GateDecision;
   conditions: string;       // conditions if conditional approval
+  conditionOwnerUserId?: number | null;
+  conditionDueDate?: string | null;
+  conditionItems?: Array<{ description: string; ownerUserId: number; dueDate: string }>;
   notes: string;            // meeting notes / decision rationale
   createdAt: string;        // ISO timestamp
   roundNumber?: number;     // review round (1 = first, 2 = re-review, etc.)
@@ -219,6 +229,10 @@ export interface Project {
   pm: string;
   pmUserId?: number | null;
   accessRole?: string | null;
+  /** §5 服务端统一状态摘要：整体进度（0-100），所有页面共用此口径。 */
+  progress?: number;
+  /** §5 各阶段进度摘要（服务端计算，skipped 双侧剔除）。 */
+  phaseProgress?: Array<{ phaseId: string; total: number; done: number; progress: number }>;
   canDeleteProject?: boolean;
   canEditProjectInfo?: boolean;
   /** 关联产品(产品库 id) */
@@ -227,6 +241,17 @@ export interface Project {
   productDefinitionSnapshotId?: number | null;
   /** 建项时冻结的 SOP 模板版本。 */
   sopTemplateVersion?: string;
+  /** SOP 入口风险分级；high 自动升级安全/认证验证与会签。 */
+  safetyRiskLevel?: 'standard' | 'high';
+  regulatoryRiskLevel?: 'standard' | 'high';
+  changeScopeDeclaration?: import('@shared/sop-risk').ProjectChangeScopeDeclaration;
+  /** JDM/OBT 冻结的客户输入基线。 */
+  customerInputVersion?: string | null;
+  customerPartNumber?: string | null;
+  commercialBoundary?: string | null;
+  customerSignoffOwnerUserId?: number | null;
+  inputBaselineFrozenAt?: string | null;
+  inputBaselineFrozenBy?: number | null;
   /** 立项基础信息 */
   description?: string | null;
   customer?: string | null;
@@ -244,12 +269,15 @@ export interface Project {
   riskOverrideUpdatedBy?: number | null;
   phases: Record<string, PhaseData>;
   phaseDates?: Record<string, PhaseDate>; // custom per-phase dates
-  category?: 'npd' | 'eco' | 'idr' | 'jdm' | 'obt'; // project category determines SOP template
+  category?: 'npd' | 'eco' | 'derivative' | 'idr' | 'jdm' | 'obt'; // project category determines SOP template
   changeLog?: ChangeRecord[];          // project-level change & decision log
   /** Per-task visibleRoles overrides: taskId -> roles[] (empty = all can see) */
   taskVisibleRoles?: Record<string, string[]>;
   /** 自定义字段值：fieldKey -> value（定义见后端 custom_field_defs） */
   customFields?: Record<string, unknown>;
+  /** 生命周期：active 进行中 / paused 暂停 / terminated 终止（终局） */
+  lifecycle?: 'active' | 'paused' | 'terminated';
+  lifecycleReason?: string | null;
 }
 
 /** 新建项目向导专用字段；不进入持久化 Project 聚合。 */
@@ -302,35 +330,13 @@ export const normalizeProject = (project: Project): Project => {
   return { ...project, phases, phaseDates: project.phaseDates || {} };
 };
 
-export const computePhaseProgress = (
-  phaseData: PhaseData | undefined,
-  phaseId: string,
-  phaseObj?: SOPPhase
-): number => {
-  const phase = phaseObj || PHASE_MAP[phaseId];
-  if (!phase || !phaseData?.tasks) return 0;
-  const effectiveTasks = phase.tasks.filter((t) => phaseData.taskDetails?.[t.id]?.taskStatus !== 'skipped');
-  const total = effectiveTasks.length;
-  if (total === 0) return phase.tasks.length > 0 ? 100 : 0;
-  const done = effectiveTasks.filter((t) => phaseData.tasks[t.id]).length;
-  return Math.round((done / total) * 100);
-};
+// §5 统一状态口径：进度只在服务端算一次（getProjectProgressSummaries），
+// 客户端只读摘要字段。原 computeOverallProgress/computePhaseProgress 已删除，
+// 不留兜底——兜底就是第二套口径的复活通道（列表轻量对象恒显 0% 的病根）。
+export const getOverallProgress = (project: Project): number => project.progress ?? 0;
 
-export const computeOverallProgress = (project: Project): number => {
-  const phases = getProjectPhases(project);
-  let totalTasks = 0;
-  let doneTasks = 0;
-  let rawTasks = 0;
-  phases.forEach((phase) => {
-    const pd = project.phases[phase.id];
-    rawTasks += phase.tasks.length;
-    const effectiveTasks = phase.tasks.filter((t) => pd?.taskDetails?.[t.id]?.taskStatus !== 'skipped');
-    totalTasks += effectiveTasks.length;
-    if (pd?.tasks) doneTasks += effectiveTasks.filter((t) => pd.tasks[t.id]).length;
-  });
-  if (totalTasks === 0) return rawTasks > 0 ? 100 : 0;
-  return Math.round((doneTasks / totalTasks) * 100);
-};
+export const getPhaseProgress = (project: Project, phaseId: string): number =>
+  project.phaseProgress?.find((item) => item.phaseId === phaseId)?.progress ?? 0;
 
 export const getPhaseStatus = (
   project: Project,
@@ -339,26 +345,14 @@ export const getPhaseStatus = (
   const phases = getProjectPhases(project);
   const idx = phases.findIndex((p) => p.id === phaseId);
   const currIdx = phases.findIndex((p) => p.id === project.currentPhase);
-  const phaseObj = phases[idx];
-  const progress = computePhaseProgress(project.phases[phaseId], phaseId, phaseObj);
   if (idx < currIdx) return 'completed';
-  if (idx === currIdx) return progress === 100 ? 'completed' : 'active';
+  if (idx === currIdx) return getPhaseProgress(project, phaseId) === 100 ? 'completed' : 'active';
   return 'pending';
 };
 
-// ── Category-aware phase helpers ─────────────────────────────────────────────
-// Import lazily to avoid circular deps; use dynamic require pattern
-let _getPhasesForCategory: ((cat?: string) => SOPPhase[]) | null = null;
-export const registerGetPhasesForCategory = (fn: (cat?: string) => SOPPhase[]) => {
-  _getPhasesForCategory = fn;
-};
-export const getProjectPhases = (project: Project): SOPPhase[] => {
-  if (project.category === 'npd' && project.sopTemplateVersion === '2026-07-v3') {
-    return getEffectivePhasesForProjectLike(project);
-  }
-  if (_getPhasesForCategory) return _getPhasesForCategory(project.category as string | undefined);
-  return SOP_PHASES;
-};
+// ── Project-aware phase helper ───────────────────────────────────────────────
+export const getProjectPhases = (project: Project): SOPPhase[] =>
+  getEffectivePhasesForProjectLike(project);
 
 /**
  * Returns true if the Gate Review task of the given phase is completed.

@@ -22,6 +22,7 @@ beforeAll(async () => {
   await db!.insert(projects).values({ id: PROJ, name: "审核测试", projectNumber: "DR-1", category: "npd", risk: "low", currentPhase: "design", createdBy: PM, pmUserId: PM });
   await db!.insert(projects).values({ id: ARCHIVED_PROJ, name: "已归档审核测试", projectNumber: "DR-A", category: "npd", risk: "low", currentPhase: "design", createdBy: PM, pmUserId: PM, archived: true });
   await db!.insert(projects).values({ id: AUTO_PROJ, name: "自动审核测试", projectNumber: "DR-AUTO", category: "npd", risk: "low", currentPhase: "design", createdBy: PM, pmUserId: PM });
+  await db!.insert(projectMembers).values({ projectId: PROJ, userId: REVIEWER, role: "rd_hw", invitedBy: PM });
   await db!.insert(projectMembers).values({ projectId: AUTO_PROJ, userId: REVIEWER, role: "rd_hw", invitedBy: PM });
 });
 afterAll(async () => {
@@ -32,13 +33,19 @@ afterAll(async () => {
   await db!.delete(projectFiles).where(eq(projectFiles.projectId, PROJ));
   await db!.delete(projectFiles).where(eq(projectFiles.projectId, AUTO_PROJ));
   await db!.delete(projectMembers).where(eq(projectMembers.projectId, AUTO_PROJ));
+  await db!.delete(projectMembers).where(eq(projectMembers.projectId, PROJ));
   await db!.delete(projects).where(eq(projects.id, PROJ));
   await db!.delete(projects).where(eq(projects.id, ARCHIVED_PROJ));
   await db!.delete(projects).where(eq(projects.id, AUTO_PROJ));
 });
 
-async function addFile(name: string) {
-  await createProjectFile({ projectId: PROJ, phaseId: "design", taskId: "d8", deliverableName: name, name: `${name}.pdf`, mimeType: "application/pdf", size: 1, storageKey: `k/${name}`, storageUrl: `/storage/k/${name}`, uploadedBy: SUBMITTER });
+async function addFile(name: string, triggerAutoReview = false) {
+  const input = { projectId: PROJ, phaseId: "design", taskId: "d8", deliverableName: name, name: `${name}.pdf`, mimeType: "application/pdf", size: 1, storageKey: `k/${name}`, storageUrl: `/storage/k/${name}`, uploadedBy: SUBMITTER };
+  if (triggerAutoReview) await createProjectFile(input);
+  else {
+    const db = await getDb();
+    await db!.insert(projectFiles).values(input);
+  }
 }
 
 describe("deliverable review service", () => {
@@ -106,7 +113,7 @@ describe("deliverable review service", () => {
     await reviewDeliverable({ projectId: PROJ, phaseId: "design", deliverableName: NAME, decision: "approved", reviewedBy: REVIEWER, note: null }, deps);
     let rows = await listDeliverableReviews(PROJ);
     expect(rows.find((r) => r.deliverableName === NAME)?.status).toBe("approved");
-    await addFile(NAME); // 上传新版本 → createProjectFile 触发 resetReviewOnReupload
+    await addFile(NAME, true); // 上传新版本 → createProjectFile 触发 resetReviewOnReupload
     rows = await listDeliverableReviews(PROJ);
     expect(rows.find((r) => r.deliverableName === NAME)?.status).toBe("pending");
   });

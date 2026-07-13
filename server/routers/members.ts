@@ -13,7 +13,15 @@ import {
   createActivityLog,
 } from "../db";
 import { PROJECT_MEMBER_ROLES, ProjectMemberRole } from "../../drizzle/schema";
-import { getEffectiveProjectRoleById } from "../project-access";
+import {
+  getEffectiveProjectRole,
+  getEffectiveProjectRoleById,
+  getEffectiveProjectRoles,
+  getUnionPermissions,
+} from "../project-access";
+import { normalizeExtraRoles } from "../../shared/project-roles";
+import { isSystemAdminRole } from "../../shared/system-roles";
+import { getMemberHandoffPreview, handoffAndRemoveProjectMember } from "../services/sop-blindspot-service";
 
 /**
  * Permission matrix for project roles.
@@ -432,6 +440,26 @@ async function getUserProjectRole(projectId: string, userId: number): Promise<Pr
   return getEffectiveProjectRoleById(projectId, userId);
 }
 
+async function canManageProjectMembers(projectId: string, userId: number): Promise<boolean> {
+  const project = await getProjectById(projectId);
+  if (!project) return false;
+  const roles = await getEffectiveProjectRoles(project, userId);
+  return getUnionPermissions(roles).canManageMembers;
+}
+
+/**
+ * 管理层是四眼升级链与 Gate 决策的治理身份：授予它必须由管理层本人（或系统管理员）
+ * 操作，防止 PM 级 canManageMembers 通过邀请/改角色路径自授或互授管理层。
+ */
+async function assertCanGrantManagerRole(projectId: string, actor: { id: number; role: string }): Promise<void> {
+  if (isSystemAdminRole(actor.role)) return;
+  const project = await getProjectById(projectId);
+  const roles = project ? await getEffectiveProjectRoles(project, actor.id) : new Set<ProjectMemberRole>();
+  if (!roles.has("manager") && !roles.has("owner")) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "只有管理层或系统管理员可以授予管理层角色" });
+  }
+}
+
 export const membersRouter = router({
   /** Get all members of a project (requires view access) */
   list: protectedProcedure
@@ -452,6 +480,7 @@ export const membersRouter = router({
       const result = members.map((m) => ({
         userId: m.userId,
         role: m.role,
+        extraRoles: m.extraRoles,
         jobTitle: m.jobTitle,
         userName: m.userName,
         userEmail: m.userEmail,
@@ -464,6 +493,7 @@ export const membersRouter = router({
         result.unshift({
           userId: ownerUser.id,
           role: "owner" as ProjectMemberRole,
+          extraRoles: [],
           jobTitle: null,
           userName: ownerUser.name ?? null,
           userEmail: ownerUser.email ?? null,
@@ -480,11 +510,15 @@ export const membersRouter = router({
   myRole: protectedProcedure
     .input(z.object({ projectId: z.string() }))
     .query(async ({ ctx, input }) => {
-      const role = await getUserProjectRole(input.projectId, ctx.user.id);
+      const project = await getProjectById(input.projectId);
+      if (!project) return null;
+      const roles = await getEffectiveProjectRoles(project, ctx.user.id);
+      const role = await getEffectiveProjectRole(project, ctx.user.id);
       if (!role) return null;
       return {
         role,
-        permissions: ROLE_PERMISSIONS[role],
+        roles: Array.from(roles),
+        permissions: getUnionPermissions(roles),
       };
     }),
 
@@ -504,18 +538,21 @@ export const membersRouter = router({
       userId: z.number().optional(),
       email: z.string().email().optional(),
       role: z.enum(PROJECT_MEMBER_ROLES),
+      extraRoles: z.array(z.enum(PROJECT_MEMBER_ROLES)).default([]),
       jobTitle: z.string().optional(),
     }).refine((d) => d.userId != null || d.email != null, {
       message: "userId 或 email 至少提供一个",
     }))
     .mutation(async ({ ctx, input }) => {
-      const myRole = await getUserProjectRole(input.projectId, ctx.user.id);
-      if (!myRole || !ROLE_PERMISSIONS[myRole].canManageMembers) {
+      if (!(await canManageProjectMembers(input.projectId, ctx.user.id))) {
         throw new TRPCError({ code: "FORBIDDEN", message: "没有成员管理权限" });
       }
       // Cannot invite as owner
       if (input.role === "owner") {
         throw new TRPCError({ code: "BAD_REQUEST", message: "不能邀请为创建者角色" });
+      }
+      if (input.role === "manager") {
+        await assertCanGrantManagerRole(input.projectId, ctx.user);
       }
 
       // Resolve target user: prefer userId, fall back to email lookup
@@ -541,9 +578,15 @@ export const membersRouter = router({
 
       const existing = await getProjectMember(input.projectId, targetUser.id);
       if (existing) {
-        // Update role if already exists
+        // Inviting an existing member appends a working role; it never silently
+        // replaces the primary role chosen for display.
+        const extraRoles = normalizeExtraRoles(existing.role, [
+          ...existing.extraRoles,
+          input.role,
+          ...input.extraRoles,
+        ]);
         await updateProjectMember(input.projectId, targetUser.id, {
-          role: input.role,
+          extraRoles,
           jobTitle: input.jobTitle ?? null,
         });
         await createActivityLog({
@@ -552,7 +595,11 @@ export const membersRouter = router({
           action: "member.update_role",
           entityType: "member",
           entityId: String(targetUser.id),
-          meta: { role: input.role, jobTitle: input.jobTitle ?? null },
+          meta: {
+            before: { role: existing.role, extraRoles: existing.extraRoles },
+            after: { role: existing.role, extraRoles },
+            jobTitle: input.jobTitle ?? null,
+          },
         });
         return { success: true, updated: true };
       }
@@ -561,6 +608,7 @@ export const membersRouter = router({
         projectId: input.projectId,
         userId: targetUser.id,
         role: input.role,
+        extraRoles: normalizeExtraRoles(input.role, input.extraRoles),
         jobTitle: input.jobTitle ?? null,
         invitedBy: ctx.user.id,
       });
@@ -581,11 +629,11 @@ export const membersRouter = router({
       projectId: z.string(),
       userId: z.number(),
       role: z.enum(PROJECT_MEMBER_ROLES),
+      extraRoles: z.array(z.enum(PROJECT_MEMBER_ROLES)).default([]),
       jobTitle: z.string().optional().nullable(),
     }))
     .mutation(async ({ ctx, input }) => {
-      const myRole = await getUserProjectRole(input.projectId, ctx.user.id);
-      if (!myRole || !ROLE_PERMISSIONS[myRole].canManageMembers) {
+      if (!(await canManageProjectMembers(input.projectId, ctx.user.id))) {
         throw new TRPCError({ code: "FORBIDDEN", message: "没有成员管理权限" });
       }
       if (input.role === "owner") {
@@ -596,8 +644,15 @@ export const membersRouter = router({
       if (project?.createdBy === input.userId) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "不能修改创建者的角色" });
       }
+      const before = await getProjectMember(input.projectId, input.userId);
+      // 升到或降出管理层都必须由管理层/系统管理员操作
+      if (input.role === "manager" || before?.role === "manager") {
+        await assertCanGrantManagerRole(input.projectId, ctx.user);
+      }
+      const extraRoles = normalizeExtraRoles(input.role, input.extraRoles);
       await updateProjectMember(input.projectId, input.userId, {
         role: input.role,
+        extraRoles,
         jobTitle: input.jobTitle ?? null,
       });
       await createActivityLog({
@@ -606,12 +661,38 @@ export const membersRouter = router({
         action: "member.update_role",
         entityType: "member",
         entityId: String(input.userId),
-        meta: { role: input.role, jobTitle: input.jobTitle ?? null },
+        meta: {
+          before: before ? { role: before.role, extraRoles: before.extraRoles } : null,
+          after: { role: input.role, extraRoles },
+          jobTitle: input.jobTitle ?? null,
+        },
       });
       return { success: true };
     }),
 
   /** Remove a member (requires canManageMembers; cannot remove owner) */
+  handoffPreview: protectedProcedure
+    .input(z.object({ projectId: z.string(), userId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      const myRole = await getUserProjectRole(input.projectId, ctx.user.id);
+      if (!myRole || !ROLE_PERMISSIONS[myRole].canManageMembers) throw new TRPCError({ code: "FORBIDDEN" });
+      return getMemberHandoffPreview(input.projectId, input.userId);
+    }),
+
+  handoffAndRemove: protectedProcedure
+    .input(z.object({ projectId: z.string(), userId: z.number().int().positive(), replacementUserId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const myRole = await getUserProjectRole(input.projectId, ctx.user.id);
+      if (!myRole || !ROLE_PERMISSIONS[myRole].canManageMembers) throw new TRPCError({ code: "FORBIDDEN", message: "没有成员管理权限" });
+      try {
+        const summary = await handoffAndRemoveProjectMember({ ...input, actorUserId: ctx.user.id });
+        await createActivityLog({ projectId: input.projectId, userId: ctx.user.id, action: "member.remove", entityType: "member_handoff", entityId: String(input.userId), meta: { replacementUserId: input.replacementUserId, transferred: summary } });
+        return { success: true, transferred: summary };
+      } catch (error) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: error instanceof Error ? error.message : "成员交接失败" });
+      }
+    }),
+
   remove: protectedProcedure
     .input(z.object({
       projectId: z.string(),
@@ -625,6 +706,10 @@ export const membersRouter = router({
       const project = await getProjectById(input.projectId);
       if (project?.createdBy === input.userId) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "不能移除项目创建者" });
+      }
+      const preview = await getMemberHandoffPreview(input.projectId, input.userId);
+      if (preview.isProjectManager || Object.entries(preview).some(([key, value]) => key !== "isProjectManager" && typeof value === "number" && value > 0)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "该成员仍有未完成责任，必须选择接收人完成批量交接后才能移除" });
       }
       await removeProjectMember(input.projectId, input.userId);
       await createActivityLog({

@@ -44,6 +44,7 @@ import {
   isSystemAdminRole,
   systemRoleCanCreateProject,
 } from '@shared/system-roles';
+import { PROJECT_MEMBER_ROLES, type ProjectMemberRole } from '@shared/project-roles';
 
 type UserRow = {
   id: number;
@@ -213,6 +214,19 @@ export default function AdminPanel() {
     onError: (err) => toast.error(err.message),
   });
   const enabledApprovalCount = APPROVAL_CONFIG_TYPES.filter((item) => approvalDrafts[item.key]?.enabled).length;
+  const { data: fallbackReviewers, refetch: refetchFallbackReviewers } = trpc.admin.fallbackReviewers.list.useQuery(undefined, {
+    enabled: isAuthenticated && isSystemAdminRole(user?.role),
+  });
+  const [fallbackRole, setFallbackRole] = useState<ProjectMemberRole>('qa');
+  const [fallbackUserId, setFallbackUserId] = useState<number | ''>('');
+  const saveFallbackReviewer = trpc.admin.fallbackReviewers.upsert.useMutation({
+    onSuccess: () => { void refetchFallbackReviewers(); toast.success('兜底审核人已更新'); },
+    onError: (error) => toast.error(error.message),
+  });
+  const removeFallbackReviewer = trpc.admin.fallbackReviewers.remove.useMutation({
+    onSuccess: () => void refetchFallbackReviewers(),
+    onError: (error) => toast.error(error.message),
+  });
   const setApprovalDraft = (key: ApprovalConfigType, patch: Partial<ApprovalDraft>) => {
     setApprovalDrafts((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
   };
@@ -292,6 +306,31 @@ export default function AdminPanel() {
               <p><strong>项目创建权限（canCreateProject）</strong>：控制用户是否可以新建项目。可单独授权给非 admin 用户（如产品经理、项目负责人）。</p>
               <p><strong>项目内角色</strong>：在各项目的「成员」标签页中单独设置（owner/manager/pm/rd_hw 等），与系统角色相互独立。</p>
             </div>
+          </div>
+        </div>
+
+        <div className="bg-card border border-border p-4">
+          <div className="mb-3">
+            <h2 className="text-base text-foreground">红线兜底审核人</h2>
+            <p className="mt-1 text-xs text-muted-foreground">仅在项目内管理层和生效代理人都无法满足四眼复核时使用。</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <select value={fallbackRole} onChange={(event) => setFallbackRole(event.target.value as ProjectMemberRole)} className="rounded border border-border bg-card px-2 py-1.5 text-sm">
+              {PROJECT_MEMBER_ROLES.filter((role) => role !== 'owner' && role !== 'viewer').map((role) => <option key={role} value={role}>{role}</option>)}
+            </select>
+            <select value={fallbackUserId} onChange={(event) => setFallbackUserId(event.target.value ? Number(event.target.value) : '')} className="min-w-52 rounded border border-border bg-card px-2 py-1.5 text-sm">
+              <option value="">选择内部用户</option>
+              {(users as UserRow[] | undefined)?.filter((item) => item.role !== 'external').map((item) => <option key={item.id} value={item.id}>{item.name || item.username}</option>)}
+            </select>
+            <Button size="sm" disabled={!fallbackUserId || saveFallbackReviewer.isPending} onClick={() => fallbackUserId && saveFallbackReviewer.mutate({ role: fallbackRole, userId: fallbackUserId, active: true })}>添加</Button>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {fallbackReviewers?.filter((item) => item.active).map((item) => (
+              <span key={item.id} className="inline-flex items-center gap-2 rounded border border-border bg-secondary/40 px-2 py-1 text-xs">
+                {item.role} · {item.userName || item.userEmail || `用户${item.userId}`}
+                <button onClick={() => removeFallbackReviewer.mutate({ id: item.id })} className="text-muted-foreground hover:text-destructive">×</button>
+              </span>
+            ))}
           </div>
         </div>
 

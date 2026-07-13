@@ -27,7 +27,6 @@ import {
   type NormalizedApprovalStatus,
 } from "../_core/dingtalkApproval";
 import { buildProjectActionPath } from "../../shared/action-links";
-import { cancelAndRecordProjectMeeting } from "./project-meeting-lifecycle";
 import { applyActionExternalApproval } from "./action-approval-apply";
 import { isActionExternalApprovalType } from "./action-approval-submit";
 
@@ -175,6 +174,7 @@ async function enqueueReleaseConfirmation(instance: ExternalApprovalInstance): P
     entityId: String(instance.id),
     dedupeKey: actionDedupeKey({
       kind: "mp_release_confirm",
+      projectId: instance.entityId,
       entityId: String(instance.id),
       recipientUserId: instance.submittedBy,
     }),
@@ -213,10 +213,6 @@ export async function confirmApprovedRelease(input: {
     override: override ?? undefined,
     externalApprovalInstanceId: instance.id,
   });
-  if (project && (project.dingtalkEventId || (project.meetingConfig as { enabled?: boolean } | null)?.enabled)) {
-    try { await cancelAndRecordProjectMeeting(project); }
-    catch (error) { console.warn("[meeting] cancel on approved release failed (non-fatal):", error); }
-  }
   await closeActionItems({
     kind: "mp_release_confirm",
     entityType: "external_approval",

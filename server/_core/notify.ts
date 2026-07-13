@@ -18,9 +18,9 @@ function signDingtalkUrl(url: string, secret: string): string {
 export async function pushWebhook(
   text: string,
   opts?: { title?: string; markdown?: string }
-): Promise<void> {
+): Promise<boolean> {
   const baseUrl = ENV.notifyWebhookUrl;
-  if (!baseUrl) return; // 未配置 → 仅站内通知
+  if (!baseUrl) return false; // 未配置 → 仅站内通知
   try {
     const isFeishu = ENV.notifyWebhookType === "feishu";
     const url = !isFeishu && ENV.notifyWebhookSecret
@@ -38,14 +38,18 @@ export async function pushWebhook(
     });
     if (!resp.ok) {
       console.warn(`[notify] webhook ${resp.status}`);
+      return false;
     } else {
       // 钉钉成功响应 errcode=0；非 0 也只 warn
       const j = await resp.json().catch(() => ({}));
       if (j && typeof j.errcode === "number" && j.errcode !== 0) {
         console.warn(`[notify] dingtalk errcode=${j.errcode} ${j.errmsg ?? ""}`);
+        return false;
       }
+      return true;
     }
   } catch (err) {
     console.warn("[notify] webhook failed (non-fatal):", err);
+    return false;
   }
 }

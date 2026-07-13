@@ -24,6 +24,15 @@ describe("action links", () => {
         taskTab: "approval",
       }),
     ).toBe("/?view=projects&projectId=p1&tab=tasks&phaseId=design&taskId=d1&taskTab=approval");
+    expect(
+      buildProjectActionPath({
+        projectId: "p1",
+        tab: "tasks",
+        phaseId: "design",
+        taskId: "d1",
+        actionItemId: 17,
+      }),
+    ).toBe("/?view=projects&projectId=p1&tab=tasks&phaseId=design&taskId=d1&actionItemId=17");
   });
 
   it("builds task approval action links", () => {
@@ -48,8 +57,8 @@ describe("action links", () => {
 
   it("builds remaining Phase A action links", () => {
     expect(
-      buildTaskCompletionActionPath({ projectId: "p1", phaseId: "evt", taskId: "e2" }),
-    ).toBe("/actions/task-complete?projectId=p1&phaseId=evt&taskId=e2");
+      buildTaskCompletionActionPath({ projectId: "p1", phaseId: "evt", taskId: "e2", actionItemId: 18 }),
+    ).toBe("/actions/task-complete?projectId=p1&phaseId=evt&taskId=e2&actionItemId=18");
 
     expect(
       buildIssueValidationActionPath({ projectId: "p1", phaseId: "evt", issueId: 42 }),

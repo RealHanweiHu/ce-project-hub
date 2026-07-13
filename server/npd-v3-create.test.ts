@@ -22,6 +22,7 @@ const IDS = {
   missingLockedPack: `npdv3-lock-${SUFFIX}`,
   missingDowngradeReason: `npdv3-down-${SUFFIX}`,
   missingAttributes: `npdv3-attrs-${SUFFIX}`,
+  legacyHighRisk: `npdv3-risk-${SUFFIX}`,
   validDowngrade: `npdv3-audit-${SUFFIX}`,
 };
 const ALL_IDS = Object.values(IDS);
@@ -182,6 +183,30 @@ describe("NPD v3 create seeding", () => {
       progress: 0,
       npdTemplate: { tier: "standard", packs: [] },
     })).rejects.toThrow(/项目属性/);
+  });
+
+  it("旧 risk=high 契约仍触发强监管推荐，降档无理由时拒绝创建", async () => {
+    const caller = projectsRouter.createCaller({
+      user: { id: OWNER, role: "member", name: "NPD v3 creator", canCreateProject: true },
+    } as any);
+
+    await expect(caller.create({
+      id: IDS.legacyHighRisk,
+      name: "NPD v3 legacy high risk",
+      projectNumber: IDS.legacyHighRisk,
+      category: "npd",
+      risk: "high",
+      currentPhase: "concept",
+      progress: 0,
+      npdAttributes: {
+        hasBattery: false,
+        needsCert: false,
+        hasFirmware: false,
+        needsNewMold: false,
+        isNewPlatform: false,
+      },
+      npdTemplate: { tier: "lite", packs: [] },
+    })).rejects.toThrow(/降档.*理由/);
   });
 
   it("有理由降档时持久化推荐差异并写入创建活动审计", async () => {

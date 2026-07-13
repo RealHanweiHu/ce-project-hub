@@ -15,8 +15,8 @@ import {
   getDb,
 } from "./db";
 import { appRouter } from "./routers";
-import { projectRequirements, projects } from "../drizzle/schema";
-import { eq, inArray } from "drizzle-orm";
+import { activityLogs, projectIssues, projectRequirements, projects } from "../drizzle/schema";
+import { and, eq, inArray } from "drizzle-orm";
 import type { TrpcContext } from "./_core/context";
 
 const SUFFIX = Date.now();
@@ -26,6 +26,7 @@ const PROJ_B = `projB-${SUFFIX}`;
 const VALUE_PROJECT = `value-${SUFFIX}`;
 const OWNER = 880001;
 const ids: number[] = [];
+const convertedIssueIds: number[] = [];
 
 function makeCtx(userId: number): TrpcContext {
   return {
@@ -76,6 +77,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   const db = await getDb();
+  if (db) await db.delete(activityLogs).where(eq(activityLogs.projectId, VALUE_PROJECT));
+  if (db && convertedIssueIds.length) await db.delete(projectIssues).where(inArray(projectIssues.id, convertedIssueIds));
   if (db && ids.length) await db.delete(projectRequirements).where(inArray(projectRequirements.id, ids));
   if (db) await db.delete(projects).where(eq(projects.id, VALUE_PROJECT));
 });
@@ -162,5 +165,35 @@ describe("unified requirement pool", () => {
     expect(row?.businessGoal).toBe("北美渠道高端款溢价");
     expect(row?.projectGoal).toBe("完成低噪风道方案收敛");
     expect(row?.successMetric).toBe("DVT 噪音测试通过");
+  });
+
+  it("通过业务 convert 创建问题时产生 canonical issue.create", async () => {
+    const caller = appRouter.createCaller(makeCtx(OWNER));
+    const created = await caller.requirements.create({
+      projectId: VALUE_PROJECT,
+      title: "需求转问题 canonical",
+      priority: "P1",
+    });
+    ids.push(created.id);
+    const converted = await caller.requirements.convert({
+      id: created.id,
+      projectId: VALUE_PROJECT,
+      phaseId: "concept",
+      target: "issue",
+    });
+    convertedIssueIds.push(Number(converted.convertedId));
+
+    const db = await getDb();
+    const [canonical] = await db!.select().from(activityLogs).where(and(
+      eq(activityLogs.projectId, VALUE_PROJECT),
+      eq(activityLogs.action, "issue.create"),
+      eq(activityLogs.entityId, converted.convertedId),
+    ));
+    expect(canonical?.meta).toMatchObject({
+      phaseId: "concept",
+      severity: "P1",
+      source: "requirement.convert",
+      after: { creatorId: OWNER, status: "open", severity: "P1" },
+    });
   });
 });

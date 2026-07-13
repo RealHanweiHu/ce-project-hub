@@ -4,6 +4,8 @@ import {
   NPD_V3_CORE_PHASES,
   NPD_V3_LITE_PHASES,
   getEffectivePhasesForProjectLike,
+  getTaskEvidenceLevel,
+  getNpdV3RedlinePolicy,
   getNpdV3EffectivePhases,
   normalizeNpdTemplateConfig,
   recommendNpdTemplateConfig,
@@ -13,6 +15,7 @@ import {
   PROJECT_CATEGORIES,
   SOP_TEMPLATE_VERSION_CURRENT,
   SOP_TEMPLATE_VERSION_LEGACY,
+  SOP_TEMPLATE_VERSION_NPD_V3,
   getPhasesForCategory,
 } from "./sop-templates";
 import { getDeliverableTemplatePath } from "./deliverable-templates";
@@ -136,6 +139,41 @@ describe("NPD v3 附加包与档位", () => {
     expect(countTasks(phases)).toBe(17);
     expect(phases.find((phase) => phase.id === "planning")?.tasks.map((task) => task.id)).toContain("pb1");
     expect(phases.find((phase) => phase.id === "design")?.tasks.map((task) => task.id)).toContain("pb2");
+  });
+
+  it("项目级红线策略包含激活包、永久红线及其审计交付物", () => {
+    const policy = getNpdV3RedlinePolicy({
+      category: "npd",
+      sopTemplateVersion: SOP_TEMPLATE_VERSION_NPD_V3,
+      customFields: { npdTemplate: { tier: "lite", packs: ["battery"] } },
+    });
+
+    expect(Array.from(policy.taskIds)).toEqual(
+      expect.arrayContaining(["pb1", "pb2", "npv2", "npv5", "nm1"])
+    );
+    expect(policy.taskIds.has("pc1")).toBe(false);
+    expect(Array.from(policy.auditDeliverables)).toEqual(expect.arrayContaining([
+      "安全FMEA与危害分析",
+      "UN38.3运输测试报告或复用确认",
+      "EOL 100%测试能力验收记录",
+      "SOP/WI作业指导书",
+      "良率报告",
+    ]));
+
+    const certPolicy = getNpdV3RedlinePolicy({
+      category: "npd",
+      sopTemplateVersion: SOP_TEMPLATE_VERSION_NPD_V3,
+      customFields: { npdTemplate: { tier: "standard", packs: ["cert"] } },
+    });
+    expect(Array.from(certPolicy.taskIds)).toEqual(expect.arrayContaining(["pc1", "pc2"]));
+    expect(certPolicy.auditDeliverables.has("认证报告")).toBe(true);
+
+    const legacyPolicy = getNpdV3RedlinePolicy({
+      category: "npd",
+      sopTemplateVersion: SOP_TEMPLATE_VERSION_CURRENT,
+    });
+    expect(legacyPolicy.taskIds.size).toBe(0);
+    expect(legacyPolicy.auditDeliverables.size).toBe(0);
   });
 
   it("lite 把 DVT 包任务和 Gate 必交物映射到 verification", () => {
@@ -286,6 +324,31 @@ describe("NPD v3 交付物词表", () => {
 });
 
 describe("v3 版本路由与项目级访问器", () => {
+  it("按项目有效模板查询证据级别，未知任务与老模板回退 light", () => {
+    const standard = {
+      category: "npd",
+      sopTemplateVersion: "2026-07-v3",
+      customFields: { npdTemplate: { tier: "standard", packs: [] } },
+    };
+    expect(getTaskEvidenceLevel(standard, "planning", "np1")).toBe("heavy");
+    expect(getTaskEvidenceLevel(standard, "planning", "np2")).toBe("light");
+    expect(getTaskEvidenceLevel(
+      {
+        category: "npd",
+        sopTemplateVersion: "2026-07-v3",
+        customFields: { npdTemplate: { tier: "lite", packs: ["battery"] } },
+      },
+      "design",
+      "pb2",
+    )).toBe("heavy");
+    expect(getTaskEvidenceLevel(
+      { category: "npd", sopTemplateVersion: "2026-07-v2" },
+      "concept",
+      "c1",
+    )).toBe("light");
+    expect(getTaskEvidenceLevel(standard, "nope", "nope")).toBe("light");
+  });
+
   it("getPhasesForCategory 只把 NPD 2026-07-v3 路由到 25 项核心模板", () => {
     expect(countTasks(getPhasesForCategory("npd", "2026-07-v3"))).toBe(25);
     expect(getPhasesForCategory("eco", "2026-07-v3")).toEqual(getPhasesForCategory("eco"));
@@ -309,5 +372,37 @@ describe("v3 版本路由与项目级访问器", () => {
       customFields: { npdTemplate: { tier: "lite", packs: ["battery"] } },
     });
     expect(countTasks(v2)).toBe(53);
+  });
+
+  it("相同档位/包组合返回同一份冻结阶段数组", () => {
+    const first = getNpdV3EffectivePhases({
+      tier: "lite",
+      packs: ["battery", "cert"],
+    });
+    const second = getNpdV3EffectivePhases({
+      tier: "lite",
+      packs: ["cert", "battery", "battery"],
+    });
+    expect(second).toBe(first);
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(Object.isFrozen(first[0])).toBe(true);
+    expect(Object.isFrozen(first[0].tasks)).toBe(true);
+  });
+
+  it("项目级访问器统一应用衍生品复用策略", () => {
+    const directReuse = {
+      battery: "direct_reuse",
+      mechanism: "direct_reuse",
+      pcba_power: "direct_reuse",
+      firmware: "direct_reuse",
+      structure_mold: "direct_reuse",
+      packaging_cert: "direct_reuse",
+    };
+    const phases = getEffectivePhasesForProjectLike({
+      category: "derivative",
+      sopTemplateVersion: "2026-07-v2",
+      customFields: { derivativeReuseStrategy: directReuse },
+    });
+    expect(countTasks(phases)).toBeLessThan(countTasks(getPhasesForCategory("derivative", "2026-07-v2")));
   });
 });

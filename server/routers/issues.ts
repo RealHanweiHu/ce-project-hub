@@ -65,7 +65,7 @@ async function notifyIssueValidation(input: {
     projectId: input.projectId,
     entityType: "issue",
     entityId,
-    dedupeKey: actionDedupeKey({ kind: "issue_validation", entityId, recipientUserId }),
+    dedupeKey: actionDedupeKey({ kind: "issue_validation", projectId: input.projectId, entityId, recipientUserId }),
     recipientUserId,
     title: "问题待验证",
     body: `「${input.issue.title}」已标记解决，请验证是否可以关闭。`,

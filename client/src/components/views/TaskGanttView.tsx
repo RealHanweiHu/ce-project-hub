@@ -2,7 +2,7 @@
 // 高亮关键路径与逾期任务,给 PM 看真正的关键路径 / 延期 / 阶段风险。
 import { useMemo, useRef, useState } from 'react';
 import { Project, getProjectPhases } from '@/lib/data';
-import { criticalPathTasks } from '@shared/schedule-graph';
+import { criticalPathTasksForProjectRows } from '@shared/schedule-graph';
 import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, CalendarDays, AlertTriangle, Flame } from 'lucide-react';
 
 function parseDate(s?: string | null): Date | null {
@@ -29,7 +29,14 @@ export function TaskGanttView({ project, onTaskClick, phaseFilter }: { project: 
 
   const { rows, totalStart, totalEnd, critTotal } = useMemo(() => {
     const phases = getProjectPhases(project);
-    const crit = criticalPathTasks(project.category);
+    // 与服务端排期同图源：把裁剪 skipped 行喂进运行态图，避免高亮已被豁免的链
+    const graphRows = Object.values(project.phases ?? {}).flatMap((pd) =>
+      Object.entries(pd?.taskDetails ?? {}).map(([taskId, detail]) => ({
+        taskId,
+        status: detail?.taskStatus ?? null,
+      })),
+    );
+    const crit = criticalPathTasksForProjectRows(project, graphRows);
     const today0 = new Date(); today0.setHours(0, 0, 0, 0);
     const rows: Row[] = [];
     let minStart: Date | null = null, maxDue: Date | null = null;

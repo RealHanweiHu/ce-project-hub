@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const DIGEST_RULE_KEYS = ["health_digest", "personal_daily_digest"] as const;
+export const DIGEST_RULE_KEYS = ["health_digest", "personal_daily_digest", "group_weekly_digest"] as const;
 export type DigestRuleKey = (typeof DIGEST_RULE_KEYS)[number];
 
 export const healthDigestConfigSchema = z.object({
@@ -20,7 +20,13 @@ export const personalDailyDigestConfigSchema = z.object({
   pushDingtalk: z.boolean().default(true),
 });
 export type PersonalDailyDigestConfig = z.infer<typeof personalDailyDigestConfigSchema>;
-export type DigestRuleConfig = HealthDigestConfig | PersonalDailyDigestConfig;
+
+export const groupWeeklyDigestConfigSchema = z.object({
+  sendHour: z.number().int().min(0).max(23).default(9), // Asia/Shanghai
+  weekday: z.number().int().min(1).max(7).default(1), // ISO: 1=周一
+});
+export type GroupWeeklyDigestConfig = z.infer<typeof groupWeeklyDigestConfigSchema>;
+export type DigestRuleConfig = HealthDigestConfig | PersonalDailyDigestConfig | GroupWeeklyDigestConfig;
 
 export const DIGEST_RULES = [
   {
@@ -39,6 +45,14 @@ export const DIGEST_RULES = [
     defaultConfig: personalDailyDigestConfigSchema.parse({}),
     configSchema: personalDailyDigestConfigSchema,
   },
+  {
+    key: "group_weekly_digest",
+    label: "项目群周摘要",
+    triggerType: "digest",
+    defaultEnabled: true,
+    defaultConfig: groupWeeklyDigestConfigSchema.parse({}),
+    configSchema: groupWeeklyDigestConfigSchema,
+  },
 ] as const;
 
 export function isDigestRuleKey(key: string): key is DigestRuleKey {
@@ -47,12 +61,15 @@ export function isDigestRuleKey(key: string): key is DigestRuleKey {
 
 export function parseDigestRuleConfig(key: "health_digest", config: unknown): HealthDigestConfig;
 export function parseDigestRuleConfig(key: "personal_daily_digest", config: unknown): PersonalDailyDigestConfig;
+export function parseDigestRuleConfig(key: "group_weekly_digest", config: unknown): GroupWeeklyDigestConfig;
 export function parseDigestRuleConfig(key: DigestRuleKey, config: unknown): DigestRuleConfig;
 export function parseDigestRuleConfig(key: DigestRuleKey, config: unknown): DigestRuleConfig {
   const schema = key === "health_digest"
     ? healthDigestConfigSchema
     : key === "personal_daily_digest"
       ? personalDailyDigestConfigSchema
+      : key === "group_weekly_digest"
+        ? groupWeeklyDigestConfigSchema
       : null;
   if (!schema) throw new Error(`Unknown digest rule: ${key}`);
   const base = schema.parse({});

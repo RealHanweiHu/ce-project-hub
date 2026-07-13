@@ -17,5 +17,7 @@ RUN pnpm install --frozen-lockfile --prod
 COPY --from=build /app/dist ./dist
 COPY drizzle ./drizzle
 COPY drizzle.config.ts ./
+# 交付物参照模板（/api/deliverable-template 下载端点的静态文件源）
+COPY docs/templates ./docs/templates
 EXPOSE 3000
 CMD ["node", "dist/index.js"]

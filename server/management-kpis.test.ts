@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import {
   activityLogs,
   bomItems,
@@ -14,6 +14,7 @@ import { getDb } from "./db";
 import type { TrpcContext } from "./_core/context";
 
 const PROJECT = `mgmt-kpi-${Date.now()}`;
+const LITE_PROJECT = `mgmt-kpi-lite-${Date.now()}`;
 const OWNER = 9_950_001;
 const MANAGER = 9_950_002;
 const SALES = 9_950_003;
@@ -57,9 +58,21 @@ beforeAll(async () => {
     customFields: { targetCost: "20" },
     createdBy: OWNER,
   });
+  await db.insert(projects).values({
+    id: LITE_PROJECT,
+    name: "Lite validation KPI",
+    projectNumber: LITE_PROJECT,
+    category: "npd",
+    sopTemplateVersion: "2026-07-v3",
+    risk: "low",
+    currentPhase: "verification",
+    customFields: { npdTemplate: { tier: "lite", packs: [] } },
+    createdBy: OWNER,
+  });
   await db.insert(projectMembers).values([
     { projectId: PROJECT, userId: MANAGER, role: "manager", invitedBy: OWNER },
     { projectId: PROJECT, userId: SALES, role: "sales", invitedBy: OWNER },
+    { projectId: LITE_PROJECT, userId: MANAGER, role: "manager", invitedBy: OWNER },
   ]);
   await db.insert(projectGateReviews).values([
     { projectId: PROJECT, phaseId: "evt", phaseName: "EVT", gateName: "EVT Gate", reviewDate: "2026-06-01", decision: "approved", roundNumber: 1, createdBy: MANAGER },
@@ -79,6 +92,7 @@ beforeAll(async () => {
   await db.insert(projectTestCases).values([
     { projectId: PROJECT, phaseId: "evt", title: "EVT function", status: "passed", severity: "P2", createdBy: MANAGER },
     { projectId: PROJECT, phaseId: "pvt", title: "PVT thermal", status: "blocked", severity: "P1", createdBy: MANAGER },
+    { projectId: LITE_PROJECT, phaseId: "verification", title: "Lite merged verification", status: "passed", severity: "P2", createdBy: MANAGER },
   ]);
   await db.insert(bomItems).values([
     { projectId: PROJECT, partNumber: "MOTOR-001", name: "Motor", quantity: 1, unitCost: "12", sortOrder: 1 },
@@ -91,11 +105,11 @@ afterAll(async () => {
   if (!db) return;
   await db.delete(activityLogs).where(eq(activityLogs.projectId, PROJECT));
   await db.delete(bomItems).where(eq(bomItems.projectId, PROJECT));
-  await db.delete(projectTestCases).where(eq(projectTestCases.projectId, PROJECT));
+  await db.delete(projectTestCases).where(inArray(projectTestCases.projectId, [PROJECT, LITE_PROJECT]));
   await db.delete(projectIssues).where(eq(projectIssues.projectId, PROJECT));
   await db.delete(projectGateReviews).where(eq(projectGateReviews.projectId, PROJECT));
-  await db.delete(projectMembers).where(eq(projectMembers.projectId, PROJECT));
-  await db.delete(projects).where(eq(projects.id, PROJECT));
+  await db.delete(projectMembers).where(inArray(projectMembers.projectId, [PROJECT, LITE_PROJECT]));
+  await db.delete(projects).where(inArray(projects.id, [PROJECT, LITE_PROJECT]));
 });
 
 describe("management KPI dashboard", () => {
@@ -106,6 +120,8 @@ describe("management KPI dashboard", () => {
     expect(data.gateFirstPass.reviewedGateCount).toBeGreaterThanOrEqual(2);
     expect(data.gateFirstPass.ratePct).not.toBeNull();
     expect(data.p0p1Aging.openCount).toBeGreaterThanOrEqual(1);
+    expect(data.validationClosure.byPhase.find((row) => row.phaseId === "verification"))
+      .toMatchObject({ total: 1, closed: 1, closureRatePct: 100 });
     expect(data.bomCostDelta.rows.some((row) => row.projectId === PROJECT && row.delta === 4)).toBe(true);
     expect(data.customerRiskRanking.rows.some((row) => row.projectId === PROJECT && row.customer === "Decathlon")).toBe(true);
   });

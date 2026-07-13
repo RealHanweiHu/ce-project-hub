@@ -115,11 +115,19 @@ describe("computeGateReadiness", () => {
     const r2 = computeGateReadiness({ ...base, latestReview: { decision: "conditional", conditions: null, notes: null } });
     expect(r2.dimensions.find((d) => d.dimension === "review_conditions")!.blockers).toEqual(["上轮评审有遗留条件"]);
   });
-  it("评审 rejected → 阻塞用 notes，缺则 conditions", () => {
+  it("评审 rejected 阻塞至显式开启 round+1", () => {
     const r1 = computeGateReadiness({ ...base, latestReview: { decision: "rejected", conditions: null, notes: "结构强度不达标" } });
-    expect(r1.dimensions.find((d) => d.dimension === "review_conditions")!.blockers).toEqual(["结构强度不达标"]);
-    const r2 = computeGateReadiness({ ...base, latestReview: { decision: "rejected", conditions: "整改项A", notes: null } });
-    expect(r2.dimensions.find((d) => d.dimension === "review_conditions")!.blockers).toEqual(["整改项A"]);
+    expect(r1.ready).toBe(false);
+    expect(r1.dimensions.find((d) => d.dimension === "review_conditions")).toMatchObject({
+      ok: false,
+      blockers: ["结构强度不达标"],
+    });
+    const r2 = computeGateReadiness({
+      ...base,
+      latestReview: { decision: "rejected", conditions: "整改项A", notes: null },
+      hasNewerOpenRound: true,
+    });
+    expect(r2.ready).toBe(true);
   });
   it("评审 approved → review 维 ok", () => {
     const r = computeGateReadiness({ ...base, latestReview: { decision: "approved", conditions: null, notes: null } });

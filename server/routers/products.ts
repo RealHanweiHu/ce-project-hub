@@ -13,7 +13,7 @@ import {
   getProductDefinitionDeviation,
   createPlatform, listProductRevisions,
   setProjectProduct, getOpenP0P1Count, releaseProject, getProjectById,
-  getReleaseGateStatus, isReleaseOverrideAuthorized,
+  getReleaseGateStatus, isReleaseOverrideAuthorized, getMpReleaseByProjectId,
   createCustomerVariant, listVariantsByCustomer, listVariantsByParentProduct,
   getDownstreamVariantImpact,
   getApprovalConfig, getExternalApprovalByProcessInstanceId,
@@ -34,7 +34,6 @@ import {
 } from "../../drizzle/schema";
 import { emitAutomationEvent } from "../automation/events";
 import { assertProjectAccess, assertProjectPermission } from "../project-access";
-import { cancelAndRecordProjectMeeting } from "../services/project-meeting-lifecycle";
 import {
   listReleaseApprovals,
   MP_RELEASE_APPROVAL,
@@ -482,6 +481,7 @@ export const productsRouter = router({
       const { project } = await assertProjectAccess(input.projectId, ctx.user);
       const openP0P1 = await getOpenP0P1Count(input.projectId);
       const gate = await getReleaseGateStatus(project);
+      const existingRelease = await getMpReleaseByProjectId(input.projectId);
       const hasProduct = !!project.productId;
       const failedHardDimensions = gate.dimensions.filter((d) => !d.ok && d.dimension !== "review_conditions");
 
@@ -490,11 +490,12 @@ export const productsRouter = router({
         gate.phaseId !== null && failedHardDimensions.length === 0 &&
         gate.decision !== null && gate.decision !== "rejected";
 
-      const canRelease = hardPass && gate.ready && gate.decision === "approved";
-      const canForceRelease = hardPass && gate.decision === "conditional" &&
+      const canRelease = !existingRelease && hardPass && gate.ready && gate.decision === "approved";
+      const canForceRelease = !existingRelease && hardPass && gate.decision === "conditional" &&
         await isReleaseOverrideAuthorized(project, { id: ctx.user.id, role: ctx.user.role });
 
       const blockers: string[] = [];
+      if (existingRelease) blockers.push("量产版本已发布，请完成稳定期后走 Close Gate");
       if (!hasProduct) blockers.push("未关联产品");
       if (openP0P1 > 0) blockers.push(`${openP0P1} 个未关闭的 P0/P1 问题`);
       if (gate.phaseId === null) blockers.push("未定义 MP Release 前置 Gate");
@@ -536,6 +537,9 @@ export const productsRouter = router({
         },
         deliverables: gate.deliverables,
         blockers, canRelease, canForceRelease,
+        alreadyReleased: !!existingRelease,
+        releasedAt: existingRelease?.releasedAt ?? null,
+        revisionId: existingRelease?.revisionId ?? null,
       };
     }),
 
@@ -603,10 +607,6 @@ export const productsRouter = router({
           notes: input.notes,
           override: input.override,
         });
-        if (project && (project.dingtalkEventId || (project.meetingConfig as { enabled?: boolean } | null)?.enabled)) {
-          try { await cancelAndRecordProjectMeeting(project); }
-          catch (error) { console.warn("[meeting] cancel on release failed (non-fatal):", error); }
-        }
         const after = {
           projectId: input.projectId,
           productId: project?.productId ?? null,

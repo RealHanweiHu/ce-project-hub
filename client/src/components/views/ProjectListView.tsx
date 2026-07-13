@@ -12,7 +12,7 @@ import {
   DndContext, PointerSensor, useSensor, useSensors, useDraggable, useDroppable,
   type DragEndEvent,
 } from '@dnd-kit/core';
-import { Plus, Minus, Trash2, ChevronRight, ChevronLeft, Check, Copy, Lock, AlertTriangle, Search, Star, LayoutGrid, List as ListIcon, GanttChartSquare, X as XIcon, CalendarDays } from 'lucide-react';
+import { Plus, Minus, Trash2, ChevronRight, ChevronLeft, Check, Copy, Lock, AlertTriangle, Search, Star, LayoutGrid, List as ListIcon, GanttChartSquare, X as XIcon, CalendarDays, Archive } from 'lucide-react';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -20,7 +20,7 @@ import {
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import {
   Project, PHASE_MAP, HEALTH_CONFIG, type ProjectCreateDraft,
-  computePhaseProgress, computeOverallProgress, getProjectPhases,
+  getPhaseProgress, getOverallProgress, getProjectPhases,
 } from '@/lib/data';
 import {
   PROJECT_CATEGORIES, ProjectCategory, getPhasesForCategory, CATEGORY_MAP,
@@ -32,8 +32,14 @@ import { cn } from '@/lib/utils';
 import { useBoardPrefs } from '@/hooks/useBoardPrefs';
 import { isSystemAdminRole } from '@shared/system-roles';
 import {
+  EMPTY_CHANGE_SCOPE_DECLARATION,
+  deriveSopRiskAssessment,
+  type ProjectChangeScopeDeclaration,
+} from '@shared/sop-risk';
+import {
   NPD_ADDON_PACKS,
   getNpdV3EffectivePhases,
+  isNpdTierDowngrade,
   recommendNpdTemplateConfig,
   type NpdAddonPackId,
   type NpdProjectAttributes,
@@ -62,6 +68,19 @@ const STEP_LABELS: Record<WizardStep, string> = {
 const PRODUCT_TYPES = [
   '汽车充气泵', '自行车充气泵', '户外充气泵', '车载吸尘器',
   '暴力风扇', '胎压计', '机械式打气筒', '组件',
+];
+
+const CHANGE_SCOPE_OPTIONS: Array<{ key: Exclude<keyof ProjectChangeScopeDeclaration, 'targetMarkets' | 'notes'>; label: string }> = [
+  { key: 'batteryCellChange', label: '新增或更换电芯' },
+  { key: 'batteryPackOrBmsChange', label: '电池包 / BMS / 保护板变化' },
+  { key: 'protectionParameterChange', label: '充放电策略或保护参数变化' },
+  { key: 'powerOrThermalBoundaryChange', label: '功率、电流、温升或连续工作边界变化' },
+  { key: 'pressurizedStructureChange', label: '受压结构或过压保护边界变化' },
+  { key: 'targetMarketExpansion', label: '新增目标市场' },
+  { key: 'criticalSafetySupplierChange', label: '关键安全件供应商或二供变化' },
+  { key: 'safetyRelatedSoftwareChange', label: '安全相关固件、OTA、APP 或烧录变化' },
+  { key: 'eolTestChange', label: 'EOL 测试项目、限值或能力变化' },
+  { key: 'otherSafetyOrRegulatoryChange', label: '其他安全或法规变化' },
 ];
 
 const NPD_TIER_OPTIONS: ReadonlyArray<{
@@ -101,12 +120,6 @@ const NPD_ATTRIBUTE_OPTIONS: ReadonlyArray<{
   { id: 'needsNewMold', label: '需要开新模', desc: '默认加入模具包，仍可取消' },
   { id: 'isNewPlatform', label: '全新平台', desc: '非成熟平台的简单衍生项目' },
 ];
-
-const NPD_TIER_RANK: Record<NpdTemplateTier, number> = {
-  lite: 0,
-  standard: 1,
-  full: 2,
-};
 
 // ── Kanban stage columns (display-only) ─────────────────────────────────────────
 // The 6 canonical lifecycle stages. Each project's currentPhase is mapped onto one of
@@ -211,6 +224,8 @@ export function ProjectListView({
   const [search, setSearch] = useState('');
   const [starred, setStarred] = useState<Set<string>>(() => new Set()); // display-only star
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [showArchive, setShowArchive] = useState(false);
+  const archived = trpc.projects.archivedList.useQuery(undefined, { enabled: showArchive });
 
   const handleOpenClone = (e: React.MouseEvent, project: Project) => {
     e.stopPropagation();
@@ -405,6 +420,14 @@ export function ProjectListView({
     startDate: '',
     targetDate: '',
     risk: 'low' as 'low' | 'medium' | 'high',
+    safetyRiskLevel: 'standard' as 'standard' | 'high',
+    regulatoryRiskLevel: 'standard' as 'standard' | 'high',
+    customerInputVersion: '',
+    customerPartNumber: '',
+    commercialBoundary: '',
+    customerSignoffOwnerUserId: null as number | null,
+    changeScopeDeclaration: { ...EMPTY_CHANGE_SCOPE_DECLARATION },
+    targetMarketsText: '',
   };
   const [form, setForm] = useState(emptyForm);
   const [npdAttributes, setNpdAttributes] = useState({ ...EMPTY_NPD_ATTRIBUTES });
@@ -412,17 +435,45 @@ export function ProjectListView({
   const [npdPackOverrides, setNpdPackOverrides] = useState<Partial<Record<NpdAddonPackId, boolean>>>({});
   const [npdTemplateDowngradeReason, setNpdTemplateDowngradeReason] = useState('');
 
+  const riskPreview = deriveSopRiskAssessment({
+    declaration: {
+      ...form.changeScopeDeclaration,
+      targetMarkets: form.targetMarketsText.split(',').map((market) => market.trim()).filter(Boolean),
+    },
+    manualSafetyRiskLevel: form.safetyRiskLevel,
+    manualRegulatoryRiskLevel: form.regulatoryRiskLevel,
+  });
+  // 与服务端采用同一结构化兜底：范围声明命中红线时，即使属性问答漏勾也要锁包。
+  const effectiveNpdAttributes = useMemo(() => ({
+    ...npdAttributes,
+    hasBattery: npdAttributes.hasBattery ||
+      form.changeScopeDeclaration.batteryCellChange ||
+      form.changeScopeDeclaration.batteryPackOrBmsChange ||
+      form.changeScopeDeclaration.protectionParameterChange ||
+      form.changeScopeDeclaration.pressurizedStructureChange,
+    needsCert: npdAttributes.needsCert ||
+      form.changeScopeDeclaration.targetMarketExpansion ||
+      form.targetMarketsText.split(',').some((market) => market.trim().length > 0),
+    hasFirmware: npdAttributes.hasFirmware ||
+      form.changeScopeDeclaration.safetyRelatedSoftwareChange,
+  }), [npdAttributes, form.changeScopeDeclaration, form.targetMarketsText]);
   const npdRecommendation = useMemo(
     () => recommendNpdTemplateConfig({
-      ...npdAttributes,
-      safetyRiskLevel: form.risk === 'high' ? 'high' : 'standard',
-      regulatoryRiskLevel: form.risk === 'high' ? 'high' : 'standard',
+      ...effectiveNpdAttributes,
+      safetyRiskLevel: riskPreview.safetyRiskLevel,
+      regulatoryRiskLevel: riskPreview.regulatoryRiskLevel,
     }),
     [
-      npdAttributes,
-      form.risk,
+      effectiveNpdAttributes.hasBattery,
+      effectiveNpdAttributes.needsCert,
+      effectiveNpdAttributes.hasFirmware,
+      effectiveNpdAttributes.needsNewMold,
+      effectiveNpdAttributes.isNewPlatform,
+      riskPreview.safetyRiskLevel,
+      riskPreview.regulatoryRiskLevel,
     ],
   );
+  // 推荐是默认层，人工选择是覆盖层：属性改变会刷新未调整项，不会在每次 render 擦掉用户决定。
   const npdTier = npdTierOverride ?? npdRecommendation.tier;
   const npdPacks = useMemo(
     () => NPD_ADDON_PACKS
@@ -434,7 +485,7 @@ export function ProjectListView({
       }),
     [npdPackOverrides, npdRecommendation.lockedPacks, npdRecommendation.packs],
   );
-  const isNpdDowngrade = NPD_TIER_RANK[npdTier] < NPD_TIER_RANK[npdRecommendation.tier];
+  const isNpdDowngrade = isNpdTierDowngrade(npdTier, npdRecommendation.tier);
   const trimmedNpdDowngradeReason = npdTemplateDowngradeReason.trim();
   const hasValidNpdDowngradeReason = !isNpdDowngrade || trimmedNpdDowngradeReason.length >= 4;
 
@@ -459,10 +510,22 @@ export function ProjectListView({
       toast.error('降档需填写至少 4 个字的理由');
       return;
     }
+    const requiresReleasedBaseline = ['eco', 'derivative', 'idr'].includes(selectedCategory);
+    if (requiresReleasedBaseline && !form.productId) {
+      toast.error('ECO / DRV / IDR 必须选择已有产品和已发布基线 Revision');
+      return;
+    }
+    if (['jdm', 'obt'].includes(selectedCategory)) {
+      if (!form.customerInputVersion.trim() || !form.customerPartNumber.trim() ||
+          !form.commercialBoundary.trim() || !form.customerSignoffOwnerUserId) {
+        toast.error('请完整冻结客户输入版本、客户料号、商务边界和签核责任人');
+        return;
+      }
+    }
     const firstPhaseId = sopPhases[0]?.id || 'concept';
     // 关联产品:选了已有 → 用它;否则填了新产品名 → 先建档再关联
     let productId: string | null = form.productId || null;
-    if (!productId && form.newProductName.trim()) {
+    if (!requiresReleasedBaseline && !productId && form.newProductName.trim()) {
       try {
         const res = await createProductMutation.mutateAsync({ name: form.newProductName.trim(), type: 'finished', category: form.type });
         productId = res.id;
@@ -480,11 +543,21 @@ export function ProjectListView({
         code: form.code, name: form.name, type: form.type, pmUserId: form.pmUserId,
         startDate: form.startDate, targetDate: form.targetDate, risk: form.risk,
         productId,
+        safetyRiskLevel: form.safetyRiskLevel,
+        regulatoryRiskLevel: form.regulatoryRiskLevel,
+        customerInputVersion: form.customerInputVersion || null,
+        customerPartNumber: form.customerPartNumber || null,
+        commercialBoundary: form.commercialBoundary || null,
+        customerSignoffOwnerUserId: form.customerSignoffOwnerUserId,
+        changeScopeDeclaration: {
+          ...form.changeScopeDeclaration,
+          targetMarkets: form.targetMarketsText.split(',').map((market) => market.trim()).filter(Boolean),
+        },
         pm: '',
         currentPhase: firstPhaseId,
         category: selectedCategory,
         npdTemplate: selectedCategory === 'npd' ? { tier: npdTier, packs: submittedNpdPacks } : undefined,
-        npdAttributes: selectedCategory === 'npd' ? npdAttributes : undefined,
+        npdAttributes: selectedCategory === 'npd' ? effectiveNpdAttributes : undefined,
         npdTemplateDowngradeReason: selectedCategory === 'npd' && isNpdDowngrade && trimmedNpdDowngradeReason
           ? trimmedNpdDowngradeReason
           : undefined,
@@ -531,8 +604,8 @@ export function ProjectListView({
     return {
       project,
       stage: stageBucket(project.currentPhase),
-      overall: computeOverallProgress(project),
-      phaseProgress: computePhaseProgress(project.phases[project.currentPhase], project.currentPhase),
+      overall: getOverallProgress(project),
+      phaseProgress: getPhaseProgress(project, project.currentPhase),
       tone: riskTone(project.risk),
       phaseName: phaseObj?.name || project.currentPhase,
       catId,
@@ -618,8 +691,9 @@ export function ProjectListView({
       <PageHeader
         title="项目组合"
         sub={<><span className="num">{projects.length}</span> 个项目 · 全生命周期看板</>}
-        actions={
-          canCreateProject ? (
+        actions={<div className="flex items-center gap-2">
+          <button onClick={() => setShowArchive(true)} className="inline-flex h-[34px] items-center gap-1.5 rounded-[7px] border border-border bg-card px-3 text-[12px] font-medium text-foreground hover:bg-secondary"><Archive size={14} />归档 / 终止</button>
+          {canCreateProject ? (
             <button
               onClick={() => setShowAdd(true)}
               className="inline-flex h-[34px] items-center gap-1.5 rounded-[7px] bg-primary px-3 text-[12.5px] font-semibold text-primary-foreground transition-colors hover:opacity-90"
@@ -632,9 +706,20 @@ export function ProjectListView({
               <Lock size={12} />
               无创建权限
             </div>
-          )
-        }
+          )}
+        </div>}
       />
+
+      <Dialog open={showArchive} onOpenChange={setShowArchive}>
+        <DialogContent className="max-w-2xl">
+          <DialogTitle>归档与终止项目</DialogTitle>
+          <p className="text-xs text-muted-foreground">正常关闭与中途终止分开展示；终止项目保留理由和日期，不混入活跃组合统计。</p>
+          <div className="max-h-[60vh] space-y-2 overflow-y-auto">
+            {(archived.data ?? []).map((item) => <div key={item.id} className="rounded-[9px] border border-border p-3"><div className="flex items-start justify-between gap-3"><div><div className="text-sm font-semibold">{item.name}</div><div className="mt-0.5 text-[11px] text-muted-foreground">{item.projectNumber} · {CATEGORY_MAP[item.category].name}</div></div><span className={`rounded px-2 py-1 text-[10px] ${item.lifecycle === 'terminated' ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'}`}>{item.lifecycle === 'terminated' ? '中途终止' : '正常关闭'}</span></div>{item.lifecycleReason && <p className="mt-2 text-xs text-muted-foreground">{item.lifecycleReason}</p>}<div className="mt-1 text-[10px] text-muted-foreground">{item.lifecycleChangedAt ? new Date(item.lifecycleChangedAt).toLocaleDateString() : '归档日期未记录'}</div></div>)}
+            {!archived.isLoading && archived.data?.length === 0 && <div className="rounded border border-dashed border-border p-8 text-center text-xs text-muted-foreground">暂无归档项目</div>}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* View toggle + search */}
       <div className="mb-3 flex flex-wrap items-center gap-3">
@@ -1326,7 +1411,9 @@ export function ProjectListView({
                     </div>
                   </div>
                   <div>
-                    <Kicker className="mb-1.5">关联产品型号（选填）</Kicker>
+                    <Kicker className="mb-1.5">
+                      关联产品型号{['eco', 'derivative', 'idr'].includes(selectedCategory) ? '（必填，且须有已发布 Revision）' : '（选填）'}
+                    </Kicker>
                     <select
                       value={form.productId}
                       onChange={(e) => setForm({ ...form, productId: e.target.value, newProductName: '' })}
@@ -1342,7 +1429,7 @@ export function ProjectListView({
                         产品定义、客户差异、规格确认属于项目 SOP 输入；不要求先在产品库建档。项目完成或 SKU 明确后，可在产品库沉淀产品型号与可销售版本。
                       </p>
                     )}
-                    {selectedCategory !== 'npd' && !form.productId && (
+                    {['jdm', 'obt'].includes(selectedCategory) && !form.productId && (
                       <input
                         value={form.newProductName}
                         onChange={(e) => setForm({ ...form, newProductName: e.target.value })}
@@ -1350,6 +1437,116 @@ export function ProjectListView({
                         className="mt-2 w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none transition-colors focus:border-[color:var(--acc-border)]"
                       />
                     )}
+                  </div>
+                  {['jdm', 'obt'].includes(selectedCategory) && (
+                    <div className="space-y-3 rounded-[8px] border border-[color:var(--acc-border)] bg-[color:var(--acc-soft)] p-3">
+                      <div>
+                        <Kicker>客户输入基线（创建后冻结）</Kicker>
+                        <p className="mt-1 text-[11px] text-muted-foreground">后续变化必须走变更记录和重新签核，不能直接覆盖。</p>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <input
+                          value={form.customerInputVersion}
+                          onChange={(e) => setForm({ ...form, customerInputVersion: e.target.value })}
+                          placeholder="客户输入版本，如 BOM V1.3"
+                          className="rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none focus:border-[color:var(--acc-border)]"
+                        />
+                        <input
+                          value={form.customerPartNumber}
+                          onChange={(e) => setForm({ ...form, customerPartNumber: e.target.value })}
+                          placeholder="客户料号"
+                          className="rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none focus:border-[color:var(--acc-border)]"
+                        />
+                      </div>
+                      <textarea
+                        value={form.commercialBoundary}
+                        onChange={(e) => setForm({ ...form, commercialBoundary: e.target.value })}
+                        rows={2}
+                        placeholder="商务边界：NRE、模具、认证、交付、变更责任……"
+                        className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none focus:border-[color:var(--acc-border)]"
+                      />
+                      <select
+                        value={form.customerSignoffOwnerUserId ?? ''}
+                        onChange={(e) => setForm({ ...form, customerSignoffOwnerUserId: e.target.value ? Number(e.target.value) : null })}
+                        className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none focus:border-[color:var(--acc-border)]"
+                      >
+                        <option value="">选择客户签核责任人…</option>
+                        {(userList || []).map((u) => <option key={u.id} value={u.id}>{u.name || u.username}</option>)}
+                      </select>
+                    </div>
+                  )}
+                  <div className="space-y-3 rounded-[8px] border border-border bg-secondary/40 p-3">
+                    <div>
+                      <Kicker>结构化变更范围声明</Kicker>
+                      <p className="mt-1 text-[11px] text-muted-foreground">系统只根据这些结构化选项判定安全/法规风险，不扫描备注或文档关键词。</p>
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {CHANGE_SCOPE_OPTIONS.map((option) => (
+                        <label key={option.key} className="flex items-start gap-2 rounded-[6px] border border-border bg-card px-2.5 py-2 text-xs text-foreground">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(form.changeScopeDeclaration[option.key])}
+                            onChange={(event) => setForm({
+                              ...form,
+                              changeScopeDeclaration: { ...form.changeScopeDeclaration, [option.key]: event.target.checked },
+                            })}
+                            className="mt-0.5"
+                          />
+                          <span>{option.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <input
+                      value={form.targetMarketsText}
+                      onChange={(event) => setForm({ ...form, targetMarketsText: event.target.value })}
+                      placeholder="本项目目标市场，逗号分隔，例如 US, EU, JP"
+                      className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none focus:border-[color:var(--acc-border)]"
+                    />
+                    <textarea
+                      value={form.changeScopeDeclaration.notes ?? ''}
+                      onChange={(event) => setForm({
+                        ...form,
+                        changeScopeDeclaration: { ...form.changeScopeDeclaration, notes: event.target.value },
+                      })}
+                      rows={2}
+                      placeholder="声明补充说明（不参与自动风险判定）"
+                      className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none focus:border-[color:var(--acc-border)]"
+                    />
+                    <div className={cn(
+                      'rounded-[6px] px-2.5 py-2 text-xs',
+                      riskPreview.safetyRiskLevel === 'high' || riskPreview.regulatoryRiskLevel === 'high'
+                        ? 'bg-[color:var(--destructive-soft)] text-destructive'
+                        : 'bg-[color:var(--success-soft)] text-[color:var(--success)]',
+                    )}>
+                      系统判定：安全 {riskPreview.safetyRiskLevel === 'high' ? '高风险' : '标准'} · 法规 {riskPreview.regulatoryRiskLevel === 'high' ? '高风险' : '标准'}
+                      {[...riskPreview.safetyReasons, ...riskPreview.regulatoryReasons].length > 0 && (
+                        <span> · {[...riskPreview.safetyReasons, ...riskPreview.regulatoryReasons].join('；')}</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Kicker className="mb-1.5">安全风险（仅可主动升级）</Kicker>
+                      <select
+                        value={form.safetyRiskLevel}
+                        onChange={(e) => setForm({ ...form, safetyRiskLevel: e.target.value as 'standard' | 'high' })}
+                        className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none focus:border-[color:var(--acc-border)]"
+                      >
+                        <option value="standard">标准</option>
+                        <option value="high">高风险（锁定安全验证）</option>
+                      </select>
+                    </div>
+                    <div>
+                      <Kicker className="mb-1.5">法规风险（仅可主动升级）</Kicker>
+                      <select
+                        value={form.regulatoryRiskLevel}
+                        onChange={(e) => setForm({ ...form, regulatoryRiskLevel: e.target.value as 'standard' | 'high' })}
+                        className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none focus:border-[color:var(--acc-border)]"
+                      >
+                        <option value="standard">标准</option>
+                        <option value="high">高风险（强制认证会签）</option>
+                      </select>
+                    </div>
                   </div>
                   {selectedCategory === 'npd' && isNpdDowngrade && (
                     <div className="rounded-[8px] border border-[color:var(--warning)]/45 bg-[color:var(--warning-soft)] px-3.5 py-3">

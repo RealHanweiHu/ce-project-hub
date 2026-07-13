@@ -42,8 +42,8 @@ async function completeReleaseGateReadiness() {
       projectId: PRJ, phaseId: phase.id, taskId: phase.gateTaskId, deliverableName: name,
       name: `${name}.pdf`, mimeType: "application/pdf", size: 1, storageKey: `release-gate/${name}`, storageUrl: `/storage/${name}`, uploadedBy: 1,
     });
-    await submitDeliverableReview({ projectId: PRJ, phaseId: phase.id, deliverableName: name, reviewerUserId: 1, submittedBy: 1 }, deps);
-    await reviewDeliverable({ projectId: PRJ, phaseId: phase.id, deliverableName: name, decision: "approved", reviewedBy: 1, note: null }, deps);
+    await submitDeliverableReview({ projectId: PRJ, phaseId: phase.id, deliverableName: name, reviewerUserId: 2, submittedBy: 1 }, deps);
+    await reviewDeliverable({ projectId: PRJ, phaseId: phase.id, deliverableName: name, decision: "approved", reviewedBy: 2, note: null }, deps);
   }
 }
 

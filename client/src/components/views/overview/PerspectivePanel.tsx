@@ -2,9 +2,10 @@
 import { useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { PHASE_MAP } from "@/lib/data";
 import { toLocalISODate, localISODatePlus } from "@/lib/utils";
-import { TaskListView, resolveTaskName, type TaskRow, type TaskFocus } from "../TaskListView";
+import { TaskListView, taskProjectLike, type TaskRow, type TaskFocus } from "../TaskListView";
+import { resolvePhaseName, resolveTaskName } from "@shared/sop-template-resolution";
+import { MANAGEMENT_VALIDATION_PHASES } from "@shared/management-kpis";
 import type { TaskStatus, TaskPriority } from "@shared/const";
 import { isProjectedOverdue, type RagLevel } from "@shared/health";
 import {
@@ -22,6 +23,7 @@ import type { RoleDashboardLens } from "@shared/role-dashboard";
 export type Lens = RoleDashboardLens;
 
 type ScoredRow = { row: PortfolioTableRow; level: RagLevel; reasons: string[] };
+const MANAGEMENT_VALIDATION_PHASE_SET = new Set<string>(MANAGEMENT_VALIDATION_PHASES);
 
 const overdue = (r: PortfolioTableRow) => isProjectedOverdue(r.projectedEnd, r.targetDate);
 const byDue = (a: PortfolioTableRow, b: PortfolioTableRow) => (a.gateDueDate ?? "9999").localeCompare(b.gateDueDate ?? "9999");
@@ -227,7 +229,7 @@ function ProjectManagerCockpit({ myRows, tasks, roleTasks, reviews, onSelectProj
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-medium text-foreground">{r.name}</div>
                       <div className="num truncate text-[10px] text-muted-foreground">
-                        {PHASE_MAP[r.currentPhase]?.name ?? r.currentPhase}
+                        {resolvePhaseName(r, r.currentPhase)}
                       </div>
                     </div>
                     {metric && <Tag tone={metric.tone}>{metric.label}</Tag>}
@@ -267,6 +269,7 @@ function ActionRow({ icon, title, detail, tag, tone, onClick }: {
 type MyTaskApiRow = {
   id: number; projectId: string; phaseId: string; taskId: string;
   projectName: string; projectNumber: string; projectCategory: string;
+  sopTemplateVersion?: string | null; customFields?: unknown;
   status: string; priority: string | null; dueDate: string | null;
   assigneeUserId: number | null; completed: boolean;
   instructions?: string | null;
@@ -300,6 +303,12 @@ type WorkbenchActionItem = {
 type WorkbenchData = {
   systemRole: string;
   roles: WorkbenchRole[];
+  /** 设计4 §6：服务端三桶分类（与钉钉摘要共用）。 */
+  buckets?: {
+    now: import('@shared/my-work').MyWorkItem[];
+    waiting: import('@shared/my-work').MyWorkItem[];
+    watching: import('@shared/my-work').MyWorkItem[];
+  };
   tasks: MyTaskApiRow[];
   actionItems: WorkbenchActionItem[];
   snoozedActionItems: WorkbenchActionItem[];
@@ -343,6 +352,7 @@ function RoleWorkbench({ lens, workbench, isLoading, onRefetch, onSelectProject 
   const rows: TaskRow[] = mergeTasks(tasks, roleTasks).map((t) => ({
     id: t.id, projectId: t.projectId, phaseId: t.phaseId, taskId: t.taskId,
     projectName: t.projectName, projectNumber: t.projectNumber, projectCategory: t.projectCategory,
+    sopTemplateVersion: t.sopTemplateVersion, customFields: t.customFields,
     status: t.status as TaskStatus, priority: (t.priority ?? "medium") as TaskPriority,
     dueDate: t.dueDate ? String(t.dueDate) : null, assigneeUserId: t.assigneeUserId ?? null, completed: t.completed,
   }));
@@ -371,14 +381,58 @@ function RoleWorkbench({ lens, workbench, isLoading, onRefetch, onSelectProject 
     return <ExternalWorkbench portfolio={portfolio} onSelectProject={onSelectProject} />;
   }
 
+  // 设计4 §6："我的工作"三桶——现在处理（服务端分桶 + 富交互行）/ 等待别人 / 仅关注
+  const buckets = workbench?.buckets ?? null;
   return (
     <div className="space-y-4">
-      <Panel title="待我处理" icon={<Inbox size={15} />}>
-        <QueueRows items={queue.slice(0, 10)} onSelectProject={onSelectProject} />
+      <Panel title="🔥 现在处理" icon={<Inbox size={15} />}>
+        {buckets ? (
+          buckets.now.length === 0 ? (
+            <div className="text-sm text-muted-foreground">暂无需要你处理的事项。</div>
+          ) : (
+            <div className="divide-y divide-border">
+              {buckets.now.slice(0, 12).map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  className="w-full py-2 text-left text-sm flex items-center gap-2 hover:bg-secondary/60 rounded"
+                  onClick={() => item.projectId && onSelectProject(item.projectId, item.taskId ? { tab: 'tasks', phaseId: item.phaseId ?? undefined, taskId: item.taskId } as never : undefined)}
+                >
+                  <span className={`shrink-0 text-[10px] rounded px-1 border ${item.rank >= 30 ? 'border-[color:var(--destructive)] text-[color:var(--destructive)]' : 'border-border text-muted-foreground'}`}>
+                    {item.rank >= 40 ? '逾期' : item.rank >= 30 ? '今日' : item.kind === 'task' ? '任务' : '待办'}
+                  </span>
+                  <span className="truncate text-foreground">{item.title}</span>
+                  {item.dueDate && <span className="shrink-0 text-[11px] num text-muted-foreground">{item.dueDate}</span>}
+                </button>
+              ))}
+            </div>
+          )
+        ) : (
+          /* 服务端分桶未返回时回退旧队列，避免空白 */
+          <QueueRows items={queue.slice(0, 10)} onSelectProject={onSelectProject} />
+        )}
       </Panel>
 
-      {snoozedActionItems.length > 0 && (
-        <Panel title="已推迟" icon={<Clock size={15} />}>
+      {buckets && buckets.waiting.length > 0 && (
+        <Panel title="⏳ 等待别人" icon={<Clock size={15} />}>
+          <div className="divide-y divide-border">
+            {buckets.waiting.slice(0, 8).map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                className="w-full py-2 text-left text-xs text-muted-foreground hover:text-foreground flex items-center gap-2"
+                onClick={() => item.projectId && onSelectProject(item.projectId, item.taskId ? { tab: 'tasks', phaseId: item.phaseId ?? undefined, taskId: item.taskId } as never : undefined)}
+              >
+                <span className="truncate">{item.title}</span>
+                <span className="shrink-0 text-[10px] rounded px-1 border border-border">球在别人那</span>
+              </button>
+            ))}
+          </div>
+        </Panel>
+      )}
+
+      {buckets && buckets.watching.length > 0 && (
+        <Panel title="👀 仅关注" icon={<Clock size={15} />}>
           <SnoozedRows items={snoozedActionItems.slice(0, 6)} onSelectProject={onSelectProject} />
         </Panel>
       )}
@@ -405,7 +459,7 @@ function makeTaskItems(tasks: MyTaskApiRow[], tag: string, priorityBoost = 0): Q
     phaseId: task.phaseId,
     taskId: task.taskId,
     tab: "tasks",
-    title: resolveTaskName(task.taskId, task.phaseId, task.projectCategory),
+    title: resolveTaskName(taskProjectLike(task), task.taskId, task.phaseId),
     detail: `${task.projectName} · ${task.dueDate ? `截止 ${task.dueDate}` : "未设截止日"}`,
     tag,
     tone: task.status === "blocked" ? "rose" : task.assigneeUserId == null ? "amber" : "stone",
@@ -528,7 +582,7 @@ function QualityWorkbench({ tasks, roleTasks, reviews, issues, gateBlockers, onS
   onSelectProject: (id: string, focus?: TaskFocus) => void;
 }) {
   const qualityTasks = mergeTasks(tasks, roleTasks).filter((task) =>
-    ["evt", "dvt", "pvt"].includes(task.phaseId) || /test|qa|quality|cert|battery|safety|report/i.test(`${task.taskId} ${task.instructions ?? ""}`)
+    MANAGEMENT_VALIDATION_PHASE_SET.has(task.phaseId) || /test|qa|quality|cert|battery|safety|report/i.test(`${task.taskId} ${task.instructions ?? ""}`)
   );
   const closureIssues = issues.filter((issue) =>
     issue.status === "resolved" || issue.severity === "P0" || issue.severity === "P1" ||
@@ -552,7 +606,7 @@ function QualityWorkbench({ tasks, roleTasks, reviews, issues, gateBlockers, onS
       <Panel title="质量 / 测试行动队列" icon={<ShieldCheck size={15} />}>
         <QueueRows items={queue.slice(0, 12)} onSelectProject={onSelectProject} />
       </Panel>
-      <Panel title="EVT / DVT / PVT 测试与报告" icon={<ClipboardCheck size={15} />}>
+      <Panel title="验证 / EVT / DVT / PVT 测试与报告" icon={<ClipboardCheck size={15} />}>
         <QueueRows items={makeTaskItems(qualityTasks, "测试交付").slice(0, 8)} onSelectProject={onSelectProject} />
       </Panel>
     </div>
@@ -596,7 +650,7 @@ function NpiWorkbench({ tasks, roleTasks, issues, gateBlockers, portfolio, onSel
             <>
               {row.releaseHardBlockers > 0 && <Tag tone="rose">硬卡 {row.releaseHardBlockers}</Tag>}
               {row.deliverableGap > 0 && <Tag tone="amber">交付物缺 {row.deliverableGap}</Tag>}
-              <Tag tone="stone">{PHASE_MAP[row.currentPhase]?.name ?? row.currentPhase}</Tag>
+              <Tag tone="stone">{resolvePhaseName(row, row.currentPhase)}</Tag>
             </>
           )}
           renderDetail={(row) => row.releaseConditions || `Gate ${row.releaseGateName ?? row.gateName ?? "未定义"} · MP 准备状态`}

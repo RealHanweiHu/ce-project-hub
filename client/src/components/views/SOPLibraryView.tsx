@@ -7,6 +7,30 @@ import {
 } from '@/lib/sop-templates';
 import { GateStandardPanel } from '@/components/shared/GateStandardPanel';
 import { Kicker } from '@/components/linear/primitives';
+import { SopGovernancePanel } from './SopGovernancePanel';
+
+const ROLE_LABELS: Record<string, string> = {
+  rd_hw: '硬件研发',
+  rd_sw: '软件研发',
+  rd_mech: '结构/ID',
+  qa: '测试/品质',
+  scm: '供应链',
+  pe: 'PE 工艺',
+  mfg: 'MFG 生产',
+  sales: '销售/渠道',
+  cert: '认证',
+  battery_safety: '电池安全',
+  project_manager: '项目经理/PMO',
+  pm: '产品经理',
+  manager: '管理层',
+  owner: '项目创建者',
+};
+const MANAGEMENT_TASK_ROLES = new Set(['project_manager', 'manager', 'owner']);
+
+function primaryTaskRoleLabel(roles: string[] | undefined, fallback = '项目经理/PMO') {
+  const primary = (roles || []).find((role) => !MANAGEMENT_TASK_ROLES.has(role)) ?? (roles || [])[0];
+  return primary ? ROLE_LABELS[primary] ?? primary : fallback;
+}
 
 export function SOPLibraryView() {
   const [activeCategory, setActiveCategory] = useState<ProjectCategory>('npd');
@@ -32,6 +56,8 @@ export function SOPLibraryView() {
           按项目类别查看对应的标准开发流程。每个子任务附带详细执行指南，帮助团队规范化产品开发过程。
         </p>
       </div>
+
+      <SopGovernancePanel />
 
       {/* Category Tabs */}
       <div className="rounded-[11px] border border-border bg-card overflow-x-auto flex gap-0 px-1">
@@ -192,9 +218,12 @@ export function SOPLibraryView() {
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="text-sm font-medium text-foreground">{task.name}</span>
                               <span className="num text-[10px] uppercase tracking-wider text-muted-foreground">{task.id}</span>
-                              <span className="text-[10px] text-muted-foreground">负责人: {task.owner}</span>
+                              <span className="text-[10px] text-muted-foreground">责任角色: {primaryTaskRoleLabel(task.visibleRoles)}</span>
                             </div>
                             <p className="text-xs text-muted-foreground mt-1">{task.desc}</p>
+                            {task.owner && (
+                              <div className="text-[10px] text-muted-foreground mt-1">职能说明: {task.owner}</div>
+                            )}
                           </div>
                         </div>
                         {task.guide && (

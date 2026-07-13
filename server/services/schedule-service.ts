@@ -1,25 +1,29 @@
 import { and, eq } from "drizzle-orm";
 import { projectTasks } from "../../drizzle/schema";
 import { computeDelayImpact, type DelayImpact } from "../../shared/delay-impact";
-import { buildSchedTasks } from "../../shared/schedule-graph";
-import { getEffectivePhasesForProjectLike } from "../../shared/npd-v3";
+import { getEffectivePhasesForProjectLike, type ProjectTemplateLike } from "../../shared/npd-v3";
+import { buildOperationalProjectSchedTasks } from "../../shared/schedule-graph";
 import { generateSchedule, rescheduleFrom, type CalendarExceptions, type Schedule } from "../../shared/scheduling";
 import { emitAutomationEvent } from "../automation/events";
 import { createActivityLog, getCalendarExceptions, getDb, getProjectById, refreshProjectTaskStatuses } from "../db";
 import { taskDisplayTitle } from "../task-title";
 
-/** 按项目 category + 开始日重生成整套任务起止日，写回 project_tasks。返回写入任务数。 */
+/**
+ * 按项目 category + 开始日重生成整套任务起止日，写回 project_tasks。返回写入任务数。
+ * 排期域 = 项目内非 skipped 任务（依赖收缩），被裁任务不占用工期也不断链。
+ */
 export async function applyProjectSchedule(projectId: string): Promise<number> {
   const db = await getDb();
   if (!db) return 0;
   const project = await getProjectById(projectId);
   if (!project?.startDate) return 0;
   const cal = await getCalendarExceptions();
-  const schedule = generateSchedule(
-    buildSchedTasks(getEffectivePhasesForProjectLike(project)),
-    project.startDate,
-    cal,
-  );
+  const rows = await db
+    .select({ taskId: projectTasks.taskId, status: projectTasks.status })
+    .from(projectTasks)
+    .where(eq(projectTasks.projectId, projectId));
+  // 尚未埋点时 helper 沿用版本/档位模板；有行时再收缩审批裁剪。
+  const schedule = generateSchedule(buildOperationalProjectSchedTasks(project, rows), project.startDate, cal);
   let n = 0;
   for (const [taskId, d] of Object.entries(schedule)) {
     await db.update(projectTasks)
@@ -32,13 +36,14 @@ export async function applyProjectSchedule(projectId: string): Promise<number> {
 }
 
 type EffectiveScheduleContext = {
-  schedTasks: ReturnType<typeof buildSchedTasks>;
+  schedTasks: ReturnType<typeof buildOperationalProjectSchedTasks>;
   current: Schedule;
   effectiveIds: Set<string>;
   gateTaskIds: Set<string>;
   gateNames: Record<string, string>;
   taskTitles: Record<string, string>;
-  projectCategory: string;
+  taskPhaseIds: Record<string, string>;
+  projectLike: ProjectTemplateLike;
   targetDate: string | null;
   cal: CalendarExceptions;
 };
@@ -70,16 +75,19 @@ async function loadEffectiveScheduleContext(projectId: string): Promise<Effectiv
   }
 
   const phases = getEffectivePhasesForProjectLike(project);
-  const schedTasks = buildSchedTasks(phases).filter((t) => effectiveIds.has(t.id));
+  // 依赖收缩而非裸过滤：被裁任务的前置透传给后继，重排/延误影响不断链
+  const schedTasks = buildOperationalProjectSchedTasks(project, rows);
   const gateTaskIds = new Set(phases.map((p) => p.gateTaskId).filter((id) => effectiveIds.has(id)));
   const gateNames: Record<string, string> = {};
   for (const p of phases) if (effectiveIds.has(p.gateTaskId)) gateNames[p.gateTaskId] = p.gate;
   const taskTitles: Record<string, string> = {};
+  const taskPhaseIds: Record<string, string> = {};
   for (const row of rows) {
+    taskPhaseIds[row.taskId] = row.phaseId;
     taskTitles[row.taskId] = taskDisplayTitle({
       taskId: row.taskId,
       phaseId: row.phaseId,
-      projectCategory: project.category,
+      projectLike: project,
       instructions: row.instructions,
     });
   }
@@ -91,7 +99,8 @@ async function loadEffectiveScheduleContext(projectId: string): Promise<Effectiv
     gateTaskIds,
     gateNames,
     taskTitles,
-    projectCategory: project.category,
+    taskPhaseIds,
+    projectLike: project,
     targetDate: project.targetDate ?? null,
     cal: await getCalendarExceptions(),
   };
@@ -129,10 +138,12 @@ export async function rescheduleProjectFromTask(
   if (n > 0) await refreshProjectTaskStatuses(projectId);
 
   if (impact?.hasImpact) {
+    const phaseId = ctx.taskPhaseIds[taskId] ?? "";
     const after = {
       taskId,
-      title: ctx.taskTitles[taskId] ?? taskDisplayTitle({ taskId, projectCategory: ctx.projectCategory }),
-      projectCategory: ctx.projectCategory,
+      phaseId,
+      title: ctx.taskTitles[taskId] ?? taskDisplayTitle({ taskId, projectLike: ctx.projectLike }),
+      projectCategory: ctx.projectLike.category,
       startDate: start,
       dueDate: due,
     };
@@ -143,14 +154,14 @@ export async function rescheduleProjectFromTask(
         action: "task.rescheduled",
         entityType: "task",
         entityId: taskId,
-        meta: { startDate: start, dueDate: due, after, impact },
+        meta: { phaseId, startDate: start, dueDate: due, after, impact },
       });
     }
     const emit = deps.emit ?? emitAutomationEvent;
     await emit({
       action: "task.rescheduled",
       entityType: "task",
-      entityId: taskId,
+      entityId: phaseId ? `${projectId}:${phaseId}:${taskId}` : `${projectId}:${taskId}`,
       projectId,
       after,
       impact,

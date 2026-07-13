@@ -3,7 +3,8 @@ import {
   createAutomationRun,
   AUTOMATION_SCHEDULER_KEY,
   finishAutomationHeartbeat,
-  getAllActiveProjects,
+  finishAutomationClaim,
+  getAutomationActiveProjects,
   getAutomationCriticalIssues,
   getAutomationDueIssues,
   getAutomationDueTasks,
@@ -12,7 +13,8 @@ import {
   getBlockedTasks,
   getGateReadiness,
   getUnassignedActiveTasks,
-  hasAutomationRunForEntity,
+  listAutomationRuleRows,
+  tryClaimAutomation,
   tryStartAutomationHeartbeat,
 } from "../db";
 import { pushWebhook } from "../_core/notify";
@@ -22,21 +24,43 @@ import { runActionItemSlaScan } from "./actionItemSla";
 import { ensureAutomationRuleDefaults, runAutomation } from "./engine";
 import { runHealthDigestScan } from "./healthDigest";
 import { runPersonalDailyDigestScan } from "./personalDailyDigest";
+import { runGroupWeeklyDigestScan } from "./groupWeeklyDigest";
 import { isAutomationSuppressedProject } from "./project-filter";
+import { runCertificateRenewalScan } from "./certificateRenewal";
+import { expireApprovedProductWaivers } from "../services/sop-blindspot-service";
 
 let timer: NodeJS.Timeout | null = null;
 
 export async function runScheduledAutomationScan(now = new Date()): Promise<void> {
   await ensureAutomationRuleDefaults();
+  let enabled = new Set<string>();
+  try {
+    enabled = new Set((await listAutomationRuleRows()).filter((row) => row.enabled).map((row) => row.ruleKey));
+  } catch (error) {
+    console.warn("[automation] failed to load scan plan; state scanners skipped:", error);
+  }
+  const dueScanEnabled = enabled.has("overdue_reminder") || enabled.has("due_soon_reminder") || enabled.has("exception_escalation");
   const [tasks, issues, blockedTasks, criticalIssues, pendingReviews, unassignedTasks] = await Promise.all([
-    getAutomationDueTasks(),
-    getAutomationDueIssues(),
-    getBlockedTasks(),
-    getAutomationCriticalIssues(),
-    getAutomationPendingDeliverableReviews(),
-    getUnassignedActiveTasks(),
+    safeScan("due tasks", dueScanEnabled, getAutomationDueTasks),
+    safeScan("due issues", dueScanEnabled, getAutomationDueIssues),
+    safeScan("blocked tasks", enabled.has("exception_escalation"), getBlockedTasks),
+    safeScan("critical issues", enabled.has("exception_escalation"), getAutomationCriticalIssues),
+    safeScan("pending reviews", enabled.has("exception_escalation"), getAutomationPendingDeliverableReviews),
+    safeScan("unassigned tasks", enabled.has("task_assignment"), getUnassignedActiveTasks),
   ]);
-  const approachingGates = await getApproachingGates();
+  const approachingGates = await safeScan("approaching gates", enabled.has("gate_prereq_incomplete"), getApproachingGates);
+  const taskProjectIds = new Set([
+    ...tasks.map((task) => task.projectId),
+    ...blockedTasks.map((task) => task.projectId),
+    ...unassignedTasks.map((task) => task.projectId),
+  ]);
+  const projectTemplateById = taskProjectIds.size === 0
+    ? new Map<string, Awaited<ReturnType<typeof getAutomationActiveProjects>>[number]>()
+    : new Map(
+        (await safeScan("task project template contexts", true, getAutomationActiveProjects))
+          .filter((project) => taskProjectIds.has(project.id))
+          .map((project) => [project.id, project] as const),
+      );
   const today = toShanghaiISODate(now);
 
   // 逾期催办 + 截止前提醒 共用这批 task/issue 事件（规则各自过滤）
@@ -51,7 +75,7 @@ export async function runScheduledAutomationScan(now = new Date()): Promise<void
       now,
       after: {
         ...task,
-        title: taskDisplayTitle(task),
+        title: taskDisplayTitle({ ...task, projectLike: projectTemplateById.get(task.projectId) }),
         ...(shouldEscalateAsOverdue
           ? { exceptionType: "overdue_task", exceptionAgeDays: overdueDays }
           : {}),
@@ -80,7 +104,7 @@ export async function runScheduledAutomationScan(now = new Date()): Promise<void
       after: {
         ...task,
         dueDate: null,
-        title: taskDisplayTitle(task),
+        title: taskDisplayTitle({ ...task, projectLike: projectTemplateById.get(task.projectId) }),
         exceptionType: "blocked_task",
         exceptionAgeDays: ageDays(today, toShanghaiISODate(task.statusChangedAt ?? task.updatedAt)),
       },
@@ -96,7 +120,7 @@ export async function runScheduledAutomationScan(now = new Date()): Promise<void
       now,
       after: {
         ...task,
-        title: taskDisplayTitle(task),
+        title: taskDisplayTitle({ ...task, projectLike: projectTemplateById.get(task.projectId) }),
         unassigned: true,
         assignmentAction: true,
       },
@@ -173,15 +197,48 @@ export async function runScheduledAutomationScan(now = new Date()): Promise<void
   }
 
   try {
+    await runGroupWeeklyDigestScan(now);
+  } catch (error) {
+    console.warn("[automation] group weekly digest failed (non-fatal):", error);
+  }
+
+  try {
     await runActionItemSlaScan(now);
   } catch (error) {
     console.warn("[automation] action item SLA scan failed (non-fatal):", error);
   }
 
   try {
+    await runCertificateRenewalScan(now);
+  } catch (error) {
+    console.warn("[automation] certificate renewal scan failed (non-fatal):", error);
+  }
+
+  try {
+    const todayISO = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+    await expireApprovedProductWaivers(todayISO);
+  } catch (error) {
+    console.warn("[automation] product waiver expiry scan failed (non-fatal):", error);
+  }
+
+  try {
     await runWeeklyMeetingFallbackScan(now);
   } catch (error) {
     console.warn("[automation] weekly meeting fallback failed (non-fatal):", error);
+  }
+}
+
+export async function safeScan<T>(
+  label: string,
+  enabled: boolean,
+  load: () => Promise<T[]>,
+): Promise<T[]> {
+  if (!enabled) return [];
+  try {
+    return await load();
+  } catch (error) {
+    console.warn(`[automation] ${label} scan failed (isolated):`, error);
+    return [];
   }
 }
 
@@ -257,6 +314,26 @@ function shanghaiWeekday(now: Date): number {
   return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(parts);
 }
 
+function shanghaiMinutes(now: Date): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Shanghai",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(now);
+  const hour = Number(parts.find((part) => part.type === "hour")?.value ?? 0) % 24;
+  const minute = Number(parts.find((part) => part.type === "minute")?.value ?? 0);
+  return hour * 60 + minute;
+}
+
+function configuredMinutes(value: string): number | null {
+  const match = /^(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  return hour <= 23 && minute <= 59 ? hour * 60 + minute : null;
+}
+
 function weekKey(now: Date): string {
   const today = new Date(`${toShanghaiISODate(now)}T00:00:00Z`);
   const day = today.getUTCDay();
@@ -266,19 +343,25 @@ function weekKey(now: Date): string {
 }
 
 async function runWeeklyMeetingFallbackScan(now: Date): Promise<void> {
+  const ruleKey = "weekly_meeting_reminder";
+  const rule = (await listAutomationRuleRows()).find((row) => row.ruleKey === ruleKey);
+  if (!rule?.enabled) return;
   const todayWeekday = shanghaiWeekday(now);
   if (todayWeekday < 0) return;
-  const projects = await getAllActiveProjects();
+  const projects = await getAutomationActiveProjects();
   for (const project of projects) {
     if (isAutomationSuppressedProject(project)) continue;
     const config = getMeetingConfig(project.meetingConfig);
     if (!config?.enabled) continue;
     if (config.weekday !== todayWeekday) continue;
+    const meetingMinutes = configuredMinutes(config.time);
+    if (meetingMinutes === null || shanghaiMinutes(now) < meetingMinutes) continue;
     if (project.dingtalkMeetingSyncStatus === "synced") continue;
 
     const entityId = `${project.id}:${weekKey(now)}`;
-    const ruleKey = "weekly_meeting_reminder";
-    if (await hasAutomationRunForEntity({ ruleKey, entityId })) continue;
+    const claimKey = `${ruleKey}:${project.id}:${entityId}`;
+    const claim = await tryClaimAutomation({ claimKey, ruleKey, projectId: project.id, entityId });
+    if (!claim) continue;
 
     const title = "项目周会提醒";
     const text = `【${project.name}】项目周会：今天 ${config.time}（${config.durationMin} 分钟）`;
@@ -288,7 +371,9 @@ async function runWeeklyMeetingFallbackScan(now: Date): Promise<void> {
       if (project.dingtalkChatId) {
         sentToProjectGroup = await sendToGroupChat(project.dingtalkChatId, title, markdown);
       }
-      if (!sentToProjectGroup) await pushWebhook(text, { title, markdown });
+      const sentToWebhook = sentToProjectGroup ? false : await pushWebhook(text, { title, markdown });
+      if (!sentToProjectGroup && !sentToWebhook) throw new Error("周会提醒群渠道未配置或发送失败");
+      await finishAutomationClaim({ claimKey, token: claim.token, status: "fired" });
       await createAutomationRun({
         ruleKey,
         projectId: project.id,
@@ -296,10 +381,16 @@ async function runWeeklyMeetingFallbackScan(now: Date): Promise<void> {
         entityType: "task",
         entityId,
         status: "fired",
-        recipients: { group: project.dingtalkChatId ?? "webhook" },
+        recipients: { group: sentToProjectGroup ? project.dingtalkChatId : "webhook" },
         detail: text,
       });
     } catch (error) {
+      await finishAutomationClaim({
+        claimKey,
+        token: claim.token,
+        status: "error",
+        error: error instanceof Error ? error.message : String(error),
+      });
       await createAutomationRun({
         ruleKey,
         projectId: project.id,

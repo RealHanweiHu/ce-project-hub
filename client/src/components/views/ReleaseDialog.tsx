@@ -194,12 +194,15 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
               <div className="text-sm font-semibold" style={{
                 color: precheck?.canRelease ? 'var(--success)' : precheck?.canForceRelease ? 'var(--warning)' : 'var(--destructive)',
               }}>
-                {precheck?.canRelease && '硬卡已满足，可以正常发布'}
+                {precheck?.alreadyReleased && '量产版本已发布，项目正在稳定期'}
+                {!precheck?.alreadyReleased && precheck?.canRelease && '硬卡已满足，可以正常发布'}
                 {precheck?.canForceRelease && '硬卡已满足，但 Gate 为有条件通过'}
-                {!precheck?.canRelease && !precheck?.canForceRelease && '硬卡未满足，暂不可发布'}
+                {!precheck?.alreadyReleased && !precheck?.canRelease && !precheck?.canForceRelease && '硬卡未满足，暂不可发布'}
               </div>
               <div className="mt-1 text-[11px] text-muted-foreground leading-snug">
-                {hardCardsSatisfied
+                {precheck?.alreadyReleased
+                  ? '请完成 2–8 周爬坡/稳定验证，并通过 Close Gate 后归档项目。'
+                  : hardCardsSatisfied
                   ? gateConditional
                     ? '需要记录例外风险、跟进负责人与截止日，发布责任由批准人承接。'
                     : '产品、P0/P1、交付物审核、Gate 决议均已满足。'
@@ -366,7 +369,7 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
             )}
 
             <p className="text-[11px] text-muted-foreground leading-relaxed">
-              发布将生成新版本（Rev）、把产品转为「量产」状态、并归档本项目。此动作不可撤销。
+              发布将生成新版本（Rev）并把产品转为「量产」状态；项目不会归档，而是进入 2–8 周稳定期。只有 Close Gate 通过后才归档。
             </p>
           </div>
         )}

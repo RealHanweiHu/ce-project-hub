@@ -5,7 +5,7 @@ import {
   MapPin, Plus, Rocket, Save, ShieldCheck, UserRound, X, ListFilter, ChevronDown,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
-import { getPhasesForCategory } from "@/lib/sop-templates";
+import { resolveTaskName } from "@shared/sop-template-resolution";
 import { LinearCard, PageHeader, SegToggle } from "@/components/linear/primitives";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem } from "@/components/ui/dropdown-menu";
 import { isSystemAdminRole } from "@shared/system-roles";
@@ -44,6 +44,8 @@ type WorkbenchTask = {
   taskId: string;
   projectName: string;
   projectCategory: string;
+  sopTemplateVersion?: string | null;
+  customFields?: unknown;
   dueDate: string | null;
   status: string;
   priority: string | null;
@@ -113,9 +115,11 @@ function inWindow(date: string | null | undefined, fromDate: string, toDate: str
 }
 
 function taskName(task: WorkbenchTask) {
-  const phase = getPhasesForCategory(task.projectCategory as "npd" | "eco" | "idr" | "jdm" | "obt")
-    .find((item) => item.id === task.phaseId);
-  return phase?.tasks.find((item) => item.id === task.taskId)?.name ?? task.taskId;
+  return resolveTaskName({
+    category: task.projectCategory,
+    sopTemplateVersion: task.sopTemplateVersion,
+    customFields: task.customFields,
+  }, task.taskId, task.phaseId);
 }
 
 function priorityLabel(priority: string | null | undefined) {
