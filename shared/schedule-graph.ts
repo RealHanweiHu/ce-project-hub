@@ -35,15 +35,52 @@ export const SCHEDULE_GRAPH: G = {
   epv1: [5, "ev5"], epv2: [7, "epv1"], epv3: [4, "epv1"], epv4: [2, "epv2"], epv5: [1, "epv2", "epv3", "epv4"],
   em1: [8, "epv5"], em2: [8, "em1"], em3: [10, "em1"], em4: [1, "em2", "em3"],
 
-  // ── 产品迭代/衍生开发（1代→2代，含投模/T1/T2/EVT/DVT/PVT）────
-  di1: [4], di2: [7, "di1"], di5: [3, "di2"], di6: [1, "di5"],
-  dd1: [8, "di6"], dd2: [8, "di6"], dd3: [8, "di6"], dd4: [8, "di6"], dd5: [8, "di6"],
-  dd9: [5, "dd1", "dd3", "dd5"], dd6: [4, "dd1", "dd2", "dd3", "dd4", "dd5", "dd9"],
-  dd7: [1, "dd5", "dd6", "dd9"], dd8: [14, "dd7"], dd10: [1, "dd6", "dd7", "dd8", "dd9"],
-  de1: [7, "dd10"], de2: [6, "de1"], de3: [6, "de1"], de4: [8, "de1"], de5: [3, "de2", "de3", "de4"], de6: [1, "de5"],
-  dv2: [10, "dd8"], dv1: [7, "de6", "dv2"], dv3: [8, "dv2"], dv4: [10, "dv1"], dv5: [7, "dv1"], dv6: [4, "dv3", "dv4", "dv5"], dv7: [1, "dv6"],
-  dp1: [5, "dv7"], dp2: [5, "dp1"], dp3: [7, "dp1", "dp2"], dp4: [4, "dp3"], dp5: [4, "dp4"], dp6: [1, "dp4", "dp5"],
-  dm1: [10, "dp6"], dm2: [10, "dm1"], dm3: [1, "dm1", "dm2"],
+  // ── DRV project-track-v1：公共任务 + 六模块任务包 ─────────────
+  drv_common_product_baseline: [2],
+  drv_common_project_plan: [2, "drv_common_product_baseline"],
+  drv_common_risk_scope: [2, "drv_common_product_baseline"],
+  drv_common_kickoff_gate: [1, "drv_common_product_baseline", "drv_common_project_plan", "drv_common_risk_scope"],
+  drv_common_dfm_validation_plan: [4, "drv_common_kickoff_gate"],
+  drv_battery_design: [6, "drv_common_kickoff_gate"],
+  drv_core_function_design: [6, "drv_common_kickoff_gate"],
+  drv_electronics_design: [7, "drv_common_kickoff_gate"],
+  drv_software_requirements_design: [5, "drv_common_kickoff_gate"],
+  drv_structure_design: [7, "drv_common_kickoff_gate"],
+  drv_structure_mold_review: [2, "drv_structure_design"],
+  drv_structure_mold_development: [12, "drv_structure_mold_review"],
+  drv_id_cmf_design: [6, "drv_common_kickoff_gate"],
+  drv_common_accessory_definition: [2, "drv_common_kickoff_gate"],
+  drv_common_design_gate: [1, "drv_common_dfm_validation_plan", "drv_battery_design", "drv_core_function_design", "drv_electronics_design", "drv_software_requirements_design", "drv_structure_mold_development", "drv_id_cmf_design", "drv_common_accessory_definition"],
+  drv_common_evt_build: [5, "drv_common_design_gate"],
+  drv_battery_sample_integration: [4, "drv_common_evt_build"],
+  drv_battery_special_validation: [6, "drv_battery_sample_integration"],
+  drv_core_function_sample: [4, "drv_common_evt_build"],
+  drv_core_function_special_validation: [6, "drv_core_function_sample"],
+  drv_electronics_sample_integration: [5, "drv_common_evt_build"],
+  drv_electronics_special_validation: [5, "drv_electronics_sample_integration"],
+  drv_software_development_integration: [6, "drv_common_evt_build"],
+  drv_software_special_validation: [5, "drv_software_development_integration"],
+  drv_structure_t1_t2_validation: [8, "drv_common_evt_build", "drv_structure_mold_development"],
+  drv_id_cmf_sample: [4, "drv_common_evt_build"],
+  drv_id_cmf_standard_confirmation: [3, "drv_id_cmf_sample"],
+  drv_common_system_function_regression: [5, "drv_common_evt_build", "drv_battery_special_validation", "drv_core_function_special_validation", "drv_electronics_special_validation", "drv_software_special_validation", "drv_structure_t1_t2_validation", "drv_id_cmf_standard_confirmation"],
+  drv_common_software_function_validation: [5, "drv_common_evt_build"],
+  drv_common_evt_issue_close: [3, "drv_common_system_function_regression", "drv_common_software_function_validation"],
+  drv_common_evt_gate: [1, "drv_common_evt_issue_close"],
+  drv_common_dvt_build: [5, "drv_common_evt_gate"],
+  drv_common_reliability_validation: [8, "drv_common_dvt_build"],
+  drv_common_safety_certification_validation: [8, "drv_common_dvt_build"],
+  drv_common_accessory_confirmation: [3, "drv_common_dvt_build"],
+  drv_common_packaging_validation: [4, "drv_common_dvt_build"],
+  drv_common_logistics_validation: [4, "drv_common_dvt_build"],
+  drv_common_dvt_issue_close: [3, "drv_common_reliability_validation", "drv_common_safety_certification_validation", "drv_common_accessory_confirmation", "drv_common_packaging_validation", "drv_common_logistics_validation"],
+  drv_common_dvt_gate: [1, "drv_common_dvt_issue_close"],
+  drv_common_fixture_confirmation: [4, "drv_common_dvt_gate"],
+  drv_common_eol_test_program_confirmation: [4, "drv_common_dvt_gate"],
+  drv_common_pvt_trial: [6, "drv_common_fixture_confirmation", "drv_common_eol_test_program_confirmation"],
+  drv_common_pvt_quality_close: [4, "drv_common_pvt_trial"],
+  drv_common_release_files: [3, "drv_common_pvt_quality_close"],
+  drv_common_pvt_release_gate: [1, "drv_common_fixture_confirmation", "drv_common_eol_test_program_confirmation", "drv_common_pvt_trial", "drv_common_pvt_quality_close", "drv_common_release_files"],
 
   // ── IDR（外观翻新）────────────────────────────────────
   ir1: [2], ir2: [2], ir3: [3, "ir1", "ir2"], ir4: [4, "ir3"], ir5: [3, "ir3"], ir6: [1, "ir4", "ir5"],
@@ -115,16 +152,9 @@ export function scheduleForCategory(category: string | undefined, startDate: str
   return generateSchedule(buildSchedTasks(getPhasesForCategory(category)), startDate, cal);
 }
 
-/**
- * Project scheduling starts from the effective NPD tier/add-on graph. Derivative
- * strategies are different: their effective process removes tasks, so keep the
- * full versioned dependency graph here and contract it with the effective ids.
- */
+/** Project scheduling starts from the project's already-composed effective phases. */
 export function buildProjectSchedTasks(projectLike: ProjectTemplateLike): SchedTask[] {
-  const phases = projectLike.category === "derivative"
-    ? getPhasesForCategory(projectLike.category, projectLike.sopTemplateVersion)
-    : getEffectivePhasesForProjectLike(projectLike);
-  return buildSchedTasks(phases);
+  return buildSchedTasks(getEffectivePhasesForProjectLike(projectLike));
 }
 
 function effectiveProjectTaskIds(projectLike: ProjectTemplateLike): Set<string> {
@@ -135,7 +165,7 @@ function effectiveProjectTaskIds(projectLike: ProjectTemplateLike): Set<string> 
 }
 
 /**
- * Project-bound dependency graph after tier/package/tailoring contraction.
+ * Project-bound dependency graph after effective-phase composition and approved tailoring.
  * Consumers outside scheduling (completion guards, task-ready automation) must
  * use this instead of reading raw template dependsOn edges independently.
  */

@@ -967,7 +967,7 @@ export function getEffectivePhasesForProjectLike(project: ProjectTemplateLike): 
   }
   if (project.category === "derivative") {
     const derivativePhases = resolveDerivativeEffectivePhases(
-      customFields.derivativeReuseStrategy,
+      customFields.projectExecutionBaseline,
       project.sopTemplateVersion,
     );
     if (derivativePhases) return derivativePhases;

@@ -3,6 +3,13 @@
 
 import { NPD_V3_CORE_PHASES } from "./npd-v3";
 import { registerDerivativeEffectivePhaseResolver } from "./derivative-phase-resolver";
+import {
+  PRODUCT_MODULE_IDS,
+  validateProjectExecutionBaseline,
+  type ModuleReuseState,
+  type ProjectExecutionBaseline,
+  type ProductModuleId,
+} from "./project-track-tailoring";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Gate 不通过（rejected）的唯一语义 —— 2026-07-05 拍板（CEH-16）
@@ -133,397 +140,42 @@ export interface ProjectCategoryConfig {
   phases: SOPPhase[];
 }
 
-export type DerivativeReuseLevel =
-  | "direct_reuse"
-  | "adapt_verify"
-  | "light_modify"
-  | "redevelop";
-export type DerivativeReuseStrategy = Partial<
-  Record<string, DerivativeReuseLevel>
->;
-
-export interface DerivativeReuseModuleRule {
-  id: string;
-  name: string;
-  examples: string;
-  defaultLevel: DerivativeReuseLevel;
-  taskIds: string[];
-  deliverables: string[];
-  timing: string[];
-  cannotCut?: string;
-  gateDepth: Record<DerivativeReuseLevel, string>;
+function allDerivativeModulesNotReused(): Record<
+  ProductModuleId,
+  ModuleReuseState
+> {
+  return {
+    battery: "not_reused",
+    core_function: "not_reused",
+    electronics: "not_reused",
+    software_connectivity: "not_reused",
+    structure_mold: "not_reused",
+    id_cmf: "not_reused",
+  };
 }
 
-export const DERIVATIVE_REUSE_LEVEL_LABELS: Record<
-  DerivativeReuseLevel,
-  string
-> = {
-  direct_reuse: "直接复用",
-  adapt_verify: "复用但需适配验证",
-  light_modify: "轻量修改",
-  redevelop: "重新开发",
-};
-
-export const DERIVATIVE_REUSE_MODULE_RULES: DerivativeReuseModuleRule[] = [
-  {
-    id: "battery",
-    name: "电池 / 电芯 / 电池包",
-    examples: "电芯、电池包、保护板、充电策略、热路径、UN38.3/MSDS",
-    defaultLevel: "adapt_verify",
-    taskIds: ["dd1", "dd9", "de2", "de4", "dv4", "dp2", "dp6"],
-    deliverables: [
-      "认证补测/复用确认",
-      "UN38.3运输测试报告或复用确认",
-      "MSDS",
-      "电芯/电池包安全认证报告或复用确认",
-      "EOL 100%测试能力验收记录",
-    ],
-    timing: [
-      "P1 输出复用等级初版",
-      "Gate1 冻结安全/认证边界",
-      "Gate2 复核验证矩阵",
-      "EVT Gate 确认可选项关闭",
-      "DVT Gate 冻结 PVT 放行证据",
-    ],
-    cannotCut:
-      "电芯、电池包、保护方案、热路径或目标市场运输边界变化时，安全/认证验证不得裁掉。",
-    gateDepth: {
-      direct_reuse:
-        "保留复用证据、适用边界和整机适配确认；PVT Gate 必须确认 UN38.3/MSDS/电池安全证据仍有效。",
-      adapt_verify:
-        "保留 EVT 差异验证、DVT 安全/认证边界确认和 PVT EOL 100% 测试能力验收。",
-      light_modify:
-        "按中改执行电池专项 EVT/DVT，认证补测路径需在 Gate2 冻结，PVT 不得缺放行证据。",
-      redevelop:
-        "按大改执行完整电池安全、可靠性、认证和 PVT 放行深度，视同 NPD 关键模块。",
-    },
-  },
-  {
-    id: "mechanism",
-    name: "机芯 / 马达 / 泵体",
-    examples: "机芯、马达、泵体、传动、噪音、温升、寿命",
-    defaultLevel: "adapt_verify",
-    taskIds: ["dd2", "de2", "de3", "dv4", "dp3"],
-    deliverables: [
-      "关键模块升级方案",
-      "关键模块验证报告",
-      "新旧版本对比报告",
-      "可靠性测试报告",
-      "升级试产报告",
-    ],
-    timing: [
-      "P1 判定性能和寿命影响",
-      "Gate1 冻结大/中改等级",
-      "Gate2 冻结样机和验证矩阵",
-      "EVT Gate 确认专项验证是否关闭",
-      "DVT Gate 确认寿命/温升/噪音结论",
-    ],
-    cannotCut:
-      "性能、噪音、温升、寿命或驱动边界变化时，专项验证和整机回归必须保留。",
-    gateDepth: {
-      direct_reuse:
-        "保留复用版本证据和整机回归；机芯专项 EVT 可减，但 DVT 需确认无集成影响。",
-      adapt_verify: "保留机芯专项 EVT、新旧性能对比和 DVT 关键可靠性确认。",
-      light_modify:
-        "按中改保留 EVT 专项、DVT 寿命/温升/噪音验证和 PVT 试产表现确认。",
-      redevelop:
-        "按大改执行完整设计、EVT/DVT/PVT 验证，Gate 深度接近 NPD 核心模块。",
-    },
-  },
-  {
-    id: "pcba_power",
-    name: "PCBA / 电源 / 主控",
-    examples: "PCBA、主控、驱动、电源余量、传感器、关键 IC",
-    defaultLevel: "light_modify",
-    taskIds: ["dd3", "dd6", "de2", "de3", "dv5", "dp2"],
-    deliverables: [
-      "升级设计包",
-      "BOM v2.0",
-      "关键模块验证报告",
-      "软件完整测试报告",
-      "治具/EOL测试程序验收",
-    ],
-    timing: [
-      "P1 标记硬件差异",
-      "Gate1 冻结核心架构是否变化",
-      "Gate2 冻结 BOM/DFMEA/验证计划",
-      "EVT Gate 确认硬件问题关闭",
-      "DVT Gate 确认量产测试覆盖",
-    ],
-    cannotCut:
-      "主控、驱动、电源架构或关键 IC 变化时，EVT 专项、软件回归和 EOL 测试能力不得裁掉。",
-    gateDepth: {
-      direct_reuse: "保留 BOM 版本、PCBA 复用证据和整机回归；EOL 覆盖需确认。",
-      adapt_verify: "保留差异验证、软件/生产测试接口回归和 DVT 完整测试确认。",
-      light_modify:
-        "按中改保留硬件设计评审、DFMEA、EVT 专项、DVT 完整测试和 PVT EOL 验收。",
-      redevelop: "按大改执行完整硬件设计、验证、可靠性和量产测试放行。",
-    },
-  },
-  {
-    id: "firmware",
-    name: "软件 / 固件 / APP 接口",
-    examples: "固件、控制策略、APP/OTA、错误码、生产烧录和测试接口",
-    defaultLevel: "adapt_verify",
-    taskIds: ["dd4", "de3", "dv5", "dp5"],
-    deliverables: [
-      "升级设计包",
-      "整机功能与兼容回归报告",
-      "软件完整测试报告",
-      "版本切换与库存处理方案",
-    ],
-    timing: [
-      "P1 判定控制策略影响",
-      "Gate1 冻结软件边界",
-      "Gate2 冻结版本和回归范围",
-      "EVT Gate 关闭功能回归问题",
-      "DVT Gate 冻结量产版本",
-    ],
-    cannotCut:
-      "控制策略、保护阈值、OTA/APP、生产烧录或 EOL 接口变化时，软件完整测试和版本切换必须保留。",
-    gateDepth: {
-      direct_reuse:
-        "保留版本复用证据、接口清单和整机回归；可减少软件专项测试。",
-      adapt_verify: "保留功能回归、接口回归、异常恢复和 DVT 完整测试。",
-      light_modify:
-        "按中改保留设计评审、EVT 回归、DVT 完整测试和 PVT 版本切换。",
-      redevelop: "按大改执行完整软件设计、EVT/DVT/PVT 回归和发布控制。",
-    },
-  },
-  {
-    id: "structure_mold",
-    name: "结构 / 外壳 / 模具",
-    examples: "外壳、机芯仓、电池仓、按键接口、T1/T2、治具和检具",
-    defaultLevel: "light_modify",
-    taskIds: ["dd5", "dd7", "dd8", "de2", "de4", "dv1", "dv2", "dv3", "dp1"],
-    deliverables: [
-      "结构设计包",
-      "投模评审/开模批准记录",
-      "模具开发计划",
-      "T1/T2试模报告",
-      "模具件验证报告",
-      "SOP/WI与检验标准更新",
-    ],
-    timing: [
-      "P1 判定新开模/修模范围",
-      "Gate1 冻结模具费用和周期",
-      "投模评审批准后开模",
-      "DVT Gate 关闭 T1/T2 和可靠性问题",
-      "PVT Gate 确认模具件量产状态",
-    ],
-    cannotCut:
-      "主承力结构、密封、散热、电池仓、跌落或运输保护边界变化时，可靠性和模具件验证必须保留。",
-    gateDepth: {
-      direct_reuse: "保留结构复用证据、装配边界和整机回归；模具专项可减。",
-      adapt_verify: "保留装配/尺寸/可靠性差异验证和 DVT 模具件确认。",
-      light_modify:
-        "按中改保留结构设计、EVT 预验证、DVT 模具件和 PVT 工艺文件更新。",
-      redevelop: "按大改执行完整结构/模具设计、T1/T2、可靠性和试产验证。",
-    },
-  },
-  {
-    id: "packaging_cert",
-    name: "包装 / 标签 / 认证边界",
-    examples: "包装结构、运输测试、渠道标签、目标市场认证、说明书",
-    defaultLevel: "direct_reuse",
-    taskIds: ["dd9", "de4", "dv5", "dp5", "dp6"],
-    deliverables: [
-      "包装与物流验证报告",
-      "认证补测/复用确认",
-      "版本切换与库存处理方案",
-      "迭代量产发布评审记录",
-    ],
-    timing: [
-      "P1 判定目标市场和运输边界",
-      "Gate1 冻结认证路径",
-      "Gate2 冻结资料责任人",
-      "DVT Gate 关闭认证/包装结论",
-      "PVT Gate 放行上市资料和切换方案",
-    ],
-    cannotCut:
-      "目标市场、运输边界、电池运输信息、渠道标签或说明书合规内容变化时，认证/包装确认必须保留。",
-    gateDepth: {
-      direct_reuse:
-        "保留复用确认、标签适用性和版本切换记录；包装测试可按边界减少。",
-      adapt_verify: "保留认证复用/补测判断、包装物流差异验证和上市资料复核。",
-      light_modify: "按中改保留认证补测或机构确认、包装验证和 PVT 发布证据。",
-      redevelop: "按大改执行完整认证、包装物流验证和发布放行。",
-    },
-  },
-];
-
-const DERIVATIVE_REUSE_LEVEL_RANK: Record<DerivativeReuseLevel, number> = {
-  direct_reuse: 0,
-  adapt_verify: 1,
-  light_modify: 2,
-  redevelop: 3,
-};
-
-const DERIVATIVE_ALWAYS_TASK_IDS = new Set([
-  "di1",
-  "di2",
-  "di5",
-  "di6",
-  "dd6",
-  "dd10",
-  "de3",
-  "de5",
-  "de6",
-  "dv6",
-  "dv7",
-  "dp1",
-  "dp3",
-  "dp4",
-  "dp5",
-  "dp6",
-  "dm1",
-  "dm2",
-  "dm3",
-]);
-
-const DERIVATIVE_TASK_REQUIREMENTS: Array<{
-  taskId: string;
-  moduleId: string;
-  minLevel: DerivativeReuseLevel;
-}> = [
-  { taskId: "dd1", moduleId: "battery", minLevel: "adapt_verify" },
-  { taskId: "dd2", moduleId: "mechanism", minLevel: "adapt_verify" },
-  { taskId: "dd3", moduleId: "pcba_power", minLevel: "adapt_verify" },
-  { taskId: "dd4", moduleId: "firmware", minLevel: "adapt_verify" },
-  { taskId: "dd5", moduleId: "structure_mold", minLevel: "adapt_verify" },
-  { taskId: "dd7", moduleId: "structure_mold", minLevel: "light_modify" },
-  { taskId: "dd8", moduleId: "structure_mold", minLevel: "light_modify" },
-  { taskId: "dd9", moduleId: "battery", minLevel: "adapt_verify" },
-  { taskId: "dd9", moduleId: "packaging_cert", minLevel: "adapt_verify" },
-  { taskId: "de1", moduleId: "battery", minLevel: "adapt_verify" },
-  { taskId: "de1", moduleId: "mechanism", minLevel: "adapt_verify" },
-  { taskId: "de1", moduleId: "pcba_power", minLevel: "adapt_verify" },
-  { taskId: "de1", moduleId: "firmware", minLevel: "adapt_verify" },
-  { taskId: "de1", moduleId: "structure_mold", minLevel: "adapt_verify" },
-  { taskId: "de2", moduleId: "battery", minLevel: "adapt_verify" },
-  { taskId: "de2", moduleId: "mechanism", minLevel: "adapt_verify" },
-  { taskId: "de2", moduleId: "pcba_power", minLevel: "adapt_verify" },
-  { taskId: "de2", moduleId: "structure_mold", minLevel: "adapt_verify" },
-  { taskId: "de4", moduleId: "battery", minLevel: "adapt_verify" },
-  { taskId: "de4", moduleId: "structure_mold", minLevel: "light_modify" },
-  { taskId: "de4", moduleId: "packaging_cert", minLevel: "adapt_verify" },
-  // DVT 样机在任一关键模块达到"适配验证"深度时都必须制作，不只挂结构模块（2026-07-09 合理性修正）
-  { taskId: "dv1", moduleId: "battery", minLevel: "adapt_verify" },
-  { taskId: "dv1", moduleId: "mechanism", minLevel: "adapt_verify" },
-  { taskId: "dv1", moduleId: "pcba_power", minLevel: "adapt_verify" },
-  { taskId: "dv1", moduleId: "firmware", minLevel: "adapt_verify" },
-  { taskId: "dv1", moduleId: "structure_mold", minLevel: "adapt_verify" },
-  { taskId: "dv2", moduleId: "structure_mold", minLevel: "light_modify" },
-  { taskId: "dv3", moduleId: "structure_mold", minLevel: "light_modify" },
-  { taskId: "dv4", moduleId: "battery", minLevel: "adapt_verify" },
-  { taskId: "dv4", moduleId: "mechanism", minLevel: "adapt_verify" },
-  { taskId: "dv4", moduleId: "pcba_power", minLevel: "light_modify" },
-  { taskId: "dv4", moduleId: "structure_mold", minLevel: "light_modify" },
-  { taskId: "dv5", moduleId: "pcba_power", minLevel: "adapt_verify" },
-  { taskId: "dv5", moduleId: "firmware", minLevel: "adapt_verify" },
-  { taskId: "dv5", moduleId: "packaging_cert", minLevel: "adapt_verify" },
-  { taskId: "dp2", moduleId: "battery", minLevel: "adapt_verify" },
-  { taskId: "dp2", moduleId: "pcba_power", minLevel: "adapt_verify" },
-];
-
-export function normalizeDerivativeReuseStrategy(
-  input: unknown
-): DerivativeReuseStrategy {
-  const raw =
-    input && typeof input === "object" && !Array.isArray(input)
-      ? (input as Record<string, unknown>)
-      : {};
-  const validLevels = new Set(Object.keys(DERIVATIVE_REUSE_LEVEL_LABELS));
-  return Object.fromEntries(
-    DERIVATIVE_REUSE_MODULE_RULES.map(rule => {
-      const value = raw[rule.id];
-      return [
-        rule.id,
-        typeof value === "string" && validLevels.has(value)
-          ? (value as DerivativeReuseLevel)
-          : rule.defaultLevel,
-      ];
-    })
-  ) as DerivativeReuseStrategy;
-}
-
-export function getDerivativeEffectiveTaskIds(
-  strategyInput?: unknown,
-  templateVersion: string | null = SOP_TEMPLATE_VERSION_LEGACY
-): Set<string> {
-  const strategy = normalizeDerivativeReuseStrategy(strategyInput);
-  const ids = new Set(DERIVATIVE_ALWAYS_TASK_IDS);
-  for (const rule of DERIVATIVE_TASK_REQUIREMENTS) {
-    const level = strategy[rule.moduleId] ?? "direct_reuse";
-    if (
-      DERIVATIVE_REUSE_LEVEL_RANK[level] >=
-      DERIVATIVE_REUSE_LEVEL_RANK[rule.minLevel]
-    ) {
-      ids.add(rule.taskId);
-    }
-  }
-  if (templateVersion === SOP_TEMPLATE_VERSION_CURRENT) {
-    for (const legacyCloseTaskId of ["dm1", "dm2", "dm3"])
-      ids.delete(legacyCloseTaskId);
-    for (const currentCloseTaskId of [
-      "stability_ramp",
-      "stability_metrics",
-      "stability_issues",
-      "project_close_review",
-    ]) {
-      ids.add(currentCloseTaskId);
-    }
-  }
-  return ids;
-}
-
-/** 某些模块等级变化时会受影响的任务集合（用于限定策略重放/局部调整的重置范围）。 */
-export function getDerivativeModuleAffectedTaskIds(
-  moduleIds: Iterable<string>
-): Set<string> {
-  const wanted = new Set(Array.from(moduleIds));
-  const ids = new Set<string>();
-  for (const req of DERIVATIVE_TASK_REQUIREMENTS) {
-    if (wanted.has(req.moduleId)) ids.add(req.taskId);
-  }
-  return ids;
-}
-
-export function getDerivativeTailoredTaskIds(
-  strategyInput?: unknown,
-  templateVersion?: string | null
-): Set<string> {
-  const effectiveIds = getDerivativeEffectiveTaskIds(
-    strategyInput,
-    templateVersion
-  );
-  const tailoredIds = new Set<string>();
-  for (const phase of getPhasesForCategory("derivative", templateVersion)) {
-    if (phase.isCloseGate) continue;
-    for (const task of phase.tasks) {
-      if (!effectiveIds.has(task.id)) tailoredIds.add(task.id);
-    }
-  }
-  return tailoredIds;
-}
-
-export function getDerivativeEffectivePhases(
-  strategyInput?: unknown,
+/** project-track-v1 DRV resolver; malformed/unfrozen states fail safe to full work packs. */
+export function getDerivativePhasesForExecutionBaseline(
+  baselineInput?: unknown,
   templateVersion?: string | null
 ): SOPPhase[] {
-  const effectiveIds = getDerivativeEffectiveTaskIds(
-    strategyInput,
-    templateVersion
+  const baseline = baselineInput && typeof baselineInput === "object" && !Array.isArray(baselineInput)
+    ? baselineInput as ProjectExecutionBaseline
+    : null;
+  const isValid = baseline?.modelVersion === "project-track-v1" &&
+    baseline.status === "frozen" &&
+    validateProjectExecutionBaseline(baseline, { track: "drv" }).ok;
+  const phases = buildDerivativePhases(
+    isValid && baseline.moduleReuse
+      ? baseline.moduleReuse
+      : allDerivativeModulesNotReused()
   );
-  return getPhasesForCategory("derivative", templateVersion).map(phase => ({
-    ...phase,
-    tasks: phase.isCloseGate
-      ? phase.tasks
-      : phase.tasks.filter(task => effectiveIds.has(task.id)),
-  }));
+  return templateVersion === SOP_TEMPLATE_VERSION_CURRENT
+    ? buildCurrentPhases("derivative", phases)
+    : phases;
 }
 
-registerDerivativeEffectivePhaseResolver(getDerivativeEffectivePhases);
+registerDerivativeEffectivePhaseResolver(getDerivativePhasesForExecutionBaseline);
 
 const NPD_GATE_STANDARDS: Record<string, SOPGateStandard> = {
   concept: {
@@ -984,270 +636,6 @@ const ECO_GATE_STANDARDS: Record<string, SOPGateStandard> = {
       "效果未达预期则延长监控或重新打开 ECO",
       "质量恶化需启动 CAPA/回滚评估",
       "文件不完整不得关闭 ECO",
-    ],
-  },
-};
-
-const DERIVATIVE_GATE_STANDARDS: Record<string, SOPGateStandard> = {
-  iteration: {
-    entryCriteria: [
-      "已确认项目需要多人跨专业协作、排期、验证与 Gate；单一包装/标签/文案等小改留在产品轴轻量变更",
-      "已明确基线产品/当前量产版本、目标升级版本和升级动因",
-      "机芯、电池、外观/CMF、外壳/模具、硬件、软件、包装等候选升级范围已形成初步清单",
-      "产品经理/项目经理已确认升级具备商业价值、资源窗口和量产切换必要性",
-    ],
-    exitCriteria: [
-      "管理层批准升级范围、目标指标、目标上市窗口和验证策略",
-      "基线 BOM/规格/认证/售后数据完成盘点，升级 BOM 差异、成本和供应影响已确认",
-      "旧模块已完成复用判定，明确直接复用、复用但需验证、轻量适配和重新开发的模块边界",
-      "模块复用策略已在流程策略面板应用，系统按策略自动判定大/中改等级与 Gate 深度，评审时确认即可",
-      "模块复用策略已绑定保留任务、可选任务、交付物深度、Gate 深度和不可裁剪边界",
-      "升级版本基线、责任分工、风险清单和阶段计划已冻结",
-    ],
-    requiredDeliverables: [
-      "迭代需求书",
-      "模块复用策略与影响分析",
-      "迭代项目计划",
-    ],
-    responsibleRoles: [
-      "产品经理负责升级目标、卖点和范围取舍",
-      "项目经理/PMO 负责迭代项目组织、节点和风险推进",
-      "R&D/QA 负责技术影响和验证策略",
-      "SCM 负责关键料件、供应商和库存影响",
-      "管理层/Owner 负责立项批准",
-    ],
-    evidenceRequirements: [
-      "迭代立项评审记录",
-      "迭代需求书（含一代问题复盘）",
-      "模块复用策略与影响分析（含系统大/中改判定快照）",
-      "项目计划和风险清单",
-    ],
-    exceptionStrategy: [
-      "升级目标或版本边界不清则退回补充定义",
-      "无需多人协作、排期和 Gate 的包装/标签/文案/简单换色等小改留在产品轴登记轻量变更",
-      "跨结构、供应链、品质、认证或量产切换的外观/CMF 翻新保留在 DRV，并将未变化模块设为直接复用",
-      "仅换料、降本或供应商替代但需要正式版本验证的工程变更转入 ECO",
-      "若为全新平台或核心架构重构则转入 NPD 评审",
-    ],
-  },
-  design: {
-    entryCriteria: [
-      "迭代 Kickoff 已通过，参考产品、目标规格和升级范围已冻结",
-      "机芯/电池/结构/硬件/软件/认证影响已明确，验证输入已形成",
-      "新料件、新模具、新工艺样品或供应商支持已准备",
-    ],
-    exitCriteria: [
-      "电池/机芯/PCBA/软件/结构等受影响模块升级设计完成并通过跨部门评审",
-      "BOM v2.0、认证/电池安全路径、升级验证计划和 DFMEA/风险清单已确认",
-      "结构设计与投模评审/开模批准已完成，模具开发计划、费用和周期已冻结",
-      "模块复用策略已在设计冻结前复核，制造、认证、电池安全和供应风险已有控制措施",
-    ],
-    requiredDeliverables: [
-      "电池/电源升级设计包",
-      "机芯/泵体升级设计包",
-      "PCBA/主控升级设计包",
-      "软件/固件升级设计包",
-      "结构设计包",
-      "BOM v2.0",
-      "投模评审/开模批准记录",
-      "模具开发计划",
-      "升级验证计划",
-      "DFMEA/风险清单",
-    ],
-    responsibleRoles: [
-      "R&D 负责升级方案设计和技术取舍",
-      "QA 负责验证输入和认证影响",
-      "ME/工厂负责制造与治具影响",
-      "SCM 负责新料件与供应商",
-      "项目经理/PMO 负责计划推进",
-      "管理层/Owner 负责设计冻结批准",
-    ],
-    evidenceRequirements: [
-      "升级前后设计差异文件",
-      "BOM v2.0 与关键料件批准记录",
-      "结构设计评审记录",
-      "投模评审/开模批准记录",
-      "模具开发计划和费用/周期确认",
-      "DFM/DFT/认证影响确认",
-      "设计评审纪要",
-      "模块复用策略复核记录",
-    ],
-    exceptionStrategy: [
-      "升级设计包不完整则不得进入 EVT",
-      "认证、电池安全或制造风险未闭环需增加验证项",
-      "成本/交期偏差需回到管理层取舍",
-    ],
-  },
-  evt: {
-    entryCriteria: [
-      "升级设计冻结 Gate 已通过",
-      "升级 EVT 样机、测试计划和新旧版本对比口径已准备",
-      "关键升级模块、回归范围和安全验证项已确认",
-      "EVT 可选项已按模块复用策略完成保留/选做判定",
-    ],
-    exitCriteria: [
-      "关键升级模块专项验证通过或有明确的复用依据",
-      "整机功能、性能和兼容回归无新增重大问题",
-      "可靠性和安全关键项达到 DVT 输入要求或获得批准豁免",
-      "EVT 问题关闭与 DVT 输入冻结已完成，选做/跳过项、风险接受人和 DVT 保留验证项已记录",
-    ],
-    requiredDeliverables: [
-      "升级EVT样机",
-      "关键模块验证报告",
-      "整机功能与兼容回归报告",
-      "新旧版本对比报告",
-      "EVT可选项裁剪记录",
-      "EVT问题关闭清单",
-      "DVT输入冻结记录",
-    ],
-    responsibleRoles: [
-      "R&D 负责升级实现和问题修正",
-      "QA 负责验证结论",
-      "项目经理/PMO 负责 Issue 闭环和 Gate 组织",
-      "产品经理负责升级目标达成判断",
-      "管理层/Owner 负责进入 DVT 决策",
-    ],
-    evidenceRequirements: [
-      "升级 EVT 样机清单",
-      "关键模块专项验证报告或裁剪依据",
-      "新旧版本性能对比数据",
-      "回归测试报告",
-      "EVT 可选项裁剪记录",
-      "问题关闭记录和风险豁免",
-    ],
-    exceptionStrategy: [
-      "验证失败则退回设计整改",
-      "新增问题需评估是否扩大回归范围",
-      "高风险未闭环不得进入 DVT",
-    ],
-  },
-  dvt: {
-    entryCriteria: [
-      "升级 EVT Gate 已通过，DVT 样机版本和验证矩阵已冻结",
-      "模具件、可靠性、认证、电池安全、包装和软件测试资源已按模块复用深度排期",
-      "EVT 遗留问题已关闭或获得进入 DVT 的批准豁免",
-    ],
-    exitCriteria: [
-      "DVT 样机、T1/T2 试模、模具件装配/尺寸/外观、可靠性、认证、电池安全和软件测试达到对应 Gate 深度",
-      "无未关闭 P0/P1 问题，量产关键风险已有控制计划",
-      "PVT 保留项、试产条件、文件包和物料齐套计划已确认",
-    ],
-    requiredDeliverables: [
-      "升级DVT样机",
-      "T1试模报告",
-      "模具问题清单",
-      "T2/修模验证报告",
-      "限度样本",
-      "可靠性测试报告",
-      "认证补测/复用确认",
-      "软件完整测试报告",
-      "包装与物流验证报告",
-      "DVT问题关闭清单",
-    ],
-    responsibleRoles: [
-      "QA 负责可靠性、认证和软件测试结论",
-      "R&D 负责设计整改",
-      "ME/SCM 负责模具、工艺与供应准备",
-      "battery_safety/cert 负责电池安全与运输认证结论",
-      "管理层/Owner 负责进入 PVT 决策",
-    ],
-    evidenceRequirements: [
-      "DVT Build Record",
-      "模具 T1/T2 评审记录",
-      "可靠性/认证/软件测试报告",
-      "包装物流验证记录",
-      "PFMEA/CTQ 控制计划",
-      "PVT Readiness 清单",
-    ],
-    exceptionStrategy: [
-      "可靠性或认证失败必须复测并记录根因",
-      "模具/外观不达标则冻结修模计划",
-      "重大问题未关闭不得进入 PVT，除非有书面豁免和风险接受人",
-    ],
-  },
-  pvt: {
-    entryCriteria: [
-      "DVT Gate 已通过，PVT 试产和版本切换计划已批准",
-      "产线、治具、EOL 测试、SOP/WI、物料和人员培训已按模块复用深度准备",
-      "旧版本库存、在制品、售后备件和渠道切换方案已明确",
-    ],
-    exitCriteria: [
-      "升级小批试产良率和质量达到发布目标，关键异常已完成问题关闭与良率改善",
-      "升级版本文件包、SOP/WI、检验标准、治具/EOL 测试程序和培训完成",
-      "认证补测/复用确认、电池安全与运输合规证据已闭环，版本切换风险受控",
-    ],
-    requiredDeliverables: [
-      "升级试产报告",
-      "试产问题关闭报告",
-      "良率改善报告",
-      "SOP/WI与检验标准更新",
-      "治具/EOL测试程序验收",
-      "EOL 100%测试能力验收记录",
-      "版本切换与库存处理方案",
-      "认证补测/复用确认",
-      "UN38.3运输测试报告或复用确认",
-      "MSDS",
-      "电芯/电池包安全认证报告或复用确认",
-    ],
-    responsibleRoles: [
-      "ME/工厂负责试产与产线切换",
-      "QA 负责质量判定",
-      "测试工程负责 EOL 测试能力",
-      "SCM 负责库存与供应",
-      "cert/battery_safety 负责认证和电池安全放行",
-      "项目经理/PMO 负责切换计划推进",
-      "管理层/Owner 负责量产发布批准",
-    ],
-    evidenceRequirements: [
-      "试产良率报告",
-      "SOP/WI 与检验标准更新记录",
-      "治具/EOL 测试程序验收记录",
-      "EOL 100%测试项目与 GR&R/验收记录",
-      "版本文件发布记录",
-      "库存盘点和切换计划签核",
-      "UN38.3、MSDS 和电池安全证书/报告或复用有效性确认",
-    ],
-    exceptionStrategy: [
-      "试产或库存方案未达标则延后发布",
-      "必要时执行分批切换或旧版本消耗策略",
-      "缺 UN38.3/MSDS/电池安全证据或复用有效性确认不得发布 MP 或出货",
-      "重大质量/安全/认证风险需暂停发布并重新验证",
-    ],
-  },
-  mp: {
-    entryCriteria: [
-      "升级量产发布 Gate 已通过，升级版本已生效",
-      "升级后生产、质量、售后和市场反馈监控指标已定义",
-      "旧版本收尾和客户/渠道通知已完成或计划明确",
-    ],
-    exitCriteria: [
-      "升级目标达到预期并完成量化验证",
-      "连续监控期内无新增重大质量、安全或售后风险",
-      "升级项目文件、经验教训和关闭报告已归档",
-    ],
-    requiredDeliverables: [
-      "升级后良率报告",
-      "升级目标达成验证报告",
-      "市场与售后影响跟踪报表",
-      "迭代项目关闭报告",
-    ],
-    responsibleRoles: [
-      "项目经理/PMO 负责升级关闭组织",
-      "产品经理负责升级目标达成确认",
-      "QA/工厂负责量产监控",
-      "SCM/售后/销售负责外部影响跟踪",
-      "管理层/Owner 负责关闭批准",
-    ],
-    evidenceRequirements: [
-      "连续量产监控数据",
-      "升级前后指标对比",
-      "售后/RMA 和市场反馈记录",
-      "升级关闭报告和复盘记录",
-    ],
-    exceptionStrategy: [
-      "效果未达预期则延长监控或发起补充升级",
-      "质量恶化需启动 CAPA/回滚评估",
-      "文件不完整不得关闭升级项目",
     ],
   },
 };
@@ -2952,657 +2340,6 @@ export const ECO_PHASES: SOPPhase[] = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Derivative — Product Iteration / Derivative Development (6-phase)
-// Gen 1 -> Gen 2 style upgrades that affect core modules and need EVT/DVT/PVT.
-// ─────────────────────────────────────────────────────────────────────────────
-export const DERIVATIVE_PHASES: SOPPhase[] = [
-  {
-    id: "iteration",
-    code: "P1",
-    name: "迭代立项",
-    nameEn: "Iteration Scoping",
-    duration: "2-3周",
-    desc: "定义产品迭代、衍生型号或轻量外观翻新的目标，盘点现有基线、模块复用边界、升级范围、Gate 深度、BOM/成本和验证策略",
-    gate: "迭代 Kickoff评审",
-    gateTaskId: "di6",
-    color: "#a16207",
-    deliverables: ["迭代需求书", "模块复用策略与影响分析", "迭代项目计划"],
-    gateStandard: DERIVATIVE_GATE_STANDARDS.iteration,
-    tasks: [
-      {
-        id: "di1",
-        name: "产品定义与升级目标",
-        desc: "明确迭代/衍生定位、外观或功能变化、目标 SKU、成功指标和现有问题复盘",
-        owner: "产品经理",
-        visibleRoles: ["pm", "sales", "manager", "owner"],
-        guide:
-          "1) 定义升级类型：外观/CMF、机芯、电池、平台模块、核心结构、性能、续航、成本或质量\n2) 明确目标市场、目标 SKU、上市窗口和成功指标，复盘现有版本 TOP 问题并列入必改项\n3) 只有需要多人跨专业协作、排期、验证和量产切换的外观/CMF 翻新才使用 DRV，并将未变化模块标记为直接复用；单一包装、标签、文案或简单换色留在产品轴轻量变更",
-      },
-      {
-        id: "di2",
-        name: "模块复用与影响分析",
-        desc: "盘点一代基线，按模块判定复用等级，并完成 BOM/资源/供应影响分析（一份文档）",
-        owner: "项目经理",
-        visibleRoles: [
-          "project_manager",
-          "pm",
-          "rd_hw",
-          "rd_sw",
-          "rd_mech",
-          "qa",
-          "scm",
-          "cert",
-          "battery_safety",
-          "manager",
-          "owner",
-        ],
-        guide:
-          "1) 汇总 BOM、图纸、软件、测试报告、认证资料和售后/RMA 数据，输出一代基线资料包\n2) 在「项目设置 → 流程策略」按电池/机芯/PCBA/软件/结构模具/包装认证判定复用等级：直接复用、复用但需适配验证、轻量修改、重新开发；大/中改等级与 Gate 深度由系统按策略自动判定，无需单独复核，Kickoff 评审确认即可\n3) 对直接复用模块记录版本、认证/测试依据、适用边界和复用风险；涉及电芯/电池包/保护方案时定义电池安全和运输认证边界\n4) 对比新旧 BOM（新增/替换/停用/复用），测算成本、MOQ、长交期、NRE/模具费用，确认供应商资质与资源窗口，盘点旧版本库存/在制品/售后备件处理策略",
-      },
-      {
-        id: "di5",
-        name: "迭代计划与裁剪矩阵",
-        desc: "定义 3-5 个月里程碑、样机数量、Gate 节奏和模块级裁剪策略",
-        owner: "项目经理",
-        visibleRoles: ["project_manager", "pm", "manager", "owner"],
-        guide:
-          "1) 制定 3-5 个月里程碑和关键路径\n2) 定义样机轮次、验证矩阵、长交期项和版本切换窗口\n3) 流程裁剪时间点：P1 输出模块复用策略初版，Gate1 冻结复用等级和 Gate 深度；Gate2 设计冻结前复核验证矩阵；EVT Gate 关闭选做/跳过项；DVT Gate 确认 PVT 保留项，之后变化走 ECO/变更记录\n4) 输出风险清单、RACI、阶段计划\n5) 不可裁剪边界：量产发布 Gate、整机回归、安全/认证边界、风险接受人和 DVT/PVT 保留验证项不得删除",
-      },
-      {
-        id: "di6",
-        name: "迭代 Kickoff (Gate 1)",
-        desc: "冻结迭代范围、基线、资源、模块复用策略和项目计划",
-        owner: "项目经理",
-        visibleRoles: [],
-        guide:
-          "评审:\n1) 产品定义、代际目标与一代问题复盘\n2) 模块复用策略与影响分析（含 BOM/成本/供应/认证/电池安全风险）\n3) 系统自动判定的大/中改等级、Gate 深度与不可裁剪边界确认\n4) 项目计划、RACI、交付物清单和阶段验证深度",
-      },
-    ],
-  },
-  {
-    id: "design",
-    code: "P2",
-    name: "设计",
-    nameEn: "Design",
-    duration: "4-6周",
-    desc: "完成受影响模块的单项升级设计、结构设计、投模评审/开模批准、模具开发准备、认证/电池安全路径、DFM/DFT 和验证计划",
-    gate: "迭代设计冻结",
-    gateTaskId: "dd10",
-    color: "#0369a1",
-    deliverables: [
-      "电池/电源升级设计包",
-      "机芯/泵体升级设计包",
-      "PCBA/主控升级设计包",
-      "软件/固件升级设计包",
-      "结构设计包",
-      "DFM/DFT/DFMEA评审记录",
-      "投模评审/开模批准记录",
-      "模具开发计划",
-      "升级验证计划",
-    ],
-    gateStandard: DERIVATIVE_GATE_STANDARDS.design,
-    tasks: [
-      {
-        id: "dd1",
-        name: "电池/电源系统升级设计",
-        desc: "电芯、电池包、保护板、充电策略、热路径和电源余量的升级或复用确认",
-        owner: "硬件研发",
-        visibleRoles: [
-          "rd_hw",
-          "battery_safety",
-          "qa",
-          "cert",
-          "pm",
-          "manager",
-          "owner",
-        ],
-        guide:
-          "1) 按模块复用策略确认电芯、电池包、保护板、充电策略和热路径是复用、适配验证、轻改还是重新开发\n2) 校核容量、续航、保护阈值、充放电策略、温升、电源余量和安全边界\n3) 输出电池/电源升级设计包、复用边界、验证项目和认证资料责任人\n4) 电芯、电池包、保护方案或热路径变化时，不得裁剪安全验证和运输合规确认",
-      },
-      {
-        id: "dd2",
-        name: "机芯/马达/泵体升级设计",
-        desc: "机芯、马达、泵体、传动、噪音、温升、寿命和性能指标升级设计",
-        owner: "结构研发",
-        visibleRoles: ["rd_mech", "rd_hw", "qa", "pm", "manager", "owner"],
-        guide:
-          "1) 明确机芯/马达/泵体的复用等级和性能目标\n2) 校核气压/流量、噪音、温升、寿命、驱动余量、装配接口和供应风险\n3) 输出机芯/泵体升级设计包、新旧版本性能差异和专项验证计划\n4) 性能、噪音、温升或寿命边界变化时，专项 EVT/DVT 验证不能省略",
-      },
-      {
-        id: "dd3",
-        name: "PCBA/电源/主控升级设计",
-        desc: "PCBA、主控、驱动、电源、传感器和关键 IC 的设计升级或复用确认",
-        owner: "硬件研发",
-        visibleRoles: [
-          "rd_hw",
-          "rd_sw",
-          "qa",
-          "scm",
-          "battery_safety",
-          "pm",
-          "manager",
-          "owner",
-        ],
-        guide:
-          "1) 更新或确认原理图、PCB、关键 IC、电源树、驱动余量、传感器和测试点\n2) 输出 PCBA/主控升级设计包、BOM v2.0 硬件差异和关键料件批准记录\n3) 确认生产烧录、测试接口、EOL 覆盖和治具影响\n4) 主控、驱动、电源架构或关键 IC 变化时，EVT 专项、软件回归和 EOL 能力确认不得裁剪",
-      },
-      {
-        id: "dd4",
-        name: "软件/固件升级设计",
-        desc: "固件、控制策略、APP/OTA、错误码、生产烧录和测试接口升级设计",
-        owner: "软件研发",
-        visibleRoles: ["rd_sw", "rd_hw", "qa", "pm", "manager", "owner"],
-        guide:
-          "1) 确认软件/固件、控制策略、保护阈值、APP/OTA、错误码和生产烧录接口的变化范围\n2) 输出软件/固件升级设计包、版本策略、接口清单和回归范围\n3) 定义 EVT/DVT 软件回归、异常恢复、OTA/APP 和生产测试接口验证\n4) 控制策略、保护阈值、OTA/APP 或 EOL 接口变化时，软件完整测试和版本切换不得裁剪",
-      },
-      {
-        id: "dd5",
-        name: "ID/CMF、结构与装配方案",
-        desc: "完成外观造型、颜色/材质/工艺，以及外壳、按键/接口、公差和装配方案设计",
-        owner: "结构研发",
-        visibleRoles: [
-          "rd_mech",
-          "rd_hw",
-          "qa",
-          "pe",
-          "pm",
-          "manager",
-          "owner",
-        ],
-        guide:
-          "1) 输出 ID/CMF 方案、色板/限度样本、结构 3D/2D、堆叠、公差、材料、装配关系和关键尺寸\n2) 明确外观面、颜色/纹理/光泽、主承力结构、密封、散热、电池仓、跌落和运输保护风险\n3) 评估新开模、修模、喷涂/表面处理、治具、检具、限度样本和试模需求\n4) 纯外观翻新可将内部模块设为直接复用，但外观标准、样件确认、受影响回归和版本切换仍需留痕",
-      },
-      {
-        id: "dd6",
-        name: "DFM/DFT/DFMEA 与验证计划",
-        desc: "完成制造、测试、风险和 EVT/DVT/PVT 验证矩阵评审",
-        owner: "QA",
-        visibleRoles: [
-          "qa",
-          "rd_hw",
-          "rd_sw",
-          "rd_mech",
-          "pe",
-          "mfg",
-          "cert",
-          "battery_safety",
-          "pm",
-          "manager",
-          "owner",
-        ],
-        guide:
-          "1) 汇总受影响模块的 DFMEA/风险清单、DFM/DFT、关键 CTQ 和量产测试覆盖\n2) 将模块复用等级绑定到 EVT/DVT/PVT 保留项、选做项、交付物深度和 Gate 深度\n3) 明确安全/认证、整机回归、DVT/PVT 保留验证项和风险接受人\n4) Gate2 前复核流程裁剪矩阵，后续如需减少安全/认证/整机回归项目必须走变更记录",
-      },
-      {
-        id: "dd7",
-        name: "投模评审/开模批准",
-        desc: "确认结构冻结、模具费用、周期、T1/T2 计划和开模条件",
-        owner: "项目经理",
-        visibleRoles: [
-          "project_manager",
-          "rd_mech",
-          "pe",
-          "mfg",
-          "scm",
-          "qa",
-          "pm",
-          "manager",
-          "owner",
-        ],
-        guide:
-          "1) 评审结构设计包、关键尺寸、公差、外观面、材料、缩水、进胶、顶出、装配和可靠性风险\n2) 确认模具费用、周期、供应商、T1/T2 计划、认证样品需求和项目关键路径影响\n3) 输出投模评审/开模批准记录；未批准不得启动模具开发\n4) 投模是 DRV 的关键时间点，需在项目排期和 Gate 证据中明确留痕",
-      },
-      {
-        id: "dd8",
-        name: "模具开发与 T0 准备",
-        desc: "执行模具开发、T0/T1 准备、试模计划和检具/治具准备",
-        owner: "PE",
-        visibleRoles: [
-          "pe",
-          "rd_mech",
-          "mfg",
-          "qa",
-          "scm",
-          "pm",
-          "manager",
-          "owner",
-        ],
-        guide:
-          "1) 根据投模批准启动模具开发，跟踪模具进度、T0/T1 试模准备和关键风险\n2) 准备检具、治具、试模材料、试模验证表、尺寸测量方案和外观判定口径\n3) 输出模具开发计划、T0/T1 准备记录和模具问题预警\n4) 模具开发结果进入 DVT T1/T2 验证，不应与结构设计混在同一任务中关闭",
-      },
-      {
-        id: "dd9",
-        name: "认证/电池安全与验证计划",
-        desc: "确认认证补测或复用路径，冻结安全、运输和目标市场验证矩阵",
-        owner: "QA",
-        visibleRoles: [
-          "qa",
-          "cert",
-          "battery_safety",
-          "rd_hw",
-          "rd_sw",
-          "rd_mech",
-          "pm",
-          "manager",
-          "owner",
-        ],
-        guide:
-          "1) 判断 UN38.3、MSDS、电芯/电池包安全认证和目标市场认证是否补测、Delta 或复用确认\n2) 涉及电芯/电池包/保护方案、充电策略、热路径、标签、说明书或目标市场变化时定义专项安全/认证验证\n3) 输出送样版本、资料责任人、预计周期、认证路径和验证计划\n4) 与 DFM/DFT/DFMEA 结果一起冻结 EVT/DVT/PVT 验证矩阵",
-      },
-      {
-        id: "dd10",
-        name: "迭代设计冻结 (Gate 2)",
-        desc: "设计输出、投模状态、验证矩阵和 Gate 深度冻结，批准进入 EVT",
-        owner: "项目经理",
-        visibleRoles: [],
-        guide:
-          "评审:\n1) 电池、机芯、PCBA、软件、结构设计包完整性\n2) BOM v2.0、成本、供应、DFMEA/DFM/DFT 和 EOL 测试覆盖\n3) 投模评审/开模批准、模具开发计划和 T1/T2 关键路径\n4) 认证、电池安全、EVT/DVT/PVT 验证矩阵和 Gate 深度\n5) 模块复用策略复核、可裁剪项依据、不可裁剪边界和风险接受人",
-      },
-    ],
-  },
-  {
-    id: "evt",
-    code: "P3",
-    name: "EVT",
-    nameEn: "EVT",
-    duration: "3-5周",
-    desc: "按模块复用策略验证关键升级模块、整机功能、兼容回归和安全关键项；未受影响模块可减少对应 EVT 专项",
-    gate: "EVT 评审",
-    gateTaskId: "de6",
-    color: "#7c3aed",
-    deliverables: [
-      "升级EVT样机",
-      "关键模块验证报告",
-      "整机功能与兼容回归报告",
-      "可靠性与安全预验证报告",
-      "EVT可选项裁剪记录",
-      "EVT问题关闭清单",
-      "DVT输入冻结记录",
-    ],
-    gateStandard: DERIVATIVE_GATE_STANDARDS.evt,
-    tasks: [
-      {
-        id: "de1",
-        name: "EVT 样机制作",
-        desc: "制作升级版本 EVT 样机并标识软硬件/BOM/结构版本",
-        owner: "硬件研发",
-        visibleRoles: ["rd_hw", "rd_mech", "qa", "pm", "manager", "owner"],
-        guide:
-          "1) 新 PCBA、机芯、电池包、结构件或模具件打样\n2) 整机组装（建议 ≥10 台，按风险增加）\n3) 记录 Build Record 和异常",
-      },
-      {
-        id: "de2",
-        name: "关键模块专项验证",
-        desc: "针对机芯、电池、硬件、结构/模具等升级模块做专项测试，未受影响模块可选做或减少专项",
-        owner: "QA",
-        visibleRoles: [
-          "qa",
-          "rd_hw",
-          "rd_mech",
-          "battery_safety",
-          "pm",
-          "manager",
-          "owner",
-        ],
-        guide:
-          "1) 按模块复用策略决定 EVT 专项：重新开发模块必须验证，轻量修改模块做差异验证，直接复用且边界未变模块可减少专项\n2) 机芯升级：性能、噪音、温升、寿命和驱动余量\n3) 电池升级：容量、续航、充放电、保护功能、温升和安全边界；涉及电芯/保护/热路径变化时不可裁剪安全验证\n4) 结构/模具升级：装配、尺寸、跌落、密封、散热和外观\n5) 记录选做/跳过依据、风险接受人和转入 DVT 的保留验证项",
-      },
-      {
-        id: "de3",
-        name: "整机功能与兼容回归",
-        desc: "确认升级未引入核心功能、软件、接口和生产测试回归问题",
-        owner: "QA",
-        visibleRoles: ["qa", "rd_sw", "rd_hw", "pm", "manager", "owner"],
-        guide:
-          "1) 核心功能回归测试\n2) 关键性能指标复测和新旧版本对比\n3) 软件、APP/OTA、生产烧录和 EOL 测试接口回归\n4) 即使多个模块直接复用，也需保留整机级回归，不能用单模块复用证据替代整机确认",
-      },
-      {
-        id: "de4",
-        name: "可靠性与安全预验证（按风险选做）",
-        desc: "验证升级涉及的可靠性、电池安全、运输和认证前置风险；低风险复用项可减少预验证",
-        owner: "QA",
-        visibleRoles: [
-          "qa",
-          "battery_safety",
-          "cert",
-          "pm",
-          "manager",
-          "owner",
-        ],
-        guide:
-          "1) 按升级影响范围选择跌落、振动、温湿度循环、寿命、电池安全、包装保护和认证前置摸底\n2) 直接复用且应用边界未变的结构、电池包、包装或认证项，可减少对应 EVT 预验证\n3) 发生电芯/电池包/保护方案、热路径、主承力结构、目标市场认证或运输边界变化时，不得裁剪相关安全/认证预验证\n4) 减少项需在 EVT 可选项裁剪记录中说明依据，并在 DVT/PVT 保留必要确认",
-      },
-      {
-        id: "de5",
-        name: "EVT 问题关闭与 DVT 输入冻结",
-        desc: "关闭 EVT 问题，冻结 DVT 样机版本、测试矩阵、模具件输入和保留验证项",
-        owner: "项目经理",
-        visibleRoles: [
-          "project_manager",
-          "qa",
-          "rd_hw",
-          "rd_sw",
-          "rd_mech",
-          "pe",
-          "pm",
-          "manager",
-          "owner",
-        ],
-        guide:
-          "1) 关闭 EVT P0/P1 问题，未关闭项需有风险接受人、关闭计划和 DVT 影响评估\n2) 冻结 DVT 样机 BOM、软硬件版本、结构版本、模具件输入和测试矩阵\n3) 明确 DVT 保留验证项、可选项关闭结论、T1/T2 依赖和样品需求\n4) 输出 EVT 问题关闭清单和 DVT 输入冻结记录",
-      },
-      {
-        id: "de6",
-        name: "EVT 评审 (Gate 3)",
-        desc: "确认 EVT 通过，进入 DVT",
-        owner: "项目经理",
-        visibleRoles: [],
-        guide:
-          "通过标准:\n- 关键升级模块验证 Pass 或已有批准的裁剪依据\n- 整机功能与兼容回归无新增重大问题\n- EVT 可选项裁剪记录、风险接受人和 DVT 保留验证项已确认\n- DVT 样机版本、测试矩阵和模具件输入已冻结",
-      },
-    ],
-  },
-  {
-    id: "dvt",
-    code: "P4",
-    name: "DVT",
-    nameEn: "DVT",
-    duration: "4-8周",
-    desc: "使用模具件和冻结版本按 Gate 深度完成可靠性、认证、电池安全、软件、包装和 PVT 准备验证",
-    gate: "DVT 评审",
-    gateTaskId: "dv7",
-    color: "#0f766e",
-    deliverables: [
-      "升级DVT样机",
-      "T1试模报告",
-      "模具问题清单",
-      "T2/修模验证报告",
-      "限度样本",
-      "可靠性测试报告",
-      "认证补测/复用确认",
-      "软件完整测试报告",
-      "包装与物流验证报告",
-      "DVT问题关闭清单",
-    ],
-    gateStandard: DERIVATIVE_GATE_STANDARDS.dvt,
-    tasks: [
-      {
-        id: "dv1",
-        name: "DVT 样机制作",
-        desc: "按冻结设计、模具件、软硬件版本和 BOM 制作 DVT 样机",
-        owner: "PE",
-        visibleRoles: [
-          "pe",
-          "mfg",
-          "rd_hw",
-          "rd_mech",
-          "qa",
-          "pm",
-          "manager",
-          "owner",
-        ],
-        guide:
-          "1) 使用冻结版 PCBA、软件、BOM、结构件和模具件组装 DVT 样机\n2) 标注样机版本、供应商批次、Build Record、测试用途和认证/可靠性样品分配\n3) 确认装配工艺、关键尺寸、首件结果和 DVT 测试可用性\n4) DVT 样机制作依赖 EVT 评审通过和 T1 试模输入，不应绕过模具件状态",
-      },
-      {
-        id: "dv2",
-        name: "T1 试模与模具问题清单",
-        desc: "完成 T1 试模、尺寸/外观/装配检查和模具问题清单",
-        owner: "结构研发",
-        visibleRoles: ["rd_mech", "pe", "qa", "mfg", "pm", "manager", "owner"],
-        guide:
-          "1) 执行 T1 试模，检查尺寸、外观面、披锋、缩水、变形、装配、公差、密封和关键 CTQ\n2) 形成模具问题清单、修模建议、责任人、完成时间和 DVT 样机使用限制\n3) 确认可用于认证/可靠性的样品版本和风险\n4) T1 问题清单是 DVT Gate 必要证据，不能以“结构设计已完成”替代",
-      },
-      {
-        id: "dv3",
-        name: "T2/修模验证与限度样本",
-        desc: "验证修模结果、冻结关键外观/尺寸限度样本和量产判定口径",
-        owner: "结构研发",
-        visibleRoles: ["rd_mech", "pe", "qa", "mfg", "pm", "manager", "owner"],
-        guide:
-          "1) 跟进 T2 或修模验证，确认 T1 问题关闭、尺寸稳定、外观可接受和装配风险受控\n2) 建立限度样本、关键尺寸检验口径、模具验收状态和遗留问题受控计划\n3) 输出 T2/修模验证报告、限度样本和量产判定口径\n4) 若结构/模具直接复用且边界未变，可用复用证据替代 T2；但有修模或新开模时不得裁剪",
-      },
-      {
-        id: "dv4",
-        name: "可靠性/安全/认证验证",
-        desc: "按复用深度完成环境、机械、寿命、电池安全、运输和认证验证",
-        owner: "QA",
-        visibleRoles: [
-          "qa",
-          "cert",
-          "battery_safety",
-          "rd_hw",
-          "rd_mech",
-          "pm",
-          "manager",
-          "owner",
-        ],
-        guide:
-          "1) 按升级影响执行跌落、振动、温湿度循环、寿命、耐久、温升、电池安全和关键模块专项可靠性\n2) 提交目标市场认证补测或复用确认资料\n3) 完成 UN38.3、MSDS、电芯/电池包安全认证或复用有效性确认\n4) 记录报告编号、样品版本、上市限制和 Gate 放行条件",
-      },
-      {
-        id: "dv5",
-        name: "软件/包装/物流完整验证",
-        desc: "完成固件/APP/OTA/生产烧录、包装运输和渠道标签验证",
-        owner: "软件研发",
-        visibleRoles: ["rd_sw", "qa", "scm", "sales", "pm", "manager", "owner"],
-        guide:
-          "1) 完成软件完整回归、压力测试、异常恢复、OTA/APP、生产烧录和 EOL 接口验证\n2) 按模块复用深度完成包装跌落、运输振动、堆码和渠道标签验证\n3) 确认包装资料、说明书、标签和区域市场资料一致\n4) 软件或包装直接复用时仍需保留版本一致性与发布资料确认",
-      },
-      {
-        id: "dv6",
-        name: "DVT 问题关闭与 PVT 准备",
-        desc: "关闭 DVT 问题，确认 PVT 试产条件、物料、文件和保留项",
-        owner: "项目经理",
-        visibleRoles: [
-          "project_manager",
-          "pm",
-          "qa",
-          "rd_hw",
-          "rd_sw",
-          "rd_mech",
-          "pe",
-          "mfg",
-          "scm",
-          "manager",
-          "owner",
-        ],
-        guide:
-          "1) 关闭 DVT P0/P1 问题，未关闭项需有风险接受人和受控计划\n2) 确认 PVT 试产数量、物料齐套、产线窗口、治具/EOL 能力和培训计划\n3) 冻结进入 PVT 的保留验证项、版本文件和发布约束\n4) 输出 DVT 问题关闭清单和 PVT Readiness 清单",
-      },
-      {
-        id: "dv7",
-        name: "DVT 评审 (Gate 4)",
-        desc: "DVT 通过并批准进入 PVT",
-        owner: "项目经理",
-        visibleRoles: [],
-        guide:
-          "通过标准:\n- 可靠性、认证、电池安全、T1/T2 或修模验证、软件和包装验证达到对应 Gate 深度\n- 无未关闭 P0/P1 问题，或已有明确风险接受人与受控计划\n- PVT 保留项、试产条件和物料计划确认",
-      },
-    ],
-  },
-  {
-    id: "pvt",
-    code: "P5",
-    name: "PVT",
-    nameEn: "PVT",
-    duration: "3-5周",
-    desc: "小批试产、生产文件固化、EOL 能力验收和版本切换",
-    gate: "迭代量产发布评审",
-    gateTaskId: "dp6",
-    isReleaseGate: true,
-    color: "#b45309",
-    deliverables: [
-      "PVT试产计划",
-      "SOP/WI与检验标准更新",
-      "治具/EOL测试程序验收",
-      "EOL 100%测试能力验收记录",
-      "升级试产报告",
-      "试产问题关闭报告",
-      "良率改善报告",
-      "版本切换与库存处理方案",
-      "认证补测/复用确认",
-      "UN38.3运输测试报告或复用确认",
-      "MSDS",
-      "电芯/电池包安全认证报告或复用确认",
-    ],
-    gateStandard: DERIVATIVE_GATE_STANDARDS.pvt,
-    tasks: [
-      {
-        id: "dp1",
-        name: "PVT 试产准备",
-        desc: "试产排程、物料齐套、SOP/WI、检验标准、培训和质量口径",
-        owner: "PE",
-        visibleRoles: [
-          "pe",
-          "mfg",
-          "qa",
-          "rd_mech",
-          "rd_hw",
-          "scm",
-          "pm",
-          "manager",
-          "owner",
-        ],
-        guide:
-          "1) 定义试产数量、排程、Build Record、版本标识和首件计划\n2) 更新 SOP/WI、工艺参数、检验标准、限度样本和培训记录\n3) 确认 BOM 齐套、人员培训、关键质量标准和良率统计口径",
-      },
-      {
-        id: "dp2",
-        name: "治具/EOL 与首件验收",
-        desc: "验证治具、检具、烧录、老化、EOL 100% 测试能力和首件条件",
-        owner: "QA",
-        visibleRoles: [
-          "qa",
-          "pe",
-          "rd_hw",
-          "battery_safety",
-          "mfg",
-          "pm",
-          "manager",
-          "owner",
-        ],
-        guide:
-          "1) 验收 ICT/FCT/老化/烧录/EOL 测试程序\n2) 电池包逐台检测保护功能、OCV/IR、容量或等效项目\n3) 完成首件确认、关键工位参数确认、EOL 100% 测试项目、限值、误判/漏判和 GR&R/验收记录",
-      },
-      {
-        id: "dp3",
-        name: "小批试产",
-        desc: "按量产工艺验证良率、一致性、关键性能和制造稳定性",
-        owner: "工厂",
-        visibleRoles: [
-          "mfg",
-          "qa",
-          "pe",
-          "rd_hw",
-          "rd_mech",
-          "pm",
-          "manager",
-          "owner",
-        ],
-        guide:
-          "1) 试产数量建议 50-300 台，按模块风险调整\n2) 执行首件确认、Build Record、全流程工位记录和异常收集\n3) 监控直通率、测试失败、返修、外观、关键性能一致性和节拍\n4) 输出升级试产报告、分工位良率、FPY 和问题清单",
-      },
-      {
-        id: "dp4",
-        name: "试产问题关闭与良率改善",
-        desc: "关闭试产关键问题，验证改善措施和 MP 放行良率",
-        owner: "QA",
-        visibleRoles: [
-          "qa",
-          "mfg",
-          "pe",
-          "rd_hw",
-          "rd_mech",
-          "project_manager",
-          "pm",
-          "manager",
-          "owner",
-        ],
-        guide:
-          "1) 对试产 P0/P1 和 Top 良率问题做根因分析、围堵、改善和复验\n2) 输出 Pareto、改善前后良率、关键异常关闭证据和进入 MP 的开放项受控计划\n3) 对安全、认证、EOL、模具件或软件版本相关异常做专项放行确认\n4) 试产问题未关闭或良率未达目标，不得仅靠 Gate 豁免直接发布",
-      },
-      {
-        id: "dp5",
-        name: "产品交付与文件发布",
-        desc: "发布二代产品文件包，确认库存、渠道、客户和认证资料切换",
-        owner: "项目经理",
-        visibleRoles: [
-          "project_manager",
-          "pm",
-          "qa",
-          "scm",
-          "pe",
-          "mfg",
-          "sales",
-          "manager",
-          "owner",
-        ],
-        guide:
-          "1) 发布 BOM、图纸、软件、SOP/WI、检验标准、包装标签和测试程序\n2) 确认上一代产品库存、在制品、售后备件、渠道和客户通知方案\n3) 归档认证、UN38.3、MSDS、电池安全、标签、说明书和系统资料同步记录\n4) 明确新产品生效日期、回滚条件和售后识别方式",
-      },
-      {
-        id: "dp6",
-        name: "迭代量产发布评审 (Gate 5)",
-        desc: "批准迭代成果作为独立产品进入 MP",
-        owner: "项目经理",
-        visibleRoles: [],
-        guide:
-          "发布 GO 条件:\n- PVT 良率和质量达标，试产问题关闭与良率改善完成\n- SOP/WI、检验标准、治具和 EOL 测试能力就绪\n- 认证、UN38.3、MSDS、电池安全证据齐套或复用确认有效\n- 产品交付和库存处理方案确认",
-      },
-    ],
-  },
-  {
-    id: "mp",
-    code: "P6",
-    name: "迭代稳定与关闭",
-    nameEn: "MP Monitoring",
-    duration: "2-8周",
-    desc: "迭代版本量产爬坡、目标达成验证、售后跟踪和项目关闭",
-    gate: "迭代关闭评审",
-    gateTaskId: "dm3",
-    isCloseGate: true,
-    color: "#166534",
-    deliverables: [
-      "升级后良率报告",
-      "升级目标达成验证报告",
-      "市场与售后影响跟踪报表",
-      "迭代项目关闭报告",
-    ],
-    gateStandard: DERIVATIVE_GATE_STANDARDS.mp,
-    tasks: [
-      {
-        id: "dm1",
-        name: "量产监控与目标达成",
-        desc: "监控升级版本良率、质量、安全、交付表现，并确认升级目标达成",
-        owner: "QA",
-        visibleRoles: ["qa", "pe", "mfg", "pm", "sales", "manager", "owner"],
-        guide:
-          "1) 连续 4 周或首批订单收集良率、OQC、返修、交付和客户反馈数据\n2) 与一代基线版本对比性能、续航、噪音、成本、可靠性、FPY、返修、测试失败和客诉\n3) 复核认证/标签/说明书/市场资料是否与升级版本一致\n4) 对异常执行快速围堵、根因分析和 CAPA，输出未达目标项的补充计划",
-      },
-      {
-        id: "dm2",
-        name: "市场与售后影响跟踪",
-        desc: "监控迭代版本上市后的售后、客户、渠道和版本切换反馈",
-        owner: "销售",
-        visibleRoles: ["sales", "qa", "scm", "pm", "manager", "owner"],
-        guide:
-          "1) 迭代后 RMA、客诉、退换货和渠道反馈追踪\n2) 与一代基线版本做同周期对比\n3) 对客户、区域市场、特殊渠道或库存切换问题做闭环",
-      },
-      {
-        id: "dm3",
-        name: "迭代关闭评审 (Gate 6)",
-        desc: "确认升级目标达成并正式关闭项目",
-        owner: "项目经理",
-        visibleRoles: [],
-        guide:
-          "关闭条件:\n- 升级目标达到预期或遗留项已形成受控计划\n- 无新增重大质量、安全、认证或售后风险\n- 版本文件、测试报告、试产和量产数据归档完整",
-      },
-    ],
-  },
-];
-
-// ─────────────────────────────────────────────────────────────────────────────
 // IDR — retired for new projects; retained only to render and close historical projects.
 // Appearance refresh for existing products. It may trigger ID, MD, EE, new
 // material procurement, packaging, manufacturing, and certification work.
@@ -4072,6 +2809,793 @@ export const IDR_PHASES: SOPPhase[] = [
     ],
   },
 ];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DRV project-track-v1 — common work + non-reused product-module work packs.
+// This composer is the only DRV task, deliverable, Gate and dependency source.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type DerivativeModulePack = {
+  designTasks: SOPTask[];
+  evtTasks: SOPTask[];
+  designDeliverables: string[];
+  evtDeliverables: string[];
+};
+
+const DRV_COMMON_VISIBLE_ROLES = [
+  "project_manager",
+  "pm",
+  "rd_hw",
+  "rd_sw",
+  "rd_mech",
+  "qa",
+  "cert",
+  "battery_safety",
+  "scm",
+  "pe",
+  "mfg",
+  "sales",
+  "manager",
+  "owner",
+];
+
+function drvTask(input: {
+  id: string;
+  name: string;
+  desc: string;
+  owner: string;
+  ownerRole: string;
+  durationDays?: number;
+  dependsOn?: string[];
+  guide?: string;
+}): SOPTask {
+  return {
+    id: input.id,
+    name: input.name,
+    desc: input.desc,
+    owner: input.owner,
+    visibleRoles: [
+      input.ownerRole,
+      ...DRV_COMMON_VISIBLE_ROLES.filter(role => role !== input.ownerRole),
+    ],
+    durationDays: input.durationDays ?? 3,
+    dependsOn: input.dependsOn,
+    evidence: "heavy",
+    guide:
+      input.guide ??
+      `${input.desc}。提交受控版本、评审结论、问题与责任人，未完成证据不得关闭任务。`,
+  };
+}
+
+function drvGateTask(id: string, name: string, desc: string): SOPTask {
+  return {
+    id,
+    name,
+    desc,
+    owner: "项目经理",
+    visibleRoles: [],
+    durationDays: 1,
+    evidence: "heavy",
+    guide: `${desc}。确认必交付物、责任人、P0/P1 问题和产品负责人批准均已完整。`,
+  };
+}
+
+const DERIVATIVE_MODULE_PACKS: Record<ProductModuleId, DerivativeModulePack> = {
+  battery: {
+    designTasks: [
+      drvTask({
+        id: "drv_battery_design",
+        name: "电池/能源系统需求与设计",
+        desc: "完成电芯、电池包、BMS、保护、充电和热路径设计",
+        owner: "硬件研发",
+        ownerRole: "rd_hw",
+        durationDays: 6,
+      }),
+    ],
+    evtTasks: [
+      drvTask({
+        id: "drv_battery_sample_integration",
+        name: "电池模块样件与集成",
+        desc: "完成电池模块样件、接口和整机集成确认",
+        owner: "硬件研发",
+        ownerRole: "rd_hw",
+        durationDays: 4,
+      }),
+      drvTask({
+        id: "drv_battery_special_validation",
+        name: "电池性能与保护专项验证",
+        desc: "验证容量、续航、充放电、保护、温升和安全边界",
+        owner: "QA",
+        ownerRole: "qa",
+        durationDays: 6,
+      }),
+    ],
+    designDeliverables: ["电池/能源系统设计包"],
+    evtDeliverables: ["电池模块样件与集成记录", "电池性能与保护专项验证报告"],
+  },
+  core_function: {
+    designTasks: [
+      drvTask({
+        id: "drv_core_function_design",
+        name: "核心功能部件规格与设计",
+        desc: "完成电机、泵、风机、机芯或传动部件的选型与设计",
+        owner: "结构研发",
+        ownerRole: "rd_mech",
+        durationDays: 6,
+      }),
+    ],
+    evtTasks: [
+      drvTask({
+        id: "drv_core_function_sample",
+        name: "核心功能部件样件",
+        desc: "完成核心功能部件样件、接口和装配确认",
+        owner: "结构研发",
+        ownerRole: "rd_mech",
+        durationDays: 4,
+      }),
+      drvTask({
+        id: "drv_core_function_special_validation",
+        name: "核心功能部件专项验证",
+        desc: "验证性能、温升、噪音、寿命和装配接口",
+        owner: "QA",
+        ownerRole: "qa",
+        durationDays: 6,
+      }),
+    ],
+    designDeliverables: ["核心功能部件设计包"],
+    evtDeliverables: ["核心功能部件样件记录", "核心功能部件专项验证报告"],
+  },
+  electronics: {
+    designTasks: [
+      drvTask({
+        id: "drv_electronics_design",
+        name: "电子硬件设计",
+        desc: "完成原理图、PCB、BOM、主控、驱动、电源和传感器设计",
+        owner: "硬件研发",
+        ownerRole: "rd_hw",
+        durationDays: 7,
+      }),
+    ],
+    evtTasks: [
+      drvTask({
+        id: "drv_electronics_sample_integration",
+        name: "电子硬件样件与联调",
+        desc: "完成 PCBA 样件、上电、接口和软硬件联调",
+        owner: "硬件研发",
+        ownerRole: "rd_hw",
+        durationDays: 5,
+      }),
+      drvTask({
+        id: "drv_electronics_special_validation",
+        name: "电子硬件专项验证",
+        desc: "验证电源、驱动、传感、EMC 前置和关键器件边界",
+        owner: "QA",
+        ownerRole: "qa",
+        durationDays: 5,
+      }),
+    ],
+    designDeliverables: ["电子硬件设计包"],
+    evtDeliverables: ["电子硬件样件联调记录", "电子硬件专项验证报告"],
+  },
+  software_connectivity: {
+    designTasks: [
+      drvTask({
+        id: "drv_software_requirements_design",
+        name: "软件/连接需求与设计",
+        desc: "完成固件、控制、APP、OTA、通讯和错误码设计",
+        owner: "软件研发",
+        ownerRole: "rd_sw",
+        durationDays: 5,
+      }),
+    ],
+    evtTasks: [
+      drvTask({
+        id: "drv_software_development_integration",
+        name: "软件开发与联调",
+        desc: "完成受控软件版本开发、烧录、接口和整机联调",
+        owner: "软件研发",
+        ownerRole: "rd_sw",
+        durationDays: 6,
+      }),
+      drvTask({
+        id: "drv_software_special_validation",
+        name: "软件接口与异常专项验证",
+        desc: "验证接口、连接、异常恢复、OTA/APP 和错误码边界",
+        owner: "QA",
+        ownerRole: "qa",
+        durationDays: 5,
+      }),
+    ],
+    designDeliverables: ["软件/连接需求与设计包"],
+    evtDeliverables: ["软件开发联调记录", "软件接口与异常专项验证报告"],
+  },
+  structure_mold: {
+    designTasks: [
+      drvTask({
+        id: "drv_structure_design",
+        name: "产品结构设计",
+        desc: "完成壳体、堆叠、装配、密封、散热和关键尺寸设计",
+        owner: "结构研发",
+        ownerRole: "rd_mech",
+        durationDays: 7,
+      }),
+      drvTask({
+        id: "drv_structure_mold_review",
+        name: "投模评审与开模批准",
+        desc: "确认结构冻结、模具方案、费用、周期和 T1/T2 计划",
+        owner: "PE",
+        ownerRole: "pe",
+        durationDays: 2,
+      }),
+      drvTask({
+        id: "drv_structure_mold_development",
+        name: "模具开发",
+        desc: "跟踪模具开发、试模准备、检具和关键风险",
+        owner: "PE",
+        ownerRole: "pe",
+        durationDays: 12,
+      }),
+    ],
+    evtTasks: [
+      drvTask({
+        id: "drv_structure_t1_t2_validation",
+        name: "T1/T2 与结构专项验证",
+        desc: "完成试模、修模、尺寸、装配、密封、散热和结构验证",
+        owner: "QA",
+        ownerRole: "qa",
+        durationDays: 8,
+      }),
+    ],
+    designDeliverables: ["产品结构设计包", "投模评审与开模批准记录", "模具开发计划"],
+    evtDeliverables: ["T1/T2 与结构专项验证报告"],
+  },
+  id_cmf: {
+    designTasks: [
+      drvTask({
+        id: "drv_id_cmf_design",
+        name: "ID/CMF 设计",
+        desc: "完成造型、颜色、材质、纹理、光泽和外观要求设计",
+        owner: "结构研发",
+        ownerRole: "rd_mech",
+        durationDays: 6,
+      }),
+    ],
+    evtTasks: [
+      drvTask({
+        id: "drv_id_cmf_sample",
+        name: "颜色/材质/工艺样件",
+        desc: "完成色板、材质和表面工艺样件确认",
+        owner: "结构研发",
+        ownerRole: "rd_mech",
+        durationDays: 4,
+      }),
+      drvTask({
+        id: "drv_id_cmf_standard_confirmation",
+        name: "外观标准与限度样本确认",
+        desc: "冻结外观判定标准、缺陷边界和限度样本",
+        owner: "QA",
+        ownerRole: "qa",
+        durationDays: 3,
+      }),
+    ],
+    designDeliverables: ["ID/CMF 设计包"],
+    evtDeliverables: ["颜色/材质/工艺样件", "外观标准与限度样本"],
+  },
+};
+
+export const DERIVATIVE_MODULE_TASK_IDS: Record<
+  ProductModuleId,
+  readonly string[]
+> = {
+  battery: moduleTaskIds("battery"),
+  core_function: moduleTaskIds("core_function"),
+  electronics: moduleTaskIds("electronics"),
+  software_connectivity: moduleTaskIds("software_connectivity"),
+  structure_mold: moduleTaskIds("structure_mold"),
+  id_cmf: moduleTaskIds("id_cmf"),
+};
+
+function moduleTaskIds(moduleId: ProductModuleId): readonly string[] {
+  return [
+    ...DERIVATIVE_MODULE_PACKS[moduleId].designTasks,
+    ...DERIVATIVE_MODULE_PACKS[moduleId].evtTasks,
+  ].map(task => task.id);
+}
+
+function chainDrvTasks(tasks: SOPTask[], entryTaskId: string): SOPTask[] {
+  return tasks.map((task, index) => ({
+    ...task,
+    dependsOn: [index === 0 ? entryTaskId : tasks[index - 1].id],
+  }));
+}
+
+function drvGateStandard(
+  phaseLabel: string,
+  requiredDeliverables: string[]
+): SOPGateStandard {
+  return {
+    entryCriteria: [`${phaseLabel}任务和责任人已确认`, "上一阶段 Gate 已通过或本阶段为项目入口"],
+    exitCriteria: [
+      `${phaseLabel}必交付物完整且版本受控`,
+      "P0/P1 问题已关闭或有经批准的处置计划",
+      "产品负责人已完成应承担的定义或范围批准",
+    ],
+    requiredDeliverables,
+    responsibleRoles: [
+      "项目经理负责 Gate 准备和问题闭环",
+      "专业工程师负责设计与验证证据",
+      "产品负责人负责产品定义和范围批准",
+      "QA/认证负责验证与安全法规结论",
+    ],
+    evidenceRequirements: requiredDeliverables,
+    exceptionStrategy: [
+      "证据不足时停留本阶段整改并重新评审",
+      "新增安全、法规或重大质量风险时升级评审，不能以模块复用替代风险结论",
+    ],
+  };
+}
+
+function makeDrvPhase(input: {
+  id: string;
+  code: string;
+  name: string;
+  nameEn: string;
+  duration: string;
+  desc: string;
+  gate: string;
+  gateTask: SOPTask;
+  color: string;
+  tasks: SOPTask[];
+  deliverables: string[];
+  isReleaseGate?: boolean;
+  isCloseGate?: boolean;
+}): SOPPhase {
+  const gateTask = {
+    ...input.gateTask,
+    dependsOn: input.tasks.map(task => task.id),
+  };
+  return {
+    id: input.id,
+    code: input.code,
+    name: input.name,
+    nameEn: input.nameEn,
+    duration: input.duration,
+    desc: input.desc,
+    gate: input.gate,
+    gateTaskId: gateTask.id,
+    color: input.color,
+    deliverables: input.deliverables,
+    gateStandard: drvGateStandard(input.name, input.deliverables),
+    tasks: [...input.tasks, gateTask],
+    isReleaseGate: input.isReleaseGate,
+    isCloseGate: input.isCloseGate,
+  };
+}
+
+export function buildDerivativePhases(
+  moduleReuse: Record<ProductModuleId, ModuleReuseState>
+): SOPPhase[] {
+  const activeModuleIds = PRODUCT_MODULE_IDS.filter(
+    moduleId => moduleReuse[moduleId] === "not_reused"
+  );
+  const designModuleTasks = activeModuleIds.flatMap(moduleId =>
+    chainDrvTasks(
+      DERIVATIVE_MODULE_PACKS[moduleId].designTasks,
+      "drv_common_kickoff_gate"
+    )
+  );
+  const evtModuleTasks = activeModuleIds.flatMap(moduleId =>
+    chainDrvTasks(
+      DERIVATIVE_MODULE_PACKS[moduleId].evtTasks,
+      "drv_common_evt_build"
+    )
+  );
+  const designModuleDeliverables = activeModuleIds.flatMap(
+    moduleId => DERIVATIVE_MODULE_PACKS[moduleId].designDeliverables
+  );
+  const evtModuleDeliverables = activeModuleIds.flatMap(
+    moduleId => DERIVATIVE_MODULE_PACKS[moduleId].evtDeliverables
+  );
+  const softwareValidationDependencies = activeModuleIds.includes(
+    "software_connectivity"
+  )
+    ? ["drv_software_special_validation"]
+    : ["drv_common_evt_build"];
+
+  const iterationTasks = [
+    drvTask({
+      id: "drv_common_product_baseline",
+      name: "产品定义/规格基线确认",
+      desc: "确认为什么做、要做成什么样以及产品规格基线",
+      owner: "产品经理",
+      ownerRole: "pm",
+      durationDays: 2,
+    }),
+    drvTask({
+      id: "drv_common_project_plan",
+      name: "项目计划、RACI 和版本基线",
+      desc: "确认里程碑、责任人、Build 版本和关键路径",
+      owner: "项目经理",
+      ownerRole: "project_manager",
+      dependsOn: ["drv_common_product_baseline"],
+      durationDays: 2,
+    }),
+    drvTask({
+      id: "drv_common_risk_scope",
+      name: "风险声明与评估结论确认",
+      desc: "确认结构化变更范围、安全法规风险和认证覆盖结论",
+      owner: "QA",
+      ownerRole: "qa",
+      dependsOn: ["drv_common_product_baseline"],
+      durationDays: 2,
+    }),
+  ];
+  const designTasks = [
+    drvTask({
+      id: "drv_common_dfm_validation_plan",
+      name: "DFM、DFT、DFMEA 与验证计划",
+      desc: "确认制造、测试、风险、CTQ 和 EVT/DVT/PVT 验证矩阵",
+      owner: "QA",
+      ownerRole: "qa",
+      dependsOn: ["drv_common_kickoff_gate"],
+      durationDays: 4,
+    }),
+    ...designModuleTasks,
+    drvTask({
+      id: "drv_common_accessory_definition",
+      name: "配件定义",
+      desc: "确认配件清单、接口、规格、样件和验证要求",
+      owner: "SCM",
+      ownerRole: "scm",
+      dependsOn: ["drv_common_kickoff_gate"],
+      durationDays: 2,
+    }),
+  ];
+  const evtTasks = [
+    drvTask({
+      id: "drv_common_evt_build",
+      name: "EVT Build 与版本记录",
+      desc: "制作整机样机并记录 BOM、硬件、软件、结构和问题版本",
+      owner: "PE",
+      ownerRole: "pe",
+      dependsOn: ["drv_common_design_gate"],
+      durationDays: 5,
+    }),
+    ...evtModuleTasks,
+    drvTask({
+      id: "drv_common_system_function_regression",
+      name: "整机功能和兼容性回归",
+      desc: "验证整机核心功能、性能、接口和模块集成兼容性",
+      owner: "QA",
+      ownerRole: "qa",
+      dependsOn: ["drv_common_evt_build", ...evtModuleTasks.map(task => task.id)],
+      durationDays: 5,
+    }),
+    drvTask({
+      id: "drv_common_software_function_validation",
+      name: "软件功能验证",
+      desc: "独立验证软件功能、异常恢复、APP/OTA、连接和生产接口",
+      owner: "QA",
+      ownerRole: "qa",
+      dependsOn: softwareValidationDependencies,
+      durationDays: 5,
+    }),
+    drvTask({
+      id: "drv_common_evt_issue_close",
+      name: "EVT 问题关闭与 DVT 输入冻结",
+      desc: "关闭 EVT 问题并冻结 DVT Build 和验证输入",
+      owner: "项目经理",
+      ownerRole: "project_manager",
+      dependsOn: [
+        "drv_common_system_function_regression",
+        "drv_common_software_function_validation",
+      ],
+      durationDays: 3,
+    }),
+  ];
+  const dvtTasks = [
+    drvTask({
+      id: "drv_common_dvt_build",
+      name: "DVT Build 与版本记录",
+      desc: "制作 DVT 样机并冻结软硬件、结构、BOM 和样品版本",
+      owner: "PE",
+      ownerRole: "pe",
+      dependsOn: ["drv_common_evt_gate"],
+      durationDays: 5,
+    }),
+    drvTask({
+      id: "drv_common_reliability_validation",
+      name: "可靠性验证（内部测试）",
+      desc: "独立完成环境、机械、寿命和使用场景可靠性测试",
+      owner: "QA",
+      ownerRole: "qa",
+      dependsOn: ["drv_common_dvt_build"],
+      durationDays: 8,
+    }),
+    drvTask({
+      id: "drv_common_safety_certification_validation",
+      name: "安规/认证验证",
+      desc: "独立完成目标市场安规、认证、运输和证书覆盖验证",
+      owner: "认证",
+      ownerRole: "cert",
+      dependsOn: ["drv_common_dvt_build"],
+      durationDays: 8,
+    }),
+    drvTask({
+      id: "drv_common_accessory_confirmation",
+      name: "配件确认",
+      desc: "独立确认配件样件、接口、规格、数量和检验要求",
+      owner: "SCM",
+      ownerRole: "scm",
+      dependsOn: ["drv_common_dvt_build"],
+      durationDays: 3,
+    }),
+    drvTask({
+      id: "drv_common_packaging_validation",
+      name: "包装验证",
+      desc: "独立验证包装结构、保护、标签资料和装箱要求",
+      owner: "QA",
+      ownerRole: "qa",
+      dependsOn: ["drv_common_dvt_build"],
+      durationDays: 4,
+    }),
+    drvTask({
+      id: "drv_common_logistics_validation",
+      name: "物流验证",
+      desc: "独立验证运输、堆码、跌落、振动和物流边界",
+      owner: "SCM",
+      ownerRole: "scm",
+      dependsOn: ["drv_common_dvt_build"],
+      durationDays: 4,
+    }),
+    drvTask({
+      id: "drv_common_dvt_issue_close",
+      name: "DVT 问题关闭与 PVT Readiness",
+      desc: "关闭 DVT 问题并确认试产输入、风险和责任人",
+      owner: "项目经理",
+      ownerRole: "project_manager",
+      dependsOn: [
+        "drv_common_reliability_validation",
+        "drv_common_safety_certification_validation",
+        "drv_common_accessory_confirmation",
+        "drv_common_packaging_validation",
+        "drv_common_logistics_validation",
+      ],
+      durationDays: 3,
+    }),
+  ];
+  const pvtTasks = [
+    drvTask({
+      id: "drv_common_fixture_confirmation",
+      name: "治具确认",
+      desc: "独立确认装配、检具、测试治具和验收状态",
+      owner: "PE",
+      ownerRole: "pe",
+      dependsOn: ["drv_common_dvt_gate"],
+      durationDays: 4,
+    }),
+    drvTask({
+      id: "drv_common_eol_test_program_confirmation",
+      name: "EOL/测试程序确认",
+      desc: "独立确认量产测试程序、覆盖率、限值和版本",
+      owner: "PE",
+      ownerRole: "pe",
+      dependsOn: ["drv_common_dvt_gate"],
+      durationDays: 4,
+    }),
+    drvTask({
+      id: "drv_common_pvt_trial",
+      name: "PVT 试产",
+      desc: "执行受控试产并记录 Build、物料、工艺、产能和良率",
+      owner: "工厂",
+      ownerRole: "mfg",
+      dependsOn: [
+        "drv_common_fixture_confirmation",
+        "drv_common_eol_test_program_confirmation",
+      ],
+      durationDays: 6,
+    }),
+    drvTask({
+      id: "drv_common_pvt_quality_close",
+      name: "试产良率与问题关闭",
+      desc: "确认良率、产能、P0/P1 问题和改善复验结果",
+      owner: "QA",
+      ownerRole: "qa",
+      dependsOn: ["drv_common_pvt_trial"],
+      durationDays: 4,
+    }),
+    drvTask({
+      id: "drv_common_release_files",
+      name: "产品文件、BOM 和量产交付",
+      desc: "发布产品规格、BOM、图纸、软件、SOP/WI 和检验标准，并复核 DVT 已批准的认证与运输证据仍覆盖量产版本",
+      owner: "项目经理",
+      ownerRole: "project_manager",
+      dependsOn: ["drv_common_pvt_quality_close"],
+      durationDays: 3,
+    }),
+  ];
+  const mpTasks = [
+    drvTask({
+      id: "stability_ramp",
+      name: "首批量产与爬坡",
+      desc: "跟踪首批产量、产能与交付爬坡",
+      owner: "工厂",
+      ownerRole: "mfg",
+      dependsOn: ["drv_common_pvt_release_gate"],
+      durationDays: 5,
+    }),
+    drvTask({
+      id: "stability_metrics",
+      name: "良率、质量与产能稳定确认",
+      desc: "以结构化周报确认发布后稳定表现",
+      owner: "QA",
+      ownerRole: "qa",
+      dependsOn: ["stability_ramp"],
+      durationDays: 7,
+    }),
+    drvTask({
+      id: "stability_issues",
+      name: "遗留问题关闭与受控转交",
+      desc: "关闭稳定期问题并将长期事项转入受控流程",
+      owner: "项目经理",
+      ownerRole: "project_manager",
+      dependsOn: ["stability_metrics"],
+      durationDays: 2,
+    }),
+  ];
+
+  return [
+    makeDrvPhase({
+      id: "iteration",
+      code: "P1",
+      name: "迭代启动",
+      nameEn: "Iteration Kickoff",
+      duration: "1-2周",
+      desc: "冻结产品规格、六模块执行基线、风险结论和项目计划",
+      gate: "迭代 Kickoff",
+      gateTask: drvGateTask(
+        "drv_common_kickoff_gate",
+        "迭代 Kickoff (Gate 1)",
+        "冻结规格、六模块复用证据、风险结论和项目计划"
+      ),
+      color: "#a16207",
+      tasks: iterationTasks,
+      deliverables: [
+        "产品规格基线确认记录",
+        "六模块执行基线",
+        "风险声明与评估结论",
+        "项目计划与RACI",
+      ],
+    }),
+    makeDrvPhase({
+      id: "design",
+      code: "P2",
+      name: "设计",
+      nameEn: "Design",
+      duration: "3-6周",
+      desc: "完成所有不复用模块设计、制造测试风险评审和验证计划",
+      gate: "设计冻结",
+      gateTask: drvGateTask(
+        "drv_common_design_gate",
+        "设计冻结 (Gate 2)",
+        "冻结模块设计输出、接口、BOM 和验证矩阵"
+      ),
+      color: "#0369a1",
+      tasks: designTasks,
+      deliverables: [
+        "DFM/DFT/DFMEA评审记录",
+        "验证计划",
+        "配件定义清单",
+        ...designModuleDeliverables,
+      ],
+    }),
+    makeDrvPhase({
+      id: "evt",
+      code: "P3",
+      name: "EVT",
+      nameEn: "EVT",
+      duration: "3-5周",
+      desc: "完成 EVT Build、模块专项验证、整机和软件回归及问题关闭",
+      gate: "EVT 评审",
+      gateTask: drvGateTask(
+        "drv_common_evt_gate",
+        "EVT 评审 (Gate 3)",
+        "确认模块专项、整机、软件和 EVT 问题已闭环"
+      ),
+      color: "#7c3aed",
+      tasks: evtTasks,
+      deliverables: [
+        "EVT Build Record",
+        "整机功能与兼容性回归报告",
+        "软件功能验证报告",
+        "EVT问题关闭与DVT输入记录",
+        ...evtModuleDeliverables,
+      ],
+    }),
+    makeDrvPhase({
+      id: "dvt",
+      code: "P4",
+      name: "DVT",
+      nameEn: "DVT",
+      duration: "4-7周",
+      desc: "独立完成可靠性、安规认证、配件、包装、物流和 DVT 问题关闭",
+      gate: "DVT 评审",
+      gateTask: drvGateTask(
+        "drv_common_dvt_gate",
+        "DVT 评审 (Gate 4)",
+        "确认独立验证证据和 PVT Readiness 完整"
+      ),
+      color: "#be123c",
+      tasks: dvtTasks,
+      deliverables: [
+        "DVT Build Record",
+        "可靠性内部测试报告",
+        "安规与认证验证报告",
+        "UN38.3运输测试报告或复用确认",
+        "MSDS",
+        "电芯/电池包安全认证报告或复用确认",
+        "配件确认记录",
+        "包装验证报告",
+        "物流验证报告",
+        "DVT问题关闭与PVT Readiness记录",
+      ],
+    }),
+    makeDrvPhase({
+      id: "pvt",
+      code: "P5",
+      name: "PVT",
+      nameEn: "PVT",
+      duration: "3-5周",
+      desc: "确认治具、EOL 测试、试产、良率、文件和量产交付",
+      gate: "量产发布评审",
+      gateTask: drvGateTask(
+        "drv_common_pvt_release_gate",
+        "量产发布评审 (Gate 5)",
+        "确认治具、EOL、试产和量产交付满足发布条件"
+      ),
+      color: "#15803d",
+      tasks: pvtTasks,
+      deliverables: [
+        "治具验收记录",
+        "EOL与测试程序验收记录",
+        "EOL 100%测试能力验收记录",
+        "PVT试产报告",
+        "试产良率与问题关闭报告",
+        "产品文件BOM与量产交付清单",
+        "认证与运输证据覆盖复核记录",
+      ],
+      isReleaseGate: true,
+    }),
+    makeDrvPhase({
+      id: "mp",
+      code: "P6",
+      name: "迭代稳定与关闭",
+      nameEn: "Post-release Stabilization & Project Close",
+      duration: "2-8周",
+      desc: "量产版本发布后的爬坡、稳定性验证与项目关闭移交",
+      gate: "迭代关闭评审",
+      gateTask: drvGateTask(
+        "project_close_review",
+        "项目关闭评审",
+        "确认稳定证据、遗留问题和正式移交满足关闭条件"
+      ),
+      color: "#166534",
+      tasks: mpTasks,
+      deliverables: [
+        "首批量产与爬坡记录",
+        "稳定期周报与QA结论",
+        "遗留问题关闭与受控转交记录",
+      ],
+      isCloseGate: true,
+    }),
+  ];
+}
+
+const DERIVATIVE_ALL_NOT_REUSED = allDerivativeModulesNotReused();
+
+export const DERIVATIVE_PHASES: SOPPhase[] = buildDerivativePhases(
+  DERIVATIVE_ALL_NOT_REUSED
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // JDM — Joint Design Manufacture / 客户委托设计 (6-phase)
@@ -5026,7 +4550,7 @@ const ALL_PROJECT_CATEGORY_CONFIGS: ProjectCategoryConfig[] = [
     textColor: "text-violet-800",
     borderColor: "border-violet-300",
     icon: "🔄",
-    desc: "需要多人跨专业协作的产品迭代、衍生型号或复杂外观/CMF 翻新；按模块复用情况裁剪设计、验证与 Gate 深度。包装、标签、文案、简单换色等小改留在产品轴，不创建项目。",
+    desc: "需要多人跨专业协作的产品迭代、衍生型号或复杂外观/CMF 翻新；固定保留公共流程，只按六模块的复用状态移除对应模块任务包。包装、标签和文案轻改走产品库 Revision，重大包装运输或认证变化走 ECO。",
     phaseCount: 6,
     typicalDuration: "约 1.5-5 个月",
     phases: DERIVATIVE_PHASES_CURRENT,

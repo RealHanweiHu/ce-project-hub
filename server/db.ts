@@ -79,14 +79,8 @@ import {
   type ProjectTemplateLike,
 } from "../shared/npd-v3";
 import {
-  getDerivativeEffectivePhases,
-  getDerivativeEffectiveTaskIds,
-  getDerivativeModuleAffectedTaskIds,
-  getDerivativeTailoredTaskIds,
   getPhasesForCategory,
-  normalizeDerivativeReuseStrategy,
   SOP_TEMPLATE_VERSION_CURRENT,
-  type DerivativeReuseStrategy,
 } from "../shared/sop-templates";
 import { computeDownstreamImpact, type DownstreamImpactRow, type VariantStatus } from "../shared/oem-variant";
 import { computeGateReadiness, type GateReadiness } from "../shared/gate-readiness";
@@ -108,7 +102,6 @@ import {
   isHighRiskProtectedTask,
   isHighSopRisk,
   phaseContainsHighRiskControls,
-  restoreHighRiskTasks,
   deriveSopRiskAssessment,
   EMPTY_CHANGE_SCOPE_DECLARATION,
   type ProjectChangeScopeDeclaration,
@@ -121,10 +114,6 @@ import {
   getRequiredCertificationCoverage,
   type CertificationCoverageRecord,
 } from "../shared/certification";
-import {
-  DERIVATIVE_AUTO_EXEMPT_REASON,
-  getDerivativeAutoExemptDeliverables,
-} from "../shared/derivative-deliverable-tailoring";
 import { buildOperationalProjectSchedTasks, buildSchedTasks } from "../shared/schedule-graph";
 import {
   forecastSchedule,
@@ -6083,19 +6072,8 @@ export async function getProjectEffectiveProcess(projectId: string): Promise<Eff
   const overrides = await listDeliverableOverrides(projectId);
   const highRisk = isHighSopRisk(project);
   const npdV3RedlinePolicy = getNpdV3RedlinePolicy(project);
-  const strategyInput = project.customFields?.derivativeReuseStrategy;
   const basePhases = getEffectivePhasesForProjectLike(project);
-  const strategyTailoredTaskIds = project.category === "derivative"
-    ? getDerivativeTailoredTaskIds(strategyInput, project.sopTemplateVersion)
-    : new Set<string>();
-  const derivativePhaseOverride = project.category === "derivative"
-    ? getDerivativeEffectivePhases(strategyInput, project.sopTemplateVersion)
-    : undefined;
-  const phaseOverride = highRisk && derivativePhaseOverride
-    ? restoreHighRiskTasks(basePhases, derivativePhaseOverride)
-    : derivativePhaseOverride;
   const tailoredTaskIds = new Set<string>(sets.tailoredTaskIds);
-  for (const id of Array.from(strategyTailoredTaskIds)) tailoredTaskIds.add(id);
   const protectedTaskIds = highRisk
     ? new Set(basePhases.flatMap((phase) => phase.tasks.filter(isHighRiskProtectedTask).map((task) => task.id)))
     : new Set<string>();
@@ -6126,279 +6104,8 @@ export async function getProjectEffectiveProcess(projectId: string): Promise<Eff
       if (npdV3RedlinePolicy.auditDeliverables.has(override.deliverableName)) return false;
       return !highRisk || !isHighRiskProtectedDeliverable(override.deliverableName);
     }),
-    phaseOverride ?? basePhases
+    basePhases
   );
-}
-
-export async function applyDerivativeReuseStrategyToProject(
-  projectId: string,
-  strategyInput: unknown,
-  updatedBy: number
-): Promise<{
-  effectiveTasks: number;
-  skippedTasks: number;
-  insertedTasks: number;
-  restoredTasks: number;
-  obsoleteSkippedTasks: number;
-  completedSkippedTasks: string[];
-  autoExemptedDeliverables: string[];
-  restoredDeliverables: string[];
-}> {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-
-  const project = await getProjectById(projectId);
-  if (!project) throw new Error("Project not found");
-  if (project.category !== "derivative") {
-    throw new Error("流程策略仅适用于产品迭代/衍生开发项目");
-  }
-
-  const strategy = normalizeDerivativeReuseStrategy(strategyInput);
-  // 重置范围限定在"等级发生变化的模块"影响的任务：同策略重放 = no-op，
-  // 只调无关模块不重置其它模块已完成的工作。
-  const previousStrategy = normalizeDerivativeReuseStrategy(project.customFields?.derivativeReuseStrategy);
-  const changedModuleIds = Object.keys(strategy).filter(
-    (moduleId) => previousStrategy[moduleId] !== strategy[moduleId]
-  );
-  const affectedTaskIds = getDerivativeModuleAffectedTaskIds(changedModuleIds);
-  const strategyEffectiveTaskIds = getDerivativeEffectiveTaskIds(strategy, project.sopTemplateVersion);
-  const derivativeTemplatePhases = getPhasesForCategory("derivative", project.sopTemplateVersion);
-  const approvedTailoring = await getApprovedTailoringSets(projectId);
-  const effectiveTaskIds = new Set(
-    Array.from(strategyEffectiveTaskIds).filter((taskId) => !approvedTailoring.tailoredTaskIds.has(taskId))
-  );
-  if (isHighSopRisk(project)) {
-    for (const phase of derivativeTemplatePhases) {
-      for (const task of phase.tasks) {
-        if (isHighRiskProtectedTask(task)) effectiveTaskIds.add(task.id);
-      }
-    }
-  }
-
-  const templateTasks = derivativeTemplatePhases.flatMap((phase) =>
-    phase.tasks.map((task) => ({ phase, task }))
-  );
-  const templateTaskIds = new Set(templateTasks.map(({ task }) => task.id));
-  const existingTasks = await getProjectTasks(projectId);
-  const existingByKey = new Map(existingTasks.map((task) => [`${task.phaseId}:${task.taskId}`, task]));
-  const rebasedTaskIds = new Set([
-    "dd1", "dd2", "dd3", "dd4", "dd5",
-    "de5",
-    "dv1", "dv2", "dv3", "dv4", "dv5",
-    "dp3", "dp4", "dp5",
-  ]);
-
-  const completedBeingTailored = templateTasks
-    .filter(({ task }) => !effectiveTaskIds.has(task.id))
-    .map(({ phase, task }) => existingByKey.get(`${phase.id}:${task.id}`))
-    .filter((task): task is ProjectTask => !!task && !rebasedTaskIds.has(task.taskId) && (task.completed || task.status === "done" || task.status === "pending_approval"));
-  if (completedBeingTailored.length > 0) {
-    throw new Error(`已完成或待审批的任务不能通过流程策略裁剪: ${completedBeingTailored.map((task) => task.taskId).join(", ")}`);
-  }
-
-  const customFields = project.customFields && typeof project.customFields === "object" && !Array.isArray(project.customFields)
-    ? project.customFields as Record<string, unknown>
-    : {};
-
-  let insertedTasks = 0;
-  let skippedTasks = 0;
-  let restoredTasks = 0;
-  let obsoleteSkippedTasks = 0;
-  const completedSkippedTasks: string[] = [];
-  const autoExemptedDeliverables: string[] = [];
-  const restoredDeliverables: string[] = [];
-
-  await db.transaction(async (tx) => {
-    await updateProject(projectId, {
-      customFields: {
-        ...customFields,
-        derivativeReuseStrategy: strategy as DerivativeReuseStrategy,
-      },
-    }, tx);
-
-    if (derivativeTemplatePhases.length > 0) {
-      await tx
-        .insert(projectPhases)
-        .values(derivativeTemplatePhases.map((phase) => ({ projectId, phaseId: phase.id })))
-        .onConflictDoNothing({
-          target: [projectPhases.projectId, projectPhases.phaseId],
-        });
-    }
-
-    // 先用一次 upsert 同步所有模板任务的稳定字段；状态变更再按旧快照分组批量写。
-    // 这样既避免逐任务 select+write，也不会用 INSERT 默认值覆盖既有审批、排期和说明。
-    const templateTaskRows = templateTasks.map(({ phase, task }) => {
-      const key = `${phase.id}:${task.id}`;
-      const existing = existingByKey.get(key);
-      const effective = effectiveTaskIds.has(task.id);
-      if (!existing) insertedTasks += 1;
-      if (!effective) {
-        skippedTasks += 1;
-        if (existing && (existing.completed || existing.status === "done" || existing.status === "pending_approval")) {
-          completedSkippedTasks.push(task.id);
-        }
-      }
-      return {
-        projectId,
-        phaseId: phase.id,
-        taskId: task.id,
-        visibleRoles: task.visibleRoles ?? [],
-        updatedBy,
-      };
-    });
-
-    const templateRows = templateTaskRows.length > 0
-      ? await tx
-        .insert(projectTasks)
-        .values(templateTaskRows)
-        .onConflictDoUpdate({
-          target: [projectTasks.projectId, projectTasks.phaseId, projectTasks.taskId],
-          set: {
-            visibleRoles: drizzleSql`excluded."visibleRoles"`,
-            updatedBy: drizzleSql`excluded."updatedBy"`,
-            updatedAt: new Date(),
-          },
-        })
-        .returning({
-          id: projectTasks.id,
-          phaseId: projectTasks.phaseId,
-          taskId: projectTasks.taskId,
-        })
-      : [];
-    const persistedIdByKey = new Map(
-      templateRows.map((row) => [`${row.phaseId}:${row.taskId}`, row.id])
-    );
-    const idsFor = (predicate: (phaseId: string, taskId: string, existing: ProjectTask | undefined) => boolean) =>
-      templateTasks.flatMap(({ phase, task }) => {
-        const key = `${phase.id}:${task.id}`;
-        return predicate(phase.id, task.id, existingByKey.get(key))
-          ? [persistedIdByKey.get(key)]
-          : [];
-      }).filter((id): id is number => id !== undefined);
-
-    const skippedIds = idsFor((_phaseId, taskId) => !effectiveTaskIds.has(taskId));
-    if (skippedIds.length > 0) {
-      const statusChangedAt = new Date();
-      await tx
-        .update(projectTasks)
-        .set({
-          status: "skipped",
-          completed: false,
-          completedAt: null,
-          statusChangedAt: drizzleSql`case when ${projectTasks.status} <> 'skipped'::task_status then ${statusChangedAt} else ${projectTasks.statusChangedAt} end`,
-          updatedBy,
-        })
-        .where(inArray(projectTasks.id, skippedIds));
-    }
-
-    const restoredIds = idsFor((_phaseId, taskId, existing) =>
-      effectiveTaskIds.has(taskId) && existing?.status === "skipped"
-    );
-    restoredTasks = restoredIds.length;
-    if (restoredIds.length > 0) {
-      await tx
-        .update(projectTasks)
-        .set({
-          status: "todo",
-          completed: false,
-          completedAt: null,
-          statusChangedAt: new Date(),
-          updatedBy,
-        })
-        .where(inArray(projectTasks.id, restoredIds));
-    }
-
-    const rebasedIds = idsFor((_phaseId, taskId, existing) =>
-      effectiveTaskIds.has(taskId) && !!existing && rebasedTaskIds.has(taskId) && affectedTaskIds.has(taskId) &&
-      (existing.completed || existing.status === "done" || existing.status === "pending_approval")
-    );
-    if (rebasedIds.length > 0) {
-      await tx
-        .update(projectTasks)
-        .set({
-          status: "todo",
-          completed: false,
-          completedAt: null,
-          statusChangedAt: new Date(),
-          approvalStatus: "none",
-          approvalRequestedBy: null,
-          approvalRequestedAt: null,
-          approvalDecidedBy: null,
-          approvalDecidedAt: null,
-          approvalNote: null,
-          updatedBy,
-        })
-        .where(inArray(projectTasks.id, rebasedIds));
-    }
-
-    const obsoleteIds = existingTasks
-      .filter((row) => !templateTaskIds.has(row.taskId) && row.status !== "skipped")
-      .map((row) => row.id);
-    obsoleteSkippedTasks = obsoleteIds.length;
-    if (obsoleteIds.length > 0) {
-      await tx
-        .update(projectTasks)
-        .set({
-          status: "skipped",
-          completed: false,
-          completedAt: null,
-          statusChangedAt: new Date(),
-          updatedBy,
-        })
-        .where(inArray(projectTasks.id, obsoleteIds));
-    }
-
-    // 策略 → Gate 交付物自动豁免（P1-3）：产出任务全被裁的交付物落 remove override（带自动理由），
-    // 策略回调后不再命中的自动豁免撤销。只增删带 DERIVATIVE_AUTO_EXEMPT_REASON 的行，
-    // PM 手动豁免（其他理由）与手动加回（action=add）一律不碰；安全锚点在推导层已排除。
-    const autoTargets = getDerivativeAutoExemptDeliverables(strategy).filter(
-      (target) => !(isHighSopRisk(project) && isHighRiskProtectedDeliverable(target.deliverableName))
-    );
-    const overrideKey = (phaseId: string, name: string) => `${phaseId}\u0000${name}`;
-    const targetKeys = new Set(autoTargets.map((t) => overrideKey(t.nodePhaseId, t.deliverableName)));
-    const existingOverrides = await tx
-      .select()
-      .from(projectDeliverableOverrides)
-      .where(eq(projectDeliverableOverrides.projectId, projectId));
-    const overrideByKey = new Map(
-      existingOverrides.map((o) => [overrideKey(o.nodePhaseId, o.deliverableName), o])
-    );
-    for (const target of autoTargets) {
-      if (overrideByKey.has(overrideKey(target.nodePhaseId, target.deliverableName))) continue;
-      await tx.insert(projectDeliverableOverrides).values({
-        projectId,
-        nodePhaseId: target.nodePhaseId,
-        deliverableName: target.deliverableName,
-        action: "remove",
-        reason: DERIVATIVE_AUTO_EXEMPT_REASON,
-        createdBy: updatedBy,
-      });
-      autoExemptedDeliverables.push(`${target.nodePhaseId}:${target.deliverableName}`);
-    }
-    for (const override of existingOverrides) {
-      if (
-        override.action === "remove" &&
-        override.reason === DERIVATIVE_AUTO_EXEMPT_REASON &&
-        !targetKeys.has(overrideKey(override.nodePhaseId, override.deliverableName))
-      ) {
-        await tx.delete(projectDeliverableOverrides).where(eq(projectDeliverableOverrides.id, override.id));
-        restoredDeliverables.push(`${override.nodePhaseId}:${override.deliverableName}`);
-      }
-    }
-  });
-
-  await refreshProjectTaskStatuses(projectId);
-
-  return {
-    effectiveTasks: effectiveTaskIds.size,
-    skippedTasks,
-    insertedTasks,
-    restoredTasks,
-    obsoleteSkippedTasks,
-    completedSkippedTasks,
-    autoExemptedDeliverables,
-    restoredDeliverables,
-  };
 }
 
 /**

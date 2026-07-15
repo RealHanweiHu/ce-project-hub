@@ -185,6 +185,17 @@ OVERRIDES = {
     "市场与渠道反馈清单": "F03",
     "版本资料移交清单": "F07",
     "IDR项目关闭报告": "F01",
+    "产品规格基线确认记录": "F01",
+    "六模块执行基线": "F07",
+    "风险声明与评估结论": "F04",
+    "首批量产与爬坡记录": "F08",
+    "稳定期周报与QA结论": "F08",
+    "投模评审与开模批准记录": "F01",
+    "整机功能与兼容性回归报告": "F02",
+    "外观标准与限度样本": "F09",
+    "配件确认记录": "F07",
+    "试产良率与问题关闭报告": "F08",
+    "认证与运输证据覆盖复核记录": "F10",
 }
 
 # 规则（按顺序匹配）
@@ -1162,9 +1173,10 @@ def main():
         os.makedirs(folder, exist_ok=True)
         fname = sanitize(name) + ".xlsx"
         ctx = {"title": name, "fid": fid, "applies": applies_text(occ)}
+        template_path = os.path.join(folder, fname)
         wb = Workbook()
         BUILDERS[fid](wb, ctx)
-        wb.save(os.path.join(folder, fname))
+        wb.save(template_path)
         index_rows.append((name, fid, FAMILIES[fid], f"{fid}-{FAMILIES[fid]}/{fname}", "、".join(occ)))
 
     # 索引工作簿

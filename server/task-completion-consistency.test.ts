@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { setTaskCompletion, updateTaskMeta, getProjectTasks, getDb, refreshProjectTaskStatuses, applyAutomaticTaskStatuses } from "./db";
 import { projectTasks, projects, type ProjectTask } from "../drizzle/schema";
-import { DERIVATIVE_REUSE_MODULE_RULES, PROJECT_CATEGORIES } from "../shared/sop-templates";
+import { PROJECT_CATEGORIES, SOP_TEMPLATE_VERSION_CURRENT } from "../shared/sop-templates";
 import { and, eq } from "drizzle-orm";
 
 const P = `test-sot-${Date.now()}`;
@@ -146,19 +146,41 @@ describe("task completion single source of truth", () => {
   });
 
   it("状态派生与开始守卫共用裁剪后的项目有效依赖图", () => {
-    const derivativeReuseStrategy = Object.fromEntries(
-      DERIVATIVE_REUSE_MODULE_RULES.map((rule) => [rule.id, "direct_reuse"]),
-    );
     const projectLike = {
       category: "derivative",
-      customFields: { derivativeReuseStrategy },
+      sopTemplateVersion: SOP_TEMPLATE_VERSION_CURRENT,
+      customFields: {
+        projectExecutionBaseline: {
+          modelVersion: "project-track-v1",
+          status: "frozen",
+          productDefinitionRef: "PSD-DRV-001",
+          moduleReuse: {
+            battery: "reused",
+            core_function: "not_reused",
+            electronics: "not_reused",
+            software_connectivity: "not_reused",
+            structure_mold: "not_reused",
+            id_cmf: "not_reused",
+          },
+          reuseEvidence: {
+            battery: {
+              sourceRef: "BAT-PLATFORM",
+              modelOrVersion: "v1",
+              evidenceRef: "EV-BAT-001",
+              boundaryConfirmed: true,
+            },
+          },
+          frozenAt: "2026-07-15T10:00:00.000Z",
+          frozenBy: 1,
+        },
+      },
     };
     const rows = [
       makeTask({
         id: 1,
         projectId: "contracted-status",
-        phaseId: "intake",
-        taskId: "di6",
+        phaseId: "iteration",
+        taskId: "drv_common_kickoff_gate",
         status: "done",
         completed: true,
         completedAt: new Date(),
@@ -167,7 +189,7 @@ describe("task completion single source of truth", () => {
         id: 2,
         projectId: "contracted-status",
         phaseId: "design",
-        taskId: "dd6",
+        taskId: "drv_common_dfm_validation_plan",
         actualStartedAt: new Date(),
       }),
     ];
@@ -176,7 +198,7 @@ describe("task completion single source of truth", () => {
       projectStartDate: "2026-07-01",
       projectLike,
     });
-    expect(out.find((task) => task.taskId === "dd6")?.status).toBe("in_progress");
+    expect(out.find((task) => task.taskId === "drv_common_dfm_validation_plan")?.status).toBe("in_progress");
   });
 
   it("项目启动后依赖未完成的任务保持待开始(不标阻塞),依赖完成后按排期推进", async () => {

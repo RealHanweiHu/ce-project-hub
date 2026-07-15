@@ -5,7 +5,10 @@
 import { describe, it, expect } from "vitest";
 import { generateSchedule, contractSchedTasks, type SchedTask } from "./scheduling";
 import { buildSchedTasks } from "./schedule-graph";
-import { getPhasesForCategory, getDerivativeEffectiveTaskIds, DERIVATIVE_REUSE_MODULE_RULES } from "./sop-templates";
+import {
+  SOP_TEMPLATE_VERSION_CURRENT,
+  getDerivativePhasesForExecutionBaseline,
+} from "./sop-templates";
 
 describe("contractSchedTasks", () => {
   it("被裁任务的前置透传给后继：A→B→C 裁 B 后 C 依赖 A", () => {
@@ -46,19 +49,43 @@ describe("contractSchedTasks", () => {
     expect(out.find((t) => t.id === "D")!.dependsOn).toEqual([]);
   });
 
-  it("DRV 全模块直接复用：dd6 不早于 di6（立项评审）完成，排期不坍塌", () => {
-    const allDirectReuse = Object.fromEntries(
-      DERIVATIVE_REUSE_MODULE_RULES.map((r) => [r.id, "direct_reuse"])
-    );
-    const keep = getDerivativeEffectiveTaskIds(allDirectReuse);
-    const full = buildSchedTasks(getPhasesForCategory("derivative"));
-    const out = contractSchedTasks(full, keep);
-    const sched = generateSchedule(out, "2026-01-05");
+  it("DRV 多模块复用后公共关键链仍按 Gate 保序，排期不坍塌", () => {
+    const phases = getDerivativePhasesForExecutionBaseline({
+      modelVersion: "project-track-v1",
+      status: "frozen",
+      productDefinitionRef: "PSD-DRV-001",
+      moduleReuse: {
+        battery: "reused",
+        core_function: "not_reused",
+        electronics: "reused",
+        software_connectivity: "not_reused",
+        structure_mold: "reused",
+        id_cmf: "reused",
+      },
+      reuseEvidence: Object.fromEntries([
+        "battery",
+        "electronics",
+        "structure_mold",
+        "id_cmf",
+      ].map((moduleId) => [moduleId, {
+        sourceRef: `source-${moduleId}`,
+        modelOrVersion: "v1",
+        evidenceRef: `evidence-${moduleId}`,
+        boundaryConfirmed: true,
+      }])),
+      frozenAt: "2026-07-15T10:00:00.000Z",
+      frozenBy: 1,
+    }, SOP_TEMPLATE_VERSION_CURRENT);
+    const sched = generateSchedule(buildSchedTasks(phases), "2026-01-05");
 
-    // 坍塌症状：dd6 前置 dd1-dd5/dd9 全被裁后回退到项目开始日
-    expect(sched.dd6.start >= sched.di6.due).toBe(true);
-    // 链条整体保序（用恒留任务断言）：设计冻结 dd10 → EVT 整机回归 de3 → DVT 评审 dv7 → PVT dp1
-    expect(sched.de3.start >= sched.dd10.due).toBe(true);
-    expect(sched.dp1.start >= sched.dv7.due).toBe(true);
+    expect(sched.drv_battery_design).toBeUndefined();
+    expect(sched.drv_common_dfm_validation_plan.start >= sched.drv_common_kickoff_gate.due).toBe(true);
+    expect(sched.drv_common_evt_build.start >= sched.drv_common_design_gate.due).toBe(true);
+    expect(
+      sched.drv_common_software_function_validation.start >=
+      sched.drv_software_special_validation.due
+    ).toBe(true);
+    expect(sched.drv_common_dvt_build.start >= sched.drv_common_evt_gate.due).toBe(true);
+    expect(sched.drv_common_pvt_trial.start >= sched.drv_common_dvt_gate.due).toBe(true);
   });
 });

@@ -1,7 +1,7 @@
 import type { SOPPhase } from "./sop-templates";
 
 export type DerivativeEffectivePhaseResolver = (
-  strategyInput?: unknown,
+  baselineInput?: unknown,
   templateVersion?: string | null,
 ) => SOPPhase[];
 
@@ -15,8 +15,8 @@ export function registerDerivativeEffectivePhaseResolver(
 }
 
 export function resolveDerivativeEffectivePhases(
-  strategyInput?: unknown,
+  baselineInput?: unknown,
   templateVersion?: string | null,
 ): SOPPhase[] | null {
-  return resolver?.(strategyInput, templateVersion) ?? null;
+  return resolver?.(baselineInput, templateVersion) ?? null;
 }

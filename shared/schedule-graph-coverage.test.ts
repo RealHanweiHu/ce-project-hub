@@ -7,8 +7,8 @@ import {
 } from "./schedule-graph";
 import {
   DERIVATIVE_PHASES,
-  DERIVATIVE_REUSE_MODULE_RULES,
   PROJECT_CATEGORIES,
+  SOP_TEMPLATE_VERSION_CURRENT,
   SOP_TEMPLATE_VERSION_NPD_V3,
 } from "./sop-templates";
 
@@ -63,12 +63,19 @@ describe("SCHEDULE_GRAPH 全 category 覆盖", () => {
     const ids = new Set(DERIVATIVE_PHASES.flatMap((p) => p.tasks.map((t) => t.id)));
     const depsOf = (taskId: string) => SCHEDULE_GRAPH[taskId].slice(1);
 
-    expect([...ids]).toEqual(expect.arrayContaining(["dd5", "dd7", "dd8", "dv2", "dv3", "dv7"]));
-    expect(depsOf("dd7")).toEqual(expect.arrayContaining(["dd5", "dd6", "dd9"]));
-    expect(depsOf("dd8")).toEqual(["dd7"]);
-    expect(depsOf("dv2")).toEqual(["dd8"]);
-    expect(depsOf("dv3")).toEqual(["dv2"]);
-    expect(depsOf("dv7")).toContain("dv6");
+    expect([...ids]).toEqual(expect.arrayContaining([
+      "drv_structure_design",
+      "drv_structure_mold_review",
+      "drv_structure_mold_development",
+      "drv_structure_t1_t2_validation",
+      "drv_common_dvt_gate",
+    ]));
+    expect(depsOf("drv_structure_mold_review")).toEqual(["drv_structure_design"]);
+    expect(depsOf("drv_structure_mold_development")).toEqual(["drv_structure_mold_review"]);
+    expect(depsOf("drv_structure_t1_t2_validation")).toEqual(
+      expect.arrayContaining(["drv_common_evt_build", "drv_structure_mold_development"]),
+    );
+    expect(depsOf("drv_common_dvt_gate")).toContain("drv_common_dvt_issue_close");
   });
 });
 
@@ -93,18 +100,44 @@ describe("project-aware schedule graph", () => {
     expect(Array.from(critical).every((taskId) => taskId in schedule)).toBe(true);
   });
 
-  it("contracts derivative dependencies from the full graph after strategy tasks are removed", () => {
-    const allDirectReuse = Object.fromEntries(
-      DERIVATIVE_REUSE_MODULE_RULES.map((rule) => [rule.id, "direct_reuse"])
-    );
+  it("uses the frozen DRV module baseline without leaving dangling schedule dependencies", () => {
     const project = {
       category: "derivative",
-      customFields: { derivativeReuseStrategy: allDirectReuse },
+      sopTemplateVersion: SOP_TEMPLATE_VERSION_CURRENT,
+      customFields: {
+        projectExecutionBaseline: {
+          modelVersion: "project-track-v1",
+          status: "frozen",
+          productDefinitionRef: "PSD-DRV-001",
+          moduleReuse: {
+            battery: "reused",
+            core_function: "not_reused",
+            electronics: "not_reused",
+            software_connectivity: "not_reused",
+            structure_mold: "not_reused",
+            id_cmf: "not_reused",
+          },
+          reuseEvidence: {
+            battery: {
+              sourceRef: "existing-battery-platform",
+              modelOrVersion: "BAT-v1",
+              evidenceRef: "EV-BAT-001",
+              boundaryConfirmed: true,
+            },
+          },
+          frozenAt: "2026-07-15T10:00:00.000Z",
+          frozenBy: 1,
+        },
+      },
     };
     const schedule = scheduleForProject(project, "2026-03-02");
 
-    expect(schedule.dd1).toBeUndefined();
-    expect(schedule.dd6.start >= schedule.di6.due).toBe(true);
+    expect(schedule.drv_battery_design).toBeUndefined();
+    expect(schedule.drv_common_dfm_validation_plan.start >= schedule.drv_common_kickoff_gate.due).toBe(true);
+    for (const task of Object.values(schedule)) {
+      expect(task.start).toBeTruthy();
+      expect(task.due).toBeTruthy();
+    }
     const critical = criticalPathTasksForProject(project);
     expect(Array.from(critical).every((taskId) => taskId in schedule)).toBe(true);
   });

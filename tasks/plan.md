@@ -99,14 +99,14 @@
 **Description:** 用公共任务与六个模块任务包构建 DRV 的 iteration/design/evt/dvt/pvt/mp 阶段，同时生成交付物、Gate 标准和排期依赖。
 
 **Acceptance criteria:**
-- [ ] DRV 保留六阶段和 Close Gate 语义，旧四级复用不参与新组合。
-- [ ] 软件、可靠性、安规、配件、包装、物流、治具和 EOL 均为独立任务。
-- [ ] 复用一个模块只移除该模块专属任务和交付物，公共硬证据始终保留。
+- [x] DRV 保留六阶段和 Close Gate 语义，旧四级复用不参与新组合。
+- [x] 软件、可靠性、安规、配件、包装、物流、治具和 EOL 均为独立任务。
+- [x] 复用一个模块只移除该模块专属任务和交付物，公共硬证据始终保留。
 
 **Verification:**
-- [ ] RED→GREEN：DRV 阶段、任务、交付物和依赖测试。
-- [ ] `pnpm exec vitest run shared/sop-templates.test.ts shared/schedule-graph-coverage.test.ts shared/deliverable-vocab-guard.test.ts`
-- [ ] `pnpm check`
+- [x] RED→GREEN：DRV 阶段、任务、交付物和依赖测试。
+- [x] `pnpm exec vitest run shared/sop-templates.test.ts shared/schedule-graph-coverage.test.ts shared/deliverable-vocab-guard.test.ts`
+- [x] `pnpm check`
 
 **Dependencies:** Task 1
 

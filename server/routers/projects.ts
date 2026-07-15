@@ -23,7 +23,6 @@ import {
   getLatestProductDefinitionSnapshot,
   getProductDefinitionSnapshotById,
   listProductDefinitionChanges,
-  applyDerivativeReuseStrategyToProject,
   getLatestProjectChangeScopeDeclaration,
   createProjectChangeScopeDeclarationVersion,
   confirmProjectChangeScopeDeclaration,
@@ -138,7 +137,6 @@ async function assignAndNotify(
 
 const riskLevelEnum = z.enum(["low", "medium", "high"]);
 const riskEnum = riskLevelEnum.default("low");
-const derivativeReuseLevelEnum = z.enum(["direct_reuse", "adapt_verify", "light_modify", "redevelop"]);
 
 const changeScopeDeclarationSchema = z.object({
   batteryCellChange: z.boolean().default(false),
@@ -826,15 +824,22 @@ export const projectsRouter = router({
         nextStartDate !== (existing.startDate ?? null) ||
         nextTargetDate !== (existing.targetDate ?? null);
       const meetingConfig = getStoredMeetingConfig(existing);
+      const existingCustomFields = existing.customFields &&
+        typeof existing.customFields === "object" &&
+        !Array.isArray(existing.customFields)
+        ? existing.customFields as Record<string, unknown>
+        : {};
       let nextCustomFields: Record<string, unknown> | undefined;
       if (input.customFields !== undefined) {
         nextCustomFields = { ...input.customFields };
+        // 第一增量内执行基线只读。通用项目编辑既不能修改，也不能删除；
+        // 后续只能由专用受控变更入口同步调整任务、Gate 和排期。
+        if (Object.prototype.hasOwnProperty.call(existingCustomFields, "projectExecutionBaseline")) {
+          nextCustomFields.projectExecutionBaseline = existingCustomFields.projectExecutionBaseline;
+        } else {
+          delete nextCustomFields.projectExecutionBaseline;
+        }
         if (existing.category === "npd") {
-          const existingCustomFields = existing.customFields &&
-            typeof existing.customFields === "object" &&
-            !Array.isArray(existing.customFields)
-            ? existing.customFields as Record<string, unknown>
-            : {};
           // 档位与附加包在立项时冻结；通用元数据编辑只能改其它自定义字段。
           // 后续若允许变更，必须走专用 mutation，重跑推荐/红线校验并 reconcile 任务。
           if (Object.prototype.hasOwnProperty.call(existingCustomFields, "npdTemplate")) {
@@ -1090,10 +1095,6 @@ export const projectsRouter = router({
     }),
 
   /**
-   * DRV 流程策略确认应用：保存模块复用等级，并同步项目任务构成。
-   * 该动作会新增模板任务、跳过裁剪任务、恢复重新纳入的任务，并刷新排期/负责人。
-   */
-  /**
    * 项目生命周期：暂停（可恢复，退出自动化扫描）/ 恢复 / 终止（终局，理由必填，连带归档）。
    * 权限同量产发布；善后说明（模具/物料/客户承诺处置）记入活动日志。
    */
@@ -1128,57 +1129,6 @@ export const projectsRouter = router({
         return { success: true, ...result };
       } catch (error) {
         const message = error instanceof Error ? error.message : "生命周期变更失败";
-        throw new TRPCError({ code: "BAD_REQUEST", message });
-      }
-    }),
-
-  applyDerivativeStrategy: protectedProcedure
-    .input(z.object({
-      projectId: z.string(),
-      strategy: z.record(z.string(), derivativeReuseLevelEnum),
-    }))
-    .mutation(async ({ ctx, input }) => {
-      const project = await getProjectById(input.projectId);
-      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
-      const role = await getEffectiveRole(input.projectId, ctx.user.id);
-      if (!role || !ROLE_PERMISSIONS[role].canEditProjectInfo) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "仅 Owner/管理层/PM 可应用流程策略" });
-      }
-      if (project.category !== "derivative") {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "流程策略仅适用于 DRV 产品迭代/衍生开发项目" });
-      }
-
-      try {
-        const result = await applyDerivativeReuseStrategyToProject(input.projectId, input.strategy, ctx.user.id);
-        let scheduled = 0;
-        if (project.startDate) {
-          try { scheduled = await applyProjectSchedule(input.projectId); }
-          catch (e) { console.warn("[derivative-strategy] schedule failed (non-fatal):", e); }
-        }
-        const assignments = await assignTasksByRole(input.projectId, ctx.user.id);
-        await createActivityLog({
-          projectId: input.projectId,
-          userId: ctx.user.id,
-          action: "project.derivative_strategy_apply",
-          entityType: "project",
-          entityId: input.projectId,
-          meta: {
-            strategy: input.strategy,
-            effectiveTasks: result.effectiveTasks,
-            skippedTasks: result.skippedTasks,
-            insertedTasks: result.insertedTasks,
-            restoredTasks: result.restoredTasks,
-            obsoleteSkippedTasks: result.obsoleteSkippedTasks,
-            completedSkippedTasks: result.completedSkippedTasks,
-            autoExemptedDeliverables: result.autoExemptedDeliverables,
-            restoredDeliverables: result.restoredDeliverables,
-            scheduled,
-            assigned: assignments.length,
-          },
-        });
-        return { success: true, ...result, scheduled, assigned: assignments.length };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "流程策略应用失败";
         throw new TRPCError({ code: "BAD_REQUEST", message });
       }
     }),

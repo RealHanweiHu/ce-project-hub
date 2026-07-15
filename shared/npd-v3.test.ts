@@ -12,6 +12,7 @@ import {
   type NpdTemplateConfig,
 } from "./npd-v3";
 import {
+  DERIVATIVE_MODULE_TASK_IDS,
   PROJECT_CATEGORIES,
   SOP_TEMPLATE_VERSION_CURRENT,
   SOP_TEMPLATE_VERSION_LEGACY,
@@ -389,20 +390,45 @@ describe("v3 版本路由与项目级访问器", () => {
     expect(Object.isFrozen(first[0].tasks)).toBe(true);
   });
 
-  it("项目级访问器统一应用衍生品复用策略", () => {
-    const directReuse = {
-      battery: "direct_reuse",
-      mechanism: "direct_reuse",
-      pcba_power: "direct_reuse",
-      firmware: "direct_reuse",
-      structure_mold: "direct_reuse",
-      packaging_cert: "direct_reuse",
-    };
+  it("项目级访问器只按冻结二元基线移除对应 DRV 模块包", () => {
     const phases = getEffectivePhasesForProjectLike({
       category: "derivative",
-      sopTemplateVersion: "2026-07-v2",
-      customFields: { derivativeReuseStrategy: directReuse },
+      sopTemplateVersion: SOP_TEMPLATE_VERSION_CURRENT,
+      customFields: {
+        projectExecutionBaseline: {
+          modelVersion: "project-track-v1",
+          status: "frozen",
+          productDefinitionRef: "PSD-DRV-001",
+          moduleReuse: {
+            battery: "reused",
+            core_function: "not_reused",
+            electronics: "not_reused",
+            software_connectivity: "not_reused",
+            structure_mold: "not_reused",
+            id_cmf: "not_reused",
+          },
+          reuseEvidence: {
+            battery: {
+              sourceRef: "BAT-PLATFORM",
+              modelOrVersion: "v1",
+              evidenceRef: "EV-BAT-001",
+              boundaryConfirmed: true,
+            },
+          },
+          frozenAt: "2026-07-15T10:00:00.000Z",
+          frozenBy: 1,
+        },
+      },
     });
-    expect(countTasks(phases)).toBeLessThan(countTasks(getPhasesForCategory("derivative", "2026-07-v2")));
+    const ids = phases.flatMap((phase) => phase.tasks.map((task) => task.id));
+    expect(countTasks(phases)).toBe(
+      countTasks(getPhasesForCategory("derivative", SOP_TEMPLATE_VERSION_CURRENT)) -
+      DERIVATIVE_MODULE_TASK_IDS.battery.length,
+    );
+    expect(ids).not.toEqual(expect.arrayContaining([...DERIVATIVE_MODULE_TASK_IDS.battery]));
+    expect(ids).toEqual(expect.arrayContaining([
+      ...DERIVATIVE_MODULE_TASK_IDS.core_function,
+      "drv_common_safety_certification_validation",
+    ]));
   });
 });

@@ -1,4 +1,4 @@
-TOTAL UNIQUE: 273
+TOTAL UNIQUE: 322
 BOM v0.1	npd:P2
 BOM v1.0	npd:P3,jdm:P2
 BOM v2.0	derivative:P2
@@ -272,3 +272,52 @@ IDR项目关闭报告	idr:P5
 首批量产 Build Record	npd:P7,jdm:P6,obt:P4
 验证与认证评审记录	idr:P3
 验证样机	idr:P3
+首批量产与爬坡记录	npd:P7,eco:P5,derivative:P6,jdm:P6,obt:P4
+稳定期周报与QA结论	npd:P7,eco:P5,derivative:P6,jdm:P6,obt:P4
+遗留问题关闭与受控转交记录	npd:P7,eco:P5,derivative:P6,jdm:P6,obt:P4
+项目关闭评审记录	npd:P7,eco:P5,derivative:P6,jdm:P6,obt:P4
+产品规格基线确认记录	derivative:P1
+六模块执行基线	derivative:P1
+风险声明与评估结论	derivative:P1
+项目计划与RACI	derivative:P1
+DRV Kickoff评审记录	derivative:P1
+验证计划	derivative:P2
+配件定义清单	derivative:P2
+电池/能源系统设计包	derivative:P2
+核心功能部件设计包	derivative:P2
+电子硬件设计包	derivative:P2
+软件/连接需求与设计包	derivative:P2
+产品结构设计包	derivative:P2
+投模评审与开模批准记录	derivative:P2
+ID/CMF 设计包	derivative:P2
+DRV设计冻结评审记录	derivative:P2
+EVT Build Record	derivative:P3
+整机功能与兼容性回归报告	derivative:P3
+软件功能验证报告	derivative:P3
+EVT问题关闭与DVT输入记录	derivative:P3
+电池模块样件与集成记录	derivative:P3
+电池性能与保护专项验证报告	derivative:P3
+核心功能部件样件记录	derivative:P3
+核心功能部件专项验证报告	derivative:P3
+电子硬件样件联调记录	derivative:P3
+电子硬件专项验证报告	derivative:P3
+软件开发联调记录	derivative:P3
+软件接口与异常专项验证报告	derivative:P3
+T1/T2 与结构专项验证报告	derivative:P3
+颜色/材质/工艺样件	derivative:P3
+外观标准与限度样本	derivative:P3
+DRV EVT评审记录	derivative:P3
+DVT Build Record	derivative:P4
+可靠性内部测试报告	derivative:P4
+安规与认证验证报告	derivative:P4
+配件确认记录	derivative:P4
+物流验证报告	derivative:P4
+DVT问题关闭与PVT Readiness记录	derivative:P4
+DRV DVT评审记录	derivative:P4
+治具验收记录	derivative:P5
+EOL与测试程序验收记录	derivative:P5
+PVT试产报告	derivative:P5
+试产良率与问题关闭报告	derivative:P5
+产品文件BOM与量产交付清单	derivative:P5
+认证与运输证据覆盖复核记录	derivative:P5
+DRV量产发布评审记录	derivative:P5
