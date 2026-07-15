@@ -174,6 +174,7 @@ describe("SOP governance Sprint 2", () => {
     ecoProjectId = eco.id;
     const project = await getProjectById(eco.id);
     expect(project?.category).toBe("eco");
+    expect(project?.productOwnerUserId).toBe(OWNER);
     expect(project?.productId).toBeNull();
     expect(project?.baseRevisionId).toBeNull();
     expect(project?.customFields).toMatchObject({

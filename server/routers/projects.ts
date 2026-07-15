@@ -374,6 +374,7 @@ export const projectsRouter = router({
     return all.map((row) => {
       let role: ProjectMemberRole | null = memberRoles.get(row.id) ?? null;
       if (row.pmUserId === ctx.user.id) role = pickHigherProjectRole(role, "project_manager");
+      if (row.productOwnerUserId === ctx.user.id) role = pickHigherProjectRole(role, "owner");
       if (row.createdBy === ctx.user.id) role = pickHigherProjectRole(role, "owner");
       if (!role && isAdmin) role = "manager";
       const effectiveRole = role ?? "viewer";

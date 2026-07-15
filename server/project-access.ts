@@ -99,6 +99,7 @@ export async function getEffectiveProjectRoles(
     for (const role of normalizeExtraRoles(member.role, member.extraRoles)) roles.add(role);
   }
   if (project.pmUserId === userId) roles.add("project_manager");
+  if (project.productOwnerUserId === userId) roles.add("owner");
   if (project.createdBy === userId) roles.add("owner");
   const delegations = await getActiveProjectRoleDelegationsForUser(project.id, userId, todayShanghai());
   for (const delegation of delegations) roles.add(delegation.role);
@@ -149,6 +150,7 @@ export async function resolveProjectActedAsRole(input: {
     normalizeExtraRoles(member.role, member.extraRoles).forEach((item) => directRoles.add(item));
   }
   if (input.project.pmUserId === input.userId) directRoles.add("project_manager");
+  if (input.project.productOwnerUserId === input.userId) directRoles.add("owner");
   if (input.project.createdBy === input.userId) directRoles.add("owner");
   const user = await getUserById(input.userId);
   if (isSystemAdminRole(user?.role)) directRoles.add("manager");

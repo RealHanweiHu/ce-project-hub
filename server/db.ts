@@ -400,6 +400,8 @@ export async function getProjectsByUser(userId: number): Promise<ProjectRow[]> {
           eq(projects.archived, false),
           or(
             eq(projects.createdBy, userId),
+            eq(projects.productOwnerUserId, userId),
+            eq(projects.pmUserId, userId),
             inArray(projects.id, memberProjectIds)
           )
         )
@@ -410,7 +412,14 @@ export async function getProjectsByUser(userId: number): Promise<ProjectRow[]> {
   return db
     .select()
     .from(projects)
-    .where(and(eq(projects.createdBy, userId), eq(projects.archived, false)))
+    .where(and(
+      or(
+        eq(projects.createdBy, userId),
+        eq(projects.productOwnerUserId, userId),
+        eq(projects.pmUserId, userId),
+      ),
+      eq(projects.archived, false),
+    ))
     .orderBy(desc(projects.updatedAt));
 }
 
@@ -433,8 +442,8 @@ export async function getArchivedProjects(userId: number, includeAll = false): P
   const memberships = await db.select({ projectId: projectMembers.projectId }).from(projectMembers).where(eq(projectMembers.userId, userId));
   const ids = memberships.map((row) => row.projectId);
   const access = ids.length > 0
-    ? or(eq(projects.createdBy, userId), eq(projects.pmUserId, userId), inArray(projects.id, ids))
-    : or(eq(projects.createdBy, userId), eq(projects.pmUserId, userId));
+    ? or(eq(projects.createdBy, userId), eq(projects.productOwnerUserId, userId), eq(projects.pmUserId, userId), inArray(projects.id, ids))
+    : or(eq(projects.createdBy, userId), eq(projects.productOwnerUserId, userId), eq(projects.pmUserId, userId));
   return db.select().from(projects).where(and(eq(projects.archived, true), access)).orderBy(desc(projects.updatedAt));
 }
 
@@ -458,7 +467,10 @@ export async function getProjectById(id: string): Promise<ProjectRow | undefined
 export async function createProject(project: InsertProject): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.insert(projects).values(project);
+  await db.insert(projects).values({
+    ...project,
+    productOwnerUserId: project.productOwnerUserId ?? project.createdBy,
+  });
 }
 
 export async function createProjectWithSeed(
@@ -476,9 +488,13 @@ export async function createProjectWithSeed(
   });
   // 安全网：currentPhase 必须是该 category 真实存在的阶段（如 jdm→input / obt→intake），
   // 否则（如非 UI 调用方沿用默认 "concept"）落到不存在的阶段。缺省取首阶段。
+  const projectWithOwner = {
+    ...project,
+    productOwnerUserId: project.productOwnerUserId ?? project.createdBy,
+  };
   const seeded = phases.some((p) => p.id === project.currentPhase)
-    ? project
-    : { ...project, currentPhase: phases[0]?.id ?? project.currentPhase };
+    ? projectWithOwner
+    : { ...projectWithOwner, currentPhase: phases[0]?.id ?? project.currentPhase };
   await db.transaction(async (tx) => {
     await tx.insert(projects).values(seeded);
     if (riskDeclaration) {
@@ -2039,8 +2055,8 @@ export async function getProjectsByMember(userId: number): Promise<ProjectRow[]>
     .where(eq(projectMembers.userId, userId));
   const memberProjectIds = memberRows.map((r) => r.projectId);
   const projectScope = memberProjectIds.length > 0
-    ? or(eq(projects.createdBy, userId), eq(projects.pmUserId, userId), inArray(projects.id, memberProjectIds))
-    : or(eq(projects.createdBy, userId), eq(projects.pmUserId, userId));
+    ? or(eq(projects.createdBy, userId), eq(projects.productOwnerUserId, userId), eq(projects.pmUserId, userId), inArray(projects.id, memberProjectIds))
+    : or(eq(projects.createdBy, userId), eq(projects.productOwnerUserId, userId), eq(projects.pmUserId, userId));
   return db
     .select()
     .from(projects)
@@ -2399,6 +2415,7 @@ export async function getPortfolio(userId: number, options?: { projectId?: strin
     const myRole = (() => {
       let role: ProjectMemberRole | null = myRoleMap.get(p.id) ?? null;
       if (p.pmUserId === userId) role = higher(role, "project_manager");
+      if (p.productOwnerUserId === userId) role = higher(role, "owner");
       if (p.createdBy === userId) role = higher(role, "owner");
       if (viewerIsAdmin) role = higher(role, "manager");
       return role;

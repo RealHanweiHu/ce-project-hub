@@ -62,6 +62,7 @@ export interface ProjectExecutionBaseline {
 export type ProjectTrackWithModuleReuse = "drv" | "jdm";
 
 export type BaselineValidationCode =
+  | "drv_requires_frozen_baseline"
   | "missing_product_definition"
   | "missing_module_state"
   | "invalid_module_state"
@@ -123,7 +124,23 @@ export function validateProjectExecutionBaseline(
   const issues: BaselineValidationIssue[] = [];
   const moduleReuse = baseline.moduleReuse;
 
-  // A JDM draft deliberately remains incomplete until its definition Gate.
+  if (baseline.status === "draft") {
+    if (options.track === "drv") {
+      return {
+        ok: false,
+        issues: [
+          {
+            code: "drv_requires_frozen_baseline",
+            message: "DRV 创建时必须提交已冻结的产品规格与六模块执行基线",
+          },
+        ],
+      };
+    }
+    // JDM 的定义期草稿允许规格、模块判断和复用证据逐步收敛；
+    // 完整性与领域不变量统一在产品定义 Gate 冻结时检查。
+    return { ok: true, issues: [] };
+  }
+
   if (baseline.status === "frozen") {
     if (!isNonBlank(baseline.productDefinitionRef)) {
       issues.push({

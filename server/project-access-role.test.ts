@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import {
   getDb, getProjectById, createProduct,
   upsertProductDefinition, confirmProductDefinition, listProductDefinitionSnapshots,
-  getProjectMember, getProjectTasks,
+  getProjectMember, getProjectTasks, getProjectsByMember,
 } from "./db";
 import { appRouter } from "./routers";
 import { getEffectiveProjectRole } from "./project-access";
@@ -211,6 +211,12 @@ describe("project create validation", () => {
     expect(project?.productOwnerUserId).toBe(EXPLICIT_PRODUCT_OWNER);
     expect(project?.createdBy).toBe(OWNER);
     expect(project?.pmUserId).toBe(MANAGER_PM);
+    await expect(getEffectiveProjectRole(project!, EXPLICIT_PRODUCT_OWNER)).resolves.toBe("owner");
+    await expect(getProjectsByMember(EXPLICIT_PRODUCT_OWNER)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: EXPLICIT_PRODUCT_OWNER_PROJECT }),
+      ]),
+    );
   });
 
   it("创建 NPD 项目不要求先关联产品库产品", async () => {

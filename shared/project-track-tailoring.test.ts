@@ -125,6 +125,35 @@ describe("项目执行基线领域模型", () => {
     expect(result).toEqual({ ok: true, issues: [] });
   });
 
+  it("JDM 产品定义 Gate 前允许暂存尚未补证据的模块草稿", () => {
+    const result = validateProjectExecutionBaseline(
+      {
+        modelVersion: "project-track-v1",
+        status: "draft",
+        customerConceptRef: "客户概念图",
+        moduleReuse: { ...allNotReused, battery: "reused" },
+      },
+      { track: "jdm" },
+    );
+
+    expect(result).toEqual({ ok: true, issues: [] });
+  });
+
+  it("DRV 不允许保存 draft 执行基线", () => {
+    const result = validateProjectExecutionBaseline(
+      {
+        modelVersion: "project-track-v1",
+        status: "draft",
+      },
+      { track: "drv" },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({ code: "drv_requires_frozen_baseline" }),
+    );
+  });
+
   it("冻结基线要求规格、六模块状态、冻结时间和冻结人完整", () => {
     const result = validateProjectExecutionBaseline(
       {
