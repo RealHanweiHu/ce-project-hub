@@ -13,6 +13,7 @@ import {
   type SOPTask,
 } from "./sop-templates";
 import { resolveDerivativeEffectivePhases } from "./derivative-phase-resolver";
+import { resolveJdmEffectivePhases } from "./jdm-phase-resolver";
 import { TASK_DELIVERABLES } from "./task-deliverables";
 
 const gateStandard = (overrides: Partial<SOPGateStandard>): SOPGateStandard => ({
@@ -971,6 +972,13 @@ export function getEffectivePhasesForProjectLike(project: ProjectTemplateLike): 
       project.sopTemplateVersion,
     );
     if (derivativePhases) return derivativePhases;
+  }
+  if (project.category === "jdm") {
+    const jdmPhases = resolveJdmEffectivePhases(
+      customFields.projectExecutionBaseline,
+      project.sopTemplateVersion,
+    );
+    if (jdmPhases) return jdmPhases;
   }
   return getPhasesForCategory(project.category ?? undefined, project.sopTemplateVersion);
 }

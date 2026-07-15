@@ -91,20 +91,6 @@ export const SCHEDULE_GRAPH: G = {
   // 发布后稳定与关闭（2-8 周窗口）
   is1: [10, "im6"], is2: [10, "im6"], is3: [4, "is1", "is2"], is4: [1, "is3"],
 
-  // ── JDM（客供 ID/规格，工厂全自研 MD/EE/SW）──────────
-  // 输入冻结 P1
-  jin1: [3], jin2: [3, "jin1"], jin3: [4, "jin1"], jin4: [4, "jin3"], jin5: [1, "jin2", "jin3", "jin4"],
-  // 详细设计 P2（MD/EE/SW 多轨并行）
-  jd1: [10, "jin5"], jd2: [9, "jin5"], jd3: [8, "jd2"], jd4: [8, "jin5"], jd5: [3, "jd1", "jd3"], jd6: [4, "jd2"], jd7: [1, "jd1", "jd3", "jd4", "jd5", "jd6"],
-  // EVT P3
-  je1: [7, "jd7"], je2: [5, "je1"], je3: [5, "je1"], je4: [6, "je1"], je5: [3, "je2", "je3", "je4"], je6: [1, "je5"],
-  // DVT P4（认证 jv3、开模 jv4 在设计冻结 jd7 即启动，与 EVT/DVT 并行——同 NPD v3/v4）
-  jv1: [7, "je6"], jv2: [10, "jv1"], jv3: [14, "jd7"], jv4: [14, "jd7"], jv5: [5, "jv1"], jv6: [1, "jv2", "jv3", "jv4", "jv5"],
-  // PVT P5（发布门）
-  jp1: [4, "jv6"], jp2: [5, "jp1"], jp3: [5, "jp1"], jp4: [5, "jp2", "jp3"], jp5: [4, "jp4"], jp6: [1, "jp4", "jp5"],
-  // MP P6
-  jm1: [8, "jp6"], jm2: [8, "jm1"], jm3: [8, "jm1"], jm4: [10, "jm1"], jm5: [3, "jm2", "jm3"],
-
   // ── OBT（客供完整设计+openBOM，工厂纯转产）──────────
   // 设计接收 P1
   or1: [4], or2: [3], or3: [4, "or1", "or2"], or4: [4, "or1"], or5: [3, "or3"], or6: [3, "or4", "or5"], or7: [1, "or3", "or4", "or5", "or6"],

@@ -3,6 +3,7 @@
 
 import { NPD_V3_CORE_PHASES } from "./npd-v3";
 import { registerDerivativeEffectivePhaseResolver } from "./derivative-phase-resolver";
+import { registerJdmEffectivePhaseResolver } from "./jdm-phase-resolver";
 import {
   PRODUCT_MODULE_IDS,
   validateProjectExecutionBaseline,
@@ -185,6 +186,35 @@ export function getDerivativePhasesForModuleReuse(
 }
 
 registerDerivativeEffectivePhaseResolver(getDerivativePhasesForExecutionBaseline);
+
+/**
+ * project-track-v1 JDM resolver.
+ * Definition work is the only executable phase until a complete baseline is
+ * frozen at the product-definition Gate. Invalid frozen input fails closed to
+ * P1 instead of silently creating design work from an uncertain baseline.
+ */
+export function getJdmPhasesForExecutionBaseline(
+  baselineInput?: unknown,
+  templateVersion?: string | null,
+): SOPPhase[] {
+  const baseline =
+    baselineInput &&
+    typeof baselineInput === "object" &&
+    !Array.isArray(baselineInput)
+      ? (baselineInput as ProjectExecutionBaseline)
+      : null;
+  const isValidFrozen =
+    baseline?.modelVersion === "project-track-v1" &&
+    baseline.status === "frozen" &&
+    validateProjectExecutionBaseline(baseline, { track: "jdm" }).ok;
+
+  if (!isValidFrozen || !baseline.moduleReuse) {
+    return [buildJdmDefinitionPhase()];
+  }
+  return getJdmPhasesForModuleReuse(baseline.moduleReuse, templateVersion);
+}
+
+registerJdmEffectivePhaseResolver(getJdmPhasesForExecutionBaseline);
 
 const NPD_GATE_STANDARDS: Record<string, SOPGateStandard> = {
   concept: {
@@ -808,246 +838,6 @@ const IDR_GATE_STANDARDS: Record<string, SOPGateStandard> = {
       "试产质量不稳定则暂停上市并追加改善",
       "物料或认证文件未切换完成不得 MP Release",
       "库存处理未闭环则限制渠道切换",
-    ],
-  },
-};
-
-// JDM —— 客户委托设计轨。客户出 ID/规格，工厂做 MD/EE/SW 并量产。
-// 关键差异：以「设计输入冻结」替代概念/规划入口，并在每个 Gate 强制客户签核
-// （签核以「必交付物」形式落地，经现有 deliverable-review 服务校验）。
-const JDM_GATE_STANDARDS: Record<string, SOPGateStandard> = {
-  input: {
-    entryCriteria: [
-      "客户已提供 ID/CMF 与产品规格初稿，委托范围基本清晰",
-      "项目经理已确认双方对设计边界、责任分工和商务条款无重大分歧",
-      "初步可行性与 NRE/模具方向已有判断",
-    ],
-    exitCriteria: [
-      "设计输入（ID/CMF/规格）冻结并经客户书面确认",
-      "RACI、初步 BOM、NRE/模具方案和项目计划已基线",
-      "关键技术、供应与认证归属风险已登记责任人",
-    ],
-    requiredDeliverables: [
-      "ID/CMF 输入包",
-      "规格确认书（客户签字）",
-      "RACI 责任矩阵",
-      "初步 BOM 与 NRE/模具方案",
-      "项目计划",
-    ],
-    responsibleRoles: [
-      "项目经理负责输入冻结、商务对齐和计划推进",
-      "R&D Lead 负责可行性判断",
-      "SCM 负责 NRE/模具与供应",
-      "客户负责输入确认签字",
-      "管理层/Owner 负责受理决策",
-    ],
-    evidenceRequirements: [
-      "规格确认书签核记录",
-      "ID/CMF 输入包版本",
-      "初步 BOM 与 NRE 报价",
-      "RACI 与风险登记表",
-    ],
-    exceptionStrategy: [
-      "输入不完整或未签字则不得进入详细设计",
-      "边界争议需升级双方对齐会",
-      "认证/模具归属不清需补充确认后再 Gate",
-    ],
-  },
-  design: {
-    entryCriteria: [
-      "设计输入冻结 Gate 已通过，输入包和项目计划已基线",
-      "MD/EE/SW 设计资源与关键料件窗口已具备",
-      "客户外观一致性判定口径已明确",
-    ],
-    exitCriteria: [
-      "MD/EE/SW 设计输出完成并通过跨部门评审",
-      "DFM/DFA、BOM v1.0 和关键料件定型已确认",
-      "客户对外观一致性完成签核，开放问题均有责任人与关闭计划",
-    ],
-    requiredDeliverables: [
-      "MD 结构图纸",
-      "EE 原理图 & PCB Layout",
-      "SW 架构文档",
-      "BOM v1.0",
-      "客户外观签核记录",
-    ],
-    responsibleRoles: [
-      "R&D Lead 负责设计完整性",
-      "ID/MD 负责外观一致性落地",
-      "项目经理负责范围、节点与客户协调",
-      "客户负责外观签核",
-      "管理层/Owner 负责设计冻结批准",
-    ],
-    evidenceRequirements: [
-      "设计评审纪要",
-      "图纸/原理图/Layout/架构版本",
-      "DFM/DFA Checklist",
-      "BOM v1.0",
-      "客户外观签核记录",
-    ],
-    exceptionStrategy: [
-      "设计输出不完整则不得释放 EVT",
-      "外观偏离客户输入需回到客户裁决",
-      "成本偏离目标需提交客户/管理层取舍",
-    ],
-  },
-  evt: {
-    entryCriteria: [
-      "设计冻结 Gate 已通过，EVT Build Plan 已批准",
-      "EVT 样机、测试计划和问题跟踪机制已就绪",
-      "客户样机确认安排与判定口径已确认",
-    ],
-    exitCriteria: [
-      "主要功能 Pass Rate 达到 95% 以上",
-      "P0 问题全部关闭，P1 问题关闭或获得明确豁免",
-      "客户完成 EVT 样机确认，DVT 输入版本已冻结",
-    ],
-    requiredDeliverables: [
-      "EVT 样机",
-      "功能/性能测试报告",
-      "软硬件联调记录",
-      "问题清单",
-      "客户样机确认记录",
-    ],
-    responsibleRoles: [
-      "EE/SW/ME 负责问题定位修正",
-      "QA 负责测试结论",
-      "项目经理负责 Issue 闭环与客户确认",
-      "客户负责样机确认",
-      "管理层/Owner 负责进入 DVT 决策",
-    ],
-    evidenceRequirements: [
-      "EVT 样机清单与版本",
-      "功能/性能测试报告",
-      "Issue List 与关闭证据",
-      "客户样机确认记录",
-    ],
-    exceptionStrategy: [
-      "未达准出条件则 Re-EVT",
-      "客户未确认不得进入 DVT",
-      "开放问题需有责任人、期限与影响评估",
-    ],
-  },
-  dvt: {
-    entryCriteria: [
-      "EVT Gate 已通过，DVT 样机版本和测试矩阵已冻结",
-      "认证、可靠性、模具和包装验证资源已排期",
-      "客户 DVT 确认计划已明确，认证归属已对齐",
-    ],
-    exitCriteria: [
-      "可靠性、认证、模具尺寸/外观和软件回归达到目标",
-      "无未关闭 P0/P1 问题，量产关键风险已有控制计划",
-      "客户完成 DVT 确认，PVT 试产条件已确认",
-    ],
-    requiredDeliverables: [
-      "DVT 样机",
-      "可靠性测试报告",
-      "安规与认证报告",
-      "模具 T1/T2 样品",
-      "包装验证报告",
-      "客户 DVT 确认记录",
-    ],
-    responsibleRoles: [
-      "QA 负责可靠性与认证结论",
-      "R&D 负责设计整改",
-      "ME/SCM 负责工艺与供应准备",
-      "客户负责 DVT 确认",
-      "管理层/Owner 负责进入 PVT 决策",
-    ],
-    evidenceRequirements: [
-      "DVT 样机 Build Record",
-      "可靠性/认证报告",
-      "模具 T1/T2 评审记录",
-      "客户 DVT 确认记录",
-    ],
-    exceptionStrategy: [
-      "可靠性或认证失败必须复测并记录根因",
-      "客户未确认不得进入 PVT",
-      "模具/外观不达标则冻结修模计划",
-    ],
-  },
-  pvt: {
-    entryCriteria: [
-      "DVT Gate 已通过，量产工艺、治具和测试程序已准备",
-      "试产物料齐套，SOP/WI 草案和产线排程已确认",
-      "客户 golden sample 签样安排已明确",
-    ],
-    exitCriteria: [
-      "试产良率达到目标，关键异常已关闭或有受控计划",
-      "SOP/WI、治具、测试程序、EOL 100%检测能力和人员培训全部就绪",
-      "电池安全/运输认证证据（UN38.3、MSDS、电芯/电池包安全认证）已闭环",
-      "客户完成 golden sample 签样，MP Release 条件已确认",
-    ],
-    requiredDeliverables: [
-      "试产（50-300台）报告",
-      "SOP/WI",
-      "治具与测试程序",
-      "良率报告",
-      "客户 golden sample 签样记录",
-      "EOL 100%测试能力验收记录",
-      "UN38.3运输测试报告或复用确认",
-      "MSDS",
-      "电芯/电池包安全认证报告或复用确认",
-    ],
-    responsibleRoles: [
-      "ME/工厂负责试产执行",
-      "QA 负责质量判定",
-      "测试工程负责 EOL 100%检测能力",
-      "SCM 负责物料与供应",
-      "battery_safety/cert 负责电池安全与运输认证放行",
-      "客户负责 golden sample 签样",
-      "项目经理负责发布准备推进",
-      "管理层负责 MP Release 决策",
-    ],
-    evidenceRequirements: [
-      "PVT 试产报告",
-      "分工位良率与 FPY 数据",
-      "SOP/WI 与培训记录",
-      "EOL 100%测试项目与验收记录",
-      "UN38.3、MSDS 和电池安全证书/报告或复用有效性确认",
-      "客户 golden sample 签样记录",
-    ],
-    exceptionStrategy: [
-      "良率未达标则重复 PVT",
-      "客户未签样不得发布 MP",
-      "工艺/治具/EOL 检测能力未就绪不得 MP Release",
-      "缺 UN38.3/MSDS/电池安全证据或复用有效性确认不得发布 MP 或出货",
-    ],
-  },
-  mp: {
-    entryCriteria: [
-      "PVT Gate 已通过，MP Release 文件包完整且客户量产授权到位",
-      "首批订单、产能、供应和售后反馈机制已准备",
-      "量产质量目标和异常升级路径已确认",
-    ],
-    exitCriteria: [
-      "量产爬坡达到计划产能和良率目标",
-      "关键质量、成本、交付和售后进入常态化管理",
-      "ECN/ECR 和持续改善机制运行稳定",
-    ],
-    requiredDeliverables: [
-      "量产产品",
-      "良率周报",
-      "ECN/ECR 记录",
-      "售后数据分析",
-    ],
-    responsibleRoles: [
-      "工厂/ME 负责产能与工艺",
-      "QA 负责出货质量",
-      "SCM 负责供应连续性",
-      "项目经理负责客户交付与爬坡跟踪",
-      "管理层负责量产经营目标",
-    ],
-    evidenceRequirements: [
-      "MP Release 记录",
-      "周良率/产能/出货数据",
-      "OQC/RMA 分析",
-      "ECN/ECR 关闭记录",
-    ],
-    exceptionStrategy: [
-      "重大质量异常启动围堵/停线/召回评估",
-      "良率/交付偏差进入管理层周会跟踪",
-      "持续不达标需启动专项改善",
     ],
   },
 };
@@ -3607,458 +3397,352 @@ export const DERIVATIVE_PHASES: SOPPhase[] = buildDerivativePhases(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// JDM — Joint Design Manufacture / 客户委托设计 (6-phase)
-// 客户出 ID/规格；工厂做 MD+EE+SW 并量产。= NPD 砍掉概念/规划，换「设计输入冻结」
-// 入口闸，并在 EVT/DVT/PVT 强制客户签核（签核以必交付物落地）。
+// JDM project-track-v1 — our product definition first, then DRV execution work.
 // ─────────────────────────────────────────────────────────────────────────────
-export const JDM_PHASES: SOPPhase[] = [
-  {
+
+function uniqueStrings(values: readonly string[]): string[] {
+  return Array.from(new Set(values));
+}
+
+function buildJdmDefinitionPhase(): SOPPhase {
+  const inputTasks = [
+    drvTask({
+      id: "jdm_input_snapshot",
+      name: "客户概念、ID 与原始要求接收",
+      desc: "保存客户概念、ID 图、参考资料和原始要求的不可覆盖快照",
+      owner: "项目经理",
+      ownerRole: "project_manager",
+      durationDays: 2,
+    }),
+    drvTask({
+      id: "jdm_requirements_gap",
+      name: "需求澄清与缺口清单",
+      desc: "逐项澄清使用场景、功能、性能、外观、成本、交期和法规缺口",
+      owner: "产品经理",
+      ownerRole: "pm",
+      dependsOn: ["jdm_input_snapshot"],
+      durationDays: 3,
+    }),
+    drvTask({
+      id: "jdm_product_spec",
+      name: "我方编制产品规格书",
+      desc: "由我方根据客户概念和澄清结论形成可设计、可验证的产品规格书",
+      owner: "产品经理",
+      ownerRole: "pm",
+      dependsOn: ["jdm_requirements_gap"],
+      durationDays: 4,
+    }),
+    drvTask({
+      id: "jdm_csr",
+      name: "客户特殊要求 CSR 定义",
+      desc: "在设计前定义外观缝隙、限度、接口、包装和其他客户特殊要求及判定标准",
+      owner: "产品经理",
+      ownerRole: "pm",
+      dependsOn: ["jdm_requirements_gap"],
+      durationDays: 3,
+    }),
+    drvTask({
+      id: "jdm_boundary_raci",
+      name: "设计责任、接口与商务边界",
+      desc: "明确我方与客户的设计责任、输入输出接口、NRE、模具、认证和商务边界",
+      owner: "项目经理",
+      ownerRole: "project_manager",
+      dependsOn: ["jdm_requirements_gap"],
+      durationDays: 2,
+    }),
+    drvTask({
+      id: "jdm_module_reuse_draft",
+      name: "六模块复用草稿与证据",
+      desc: "基于我方产品规格登记六模块复用草稿、来源、版本、证据和适用边界",
+      owner: "项目经理",
+      ownerRole: "project_manager",
+      dependsOn: ["jdm_product_spec", "jdm_boundary_raci"],
+      durationDays: 3,
+    }),
+    drvTask({
+      id: "drv_common_project_plan",
+      name: "项目计划、RACI 和版本基线",
+      desc: "确认里程碑、责任人、Build 版本和关键路径",
+      owner: "项目经理",
+      ownerRole: "project_manager",
+      dependsOn: ["jdm_product_spec", "jdm_boundary_raci"],
+      durationDays: 2,
+    }),
+    drvTask({
+      id: "drv_common_risk_scope",
+      name: "风险声明、安全法规与认证路径",
+      desc: "基于产品规格和 CSR 完成结构化风险声明、安全法规评估和认证路径",
+      owner: "QA",
+      ownerRole: "qa",
+      dependsOn: ["jdm_product_spec", "jdm_csr"],
+      durationDays: 3,
+    }),
+    drvTask({
+      id: "jdm_product_owner_approval",
+      name: "产品负责人内部确认",
+      desc: "产品负责人批准我方规格、CSR、范围、六模块草稿、风险结论和项目计划",
+      owner: "产品经理",
+      ownerRole: "pm",
+      dependsOn: [
+        "jdm_product_spec",
+        "jdm_csr",
+        "jdm_boundary_raci",
+        "jdm_module_reuse_draft",
+        "drv_common_project_plan",
+        "drv_common_risk_scope",
+      ],
+      durationDays: 1,
+    }),
+    drvTask({
+      id: "jdm_customer_spec_csr_confirm",
+      name: "客户确认产品规格与 CSR",
+      desc: "取得客户对我方产品规格书、特殊要求、责任边界和验收口径的书面确认",
+      owner: "项目经理",
+      ownerRole: "project_manager",
+      dependsOn: ["jdm_product_owner_approval"],
+      durationDays: 2,
+    }),
+  ];
+  const deliverables = [
+    "产品概念书",
+    "问题清单",
+    "产品规格书 PSD",
+    "客户特殊要求清单 CSR",
+    "RACI 责任矩阵",
+    "六模块执行基线",
+    "项目计划与RACI",
+    "风险声明与评估结论",
+    "产品规格基线确认记录",
+    "规格确认书（客户签字）",
+    "设计输入冻结确认（客户）",
+  ];
+  const phase = makeDrvPhase({
     id: "input",
     code: "P1",
-    name: "设计输入冻结",
-    nameEn: "Design Input Freeze",
-    duration: "2-3周",
-    desc: "接收并冻结客户 ID/CMF/规格输入",
-    gate: "输入冻结评审",
-    gateTaskId: "jin5",
-    color: "#78716c",
-    deliverables: [
-      "ID/CMF 输入包",
-      "规格确认书（客户签字）",
-      "RACI 责任矩阵",
-      "初步 BOM 与 NRE/模具方案",
-      "项目计划",
-    ],
-    gateStandard: JDM_GATE_STANDARDS.input,
-    tasks: [
-      {
-        id: "jin1",
-        name: "接收客户 ID/CMF/规格输入",
-        desc: "汇总并核对客户提供的外观与规格资料",
+    name: "产品定义",
+    nameEn: "Product Definition",
+    duration: "2-4周",
+    desc: "从客户概念收敛为经双方确认、可以进入设计的正式产品定义",
+    gate: "产品定义冻结",
+    gateTask: drvGateTask(
+      "jdm_product_definition_gate",
+      "产品定义冻结 (Gate 1)",
+      "客户书面确认我方产品规格、CSR 与责任边界后，冻结六模块和风险基线",
+    ),
+    color: "#4f46e5",
+    tasks: inputTasks,
+    deliverables,
+  });
+  return {
+    ...phase,
+    gateStandard: {
+      entryCriteria: [
+        "客户概念、ID 或原始要求已留存，需求缺口已有明确处置",
+        "我方产品规格书、CSR、责任边界、六模块草稿、风险声明和项目计划已完成内审",
+      ],
+      exitCriteria: [
+        "产品负责人已批准产品定义和执行范围",
+        "客户已书面确认我方产品规格书、CSR、责任边界和验收口径",
+        "六模块执行基线、复用证据和安全法规风险结论完整并正式冻结",
+      ],
+      requiredDeliverables: deliverables,
+      responsibleRoles: [
+        "产品负责人负责产品规格、CSR 与范围批准",
+        "项目经理负责定义收敛、计划、证据和客户确认",
+        "专业工程师负责模块边界与复用证据",
+        "QA/认证负责风险声明与认证路径",
+        "客户负责产品规格、CSR 和责任边界书面确认",
+      ],
+      evidenceRequirements: deliverables,
+      exceptionStrategy: [
+        "规格、CSR、风险或客户确认缺失时不得进入详细设计",
+        "Gate 前的定义调整属于正常收敛，不发起受控设计变更",
+        "Gate 通过后任何设计范围变化必须取得产品负责人批准和客户书面确认",
+      ],
+    },
+  };
+}
+
+type JdmCustomerTaskSpec = {
+  phaseId: "design" | "evt" | "dvt" | "pvt" | "mp";
+  task: SOPTask;
+  deliverables: string[];
+};
+
+function jdmCustomerConfirmations(): JdmCustomerTaskSpec[] {
+  return [
+    {
+      phaseId: "design",
+      task: drvTask({
+        id: "jdm_customer_design_confirm",
+        name: "客户确认 ID/CMF 与设计冻结",
+        desc: "客户确认 ID/CMF、外观缝隙与限度标准、关键接口和设计冻结版本",
         owner: "项目经理",
-        visibleRoles: ["pm", "manager", "owner"],
-        guide:
-          "1) 接收 ID/CMF 文件与规格书\n2) 核对完整性与版本\n3) 登记缺口清单",
-      },
-      {
-        id: "jin2",
-        name: "设计边界与 RACI 确认",
-        desc: "明确工厂/客户责任分工与设计边界",
+        ownerRole: "project_manager",
+        dependsOn: ["drv_common_dfm_validation_plan"],
+        durationDays: 2,
+      }),
+      deliverables: ["客户外观签核记录"],
+    },
+    {
+      phaseId: "evt",
+      task: drvTask({
+        id: "jdm_customer_evt_confirm",
+        name: "客户确认 EVT 样机与结果",
+        desc: "客户确认 EVT 样机、功能结果、偏差和 DVT 输入版本",
         owner: "项目经理",
-        visibleRoles: ["pm", "manager", "owner"],
-        guide:
-          "1) 划定 MD/EE/SW 设计边界\n2) 输出 RACI 责任矩阵\n3) 与客户对齐确认",
-      },
-      {
-        id: "jin3",
-        name: "可行性与初步 DFM",
-        desc: "评估设计可行性与可制造性",
-        owner: "R&D Lead",
-        visibleRoles: ["rd_hw", "rd_mech", "pm", "manager", "owner"],
-        guide: "1) 关键技术可行性判断\n2) 初步 DFM 风险\n3) 输出可行性结论",
-      },
-      {
-        id: "jin4",
-        name: "报价 / NRE / 模具方案确认",
-        desc: "确认 NRE、模具方案与报价",
-        owner: "SCM/采购",
-        visibleRoles: ["scm", "sales", "pm", "manager", "owner"],
-        guide: "1) NRE 与模具方案\n2) 初步 BOM 成本\n3) 报价确认",
-      },
-      {
-        id: "jin5",
-        name: "输入冻结评审 (Gate 1, 客户确认)",
-        desc: "冻结设计输入，客户书面确认",
-        owner: "跨部门",
-        visibleRoles: [],
-        guide:
-          "评审:\n1) 输入完整性\n2) 规格确认书签字\n3) RACI 与初步 BOM/NRE\n4) 项目计划",
-      },
-    ],
-  },
-  {
-    id: "design",
-    code: "P2",
-    name: "详细设计",
-    nameEn: "Detailed Design",
-    duration: "5-9周",
-    desc: "MD/EE/SW 并行设计与外观一致性落地",
-    gate: "设计冻结评审 + 客户外观签核",
-    gateTaskId: "jd7",
-    color: "#0369a1",
-    deliverables: [
-      "MD 结构图纸",
-      "EE 原理图 & PCB Layout",
-      "SW 架构文档",
-      "BOM v1.0",
-      "客户外观签核记录",
-    ],
-    gateStandard: JDM_GATE_STANDARDS.design,
-    tasks: [
-      {
-        id: "jd1",
-        name: "MD 结构设计",
-        desc: "内部结构、装配与外观件落地",
-        owner: "MD",
-        visibleRoles: ["rd_mech", "pm", "manager", "owner"],
-        guide: "1) 结构 3D/2D\n2) 装配工艺\n3) 外观件还原客户 ID",
-      },
-      {
-        id: "jd2",
-        name: "EE 原理设计",
-        desc: "电源/MCU/传感器/通信架构",
-        owner: "EE",
-        visibleRoles: ["rd_hw", "pm", "manager", "owner"],
-        guide: "1) 系统框图\n2) 原理图\n3) 电源树与功耗",
-      },
-      {
-        id: "jd3",
-        name: "PCB Layout",
-        desc: "PCB 布线、阻抗与 EMC",
-        owner: "EE/PCB",
-        visibleRoles: ["rd_hw", "pm", "manager", "owner"],
-        guide: "1) 叠层规划\n2) 关键信号阻抗\n3) EMC/DRC",
-      },
-      {
-        id: "jd4",
-        name: "SW 架构设计",
-        desc: "Firmware 架构与通信协议",
-        owner: "SW",
-        visibleRoles: ["rd_sw", "pm", "manager", "owner"],
-        guide: "1) 系统架构\n2) 协议定义\n3) OTA 方案",
-      },
-      {
-        id: "jd5",
-        name: "DFM/DFA 评审",
-        desc: "可制造/可装配性评审",
-        owner: "ME/工厂",
-        visibleRoles: ["rd_mech", "rd_hw", "qa", "pm", "manager", "owner"],
-        guide: "1) 工厂参与评审\n2) DFM/DFA Checklist",
-      },
-      {
-        id: "jd6",
-        name: "关键料件定型",
-        desc: "主芯片/屏/电池等规格冻结",
-        owner: "EE/采购",
-        visibleRoles: ["rd_hw", "scm", "pm", "manager", "owner"],
-        guide: "1) 2nd Source 验证\n2) 规格与供货锁定",
-      },
-      {
-        id: "jd7",
-        name: "设计冻结评审 (Gate 2, 客户外观签核)",
-        desc: "Design Freeze + 客户外观一致性签核",
-        owner: "跨部门",
-        visibleRoles: [],
-        guide:
-          "评审:\n1) 设计完整度\n2) BOM v1.0 成本\n3) 客户外观签核\n4) EVT 计划",
-      },
-    ],
-  },
-  {
-    id: "evt",
-    code: "P3",
-    name: "EVT 工程验证",
-    nameEn: "EVT",
-    duration: "4-6周",
-    desc: "工程样机功能/性能验证",
-    gate: "EVT 评审 + 客户样机确认",
-    gateTaskId: "je6",
-    color: "#7c3aed",
-    deliverables: [
-      "EVT 样机",
-      "功能/性能测试报告",
-      "软硬件联调记录",
-      "问题清单",
-      "客户样机确认记录",
-    ],
-    gateStandard: JDM_GATE_STANDARDS.evt,
-    tasks: [
-      {
-        id: "je1",
-        name: "工程样机制作",
-        desc: "制作 EVT 样机用于验证",
-        owner: "EE/EMS",
-        visibleRoles: ["rd_hw", "pm", "manager", "owner"],
-        guide: "1) PCBA 打样\n2) 整机组装\n3) 标注版本序号",
-      },
-      {
-        id: "je2",
-        name: "功能测试 (FT)",
-        desc: "功能点逐一验证",
-        owner: "QA/EE",
-        visibleRoles: ["qa", "rd_hw", "pm", "manager", "owner"],
-        guide: "1) FT Test Plan\n2) 逐项 Pass/Fail\n3) Bug 入 Issue List",
-      },
-      {
-        id: "je3",
-        name: "性能测试 (PT)",
-        desc: "续航/信号/热设计初测",
-        owner: "QA/EE",
-        visibleRoles: ["qa", "rd_hw", "pm", "manager", "owner"],
-        guide: "1) 续航\n2) RF 性能\n3) 温升",
-      },
-      {
-        id: "je4",
-        name: "软硬件联调",
-        desc: "Firmware 与硬件联调",
-        owner: "SW/EE",
-        visibleRoles: ["rd_sw", "rd_hw", "pm", "manager", "owner"],
-        guide: "1) Bringup\n2) 驱动/协议\n3) 稳定性优化",
-      },
-      {
-        id: "je5",
-        name: "问题清单",
-        desc: "记录 bug、缺陷与改善方案",
-        owner: "项目经理/QA",
-        visibleRoles: [
-          "pm",
-          "qa",
-          "rd_hw",
-          "rd_sw",
-          "rd_mech",
-          "manager",
-          "owner",
-        ],
-        guide: "每个 Issue:\n- 现象\n- 根因\n- 改善方案\n- 责任人/期限",
-      },
-      {
-        id: "je6",
-        name: "EVT 评审 (Gate 3, 客户样机确认)",
-        desc: "是否达到进入 DVT 条件 + 客户样机确认",
-        owner: "跨部门",
-        visibleRoles: [],
-        guide: "标准:\n- 功能 Pass Rate ≥95%\n- 无 P0 未解\n- 客户样机确认",
-      },
-    ],
-  },
-  {
-    id: "dvt",
-    code: "P4",
-    name: "DVT 设计验证",
-    nameEn: "DVT",
-    duration: "4-8周",
-    desc: "设计成熟度、可靠性与认证验证",
-    gate: "DVT 评审 + 客户 DVT 确认",
-    gateTaskId: "jv6",
-    color: "#0f766e",
-    deliverables: [
-      "DVT 样机",
-      "可靠性测试报告",
-      "安规与认证报告",
-      "模具 T1/T2 样品",
-      "包装验证报告",
-      "客户 DVT 确认记录",
-    ],
-    gateStandard: JDM_GATE_STANDARDS.dvt,
-    tasks: [
-      {
-        id: "jv1",
-        name: "DVT 样机制作",
-        desc: "半量产工艺制作 DVT 样机",
-        owner: "EMS",
-        visibleRoles: ["rd_hw", "pm", "manager", "owner"],
-        guide: "1) 半正式 SMT\n2) 整机组装\n3) 模拟量产工艺",
-      },
-      {
-        id: "jv2",
-        name: "可靠性测试",
-        desc: "跌落/温湿/震动/老化",
-        owner: "QA",
-        visibleRoles: ["qa", "pm", "manager", "owner"],
-        guide: "标准测试矩阵:\n- 跌落\n- 高低温\n- 湿热\n- 振动",
-      },
-      {
-        id: "jv3",
-        name: "安规与认证",
-        desc: "电池安全、运输、整机、EMC 等目标市场认证",
-        owner: "QA/认证",
-        visibleRoles: [
-          "qa",
-          "cert",
-          "battery_safety",
-          "rd_hw",
-          "pm",
-          "manager",
-          "owner",
-        ],
-        guide:
-          "认证清单:\n- 电芯/电池包安全: IEC 62133、GB 31241、UL 2054 等适用项（或复用确认）\n- 运输: UN38.3 + MSDS\n- 整机: CCC/CE/FCC/PSE/KC 等目标市场认证\n- 安规/EMC/RF，归档证书\n- 每项记录样品版本与报告编号",
-      },
-      {
-        id: "jv4",
-        name: "模具 T1/T2 试模",
-        desc: "塑胶模具开模与试模",
-        owner: "MD/模厂",
-        visibleRoles: ["rd_mech", "pm", "manager", "owner"],
-        guide: "1) 开模\n2) T1/T2 试模\n3) 修模与认证样品",
-      },
-      {
-        id: "jv5",
-        name: "包装设计验证",
-        desc: "包装跌落与运输测试",
-        owner: "包装",
-        visibleRoles: ["scm", "pm", "manager", "owner"],
-        guide: "1) 包装结构\n2) ISTA 跌落\n3) 运输振动",
-      },
-      {
-        id: "jv6",
-        name: "DVT 评审 (Gate 4, 客户 DVT 确认)",
-        desc: "进入 PVT 前关键评审 + 客户 DVT 确认",
-        owner: "跨部门",
-        visibleRoles: [],
-        guide: "标准:\n- 可靠性/认证 Pass\n- 模具尺寸/外观 OK\n- 客户 DVT 确认",
-      },
-    ],
-  },
-  {
-    id: "pvt",
-    code: "P5",
-    name: "PVT 试产验证",
-    nameEn: "PVT",
-    duration: "3-6周",
-    desc: "生产工艺与良率验证",
-    gate: "MP 准备就绪评审 + 客户 golden sample 签样",
-    gateTaskId: "jp6",
-    isReleaseGate: true,
-    color: "#b45309",
-    deliverables: [
-      "试产（50-300台）报告",
-      "SOP/WI",
-      "治具与测试程序",
-      "良率报告",
-      "客户 golden sample 签样记录",
-      "EOL 100%测试能力验收记录",
-      "UN38.3运输测试报告或复用确认",
-      "MSDS",
-      "电芯/电池包安全认证报告或复用确认",
-    ],
-    gateStandard: JDM_GATE_STANDARDS.pvt,
-    tasks: [
-      {
-        id: "jp1",
-        name: "试产规划",
-        desc: "产线排程、物料齐套、培训",
-        owner: "ME/工厂",
-        visibleRoles: [
-          "rd_mech",
-          "rd_hw",
-          "qa",
-          "scm",
-          "pm",
-          "manager",
-          "owner",
-        ],
-        guide: "1) 试产数量与排程\n2) 物料齐套\n3) 人员培训",
-      },
-      {
-        id: "jp2",
-        name: "SOP/WI 制定",
-        desc: "标准作业流程与作业指导书",
-        owner: "ME/IE",
-        visibleRoles: ["rd_mech", "qa", "pe", "mfg", "pm", "manager", "owner"],
-        guide: "每工位:\n- SOP\n- WI\n- 检验标准",
-      },
-      {
-        id: "jp3",
-        name: "治具与测试程序",
-        desc: "ICT/FCT/老化治具与测试软件",
-        owner: "测试工程",
-        visibleRoles: ["rd_hw", "qa", "pm", "manager", "owner"],
-        guide: "1) ICT/FCT 治具\n2) 老化柜\n3) 测试程序与判定",
-      },
-      {
-        id: "jp4",
-        name: "试产 (50-300台)",
-        desc: "按量产工艺试制",
-        owner: "工厂",
-        visibleRoles: [
-          "rd_mech",
-          "rd_hw",
-          "qa",
-          "pe",
-          "mfg",
-          "pm",
-          "manager",
-          "owner",
-        ],
-        guide: "1) FAI\n2) 全程良率监控\n3) FPY 记录",
-      },
-      {
-        id: "jp5",
-        name: "良率分析与改善",
-        desc: "SMT/组装/测试良率追踪",
-        owner: "QE/ME",
-        visibleRoles: ["qa", "rd_hw", "rd_mech", "pm", "manager", "owner"],
-        guide: "良率目标与 Pareto 改善",
-      },
-      {
-        id: "jp6",
-        name: "PVT 评审 (Gate 5, 客户 golden sample 签样)",
-        desc: "量产准备就绪 + 客户 golden sample 签样",
-        owner: "跨部门",
-        visibleRoles: [],
-        guide:
-          "GO 条件:\n- 试产良率达标\n- SOP/WI 完整\n- 治具/产能就绪\n- 客户 golden sample 签样",
-      },
-    ],
-  },
-  {
-    id: "mp",
-    code: "P6",
-    name: "量产稳定与客户移交",
-    nameEn: "Mass Production",
-    duration: "2-8周",
-    desc: "量产发布后的爬坡、客户交付验证与项目关闭移交",
-    gate: "项目关闭移交评审",
-    gateTaskId: "jm5",
-    isCloseGate: true,
-    color: "#166534",
-    deliverables: ["量产产品", "良率周报", "ECN/ECR 记录", "售后数据分析"],
-    gateStandard: JDM_GATE_STANDARDS.mp,
-    tasks: [
-      {
-        id: "jm1",
-        name: "首批量产 (Ramp-up)",
-        desc: "小批爬坡，监控良率",
-        owner: "工厂/项目经理",
-        visibleRoles: ["scm", "qa", "mfg", "pe", "pm", "manager", "owner"],
-        guide: "1) 首批爬坡\n2) 日良率监控\n3) 客户样品确认",
-      },
-      {
-        id: "jm2",
-        name: "良率监控与改善",
-        desc: "日/周良率追踪与 CAR",
-        owner: "QE/工厂",
-        visibleRoles: ["qa", "pm", "manager", "owner"],
-        guide: "1) 良率报告\n2) Pareto Top3\n3) CAR 关闭",
-      },
-      {
-        id: "jm3",
-        name: "工程变更管理",
-        desc: "ECN/ECR 评审与执行",
-        owner: "项目经理/CM",
-        visibleRoles: ["rd_hw", "rd_sw", "rd_mech", "pm", "manager", "owner"],
-        guide: "1) ECR 评估\n2) CCB 审批\n3) ECN 执行",
-      },
-      {
-        id: "jm4",
-        name: "售后问题跟踪",
-        desc: "RMA 与市场反馈 FA",
-        owner: "售后/QA",
-        visibleRoles: ["qa", "pm", "manager", "owner"],
-        guide: "1) RMA 分析\n2) 失效模式 FA\n3) 客诉改善",
-      },
-      {
-        id: "jm5",
-        name: "产品交付/EOL 评审 (Gate 6)",
-        desc: "量产交付与 EOL 决策",
-        owner: "跨部门",
-        visibleRoles: [],
-        guide: "关注:\n- 量产经营目标\n- 持续改善\n- EOL 计划",
-      },
-    ],
-  },
-];
+        ownerRole: "project_manager",
+        dependsOn: ["drv_common_evt_issue_close"],
+        durationDays: 2,
+      }),
+      deliverables: ["客户样机确认记录"],
+    },
+    {
+      phaseId: "dvt",
+      task: drvTask({
+        id: "jdm_customer_dvt_confirm",
+        name: "客户确认 DVT、配件与包装",
+        desc: "客户确认 DVT 样机和结果，以及配件、包装、物流与外观验收状态",
+        owner: "项目经理",
+        ownerRole: "project_manager",
+        dependsOn: ["drv_common_dvt_issue_close"],
+        durationDays: 2,
+      }),
+      deliverables: ["客户 DVT 确认记录"],
+    },
+    {
+      phaseId: "pvt",
+      task: drvTask({
+        id: "jdm_customer_golden_confirm",
+        name: "客户确认 Golden Sample",
+        desc: "客户签样量产 Golden Sample、外观限度与产品版本",
+        owner: "项目经理",
+        ownerRole: "project_manager",
+        dependsOn: ["drv_common_release_files"],
+        durationDays: 2,
+      }),
+      deliverables: ["客户 golden sample 签样记录"],
+    },
+    {
+      phaseId: "pvt",
+      task: drvTask({
+        id: "jdm_customer_release_confirm",
+        name: "客户量产放行确认",
+        desc: "客户确认量产版本、交付资料、开放项边界并书面同意放行",
+        owner: "项目经理",
+        ownerRole: "project_manager",
+        dependsOn: ["jdm_customer_golden_confirm"],
+        durationDays: 1,
+      }),
+      deliverables: ["客户放行记录"],
+    },
+  ];
+}
+
+function remapJdmEntryDependency(task: SOPTask): SOPTask {
+  return {
+    ...task,
+    dependsOn: task.dependsOn?.map(dependencyId =>
+      dependencyId === "drv_common_kickoff_gate"
+        ? "jdm_product_definition_gate"
+        : dependencyId,
+    ),
+  };
+}
+
+function addJdmCustomerConfirmations(phase: SOPPhase): SOPPhase {
+  const additions = jdmCustomerConfirmations().filter(
+    item => item.phaseId === phase.id,
+  );
+  const existingTasks = phase.tasks
+    .filter(task => task.id !== phase.gateTaskId)
+    .map(remapJdmEntryDependency);
+  const gateTask = phase.tasks.find(task => task.id === phase.gateTaskId);
+  if (!gateTask) return phase;
+
+  const addedTasks = additions.map(item =>
+    item.task.id === "jdm_customer_design_confirm"
+      ? { ...item.task, dependsOn: existingTasks.map(task => task.id) }
+      : item.task,
+  );
+  const deliverables = uniqueStrings([
+    ...phase.deliverables,
+    ...additions.flatMap(item => item.deliverables),
+  ]);
+  const customerDeliverables = additions.flatMap(item => item.deliverables);
+  const tasks = [...existingTasks, ...addedTasks];
+  const gate = {
+    ...gateTask,
+    name: phase.id === "pvt" ? "JDM 量产发布评审" : gateTask.name,
+    desc: `${gateTask.desc}；客户确认不能替代我方内部设计、可靠性、安全法规或量产放行结论`,
+    dependsOn: tasks.map(task => task.id),
+  };
+  return {
+    ...phase,
+    name: phase.id === "design" ? "详细设计" : phase.name,
+    desc: `${phase.desc}；本阶段客户确认以书面证据进入 Gate`,
+    gate: `${phase.gate} + 客户确认`,
+    deliverables,
+    gateStandard: {
+      ...phase.gateStandard,
+      requiredDeliverables: uniqueStrings([
+        ...phase.gateStandard.requiredDeliverables,
+        ...customerDeliverables,
+      ]),
+      responsibleRoles: uniqueStrings([
+        ...phase.gateStandard.responsibleRoles,
+        "项目经理负责取得并登记客户书面确认",
+        "客户负责确认本阶段约定的产品版本、样机或放行边界",
+      ]),
+      evidenceRequirements: uniqueStrings([
+        ...phase.gateStandard.evidenceRequirements,
+        ...customerDeliverables,
+      ]),
+      exceptionStrategy: uniqueStrings([
+        ...phase.gateStandard.exceptionStrategy,
+        "客户未确认时不得通过本阶段 Gate；任何修改需取得产品负责人批准和客户确认",
+      ]),
+    },
+    tasks: [...tasks, gate],
+  };
+}
+
+/** JDM frozen baseline = JDM P1 + DRV P2-P6 + customer confirmations. */
+export function getJdmPhasesForModuleReuse(
+  moduleReuse: Record<ProductModuleId, ModuleReuseState>,
+  templateVersion?: string | null,
+): SOPPhase[] {
+  for (const moduleId of PRODUCT_MODULE_IDS) {
+    const state = moduleReuse[moduleId];
+    if (state !== "reused" && state !== "not_reused") {
+      throw new Error(`JDM 六模块执行基线无效：${moduleId} 缺少复用状态`);
+    }
+  }
+  if (
+    moduleReuse.id_cmf === "not_reused" &&
+    moduleReuse.structure_mold === "reused"
+  ) {
+    throw new Error(
+      "JDM 六模块执行基线无效：ID/CMF 不复用时，产品结构/模具也必须不复用",
+    );
+  }
+
+  const executionPhases = buildDerivativePhases(moduleReuse)
+    .filter(phase => phase.id !== "iteration")
+    .map(addJdmCustomerConfirmations);
+  const phases = [buildJdmDefinitionPhase(), ...executionPhases];
+  return templateVersion === SOP_TEMPLATE_VERSION_CURRENT
+    ? buildCurrentPhases("jdm", phases)
+    : phases;
+}
+
+export const JDM_PHASES: SOPPhase[] = getJdmPhasesForModuleReuse(
+  DERIVATIVE_ALL_NOT_REUSED,
+  SOP_TEMPLATE_VERSION_LEGACY,
+);
+
+// The old static JDM template remains temporarily below as a non-executable
+// reference while its direct consumers are migrated in this increment.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // OBT — openBOM Transfer / 转产导入 (4-phase)
@@ -4432,6 +4116,7 @@ function toCurrentClosePhase(
           "manager",
           "owner",
         ],
+        durationDays: 5,
         guide:
           "1) 记录首批产量和目标产能\n2) 跟踪瓶颈工位与交付风险\n3) 异常进入受控问题或 CAPA/ECO",
       },
@@ -4450,6 +4135,8 @@ function toCurrentClosePhase(
           "manager",
           "owner",
         ],
+        durationDays: 7,
+        dependsOn: ["stability_ramp"],
         guide:
           "1) 至少两期周报\n2) 累计覆盖不少于 14 天\n3) QA 确认 FPY、质量事件和产能达成",
       },
@@ -4468,6 +4155,8 @@ function toCurrentClosePhase(
           "manager",
           "owner",
         ],
+        durationDays: 2,
+        dependsOn: ["stability_metrics"],
         guide:
           "1) 关闭全部 P0/P1\n2) 不在项目内长期运行工程变更、售后或持续改善\n3) 需继续处理的事项转入受控流程",
       },
@@ -4477,6 +4166,12 @@ function toCurrentClosePhase(
         desc: "确认稳定证据和遗留问题满足关闭条件",
         owner: "跨部门",
         visibleRoles: [],
+        durationDays: 1,
+        dependsOn: [
+          "stability_ramp",
+          "stability_metrics",
+          "stability_issues",
+        ],
         guide:
           "Close 条件:\n- 已发布量产版本\n- 两期稳定记录且覆盖至少 14 天\n- QA 已确认\n- 无未关闭 P0/P1\n- 必签完成",
       },
@@ -4500,7 +4195,10 @@ export const DERIVATIVE_PHASES_CURRENT = buildCurrentPhases(
   DERIVATIVE_PHASES
 );
 export const IDR_PHASES_CURRENT = buildCurrentPhases("idr", IDR_PHASES);
-export const JDM_PHASES_CURRENT = buildCurrentPhases("jdm", JDM_PHASES);
+export const JDM_PHASES_CURRENT = getJdmPhasesForModuleReuse(
+  DERIVATIVE_ALL_NOT_REUSED,
+  SOP_TEMPLATE_VERSION_CURRENT,
+);
 export const OBT_PHASES_CURRENT = buildCurrentPhases("obt", OBT_PHASES);
 
 const LEGACY_PHASES_BY_CATEGORY: Record<ProjectCategory, SOPPhase[]> = {

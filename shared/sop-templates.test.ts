@@ -165,7 +165,10 @@ describe("SOP templates", () => {
   it("keeps customer-led gates explicit in JDM and OBT", () => {
     expect(phase(JDM_PHASES, "input").deliverables).toContain("规格确认书（客户签字）");
     expect(phase(JDM_PHASES, "pvt").deliverables).toContain("客户 golden sample 签样记录");
-    expect(task(JDM_PHASES, "input", "jin1").owner).toBe("项目经理");
+    expect(task(JDM_PHASES, "input", "jdm_input_snapshot").owner).toBe("项目经理");
+    expect(task(JDM_PHASES, "input", "jdm_product_spec").name).toContain("我方");
+    expect(task(JDM_PHASES, "input", "jdm_csr").name).toContain("CSR");
+    expect(task(JDM_PHASES, "input", "jdm_customer_spec_csr_confirm").name).toContain("客户确认");
 
     expect(phase(OBT_PHASES, "intake").deliverables).toContain("设计输入冻结确认（客户）");
     expect(phase(OBT_PHASES, "sample").deliverables).toContain("客户签样记录");

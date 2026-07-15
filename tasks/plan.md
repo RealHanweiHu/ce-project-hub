@@ -176,14 +176,14 @@
 **Description:** 保留 input/design/evt/dvt/pvt/mp phaseId，将 P1 定义任务与 DRV 剩余公共任务、模块任务包和客户确认任务组合。
 
 **Acceptance criteria:**
-- [ ] draft 基线只返回 input 阶段；frozen 基线返回 P1-P6。
-- [ ] P1 包含我方产品规格、CSR、风险声明、模块草稿和客户确认硬卡。
-- [ ] JDM 定义任务与 DRV 产品基线公共任务按语义键去重。
+- [x] draft 基线只返回 input 阶段；frozen 基线返回 P1-P6。
+- [x] P1 包含我方产品规格、CSR、风险声明、模块草稿和客户确认硬卡。
+- [x] JDM 定义任务与 DRV 产品基线公共任务按语义键去重。
 
 **Verification:**
-- [ ] RED→GREEN：JDM draft/frozen 模板测试。
-- [ ] `pnpm exec vitest run shared/sop-templates.test.ts shared/gate-signoffs.test.ts`
-- [ ] `pnpm check`
+- [x] RED→GREEN：JDM draft/frozen 模板测试。
+- [x] `pnpm exec vitest run shared/sop-templates.test.ts shared/gate-signoffs.test.ts`
+- [x] `pnpm check`
 
 **Dependencies:** Tasks 1, 3
 

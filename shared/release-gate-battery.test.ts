@@ -1,29 +1,40 @@
 import { describe, it, expect } from "vitest";
-import { CATEGORY_MAP, getReleaseGatePhase } from "./sop-templates";
+import {
+  CATEGORY_MAP,
+  getPhasesForCategory,
+  getReleaseGatePhase,
+} from "./sop-templates";
 import { canRoleContributeToDeliverable } from "./deliverable-permissions";
 
 /**
  * P0：锂电产品出货的运输/安全认证义务在制造商，与谁做的设计无关。
- * JDM（工厂全自研 MD/EE/SW）发布门必须与 NPD 同标：UN38.3 / MSDS /
- * 电芯电池包安全认证 / EOL 100% 检测能力；OBT（客供设计）至少要有
- * UN38.3 / MSDS（可为客户提供的复用确认）。
+ * JDM 在 DVT 对 UN38.3 / MSDS / 电芯电池包安全认证做实证验证，
+ * 发布门再确认 EOL 能力和认证证据仍覆盖量产版本；客户签字不能替代。
+ * OBT（客供设计）发布门至少要有 UN38.3 / MSDS 复用或有效性确认。
  */
-const JDM_BATTERY_EVIDENCE = [
+const JDM_DVT_BATTERY_EVIDENCE = [
   "UN38.3运输测试报告或复用确认",
   "MSDS",
   "电芯/电池包安全认证报告或复用确认",
+];
+const JDM_RELEASE_BATTERY_EVIDENCE = [
   "EOL 100%测试能力验收记录",
+  "认证与运输证据覆盖复核记录",
 ];
 const OBT_BATTERY_EVIDENCE = ["UN38.3运输测试报告或复用确认", "MSDS"];
 
 describe("JDM/OBT 发布门电池安全证据", () => {
-  it("JDM 发布门 requiredDeliverables 含全部电池安全硬证据（与 NPD 同标）", () => {
-    const gate = getReleaseGatePhase("jdm");
-    expect(gate).not.toBeNull();
-    for (const name of JDM_BATTERY_EVIDENCE) {
-      expect(gate!.gateStandard.requiredDeliverables, `缺 ${name}`).toContain(name);
-      // 阶段 deliverables 决定 effective 提交集——不加进去证据传不上来
-      expect(gate!.deliverables, `阶段交付物缺 ${name}`).toContain(name);
+  it("JDM DVT 完成电池安全实证，发布门复核量产版本覆盖", () => {
+    const dvt = getPhasesForCategory("jdm").find((phase) => phase.id === "dvt")!;
+    const release = getReleaseGatePhase("jdm");
+    expect(release).not.toBeNull();
+    for (const name of JDM_DVT_BATTERY_EVIDENCE) {
+      expect(dvt.gateStandard.requiredDeliverables, `DVT 缺 ${name}`).toContain(name);
+      expect(dvt.deliverables, `DVT 阶段交付物缺 ${name}`).toContain(name);
+    }
+    for (const name of JDM_RELEASE_BATTERY_EVIDENCE) {
+      expect(release!.gateStandard.requiredDeliverables, `发布门缺 ${name}`).toContain(name);
+      expect(release!.deliverables, `发布阶段交付物缺 ${name}`).toContain(name);
     }
   });
 

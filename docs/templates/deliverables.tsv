@@ -1,4 +1,4 @@
-TOTAL UNIQUE: 322
+TOTAL UNIQUE: 323
 BOM v0.1	npd:P2
 BOM v1.0	npd:P3,jdm:P2
 BOM v2.0	derivative:P2
@@ -84,6 +84,7 @@ openBOM 核对清单	obt:P1
 产品概念书	npd:P1
 产品规格书 PSD	npd:P2
 产品需求文档 PRD	npd:P2
+客户特殊要求清单 CSR	jdm:P1
 产线切换计划	eco:P4
 产能爬坡计划	npd:P7
 供应商样件	idr:P2

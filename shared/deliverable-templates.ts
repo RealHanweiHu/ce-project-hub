@@ -222,6 +222,7 @@ export const DELIVERABLE_TEMPLATE_FILES: Record<string, string> = {
   "客户签样记录": "F12-客户签核单/客户签样记录.xlsx",
   "规格确认书（客户签字）": "F12-客户签核单/规格确认书（客户签字）.xlsx",
   "设计输入冻结确认（客户）": "F12-客户签核单/设计输入冻结确认（客户）.xlsx",
+  "客户特殊要求清单 CSR": "F13-需求与文档/客户特殊要求清单 CSR.xlsx",
   "CIP 持续改善报告": "F13-需求与文档/CIP 持续改善报告.xlsx",
   "ECO关闭报告": "F13-需求与文档/ECO关闭报告.xlsx",
   "ECR变更申请书": "F13-需求与文档/ECR变更申请书.xlsx",

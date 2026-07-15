@@ -48,6 +48,8 @@ describe("Gate structured sign-offs", () => {
     const phase = getPhasesForCategory("jdm")[0];
     const requirements = buildGateSignoffRequirements("jdm", phase);
     expect(requirements.customer).toBe("required");
+    expect(requirements.product).toBe("required");
+    expect(requirements.qa).toBe("required");
     const pending = gateSignoffsReady(requirements, {});
     expect(pending.ready).toBe(false);
     const approved = Object.fromEntries(

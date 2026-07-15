@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   SCHEDULE_GRAPH,
+  buildSchedTasks,
   criticalPathTasksForProject,
   scheduleForCategory,
   scheduleForProject,
@@ -13,10 +14,9 @@ import {
 } from "./sop-templates";
 
 /**
- * P0：SCHEDULE_GRAPH 必须覆盖所有 category 的全部任务。
- * 缺失的任务会被 buildSchedTasks 按「工期 1 天、无依赖、阶段入口」兜底，
- * 导致整条赛道所有任务同一天开始——甘特图/关键路径/延期影响全部失真
- * （JDM/OBT 上线时就是这么漏的）。
+ * P0：每个有效任务必须通过模板内联字段或旧 SCHEDULE_GRAPH 定义排期。
+ * 新动态模板优先使用内联工期/依赖，因为同一公共任务在不同项目轨道
+ * 可以拥有不同入口依赖；旧模板继续从静态表回退。
  */
 describe("SCHEDULE_GRAPH 全 category 覆盖", () => {
   for (const category of PROJECT_CATEGORIES) {
@@ -24,21 +24,21 @@ describe("SCHEDULE_GRAPH 全 category 覆盖", () => {
       const missing: string[] = [];
       for (const phase of category.phases) {
         for (const task of phase.tasks) {
-          if (!SCHEDULE_GRAPH[task.id]) missing.push(`${phase.id}/${task.id}`);
+          if (task.durationDays === undefined && !SCHEDULE_GRAPH[task.id]) {
+            missing.push(`${phase.id}/${task.id}`);
+          }
         }
       }
       expect(missing, `缺排期定义: ${missing.join(", ")}`).toEqual([]);
     });
 
     it(`${category.id} 图中依赖都指向存在的任务（无悬空依赖）`, () => {
-      const ids = new Set(category.phases.flatMap((p) => p.tasks.map((t) => t.id)));
+      const scheduled = buildSchedTasks(category.phases);
+      const ids = new Set(scheduled.map((task) => task.id));
       const dangling: string[] = [];
-      for (const phase of category.phases) {
-        for (const task of phase.tasks) {
-          const deps = (SCHEDULE_GRAPH[task.id]?.slice(1) ?? []) as string[];
-          for (const dep of deps) {
-            if (!ids.has(dep)) dangling.push(`${task.id}→${dep}`);
-          }
+      for (const task of scheduled) {
+        for (const dep of task.dependsOn) {
+          if (!ids.has(dep)) dangling.push(`${task.id}→${dep}`);
         }
       }
       expect(dangling, `悬空依赖: ${dangling.join(", ")}`).toEqual([]);

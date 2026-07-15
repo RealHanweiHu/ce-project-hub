@@ -116,11 +116,11 @@ export const GATE_SIGNOFF_REQUIREMENT_MATRIX: Record<string, Record<string, Reco
     stabilization: requirementSet(["product", "engineering", "qa", "scm", "npi", "certification"]),
   },
   jdm: {
-    input: requirementSet(["engineering", "scm", "certification", "customer"], ["product", "qa"]),
-    design: requirementSet(["engineering", "customer"], ["product", "qa", "certification"]),
-    evt: requirementSet(["engineering", "qa", "npi", "customer"], ["product", "certification"]),
-    dvt: requirementSet(["engineering", "qa", "scm", "npi", "certification", "customer"], ["product"]),
-    pvt: requirementSet(["engineering", "qa", "scm", "npi", "certification", "customer"], ["product"]),
+    input: requirementSet(["product", "engineering", "qa", "scm", "certification", "customer"], ["npi"]),
+    design: requirementSet(["product", "engineering", "qa", "customer"], ["scm", "npi", "certification"]),
+    evt: requirementSet(["product", "engineering", "qa", "npi", "customer"], ["certification"]),
+    dvt: requirementSet(["product", "engineering", "qa", "scm", "npi", "certification", "customer"]),
+    pvt: requirementSet(["product", "engineering", "qa", "scm", "npi", "certification", "customer"]),
     mp: requirementSet(["product", "qa", "scm", "npi", "customer"], ["engineering", "certification"]),
   },
   obt: {

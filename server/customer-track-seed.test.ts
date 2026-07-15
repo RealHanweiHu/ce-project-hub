@@ -1,10 +1,15 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { getDb, createProjectWithSeed, getProjectById } from "./db";
-import { getPhasesForCategory, getReleaseGatePhase } from "../shared/sop-templates";
+import {
+  SOP_TEMPLATE_VERSION_CURRENT,
+  getPhasesForCategory,
+  getReleaseGatePhase,
+} from "../shared/sop-templates";
+import { getEffectivePhasesForProjectLike } from "../shared/npd-v3";
 
 // 钉死客户委托轨（JDM/OBT）的建项 seed 链路：
 //   1) currentPhase 归位到该 category 真实首阶段（即便调用方沿用默认 "concept"）
-//   2) project_phases / project_tasks 按 category 阶段集正确 seed
+//   2) JDM 创建只 seed 产品定义 P1；OBT 创建 seed 完整固定阶段
 //   3) MP Release 前置 Gate 落在 PVT，且强制客户签核交付物
 
 const JDM_PRJ = "ctseed_jdm";
@@ -34,6 +39,11 @@ async function countRows(table: "project_phases" | "project_tasks", projectId: s
 
 const expectedTaskCount = (cat: string) =>
   getPhasesForCategory(cat).reduce((sum, p) => sum + p.tasks.length, 0);
+const jdmDraftPhases = getEffectivePhasesForProjectLike({
+  category: "jdm",
+  sopTemplateVersion: SOP_TEMPLATE_VERSION_CURRENT,
+  customFields: {},
+});
 
 describe("客户委托轨 建项 seed", () => {
   beforeAll(async () => {
@@ -57,11 +67,14 @@ describe("客户委托轨 建项 seed", () => {
     expect(obt?.currentPhase).toBe("intake");
   });
 
-  it("project_phases / project_tasks 按 category 阶段集 seed", async () => {
+  it("JDM 只 seed P1，OBT 按完整固定阶段 seed", async () => {
     const db = await getDb(); if (!db) return;
-    expect(await countRows("project_phases", JDM_PRJ)).toBe(getPhasesForCategory("jdm").length);
+    expect(jdmDraftPhases.map((phase) => phase.id)).toEqual(["input"]);
+    expect(await countRows("project_phases", JDM_PRJ)).toBe(jdmDraftPhases.length);
     expect(await countRows("project_phases", OBT_PRJ)).toBe(getPhasesForCategory("obt").length);
-    expect(await countRows("project_tasks", JDM_PRJ)).toBe(expectedTaskCount("jdm"));
+    expect(await countRows("project_tasks", JDM_PRJ)).toBe(
+      jdmDraftPhases.reduce((sum, phase) => sum + phase.tasks.length, 0),
+    );
     expect(await countRows("project_tasks", OBT_PRJ)).toBe(expectedTaskCount("obt"));
   });
 
