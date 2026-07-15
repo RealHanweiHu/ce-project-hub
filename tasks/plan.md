@@ -224,22 +224,31 @@
 **Description:** JDM 创建页只收概念输入；项目 P1 显示规格、CSR、模块草稿、风险与客户确认表单，并预览 Gate 后任务。
 
 **Acceptance criteria:**
-- [ ] 创建页不再要求 `customerInputVersion` 或模块选择。
-- [ ] Gate 前模块草稿可正常收敛；Gate 后基线只读，变更入口置灰。
-- [ ] Gate 预览任务数等于实际生成任务数。
+- [x] 创建页不再要求 `customerInputVersion` 或模块选择。
+- [x] Gate 前模块草稿可正常收敛；Gate 后基线只读，变更入口置灰。
+- [x] Gate 预览任务数等于实际生成任务数。
 
 **Verification:**
-- [ ] `pnpm check`
-- [ ] `pnpm build`
-- [ ] 本地浏览器完成“JDM 创建→填写 P1→通过 Gate→出现 P2-P6”。
+- [x] `pnpm check`
+- [x] 完整测试：180 个测试文件、1028 项测试全部通过（含 JDM 草稿权限/竞态、两段式生成与 Gate 回归）。
+- [x] `pnpm build`、`git diff --check`
+- [x] 本地浏览器完成“JDM 创建→只生成 P1→保存不完整/完整草稿→模块任务数联动→查看 Gate 冻结摘要与硬卡阻断”。
+- [x] `server/jdm-two-stage-seed.test.ts` 验证 Gate 通过后原子生成 P2-P6，且任务数与共享预览组合器一致。
 
 **Dependencies:** Task 7
 
 **Files likely touched:**
 - `client/src/components/views/ProjectListView.tsx`
-- `client/src/components/views/OverviewPanel.tsx`
+- `client/src/components/views/JdmDefinitionBaselinePanel.tsx`
+- `client/src/components/views/GateReviewModal.tsx`
+- `client/src/components/views/GateReadinessChecklist.tsx`
+- `client/src/components/views/ProjectDetailView.tsx`
 - `client/src/pages/Home.tsx`
 - `client/src/lib/data.ts`
+- `client/src/lib/jdm-create.ts`
+- `client/src/lib/jdm-definition.ts`
+- `server/routers/projects.ts`
+- `server/db.ts`
 
 **Estimated scope:** M
 

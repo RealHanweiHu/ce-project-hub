@@ -101,6 +101,12 @@ import {
   updateDerivativeModuleReuse,
   validateDerivativeCreateBaseline,
 } from "@/lib/derivative-create";
+import {
+  buildJdmCreateExecutionBaseline,
+  getJdmCreatePhasePreview,
+  validateJdmCreateInput,
+  validateObtCreateInput,
+} from "@/lib/jdm-create";
 
 interface ProjectListViewProps {
   projects: Project[];
@@ -353,6 +359,8 @@ export function ProjectListView({
     useState<ProjectCategory>("npd");
   const capturesProjectIntent = selectedCategory === "derivative";
   const capturesEcoChangeScope = selectedCategory === "eco";
+  const isJdm = selectedCategory === "jdm";
+  const isObt = selectedCategory === "obt";
   const {
     data: userList,
     isLoading: usersLoading,
@@ -576,6 +584,7 @@ export function ProjectListView({
     risk: "low" as "low" | "medium" | "high",
     safetyRiskLevel: "standard" as "standard" | "high",
     regulatoryRiskLevel: "standard" as "standard" | "high",
+    customerConceptRef: "",
     customerInputVersion: "",
     customerPartNumber: "",
     commercialBoundary: "",
@@ -608,6 +617,7 @@ export function ProjectListView({
     // 类型专属输入不能跨项目轨道继承，尤其不能把折叠区里的旧风险勾选静默带入。
     setForm(current => ({
       ...current,
+      customerConceptRef: "",
       customerInputVersion: "",
       customerPartNumber: "",
       commercialBoundary: "",
@@ -628,17 +638,17 @@ export function ProjectListView({
   const handleCreate = async () => {
     if (isCreating) return;
     if (!form.name.trim()) return;
-    if (["jdm", "obt"].includes(selectedCategory)) {
-      if (
-        !form.customerInputVersion.trim() ||
-        !form.customerPartNumber.trim() ||
-        !form.commercialBoundary.trim() ||
-        !form.customerSignoffOwnerUserId
-      ) {
-        toast.error("请完整冻结客户输入版本、客户料号、商务边界和签核责任人");
-        return;
-      }
+    if (isJdm && !jdmCreateValidation.ok) {
+      toast.error(`请补充：${jdmCreateValidation.issues.join("、")}`);
+      return;
     }
+    if (isObt && !obtCreateValidation.ok) {
+      toast.error(`请补充：${obtCreateValidation.issues.join("、")}`);
+      return;
+    }
+    const jdmDraftExecutionBaseline = isJdm
+      ? buildJdmCreateExecutionBaseline(form.customerConceptRef)
+      : null;
     let derivativeBaseline = null;
     if (capturesProjectIntent) {
       const validation = validateDerivativeCreateBaseline({
@@ -688,9 +698,11 @@ export function ProjectListView({
         productId: null,
         safetyRiskLevel: form.safetyRiskLevel,
         regulatoryRiskLevel: form.regulatoryRiskLevel,
-        customerInputVersion: form.customerInputVersion || null,
-        customerPartNumber: form.customerPartNumber || null,
-        commercialBoundary: form.commercialBoundary || null,
+        customerInputVersion: isObt ? form.customerInputVersion.trim() : null,
+        customerPartNumber: isObt ? form.customerPartNumber.trim() : null,
+        commercialBoundary: (isJdm || isObt)
+          ? form.commercialBoundary.trim()
+          : null,
         customerSignoffOwnerUserId: form.customerSignoffOwnerUserId,
         description: capturesProjectIntent
           ? [
@@ -730,6 +742,10 @@ export function ProjectListView({
                 },
                 projectExecutionBaseline: derivativeBaseline,
               }
+            : isJdm
+              ? {
+                  projectExecutionBaseline: jdmDraftExecutionBaseline,
+                }
             : {}),
         },
         changeScopeDeclaration: capturesEcoChangeScope
@@ -787,18 +803,51 @@ export function ProjectListView({
     () => getDerivativeChangeScopeRules(form.moduleReuse),
     [form.moduleReuse],
   );
+  const jdmCreateValidation = useMemo(
+    () => validateJdmCreateInput({
+      customerConceptRef: form.customerConceptRef,
+      commercialBoundary: form.commercialBoundary,
+      customerSignoffOwnerUserId: form.customerSignoffOwnerUserId,
+    }),
+    [
+      form.commercialBoundary,
+      form.customerConceptRef,
+      form.customerSignoffOwnerUserId,
+    ],
+  );
+  const obtCreateValidation = useMemo(
+    () => validateObtCreateInput({
+      customerInputVersion: form.customerInputVersion,
+      customerPartNumber: form.customerPartNumber,
+      commercialBoundary: form.commercialBoundary,
+      customerSignoffOwnerUserId: form.customerSignoffOwnerUserId,
+    }),
+    [
+      form.commercialBoundary,
+      form.customerInputVersion,
+      form.customerPartNumber,
+      form.customerSignoffOwnerUserId,
+    ],
+  );
+  const jdmCreatePreview = useMemo(
+    () => getJdmCreatePhasePreview(form.customerConceptRef),
+    [form.customerConceptRef],
+  );
   const sopPhases = useMemo(
     () =>
       selectedCategory === "npd"
         ? getNpdV3EffectivePhases(NPD_FULL_TEMPLATE_CONFIG)
         : selectedCategory === "derivative"
           ? derivativePreview.phases
+        : selectedCategory === "jdm"
+          ? jdmCreatePreview.phases
         : getPhasesForCategory(selectedCategory),
-    [derivativePreview.phases, selectedCategory]
+    [derivativePreview.phases, jdmCreatePreview.phases, selectedCategory]
   );
-  const isCreateBlocked = !form.name.trim() || (
-    selectedCategory === "derivative" && !derivativeBaselineValidation.ok
-  );
+  const isCreateBlocked = !form.name.trim() ||
+    (selectedCategory === "derivative" && !derivativeBaselineValidation.ok) ||
+    (isJdm && !jdmCreateValidation.ok) ||
+    (isObt && !obtCreateValidation.ok);
 
   // ── Derived per-project presentation model ───────────────────────────────────
   interface Row {
@@ -1689,12 +1738,71 @@ export function ProjectListView({
                       </select>
                     </div>
                   </div>
-                  {["jdm", "obt"].includes(selectedCategory) && (
+                  {isJdm && (
                     <div className="space-y-3 rounded-[8px] border border-[color:var(--acc-border)] bg-[color:var(--acc-soft)] p-3">
                       <div>
-                        <Kicker>客户输入基线（创建后冻结）</Kicker>
+                        <Kicker>JDM 立项原始输入</Kicker>
+                        <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                          创建时只留存客户概念或 ID 原始输入、商务边界和客户签核责任人。产品规格书、CSR 与六模块复用草稿在 P1 产品定义阶段完成，并在 Gate 通过时冻结。
+                        </p>
+                      </div>
+                      <textarea
+                        value={form.customerConceptRef}
+                        onChange={event =>
+                          setForm({
+                            ...form,
+                            customerConceptRef: event.target.value,
+                          })
+                        }
+                        rows={2}
+                        required
+                        aria-label="客户概念或 ID 原始输入"
+                        placeholder="客户概念 / ID 原始输入引用，例如：客户 ID 图链接、邮件主题或需求附件编号"
+                        className="w-full resize-none rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none focus:border-[color:var(--acc-border)]"
+                      />
+                      <textarea
+                        value={form.commercialBoundary}
+                        onChange={event =>
+                          setForm({
+                            ...form,
+                            commercialBoundary: event.target.value,
+                          })
+                        }
+                        rows={2}
+                        required
+                        aria-label="JDM 商务边界"
+                        placeholder="商务边界：NRE、模具、认证、交付、变更责任……"
+                        className="w-full resize-none rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none focus:border-[color:var(--acc-border)]"
+                      />
+                      <select
+                        value={form.customerSignoffOwnerUserId ?? ""}
+                        onChange={event =>
+                          setForm({
+                            ...form,
+                            customerSignoffOwnerUserId: event.target.value
+                              ? Number(event.target.value)
+                              : null,
+                          })
+                        }
+                        required
+                        aria-label="JDM 客户签核责任人"
+                        className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none focus:border-[color:var(--acc-border)]"
+                      >
+                        <option value="">选择客户签核责任人…</option>
+                        {(userList || []).map(userOption => (
+                          <option key={userOption.id} value={userOption.id}>
+                            {userOption.name || userOption.username}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  {isObt && (
+                    <div className="space-y-3 rounded-[8px] border border-[color:var(--acc-border)] bg-[color:var(--acc-soft)] p-3">
+                      <div>
+                        <Kicker>OBT 客户设计输入（创建后冻结）</Kicker>
                         <p className="mt-1 text-[11px] text-muted-foreground">
-                          后续变化必须走变更记录和重新签核，不能直接覆盖。
+                          OBT 以客户完整设计和 BOM 为输入；后续变化必须走变更记录和重新签核，不能直接覆盖。
                         </p>
                       </div>
                       <div className="grid grid-cols-2 gap-3">
@@ -1707,6 +1815,8 @@ export function ProjectListView({
                             })
                           }
                           placeholder="客户输入版本，如 BOM V1.3"
+                          required
+                          aria-label="OBT 客户输入版本"
                           className="rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none focus:border-[color:var(--acc-border)]"
                         />
                         <input
@@ -1718,6 +1828,8 @@ export function ProjectListView({
                             })
                           }
                           placeholder="客户料号"
+                          required
+                          aria-label="OBT 客户料号"
                           className="rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none focus:border-[color:var(--acc-border)]"
                         />
                       </div>
@@ -1730,6 +1842,8 @@ export function ProjectListView({
                           })
                         }
                         rows={2}
+                        required
+                        aria-label="OBT 商务边界"
                         placeholder="商务边界：NRE、模具、认证、交付、变更责任……"
                         className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none focus:border-[color:var(--acc-border)]"
                       />
@@ -1743,6 +1857,8 @@ export function ProjectListView({
                               : null,
                           })
                         }
+                        required
+                        aria-label="OBT 客户签核责任人"
                         className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none focus:border-[color:var(--acc-border)]"
                       >
                         <option value="">选择客户签核责任人…</option>

@@ -1,8 +1,9 @@
 import { useRef, useState } from "react";
 import { resolveTaskName } from '@shared/sop-template-resolution';
 import { trpc } from "@/lib/trpc";
-import { CheckCircle2, XCircle, Upload, Trash2, FileText } from "lucide-react";
+import { AlertCircle, CheckCircle2, XCircle, Upload, Trash2, FileText } from "lucide-react";
 import { toast } from "sonner";
+import { getGateEvidenceState } from "@/lib/gate-evidence-state";
 
 const DIM_LABEL: Record<string, string> = {
   prereq: "前置任务",
@@ -20,6 +21,11 @@ type GateBlockerRow = {
   title: string;
   description: string | null;
   status: "open" | "resolved";
+};
+type DeliverableReviewRow = {
+  phaseId: string;
+  deliverableName: string;
+  status: "pending" | "approved" | "rejected";
 };
 
 /**
@@ -41,7 +47,10 @@ export function GateReadinessChecklist({
 }) {
   const utils = trpc.useUtils();
   const { data: readiness, isLoading } = trpc.gateReviews.readiness.useQuery({ projectId, phaseId });
-  const { data: files = [] } = trpc.files.list.useQuery({ projectId, phaseId, taskId: gateTaskId });
+  // Match server readiness: evidence may be uploaded from the producing task,
+  // not only from the Gate task itself.
+  const { data: files = [] } = trpc.files.list.useQuery({ projectId, phaseId });
+  const { data: deliverableReviews = [] } = trpc.deliverableReviews.list.useQuery({ projectId });
   const { data: gateBlockers = [] } = trpc.gateBlockers.list.useQuery({ projectId, phaseId });
   // §4 缺口清单：前置任务缺口带名称+责任人+跳转，而不是裸 id
   const { data: projectRow } = trpc.projects.get.useQuery({ id: projectId }, { staleTime: 30_000 });
@@ -58,8 +67,9 @@ export function GateReadinessChecklist({
   const refresh = async () => {
     await Promise.all([
       utils.gateReviews.readiness.invalidate({ projectId, phaseId }),
-      utils.files.list.invalidate({ projectId, phaseId, taskId: gateTaskId }),
+      utils.files.list.invalidate({ projectId, phaseId }),
       utils.gateBlockers.list.invalidate({ projectId, phaseId }),
+      utils.deliverableReviews.list.invalidate({ projectId }),
     ]);
   };
 
@@ -108,6 +118,8 @@ export function GateReadinessChecklist({
             <DeliverableRows
               missing={deliverablesDim?.blockers ?? []}
               files={files as FileRow[]}
+              reviews={(deliverableReviews as DeliverableReviewRow[])
+                .filter(review => review.phaseId === phaseId)}
               canEdit={canEdit}
               onUpload={uploadFor}
               onDelete={(id) => del.mutate({ id, projectId })}
@@ -252,10 +264,11 @@ function GateBlockerControls({
 }
 
 function DeliverableRows({
-  missing, files, canEdit, onUpload, onDelete,
+  missing, files, reviews, canEdit, onUpload, onDelete,
 }: {
   missing: string[];
   files: FileRow[];
+  reviews: DeliverableReviewRow[];
   canEdit: boolean;
   onUpload: (name: string, file: File) => void;
   onDelete: (id: number) => void;
@@ -263,17 +276,42 @@ function DeliverableRows({
   // 全集 = 已上传(文件里出现的 deliverableName) ∪ 缺失(missing)
   const uploadedNames = Array.from(new Set(files.map((f) => f.deliverableName).filter((n): n is string => !!n)));
   const names = Array.from(new Set([...uploadedNames, ...missing]));
+  const reviewByName = new Map(reviews.map(review => [review.deliverableName, review]));
   if (names.length === 0) return null;
   return (
     <div className="ml-6 mt-1 space-y-1">
       {names.map((name) => {
         const versions = files.filter((f) => f.deliverableName === name).sort((a, b) => b.id - a.id);
         const has = versions.length > 0;
+        const state = getGateEvidenceState({
+          hasFile: has,
+          readinessMissing: missing.includes(name),
+          reviewStatus: reviewByName.get(name)?.status ?? null,
+        });
+        const statusLabel = {
+          missing: "缺少文件",
+          uploaded: "已上传，待提交审核",
+          pending: "审核中",
+          rejected: "审核未通过",
+          approved: "已通过",
+        }[state];
         return (
           <div key={name} className="text-xs">
             <div className="flex items-center gap-2">
-              {has ? <CheckCircle2 size={12} className="text-[color:var(--success)] shrink-0" /> : <XCircle size={12} className="text-destructive shrink-0" />}
-              <span className={has ? "text-foreground" : "text-muted-foreground"}>{name}</span>
+              {state === "approved"
+                ? <CheckCircle2 size={12} className="shrink-0 text-[color:var(--success)]" />
+                : state === "missing"
+                  ? <XCircle size={12} className="shrink-0 text-destructive" />
+                  : <AlertCircle size={12} className="shrink-0 text-[color:var(--warning)]" />}
+              <span className={state === "missing" ? "text-muted-foreground" : "text-foreground"}>{name}</span>
+              <span className={state === "approved"
+                ? "text-[10px] text-[color:var(--success)]"
+                : state === "missing" || state === "rejected"
+                  ? "text-[10px] text-destructive"
+                  : "text-[10px] text-[color:var(--warning)]"}
+              >
+                {statusLabel}
+              </span>
               {canEdit && <UploadButton onPick={(f) => onUpload(name, f)} />}
             </div>
             {versions.map((v, idx) => (

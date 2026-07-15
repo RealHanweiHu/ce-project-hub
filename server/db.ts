@@ -85,6 +85,9 @@ import {
 } from "../shared/sop-templates";
 import {
   validateProjectExecutionBaseline,
+  type ModuleReuseEvidence,
+  type ModuleReuseState,
+  type ProductModuleId,
   type ProjectExecutionBaseline,
 } from "../shared/project-track-tailoring";
 import { isDeliverableSatisfied } from "../shared/deliverable-review";
@@ -457,6 +460,132 @@ export async function getProjectById(id: string): Promise<ProjectRow | undefined
   if (!db) return undefined;
   const result = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
   return result[0];
+}
+
+export type SaveJdmDefinitionDraftResult =
+  | { ok: true; baseline: ProjectExecutionBaseline }
+  | {
+      ok: false;
+      reason: "not_found" | "not_jdm" | "not_input" | "not_draft" | "invalid_baseline";
+      message: string;
+    };
+
+/**
+ * Save the converging JDM product-definition draft under the same phase lock
+ * used by Gate confirmation. The locked re-read prevents a stale editor from
+ * overwriting a baseline that the input Gate has just frozen.
+ */
+export async function saveJdmDefinitionDraftBaseline(input: {
+  projectId: string;
+  productDefinitionRef: string;
+  moduleReuse: Record<ProductModuleId, ModuleReuseState>;
+  reuseEvidence: Partial<Record<ProductModuleId, ModuleReuseEvidence>>;
+  savedBy: number;
+}): Promise<SaveJdmDefinitionDraftResult> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  return db.transaction(async (tx) => {
+    await tx.execute(
+      drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${input.projectId}:input`}))`,
+    );
+    const [lockedProject] = await tx.select().from(projects)
+      .where(eq(projects.id, input.projectId))
+      .limit(1);
+    if (!lockedProject) {
+      return { ok: false, reason: "not_found", message: "项目不存在" };
+    }
+    if (lockedProject.category !== "jdm") {
+      return {
+        ok: false,
+        reason: "not_jdm",
+        message: "仅 JDM 项目可保存产品定义草稿",
+      };
+    }
+    if (lockedProject.currentPhase !== "input") {
+      return {
+        ok: false,
+        reason: "not_input",
+        message: "仅 JDM 的 input 产品定义阶段可保存草稿",
+      };
+    }
+
+    const customFields = lockedProject.customFields &&
+      typeof lockedProject.customFields === "object" &&
+      !Array.isArray(lockedProject.customFields)
+      ? lockedProject.customFields as Record<string, unknown>
+      : {};
+    const storedValue = customFields.projectExecutionBaseline;
+    const storedRecord = storedValue && typeof storedValue === "object" && !Array.isArray(storedValue)
+      ? storedValue as Record<string, unknown>
+      : null;
+    if (
+      !storedRecord ||
+      storedRecord.modelVersion !== "project-track-v1" ||
+      storedRecord.status !== "draft"
+    ) {
+      return {
+        ok: false,
+        reason: "not_draft",
+        message: "JDM 产品定义基线已冻结或不是有效草稿，不能继续保存",
+      };
+    }
+    if (
+      typeof storedRecord.customerConceptRef !== "string" ||
+      !storedRecord.customerConceptRef.trim()
+    ) {
+      return {
+        ok: false,
+        reason: "invalid_baseline",
+        message: "JDM 草稿缺少创建时冻结的客户概念原始输入引用",
+      };
+    }
+
+    const {
+      frozenAt: _frozenAt,
+      frozenBy: _frozenBy,
+      ...storedDraft
+    } = storedValue as ProjectExecutionBaseline;
+    const nextBaseline: ProjectExecutionBaseline = {
+      ...storedDraft,
+      modelVersion: "project-track-v1",
+      status: "draft",
+      customerConceptRef: storedRecord.customerConceptRef.trim(),
+      productDefinitionRef: input.productDefinitionRef.trim(),
+      moduleReuse: { ...input.moduleReuse },
+      reuseEvidence: { ...input.reuseEvidence },
+    };
+    const validation = validateProjectExecutionBaseline(nextBaseline, { track: "jdm" });
+    if (!validation.ok) {
+      return {
+        ok: false,
+        reason: "invalid_baseline",
+        message: `JDM 产品定义草稿无效：${validation.issues.map(issue => issue.message).join("；")}`,
+      };
+    }
+
+    await tx.update(projects).set({
+      customFields: {
+        ...customFields,
+        projectExecutionBaseline: nextBaseline,
+      },
+      updatedAt: new Date(),
+    }).where(eq(projects.id, input.projectId));
+    await createActivityLog({
+      projectId: input.projectId,
+      userId: input.savedBy,
+      action: "project.jdm_definition_draft.save",
+      entityType: "project_execution_baseline",
+      entityId: `${input.projectId}:input`,
+      meta: {
+        productDefinitionRef: nextBaseline.productDefinitionRef,
+        moduleReuse: nextBaseline.moduleReuse,
+        reuseEvidenceModuleIds: Object.keys(nextBaseline.reuseEvidence ?? {}),
+      },
+    }, tx);
+
+    return { ok: true, baseline: nextBaseline };
+  });
 }
 
 export async function createProject(project: InsertProject): Promise<void> {

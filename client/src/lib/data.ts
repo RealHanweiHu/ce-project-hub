@@ -228,6 +228,8 @@ export interface Project {
   type: string;
   pm: string;
   pmUserId?: number | null;
+  /** 产品负责人；JDM 产品定义与任何设计变更的最终内部批准人。 */
+  productOwnerUserId?: number | null;
   accessRole?: string | null;
   /** §5 服务端统一状态摘要：整体进度（0-100），所有页面共用此口径。 */
   progress?: number;
@@ -245,7 +247,7 @@ export interface Project {
   safetyRiskLevel?: 'standard' | 'high';
   regulatoryRiskLevel?: 'standard' | 'high';
   changeScopeDeclaration?: import('@shared/sop-risk').ProjectChangeScopeDeclaration;
-  /** JDM/OBT 冻结的客户输入基线。 */
+  /** JDM/OBT 冻结的客户输入基线（JDM 原始概念位于 execution baseline）。 */
   customerInputVersion?: string | null;
   customerPartNumber?: string | null;
   commercialBoundary?: string | null;

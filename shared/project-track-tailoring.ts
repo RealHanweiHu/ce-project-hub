@@ -130,6 +130,18 @@ export function validateProjectExecutionBaseline(
   const issues: BaselineValidationIssue[] = [];
   const moduleReuse = baseline.moduleReuse;
 
+  // 这是模块选择本身的不变量，而不是“冻结完成”才生效的完整性要求。
+  // JDM 定义草稿可以逐步补齐，但任何一次保存都不能形成这个非法组合。
+  if (
+    moduleReuse?.id_cmf === "not_reused" &&
+    moduleReuse.structure_mold === "reused"
+  ) {
+    issues.push({
+      code: "invalid_id_cmf_structure_combination",
+      message: "ID/CMF 不复用时，产品结构/模具也必须设为不复用",
+    });
+  }
+
   if (baseline.status === "draft") {
     if (options.track === "drv") {
       return {
@@ -143,8 +155,8 @@ export function validateProjectExecutionBaseline(
       };
     }
     // JDM 的定义期草稿允许规格、模块判断和复用证据逐步收敛；
-    // 完整性与领域不变量统一在产品定义 Gate 冻结时检查。
-    return { ok: true, issues: [] };
+    // 证据完整性统一在产品定义 Gate 冻结时检查，但非法模块组合不能暂存。
+    return { ok: issues.length === 0, issues };
   }
 
   if (baseline.status === "frozen") {
@@ -195,16 +207,6 @@ export function validateProjectExecutionBaseline(
           ...validateReuseEvidence(moduleId, baseline.reuseEvidence?.[moduleId])
         );
       }
-    }
-
-    if (
-      moduleReuse.id_cmf === "not_reused" &&
-      moduleReuse.structure_mold === "reused"
-    ) {
-      issues.push({
-        code: "invalid_id_cmf_structure_combination",
-        message: "ID/CMF 不复用时，产品结构/模具也必须设为不复用",
-      });
     }
 
     if (

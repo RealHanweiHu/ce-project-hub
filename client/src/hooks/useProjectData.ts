@@ -249,9 +249,20 @@ export function useProjectData(projectId: string | null) {
       category: (projectRow.category as 'npd' | 'eco' | 'derivative' | 'idr' | 'jdm' | 'obt') ?? 'npd',
       pm: '',  // pmName resolved in UI via listUsersForSelect
       pmUserId: projectRow.pmUserId ?? null,
+      productOwnerUserId: (projectRow as { productOwnerUserId?: number | null }).productOwnerUserId ?? null,
       productId: (projectRow as { productId?: string | null }).productId ?? null,
       sopTemplateVersion: (projectRow as { sopTemplateVersion?: string | null }).sopTemplateVersion ?? undefined,
       productDefinitionSnapshotId: (projectRow as { productDefinitionSnapshotId?: number | null }).productDefinitionSnapshotId ?? null,
+      safetyRiskLevel: (projectRow as { safetyRiskLevel?: Project['safetyRiskLevel'] }).safetyRiskLevel ?? 'standard',
+      regulatoryRiskLevel: (projectRow as { regulatoryRiskLevel?: Project['regulatoryRiskLevel'] }).regulatoryRiskLevel ?? 'standard',
+      customerInputVersion: (projectRow as { customerInputVersion?: string | null }).customerInputVersion ?? null,
+      customerPartNumber: (projectRow as { customerPartNumber?: string | null }).customerPartNumber ?? null,
+      commercialBoundary: (projectRow as { commercialBoundary?: string | null }).commercialBoundary ?? null,
+      customerSignoffOwnerUserId: (projectRow as { customerSignoffOwnerUserId?: number | null }).customerSignoffOwnerUserId ?? null,
+      inputBaselineFrozenAt: (projectRow as { inputBaselineFrozenAt?: string | Date | null }).inputBaselineFrozenAt
+        ? new Date((projectRow as { inputBaselineFrozenAt?: string | Date }).inputBaselineFrozenAt!).toISOString()
+        : null,
+      inputBaselineFrozenBy: (projectRow as { inputBaselineFrozenBy?: number | null }).inputBaselineFrozenBy ?? null,
       description: (projectRow as { description?: string | null }).description ?? null,
       customer: (projectRow as { customer?: string | null }).customer ?? null,
       background: (projectRow as { background?: string | null }).background ?? null,

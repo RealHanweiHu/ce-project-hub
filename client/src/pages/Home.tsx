@@ -159,6 +159,7 @@ function projectToApiInput(p: Project) {
     projectNumber: code || '',
     category: category || 'npd',
     pmUserId: pmUserId ?? null,
+    productOwnerUserId: p.productOwnerUserId ?? null,
     productId: p.productId ?? null,
     changeScopeDeclaration: p.changeScopeDeclaration,
     safetyRiskLevel: p.safetyRiskLevel ?? 'standard',
@@ -185,6 +186,7 @@ function projectToApiInput(p: Project) {
 // Helper: convert API row (new schema) back to lightweight Project shape for list views
 function rowToProject(row: {
   id: string; name: string; projectNumber: string; category: string;
+  productOwnerUserId?: number | null;
   productId?: string | null; productDefinitionSnapshotId?: number | null;
   sopTemplateVersion?: string | null;
   safetyRiskLevel?: 'standard' | 'high' | null;
@@ -214,6 +216,7 @@ function rowToProject(row: {
     category: (row.category as 'npd' | 'eco' | 'derivative' | 'idr' | 'jdm' | 'obt') || 'npd',
     pm: '',
     pmUserId: row.pmUserId ?? null,
+    productOwnerUserId: row.productOwnerUserId ?? null,
     accessRole: row.accessRole ?? null,
     canDeleteProject: !!row.canDeleteProject,
     canEditProjectInfo: !!row.canEditProjectInfo,

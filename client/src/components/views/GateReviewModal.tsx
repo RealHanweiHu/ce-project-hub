@@ -1,7 +1,7 @@
 // GateReviewModal: gate review history list + new review form
 import { useState } from 'react';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog';
 import {
   Flag, CheckCircle2, AlertCircle, XCircle, Users, Calendar,
@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { GateReview } from '@/lib/data';
 import { GATE_DECISIONS } from '@shared/const';
-import { toLocalISODate } from '@/lib/utils';
+import { cn, toLocalISODate } from '@/lib/utils';
 import { GateReadinessChecklist } from './GateReadinessChecklist';
 import type { SOPGateStandard } from '@/lib/sop-templates';
 import { GateStandardPanel } from '@/components/shared/GateStandardPanel';
@@ -23,6 +23,10 @@ import {
 } from '@shared/gate-signoffs';
 import { StabilityGatePanel } from './StabilityGatePanel';
 import type { ProjectMemberRole } from '@shared/project-roles';
+import {
+  PRODUCT_MODULES,
+  type ProjectExecutionBaseline,
+} from '@shared/project-track-tailoring';
 
 // ── Decision config ───────────────────────────────────────────────────────────
 export const DECISION_CONFIG: Record<GateReview['decision'], {
@@ -385,10 +389,14 @@ interface GateReviewModalProps {
   readOnly?: boolean;
   /** 决策权（approved/conditional）；false 时仅召集权——只能记录「不通过」的评审 */
   canDecide?: boolean;
+  /** JDM P1 Gate 本次将原子冻结的候选基线；仅作只读预览。 */
+  jdmDefinitionFreeze?: ProjectExecutionBaseline;
+  /** 前端完整性预检；服务端仍会在事务内重复校验。 */
+  jdmDefinitionIssues?: string[];
 }
 
 export function GateReviewModal({
-  open, phaseId, phaseName, gateName, gateStandard, existingReviews = [], projectId, gateTaskId, onOpenSettings, canEditDeliverables = false, canQualityGateBlock = false, canNpiGateBlock = false, onTaskClick, onConfirm, onCancel, readOnly = false, canDecide = true,
+  open, phaseId, phaseName, gateName, gateStandard, existingReviews = [], projectId, gateTaskId, onOpenSettings, canEditDeliverables = false, canQualityGateBlock = false, canNpiGateBlock = false, onTaskClick, onConfirm, onCancel, readOnly = false, canDecide = true, jdmDefinitionFreeze, jdmDefinitionIssues = [],
 }: GateReviewModalProps) {
   // readOnly（无 canGateReview 权限）绝不能进表单：否则用户填完提交被静默丢弃
   const [showForm, setShowForm] = useState(existingReviews.length === 0 && !readOnly);
@@ -437,16 +445,32 @@ export function GateReviewModal({
     { projectId: projectId || '' },
     { enabled: !!projectId && gateTaskId === 'project_close_review' },
   );
+  const isJdmDefinitionGate = gateTaskId === 'jdm_product_definition_gate';
+  const jdmRiskScope = trpc.projects.riskScope.useQuery(
+    { projectId: projectId || '' },
+    { enabled: !!projectId && isJdmDefinitionGate },
+  );
   // 查询报错/未返回时不得默认"会签就绪"——四眼 UI 的空数据必须按未就绪处理
   const signoffsReady = !!projectId && signoffsQuery.data != null && signoffSlots.every((slot) =>
     slot.requirement !== 'required' || slot.status === 'approved'
   ) && !signoffSlots.some((slot) => slot.status === 'rejected');
-  const approvalReady = signoffsReady && (gateTaskId !== 'project_close_review' || (
-    stabilityReadiness.data?.ready === true &&
-    certificationCoverage.data?.covered === true &&
-    conditionsReadiness.data?.ready === true &&
-    handoffReadiness.data?.ready === true
-  ));
+  const jdmRiskReady = !isJdmDefinitionGate || (
+    !!jdmRiskScope.data?.engineeringConfirmedAt &&
+    !!jdmRiskScope.data?.qaOrCertConfirmedAt
+  );
+  const jdmDefinitionReady = !isJdmDefinitionGate || (
+    !!jdmDefinitionFreeze &&
+    jdmDefinitionIssues.length === 0 &&
+    jdmRiskReady
+  );
+  const approvalReady = signoffsReady &&
+    jdmDefinitionReady &&
+    (gateTaskId !== 'project_close_review' || (
+      stabilityReadiness.data?.ready === true &&
+      certificationCoverage.data?.covered === true &&
+      conditionsReadiness.data?.ready === true &&
+      handoffReadiness.data?.ready === true
+    ));
 
   const submitSignoff = (slot: GateSignoffSlot, status: 'approved' | 'conditional' | 'rejected') => {
     if (!projectId) return;
@@ -500,7 +524,9 @@ export function GateReviewModal({
             </div>
             <div>
               <DialogTitle className="text-xl text-foreground">Gate 评审记录</DialogTitle>
-              <p className="text-[10px] uppercase tracking-widest text-muted-foreground mt-0.5">GATE REVIEW HISTORY</p>
+              <DialogDescription className="text-[10px] uppercase tracking-widest text-muted-foreground mt-0.5">
+                GATE REVIEW HISTORY
+              </DialogDescription>
             </div>
           </div>
         </DialogHeader>
@@ -524,6 +550,63 @@ export function GateReviewModal({
           canNpiGateBlock={canNpiGateBlock}
           onTaskClick={onTaskClick}
         />
+
+        {isJdmDefinitionGate && (
+          <div className={cn(
+            'mb-4 rounded-[9px] border p-3 text-xs',
+            jdmDefinitionReady
+              ? 'border-[color:var(--success)] bg-[color:var(--success-soft)]'
+              : 'border-[color:var(--warning)] bg-[color:var(--warning-soft)]',
+          )}>
+            <div className="flex items-center justify-between gap-2">
+              <div className="font-semibold text-foreground">本次将冻结的产品定义</div>
+              <span className={jdmDefinitionReady ? 'text-[color:var(--success)]' : 'text-[color:var(--warning)]'}>
+                {jdmDefinitionReady ? '可冻结' : '尚未就绪'}
+              </span>
+            </div>
+            <div className="mt-2 grid gap-1 text-muted-foreground sm:grid-cols-2">
+              <div className="sm:col-span-2">
+                <span className="text-foreground">产品规格：</span>
+                {jdmDefinitionFreeze?.productDefinitionRef || '未填写'}
+              </div>
+              <div>
+                <span className="text-foreground">复用模块：</span>
+                {PRODUCT_MODULES
+                  .filter(module => jdmDefinitionFreeze?.moduleReuse?.[module.id] === 'reused')
+                  .map(module => module.label)
+                  .join('、') || '无'}
+              </div>
+              <div>
+                <span className="text-foreground">不复用模块：</span>
+                {PRODUCT_MODULES
+                  .filter(module => jdmDefinitionFreeze?.moduleReuse?.[module.id] === 'not_reused')
+                  .map(module => module.label)
+                  .join('、') || '未完整选择'}
+              </div>
+              <div className="sm:col-span-2">
+                <span className="text-foreground">风险声明：</span>
+                {jdmRiskScope.data
+                  ? `v${jdmRiskScope.data.version} · 研发${jdmRiskScope.data.engineeringConfirmedAt ? '已确认' : '待确认'} · QA/认证${jdmRiskScope.data.qaOrCertConfirmedAt ? '已确认' : '待确认'}`
+                  : '未建立或加载中'}
+              </div>
+            </div>
+            {!jdmDefinitionReady && (
+              <div className="mt-2 flex items-start gap-1.5 text-[color:var(--warning)]">
+                <AlertCircle size={12} className="mt-0.5 shrink-0" />
+                <span>
+                  {jdmDefinitionIssues.length > 0
+                    ? jdmDefinitionIssues.join('；')
+                    : !jdmRiskReady
+                      ? '风险声明需要研发与 QA/认证双确认'
+                      : '请先完成 JDM 产品定义与六模块基线'}
+                </span>
+              </div>
+            )}
+            <div className="mt-2 text-[10px] text-muted-foreground">
+              “通过 / 有条件通过”会在同一事务内冻结基线并生成 P2–P6；“未通过”不会冻结。
+            </div>
+          </div>
+        )}
 
         {projectId && gateTaskId === 'project_close_review' && (
           <>

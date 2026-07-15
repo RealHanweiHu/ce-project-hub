@@ -32,6 +32,7 @@ import { ChangeLog } from './ChangeLog';
 import { Issue, GateReview, ChangeRecord } from '@/lib/data';
 import { GateReviewModal, GateReviewBadge } from './GateReviewModal';
 import { GateReadinessChecklist } from './GateReadinessChecklist';
+import { JdmDefinitionBaselinePanel } from './JdmDefinitionBaselinePanel';
 import { ReleaseDialog } from './ReleaseDialog';
 import { BomPanel } from './BomPanel';
 import { OverviewPanel } from './OverviewPanel';
@@ -65,9 +66,35 @@ import { resolveTaskName } from '@shared/sop-template-resolution';
 import { shouldOfferCompletionAfterEvidenceUpload } from '@shared/task-evidence-actions';
 import { buildTaskCompletionActionPath } from '@shared/action-links';
 import { SOP_TEMPLATE_VERSION_NPD_V3 } from '@shared/sop-templates';
+import type { ProjectExecutionBaseline } from '@shared/project-track-tailoring';
+import {
+  buildJdmDefinitionFreezeCandidate,
+  createJdmDefinitionFormState,
+  getJdmDefinitionGateFreezePayload,
+  validateJdmDefinitionFreeze,
+} from '@/lib/jdm-definition';
 import { Users } from 'lucide-react';
 
 const MAX_FILE_SIZE = 16 * 1024 * 1024;
+
+function readProjectExecutionBaseline(project: Project): ProjectExecutionBaseline {
+  const value = project.customFields?.projectExecutionBaseline;
+  if (
+    value &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    (value as Record<string, unknown>).modelVersion === 'project-track-v1' &&
+    ((value as Record<string, unknown>).status === 'draft' ||
+      (value as Record<string, unknown>).status === 'frozen')
+  ) {
+    return value as ProjectExecutionBaseline;
+  }
+  return {
+    modelVersion: 'project-track-v1',
+    status: 'draft',
+    customerConceptRef: '',
+  };
+}
 
 interface ProjectDetailViewProps {
   project: Project;
@@ -1950,6 +1977,28 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
   const perms = useProjectPermission(project.id);
   const { user: currentUser } = useAuth();
   const isSystemAdmin = isSystemAdminRole(currentUser?.role);
+  const jdmExecutionBaseline = useMemo(
+    () => readProjectExecutionBaseline(project),
+    [project.customFields],
+  );
+  const jdmExecutionBaselineKey = JSON.stringify(jdmExecutionBaseline);
+  const [jdmDefinitionState, setJdmDefinitionState] = useState(() =>
+    createJdmDefinitionFormState(jdmExecutionBaseline),
+  );
+  useEffect(() => {
+    setJdmDefinitionState(createJdmDefinitionFormState(jdmExecutionBaseline));
+  }, [jdmExecutionBaselineKey]);
+  const jdmDefinitionValidation = useMemo(
+    () => validateJdmDefinitionFreeze(jdmDefinitionState),
+    [jdmDefinitionState],
+  );
+  const jdmDefinitionFreezeCandidate = useMemo(
+    () => buildJdmDefinitionFreezeCandidate(jdmDefinitionState),
+    [jdmDefinitionState],
+  );
+  const canEditJdmDefinition = isSystemAdmin ||
+    perms.canEditProjectInfo ||
+    project.productOwnerUserId === currentUser?.id;
   const externalCommentChannels = useMemo(() => {
     const channels: Array<{ audience: 'customer' | 'supplier'; label: string }> = [];
     if (perms.canViewCustomerFiles) channels.push({ audience: 'customer', label: '客户协作' });
@@ -2373,6 +2422,19 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
     // 原子化：服务端一次完成「记录评审 + 标 gate task done + 推进阶段」，
     // 避免旧的客户端三笔分散写经 600ms 防抖串起时的部分持久化（→阶段锁死）。
     const phaseId = activePhaseId;
+    const jdmDefinitionFreeze = activePhase?.gateTaskId === 'jdm_product_definition_gate'
+      ? getJdmDefinitionGateFreezePayload({
+          category: project.category,
+          phaseId,
+          decision: review.decision,
+          state: jdmDefinitionState,
+        })
+      : undefined;
+    const freezesJdmDefinition = !!jdmDefinitionFreeze;
+    if (freezesJdmDefinition && !jdmDefinitionValidation.ok) {
+      toast.error(`JDM 产品定义尚不能冻结：${jdmDefinitionValidation.issues[0]?.message ?? '请补齐规格和六模块复用证据'}`);
+      return;
+    }
     setGateReviewPending(null);
     try {
       const result = await confirmGateMutation.mutateAsync({
@@ -2389,6 +2451,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         conditionDueDate: review.conditionDueDate ?? null,
         conditionItems: review.conditionItems ?? [],
         notes: review.notes || null,
+        jdmDefinitionFreeze,
       });
       // 刷新项目详情 + 组合看板（取代旧的乐观本地更新，确保与服务端一致）
       await Promise.all([
@@ -2826,6 +2889,15 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
       {/* ── Gate sub-view：复用现有 Gate 评审就绪度 + GateReviewModal 流程 ────── */}
       {mainTab === 'reviews' && reviewsView === 'gate' && (
         <div className="p-6 space-y-4">
+          {project.category === 'jdm' && activePhaseId === 'input' && (
+            <JdmDefinitionBaselinePanel
+              projectId={project.id}
+              baseline={jdmExecutionBaseline}
+              state={jdmDefinitionState}
+              onChange={setJdmDefinitionState}
+              canEdit={canEditJdmDefinition}
+            />
+          )}
           <LinearCard className="overflow-x-auto">
             <div className="flex min-w-max">
               {projectPhases.map((phase) => {
@@ -3408,6 +3480,19 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                           )}
                         </div>
 
+                        {project.category === 'jdm' &&
+                          activePhaseId === 'input' &&
+                          (selectedTask.id === 'jdm_module_reuse_draft' || selectedTaskIsGate) && (
+                            <JdmDefinitionBaselinePanel
+                              projectId={project.id}
+                              baseline={jdmExecutionBaseline}
+                              state={jdmDefinitionState}
+                              onChange={setJdmDefinitionState}
+                              canEdit={canEditJdmDefinition}
+                              compact
+                            />
+                          )}
+
                         {/* ── Gate-only sections (under 交付物) ──────────────── */}
                         {selectedTaskIsGate && (
                           <GateReadinessChecklist
@@ -3862,6 +3947,16 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
           canEditDeliverables={perms.role !== 'viewer' && (perms.canEditProjectInfo || perms.canEditTasks)}
           canQualityGateBlock={perms.canQualityGateBlock}
           canNpiGateBlock={perms.canNpiGateBlock}
+          jdmDefinitionFreeze={
+            project.category === 'jdm' && gateReviewPending.phaseId === 'input'
+              ? jdmDefinitionFreezeCandidate
+              : undefined
+          }
+          jdmDefinitionIssues={
+            project.category === 'jdm' && gateReviewPending.phaseId === 'input'
+              ? jdmDefinitionValidation.issues.map(issue => issue.message)
+              : undefined
+          }
           onTaskClick={(gapPhaseId, gapTaskId) => {
             setGateReviewPending(null);
             setActivePhaseId(gapPhaseId);

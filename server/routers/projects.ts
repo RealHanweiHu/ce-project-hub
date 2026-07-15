@@ -9,6 +9,7 @@ import {
   setProjectLifecycle,
   getProductById,
   createProjectWithSeed,
+  saveJdmDefinitionDraftBaseline,
   updateProject,
   deleteProject,
   getPortfolio,
@@ -44,7 +45,12 @@ import {
 } from "../../shared/sop-templates";
 import { isSystemAdminRole, systemRoleCanCreateProject } from "../../shared/system-roles";
 import { PROJECT_MEMBER_ROLES, type ProjectMemberRole } from "../../drizzle/schema";
-import { getEffectiveProjectRoleById as getEffectiveRole, pickHigherProjectRole } from "../project-access";
+import {
+  getEffectiveProjectRoleById as getEffectiveRole,
+  getEffectiveProjectRoles,
+  getUnionPermissions,
+  pickHigherProjectRole,
+} from "../project-access";
 import { isISODate } from "../../shared/scheduling";
 import { buildProjectActionPath, buildTaskCompletionActionPath, toAbsoluteAppUrl } from "../../shared/action-links";
 import { cancelAndRecordProjectMeeting, syncAndRecordProjectMeeting } from "../services/project-meeting-lifecycle";
@@ -208,6 +214,32 @@ const projectCreateInputSchema = projectInputSchema.extend({
   npdAttributes: npdAttributesSchema.optional(),
   npdTemplateDowngradeReason: z.string().trim().min(4).max(1000).optional(),
 });
+
+const moduleReuseStateSchema = z.enum(["reused", "not_reused"]);
+const moduleReuseSchema = z.object({
+  battery: moduleReuseStateSchema,
+  core_function: moduleReuseStateSchema,
+  electronics: moduleReuseStateSchema,
+  software_connectivity: moduleReuseStateSchema,
+  structure_mold: moduleReuseStateSchema,
+  id_cmf: moduleReuseStateSchema,
+}).strict();
+const moduleReuseEvidenceSchema = z.object({
+  // JDM P1 is a convergence phase: a reuse judgment may be saved before the
+  // three evidence references are complete. The Gate schema remains strict.
+  sourceRef: z.string().trim().max(512),
+  modelOrVersion: z.string().trim().max(256),
+  evidenceRef: z.string().trim().max(512),
+  boundaryConfirmed: z.boolean(),
+}).strict();
+const moduleReuseEvidenceMapSchema = z.object({
+  battery: moduleReuseEvidenceSchema.optional(),
+  core_function: moduleReuseEvidenceSchema.optional(),
+  electronics: moduleReuseEvidenceSchema.optional(),
+  software_connectivity: moduleReuseEvidenceSchema.optional(),
+  structure_mold: moduleReuseEvidenceSchema.optional(),
+  id_cmf: moduleReuseEvidenceSchema.optional(),
+}).strict();
 
 function requireValidDrvExecutionBaseline(
   customFields: Record<string, unknown> | undefined,
@@ -880,6 +912,50 @@ export const projectsRouter = router({
         console.warn("[meeting] create sync failed (non-fatal):", e);
       }
       return { success: true };
+    }),
+
+  /**
+   * Save the converging JDM product-definition draft. Customer concept input is
+   * immutable here; the input Gate is the only path that can freeze this draft.
+   */
+  saveJdmDefinitionDraft: protectedProcedure
+    .input(z.object({
+      projectId: z.string().trim().min(1).max(32),
+      // P1 supports progressive convergence; the Gate schema requires this
+      // reference to be non-empty before freeze.
+      productDefinitionRef: z.string().trim().max(512),
+      moduleReuse: moduleReuseSchema,
+      reuseEvidence: moduleReuseEvidenceMapSchema,
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+      const roles = await getEffectiveProjectRoles(project, ctx.user.id);
+      const allowed =
+        project.productOwnerUserId === ctx.user.id ||
+        isSystemAdminRole(ctx.user.role) ||
+        getUnionPermissions(roles).canEditProjectInfo;
+      if (!allowed) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "仅产品负责人或可编辑项目信息的成员可保存 JDM 产品定义草稿",
+        });
+      }
+
+      const result = await saveJdmDefinitionDraftBaseline({
+        ...input,
+        savedBy: ctx.user.id,
+      });
+      if (!result.ok) {
+        throw new TRPCError({
+          code: result.reason === "not_found" ? "NOT_FOUND" : "BAD_REQUEST",
+          message: result.message,
+        });
+      }
+      return {
+        success: true,
+        projectExecutionBaseline: result.baseline,
+      };
     }),
 
   /** Update an existing project metadata (requires canEditProjectInfo) */
