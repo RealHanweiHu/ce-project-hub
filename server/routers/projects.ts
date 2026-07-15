@@ -211,6 +211,7 @@ const projectCreateInputSchema = projectInputSchema.extend({
 
 function requireValidDrvExecutionBaseline(
   customFields: Record<string, unknown> | undefined,
+  actorId: number,
 ): ProjectExecutionBaseline {
   const value = customFields?.projectExecutionBaseline;
   if (
@@ -226,7 +227,12 @@ function requireValidDrvExecutionBaseline(
     });
   }
 
-  const baseline = value as ProjectExecutionBaseline;
+  const baseline: ProjectExecutionBaseline = {
+    ...value as ProjectExecutionBaseline,
+    // 冻结审计字段由服务端签发，不能信任客户端冒充确认人或回填时间。
+    frozenAt: new Date().toISOString(),
+    frozenBy: actorId,
+  };
   const validation = validateProjectExecutionBaseline(baseline, { track: "drv" });
   if (!validation.ok) {
     throw new TRPCError({
@@ -668,9 +674,9 @@ export const projectsRouter = router({
           message: "IDR 已停止新建：包装/标签/简单换色等小改请在产品库登记轻量变更；需要多人跨专业协作的外观翻新请选择 DRV",
         });
       }
-      if (input.category === "derivative") {
-        requireValidDrvExecutionBaseline(input.customFields);
-      }
+      const drvExecutionBaseline = input.category === "derivative"
+        ? requireValidDrvExecutionBaseline(input.customFields, ctx.user.id)
+        : null;
       const linkedProduct = input.productId ? await getProductById(input.productId) : undefined;
       if (input.productId && !linkedProduct) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "关联产品不存在" });
@@ -718,7 +724,12 @@ export const projectsRouter = router({
             ...(input.customFields ?? {}),
             npdTemplate: npdTemplateAudit,
           }
-        : (input.customFields ?? {});
+        : input.category === "derivative"
+          ? {
+              ...(input.customFields ?? {}),
+              projectExecutionBaseline: drvExecutionBaseline,
+            }
+          : (input.customFields ?? {});
       await createProjectWithSeed({
         id: input.id,
         name: input.name,

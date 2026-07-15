@@ -46,7 +46,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Project,
   PHASE_MAP,
@@ -61,6 +66,7 @@ import {
   ProjectCategory,
   getPhasesForCategory,
   CATEGORY_MAP,
+  DERIVATIVE_MODULE_TASK_IDS,
 } from "@/lib/sop-templates";
 import {
   LinearCard,
@@ -82,6 +88,19 @@ import {
   NPD_FULL_TEMPLATE_CONFIG,
   getNpdV3EffectivePhases,
 } from "@shared/npd-v3";
+import {
+  PRODUCT_MODULES,
+} from "@shared/project-track-tailoring";
+import {
+  EMPTY_DERIVATIVE_MODULE_REUSE,
+  buildDerivativeChangeScopeDeclaration,
+  buildDerivativeExecutionBaseline,
+  createEmptyDerivativeReuseEvidence,
+  getDerivativeTaskPreview,
+  getDerivativeChangeScopeRules,
+  updateDerivativeModuleReuse,
+  validateDerivativeCreateBaseline,
+} from "@/lib/derivative-create";
 
 interface ProjectListViewProps {
   projects: Project[];
@@ -97,12 +116,11 @@ interface ProjectListViewProps {
 }
 
 // ── Wizard Steps ──────────────────────────────────────────────────────────────
-type WizardStep = 1 | 2 | 3;
+type WizardStep = 1 | 2;
 
 const STEP_LABELS: Record<WizardStep, string> = {
   1: "选择类别",
-  2: "填写信息",
-  3: "确认流程",
+  2: "填写并确认",
 };
 
 const PRODUCT_TYPES = [
@@ -142,7 +160,6 @@ const ECO_CHANGE_SCOPE_OPTIONS: Array<{
 ];
 
 const PROJECT_INTENT_OPTIONS = [
-  { id: "reuse", label: "复用成熟方案" },
   { id: "efficiency", label: "提升研发 / 生产效率" },
   { id: "new_capability", label: "增加功能或能力" },
   { id: "appearance", label: "跨专业外观 / CMF 升级" },
@@ -163,6 +180,23 @@ const STAGE_COLUMNS: { id: string; label: string; short: string }[] = [
   { id: "pvt", label: "PVT 试产", short: "PVT" },
   { id: "mp", label: "量产 MP", short: "量产" },
 ];
+
+const DERIVATIVE_MODULE_DISPLAY_ORDER = [
+  "battery",
+  "core_function",
+  "electronics",
+  "software_connectivity",
+  "id_cmf",
+  "structure_mold",
+] as const;
+
+const DERIVATIVE_MODULES_FOR_CREATE = DERIVATIVE_MODULE_DISPLAY_ORDER.map(
+  moduleId => {
+    const module = PRODUCT_MODULES.find(item => item.id === moduleId);
+    if (!module) throw new Error(`Missing product module definition: ${moduleId}`);
+    return module;
+  },
+);
 const STAGE_IDS = STAGE_COLUMNS.map(s => s.id);
 const STAGE_SHORT: Record<string, string> = Object.fromEntries(
   STAGE_COLUMNS.map(s => [s.id, s.short])
@@ -265,6 +299,7 @@ export function ProjectListView({
   canCreateProject = false,
 }: ProjectListViewProps) {
   const [showAdd, setShowAdd] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
   const [cloneSource, setCloneSource] = useState<Project | null>(null);
   const [cloneForm, setCloneForm] = useState({
     name: "",
@@ -546,9 +581,11 @@ export function ProjectListView({
     commercialBoundary: "",
     customerSignoffOwnerUserId: null as number | null,
     intentGoals: [] as ProjectIntentGoal[],
-    reuseSummary: "",
     efficiencySummary: "",
     newCapabilitySummary: "",
+    productDefinitionRef: "",
+    moduleReuse: { ...EMPTY_DERIVATIVE_MODULE_REUSE },
+    reuseEvidence: createEmptyDerivativeReuseEvidence(),
     changeScopeDeclaration: { ...EMPTY_CHANGE_SCOPE_DECLARATION },
     targetMarketsText: "",
   };
@@ -565,7 +602,31 @@ export function ProjectListView({
     resetWizard();
   };
 
+  const handleCategoryChange = (category: ProjectCategory) => {
+    if (category === selectedCategory) return;
+    setSelectedCategory(category);
+    // 类型专属输入不能跨项目轨道继承，尤其不能把折叠区里的旧风险勾选静默带入。
+    setForm(current => ({
+      ...current,
+      customerInputVersion: "",
+      customerPartNumber: "",
+      commercialBoundary: "",
+      customerSignoffOwnerUserId: null,
+      intentGoals: [],
+      efficiencySummary: "",
+      newCapabilitySummary: "",
+      productDefinitionRef: "",
+      moduleReuse: { ...EMPTY_DERIVATIVE_MODULE_REUSE },
+      reuseEvidence: createEmptyDerivativeReuseEvidence(),
+      changeScopeDeclaration: { ...EMPTY_CHANGE_SCOPE_DECLARATION },
+      targetMarketsText: "",
+      safetyRiskLevel: "standard",
+      regulatoryRiskLevel: "standard",
+    }));
+  };
+
   const handleCreate = async () => {
+    if (isCreating) return;
     if (!form.name.trim()) return;
     if (["jdm", "obt"].includes(selectedCategory)) {
       if (
@@ -578,7 +639,43 @@ export function ProjectListView({
         return;
       }
     }
+    let derivativeBaseline = null;
+    if (capturesProjectIntent) {
+      const validation = validateDerivativeCreateBaseline({
+        productDefinitionRef: form.productDefinitionRef,
+        moduleReuse: form.moduleReuse,
+        reuseEvidence: form.reuseEvidence,
+      });
+      if (!validation.ok) {
+        toast.error(validation.issues[0]?.message || "请完整确认 DRV 六模块执行基线");
+        return;
+      }
+      const actorId = Number(
+        (user as (typeof user & { id?: number }) | null)?.id ?? 0,
+      );
+      if (!actorId) {
+        toast.error("无法确认当前创建人，请刷新页面后重试");
+        return;
+      }
+      derivativeBaseline = buildDerivativeExecutionBaseline({
+        productDefinitionRef: form.productDefinitionRef,
+        moduleReuse: form.moduleReuse,
+        reuseEvidence: form.reuseEvidence,
+        frozenAt: new Date().toISOString(),
+        frozenBy: actorId,
+      });
+    }
     const firstPhaseId = sopPhases[0]?.id || "concept";
+    const reusedModuleSummary = capturesProjectIntent
+      ? PRODUCT_MODULES
+          .filter(module => form.moduleReuse[module.id] === "reused")
+          .map(module => {
+            const moduleEvidence = form.reuseEvidence[module.id];
+            return `${module.label}（${moduleEvidence.sourceRef.trim()} / ${moduleEvidence.modelOrVersion.trim()}）`;
+          })
+          .join("、")
+      : "";
+    setIsCreating(true);
     try {
       const projectDraft: ProjectCreateDraft = {
         code: form.code,
@@ -597,8 +694,7 @@ export function ProjectListView({
         customerSignoffOwnerUserId: form.customerSignoffOwnerUserId,
         description: capturesProjectIntent
           ? [
-              form.reuseSummary.trim() &&
-                `复用基础：${form.reuseSummary.trim()}`,
+              reusedModuleSummary && `复用基础：${reusedModuleSummary}`,
               form.efficiencySummary.trim() &&
                 `改进目标：${form.efficiencySummary.trim()}`,
               form.newCapabilitySummary.trim() &&
@@ -608,11 +704,12 @@ export function ProjectListView({
               .join("\n") || null
           : null,
         background: capturesProjectIntent
-          ? PROJECT_INTENT_OPTIONS.filter(option =>
-              form.intentGoals.includes(option.id)
-            )
-              .map(option => option.label)
-              .join("、") || null
+          ? [
+              reusedModuleSummary && "复用成熟方案",
+              ...PROJECT_INTENT_OPTIONS.filter(option =>
+                form.intentGoals.includes(option.id)
+              ).map(option => option.label),
+            ].filter(Boolean).join("、") || null
           : null,
         value: capturesProjectIntent
           ? [form.efficiencySummary.trim(), form.newCapabilitySummary.trim()]
@@ -625,10 +722,13 @@ export function ProjectListView({
             ? {
                 projectIntent: {
                   goals: form.intentGoals,
-                  reuseSummary: form.reuseSummary.trim(),
+                  reusedModules: PRODUCT_MODULES
+                    .filter(module => form.moduleReuse[module.id] === "reused")
+                    .map(module => module.id),
                   efficiencySummary: form.efficiencySummary.trim(),
                   newCapabilitySummary: form.newCapabilitySummary.trim(),
                 },
+                projectExecutionBaseline: derivativeBaseline,
               }
             : {}),
         },
@@ -640,6 +740,11 @@ export function ProjectListView({
                 .map(market => market.trim())
                 .filter(Boolean),
             }
+          : capturesProjectIntent
+            ? buildDerivativeChangeScopeDeclaration({
+                moduleReuse: form.moduleReuse,
+                declaration: form.changeScopeDeclaration,
+              })
           : { ...EMPTY_CHANGE_SCOPE_DECLARATION },
         pm: "",
         currentPhase: firstPhaseId,
@@ -660,23 +765,40 @@ export function ProjectListView({
           ? error.message
           : "创建项目失败，请稍后重试"
       );
+    } finally {
+      setIsCreating(false);
     }
   };
 
   const categoryConfig = CATEGORY_MAP[selectedCategory];
+  const derivativePreview = useMemo(
+    () => getDerivativeTaskPreview(form.moduleReuse),
+    [form.moduleReuse],
+  );
+  const derivativeBaselineValidation = useMemo(
+    () => validateDerivativeCreateBaseline({
+      productDefinitionRef: form.productDefinitionRef,
+      moduleReuse: form.moduleReuse,
+      reuseEvidence: form.reuseEvidence,
+    }),
+    [form.moduleReuse, form.productDefinitionRef, form.reuseEvidence],
+  );
+  const derivativeChangeScopeRules = useMemo(
+    () => getDerivativeChangeScopeRules(form.moduleReuse),
+    [form.moduleReuse],
+  );
   const sopPhases = useMemo(
     () =>
       selectedCategory === "npd"
         ? getNpdV3EffectivePhases(NPD_FULL_TEMPLATE_CONFIG)
+        : selectedCategory === "derivative"
+          ? derivativePreview.phases
         : getPhasesForCategory(selectedCategory),
-    [selectedCategory]
+    [derivativePreview.phases, selectedCategory]
   );
-  const sopTaskCount = useMemo(
-    () => sopPhases.reduce((total, phase) => total + phase.tasks.length, 0),
-    [sopPhases]
+  const isCreateBlocked = !form.name.trim() || (
+    selectedCategory === "derivative" && !derivativeBaselineValidation.ok
   );
-  const isStepAdvanceBlocked = step === 2 && !form.name.trim();
-  const isCreateBlocked = !form.name.trim();
 
   // ── Derived per-project presentation model ───────────────────────────────────
   interface Row {
@@ -1354,26 +1476,35 @@ export function ProjectListView({
       )}
 
       {/* ── New Project Wizard Modal ─────────────────────────────────────────── */}
-      {showAdd && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/40 p-4"
-          onClick={handleClose}
+      <Dialog
+        open={showAdd}
+        onOpenChange={open => {
+          if (!open && !isCreating) handleClose();
+        }}
+      >
+        <DialogContent
+          className="!flex max-h-[90vh] w-full flex-col gap-0 overflow-hidden rounded-[11px] border-border bg-card p-0 shadow-2xl sm:!max-w-3xl"
+          showCloseButton={false}
         >
-          <LinearCard
-            className="flex max-h-[90vh] w-full max-w-3xl flex-col shadow-2xl"
-            onClick={e => e.stopPropagation()}
-          >
+          <DialogDescription className="sr-only">
+            选择项目类型，填写项目资料，并确认系统将生成的流程和任务。
+          </DialogDescription>
             {/* Modal Header */}
             <div className="flex shrink-0 items-center justify-between border-b border-border p-6">
               <div>
-                <h3 className="text-xl font-bold tracking-[-0.3px]">
+                <DialogTitle
+                  className="text-xl font-bold tracking-[-0.3px]"
+                >
                   新建项目
-                </h3>
+                </DialogTitle>
                 <Kicker className="mt-0.5">NEW PROJECT</Kicker>
               </div>
               <button
+                type="button"
                 onClick={handleClose}
-                className="text-muted-foreground hover:text-foreground"
+                disabled={isCreating}
+                aria-label="关闭新建项目窗口"
+                className="text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <XIcon size={18} />
               </button>
@@ -1381,9 +1512,10 @@ export function ProjectListView({
 
             {/* Step Indicator */}
             <div className="flex shrink-0 items-center border-b border-border bg-secondary px-6 py-3">
-              {([1, 2, 3] as WizardStep[]).map((s, i) => (
+              {([1, 2] as WizardStep[]).map((s, i) => (
                 <div key={s} className="flex items-center">
                   <div
+                    aria-current={step === s ? "step" : undefined}
                     className={cn(
                       "flex items-center gap-2",
                       step === s
@@ -1409,7 +1541,7 @@ export function ProjectListView({
                       {STEP_LABELS[s]}
                     </span>
                   </div>
-                  {i < 2 && <div className="mx-3 h-px w-8 bg-border" />}
+                  {i < 1 && <div className="mx-3 h-px w-8 bg-border" />}
                 </div>
               ))}
             </div>
@@ -1420,7 +1552,7 @@ export function ProjectListView({
               {step === 1 && (
                 <div className="space-y-4 p-6">
                   <p className="text-sm text-muted-foreground">
-                    选择项目类型，系统将自动匹配对应的 SOP 流程模板。
+                    选择项目类型；新产品开发使用完整流程，衍生开发按六模块复用情况自动减负。
                   </p>
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                     {PROJECT_CATEGORIES.map(cat => {
@@ -1428,7 +1560,9 @@ export function ProjectListView({
                       return (
                         <button
                           key={cat.id}
-                          onClick={() => setSelectedCategory(cat.id)}
+                          type="button"
+                          onClick={() => handleCategoryChange(cat.id)}
+                          aria-pressed={active}
                           className={cn(
                             "relative flex flex-col rounded-[10px] border-2 p-4 text-left transition-all",
                             active
@@ -1476,7 +1610,7 @@ export function ProjectListView({
                     <span>{categoryConfig.icon}</span>
                     <span className="text-xs font-medium text-primary">
                       {categoryConfig.name} · {sopPhases.length} 个阶段 ·{" "}
-                      {sopTaskCount} 个任务 · {categoryConfig.typicalDuration}
+                      {categoryConfig.typicalDuration}
                     </span>
                   </div>
 
@@ -1623,9 +1757,9 @@ export function ProjectListView({
                   {capturesProjectIntent && (
                     <div className="space-y-3 rounded-[8px] border border-border bg-card p-3">
                       <div>
-                        <Kicker>DRV 目标与复用说明</Kicker>
+                        <Kicker>DRV 项目目标</Kicker>
                         <p className="mt-1 text-[11px] text-muted-foreground">
-                          说明这次为什么做、沿用了什么、带来了什么。内容会写入项目概览。
+                          说明这次为什么做、要改善什么、要新增什么。模块复用情况在下方单独确认，内容会写入项目概览。
                         </p>
                       </div>
                       <div className="flex flex-wrap gap-2">
@@ -1661,19 +1795,7 @@ export function ProjectListView({
                           );
                         })}
                       </div>
-                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                        <textarea
-                          value={form.reuseSummary}
-                          onChange={event =>
-                            setForm({
-                              ...form,
-                              reuseSummary: event.target.value,
-                            })
-                          }
-                          rows={3}
-                          placeholder="复用了什么？例如：沿用一代 PCBA、BMS 与认证方案"
-                          className="resize-none rounded-[7px] border border-border bg-secondary/30 px-3 py-2 text-xs outline-none focus:border-[color:var(--acc-border)]"
-                        />
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                         <textarea
                           value={form.efficiencySummary}
                           onChange={event =>
@@ -1683,6 +1805,7 @@ export function ProjectListView({
                             })
                           }
                           rows={3}
+                          aria-label="DRV 改进目标"
                           placeholder="要改善什么？例如：装配工时降低 20%，良率提升至 98%"
                           className="resize-none rounded-[7px] border border-border bg-secondary/30 px-3 py-2 text-xs outline-none focus:border-[color:var(--acc-border)]"
                         />
@@ -1695,11 +1818,274 @@ export function ProjectListView({
                             })
                           }
                           rows={3}
+                          aria-label="DRV 新增功能或能力"
                           placeholder="新增什么？例如：增加双档充气、APP 远程状态查看"
                           className="resize-none rounded-[7px] border border-border bg-secondary/30 px-3 py-2 text-xs outline-none focus:border-[color:var(--acc-border)]"
                         />
                       </div>
                     </div>
+                  )}
+                  {capturesProjectIntent && (
+                    <div className="space-y-4 rounded-[10px] border border-[color:var(--acc-border)] bg-[color:var(--acc-soft)] p-4">
+                      <div>
+                        <Kicker>产品规格与六模块执行基线</Kicker>
+                        <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                          默认均为“不复用”。只有型号、接口、参数和适用边界完全不变时才选择“复用”；系统会直接移除该模块任务包。
+                        </p>
+                      </div>
+
+                      <div>
+                        <Kicker className="mb-1.5">产品定义 / 规格书引用 *</Kicker>
+                        <input
+                          value={form.productDefinitionRef}
+                          onChange={event =>
+                            setForm({
+                              ...form,
+                              productDefinitionRef: event.target.value,
+                            })
+                          }
+                          aria-label="产品定义或规格书引用"
+                          aria-required="true"
+                          placeholder="例如：PRS-CE1000-V1.0 或已确认规格书链接"
+                          className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none focus:border-[color:var(--acc-border)]"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="rounded-[8px] border border-border bg-card px-1.5 py-2.5 text-center sm:px-3 sm:text-left">
+                          <div className="whitespace-nowrap text-[9px] text-muted-foreground sm:text-[10px]">公共任务</div>
+                          <div className="mt-0.5 text-lg font-semibold num">
+                            {derivativePreview.publicTaskCount}
+                          </div>
+                        </div>
+                        <div className="rounded-[8px] border border-border bg-card px-1.5 py-2.5 text-center sm:px-3 sm:text-left">
+                          <div className="whitespace-nowrap text-[9px] text-muted-foreground sm:text-[10px]">模块任务</div>
+                          <div className="mt-0.5 text-lg font-semibold num">
+                            {derivativePreview.moduleTaskCount}
+                          </div>
+                        </div>
+                        <div
+                          className="rounded-[8px] border border-primary/30 bg-primary/5 px-1.5 py-2.5 text-center sm:px-3 sm:text-left"
+                          role="status"
+                          aria-live="polite"
+                        >
+                          <div className="whitespace-nowrap text-[9px] text-primary sm:text-[10px]">总任务</div>
+                          <div className="mt-0.5 text-lg font-semibold text-primary num">
+                            {derivativePreview.totalTaskCount}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-2">
+                        {DERIVATIVE_MODULES_FOR_CREATE.map(module => {
+                          const state = form.moduleReuse[module.id];
+                          const moduleEvidence = form.reuseEvidence[module.id];
+                          const structureReuseBlocked =
+                            module.id === "structure_mold" &&
+                            form.moduleReuse.id_cmf === "not_reused";
+                          const updateEvidence = (
+                            patch: Partial<typeof moduleEvidence>,
+                          ) => setForm({
+                            ...form,
+                            reuseEvidence: {
+                              ...form.reuseEvidence,
+                              [module.id]: { ...moduleEvidence, ...patch },
+                            },
+                          });
+                          const selectState = (
+                            nextState: "reused" | "not_reused",
+                          ) => setForm({
+                            ...form,
+                            moduleReuse: updateDerivativeModuleReuse(
+                              form.moduleReuse,
+                              module.id,
+                              nextState,
+                            ),
+                          });
+                          return (
+                            <div
+                              key={module.id}
+                              className="rounded-[9px] border border-border bg-card p-3"
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="text-sm font-semibold text-foreground">
+                                    {module.label}
+                                  </div>
+                                  <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
+                                    {module.responsibilityDomain}
+                                  </p>
+                                </div>
+                                <span className="shrink-0 rounded-full bg-secondary px-2 py-1 text-[9px] text-muted-foreground num">
+                                  {state === "reused" ? "减少" : "生成"}{" "}
+                                  {DERIVATIVE_MODULE_TASK_IDS[module.id].length}{" "}
+                                  项
+                                </span>
+                              </div>
+                              <div
+                                className="mt-3 grid grid-cols-2 gap-2"
+                                role="group"
+                                aria-label={`${module.label}复用状态`}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => selectState("reused")}
+                                  disabled={structureReuseBlocked}
+                                  aria-pressed={state === "reused"}
+                                  aria-label={`${module.label}：复用`}
+                                  aria-describedby={structureReuseBlocked ? "structure-reuse-blocked-description" : undefined}
+                                  className={cn(
+                                    "rounded-[7px] border px-3 py-2 text-xs font-medium transition-colors",
+                                    state === "reused"
+                                      ? "border-primary bg-primary text-primary-foreground"
+                                      : "border-border bg-secondary/40 text-muted-foreground hover:bg-secondary",
+                                    structureReuseBlocked && "cursor-not-allowed opacity-45",
+                                  )}
+                                >
+                                  复用
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => selectState("not_reused")}
+                                  aria-pressed={state === "not_reused"}
+                                  aria-label={`${module.label}：不复用`}
+                                  className={cn(
+                                    "rounded-[7px] border px-3 py-2 text-xs font-medium transition-colors",
+                                    state === "not_reused"
+                                      ? "border-foreground/30 bg-foreground text-background"
+                                      : "border-border bg-secondary/40 text-muted-foreground hover:bg-secondary",
+                                  )}
+                                >
+                                  不复用
+                                </button>
+                              </div>
+                              {structureReuseBlocked && (
+                                <p
+                                  id="structure-reuse-blocked-description"
+                                  className="mt-2 text-[10px] text-muted-foreground"
+                                >
+                                  ID/CMF 不复用时，结构/模具必须一并由工程师跟进。
+                                </p>
+                              )}
+                              {module.id === "id_cmf" && (
+                                <p className="mt-2 text-[10px] text-muted-foreground">
+                                  仅颜色、标签或文案轻改请退出建项，转产品库 Revision。
+                                </p>
+                              )}
+                              {state === "reused" && (
+                                <div className="mt-3 space-y-2 border-t border-border pt-3">
+                                  <input
+                                    value={moduleEvidence.sourceRef}
+                                    onChange={event => updateEvidence({ sourceRef: event.target.value })}
+                                    aria-label={`${module.label}复用来源产品或模块`}
+                                    aria-required="true"
+                                    placeholder="来源产品或模块 *"
+                                    className="w-full rounded-[6px] border border-border bg-secondary/30 px-2.5 py-2 text-xs outline-none focus:border-[color:var(--acc-border)]"
+                                  />
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <input
+                                      value={moduleEvidence.modelOrVersion}
+                                      onChange={event => updateEvidence({ modelOrVersion: event.target.value })}
+                                      aria-label={`${module.label}复用型号或版本`}
+                                      aria-required="true"
+                                      placeholder="型号 / 版本 *"
+                                      className="rounded-[6px] border border-border bg-secondary/30 px-2.5 py-2 text-xs outline-none focus:border-[color:var(--acc-border)]"
+                                    />
+                                    <input
+                                      value={moduleEvidence.evidenceRef}
+                                      onChange={event => updateEvidence({ evidenceRef: event.target.value })}
+                                      aria-label={`${module.label}复用证据编号或链接`}
+                                      aria-required="true"
+                                      placeholder="证据编号 / 链接 *"
+                                      className="rounded-[6px] border border-border bg-secondary/30 px-2.5 py-2 text-xs outline-none focus:border-[color:var(--acc-border)]"
+                                    />
+                                  </div>
+                                  <label className="flex cursor-pointer items-start gap-2 rounded-[6px] bg-secondary/40 px-2.5 py-2 text-[10px] leading-relaxed text-foreground">
+                                    <input
+                                      type="checkbox"
+                                      checked={moduleEvidence.boundaryConfirmed}
+                                      onChange={event => updateEvidence({ boundaryConfirmed: event.target.checked })}
+                                      aria-label={`${module.label}适用边界已确认`}
+                                      aria-required="true"
+                                      className="mt-0.5 h-3.5 w-3.5 accent-primary"
+                                    />
+                                    已确认型号、接口、参数和适用边界均不发生变化
+                                  </label>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {!derivativeBaselineValidation.ok && (
+                        <div
+                          className="flex items-start gap-2 rounded-[8px] border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-900"
+                          role="alert"
+                        >
+                          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                          <span>{derivativeBaselineValidation.issues[0]?.message}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {capturesProjectIntent && (
+                    <details className="group rounded-[8px] border border-border bg-card">
+                      <summary className="flex cursor-pointer list-none items-start justify-between gap-3 px-3 py-3">
+                        <div>
+                          <Kicker>安全 / 法规影响确认</Kicker>
+                          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                            仅显示与“不复用”模块相关的问题。新增目标市场、供应商或二供变化不在 DRV 中处理，应按程度进入产品库变更或 ECO。
+                          </p>
+                        </div>
+                        <ChevronRight
+                          size={15}
+                          className="mt-0.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-90"
+                        />
+                      </summary>
+                      <div className="space-y-3 border-t border-border p-3">
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                          {derivativeChangeScopeRules.map(option => (
+                            <label
+                              key={option.key}
+                              className="flex cursor-pointer items-start gap-2 rounded-[7px] bg-secondary/40 px-3 py-2.5 text-xs text-foreground"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={Boolean(form.changeScopeDeclaration[option.key])}
+                                onChange={event =>
+                                  setForm({
+                                    ...form,
+                                    changeScopeDeclaration: {
+                                      ...form.changeScopeDeclaration,
+                                      [option.key]: event.target.checked,
+                                    },
+                                  })
+                                }
+                                className="mt-0.5 h-3.5 w-3.5 accent-primary"
+                              />
+                              <span>{option.label}</span>
+                            </label>
+                          ))}
+                        </div>
+                        <textarea
+                          value={form.changeScopeDeclaration.notes ?? ""}
+                          onChange={event =>
+                            setForm({
+                              ...form,
+                              changeScopeDeclaration: {
+                                ...form.changeScopeDeclaration,
+                                notes: event.target.value,
+                              },
+                            })
+                          }
+                          rows={2}
+                          aria-label="DRV 安全法规影响补充说明"
+                          placeholder="补充安全边界、验证重点或不确定项（可选）"
+                          className="w-full resize-none rounded-[7px] border border-border bg-secondary/30 px-3 py-2 text-sm outline-none focus:border-[color:var(--acc-border)]"
+                        />
+                      </div>
+                    </details>
                   )}
                   {capturesEcoChangeScope && (
                     <div className="space-y-3 rounded-[8px] border border-border bg-card p-3">
@@ -1832,103 +2218,43 @@ export function ProjectListView({
                       />
                     </div>
                   </div>
-                </div>
-              )}
-
-              {/* ── Step 3: SOP Preview ── */}
-              {step === 3 && (
-                <div className="space-y-4 p-6">
-                  <div className="flex items-start gap-3 rounded-[8px] border border-border bg-secondary p-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="mb-0.5 flex items-center gap-2">
-                        <span className="text-base font-semibold text-foreground">
-                          {form.name || "（未命名）"}
-                        </span>
-                        <TypeBadge type={categoryConfig.badge} />
+                  <details className="group rounded-[8px] border border-border bg-card">
+                    <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5">
+                      <div>
+                        <Kicker>将创建的项目流程</Kicker>
+                        <p className="mt-1 text-[11px] text-muted-foreground">
+                          展开查看各阶段任务与 Gate 明细。
+                        </p>
                       </div>
-                      <div className="text-xs text-muted-foreground num">
-                        {form.code && <span className="mr-3">{form.code}</span>}
-                        {form.pmUserId && (
-                          <span className="mr-3">
-                            PM:{" "}
-                            {userList?.find(u => u.id === form.pmUserId)
-                              ?.name ||
-                              userList?.find(u => u.id === form.pmUserId)
-                                ?.username ||
-                              ""}
-                          </span>
-                        )}
-                        {form.startDate && (
-                          <span>
-                            {form.startDate} → {form.targetDate || "?"}
-                          </span>
-                        )}
-                      </div>
-                      <div className="mt-2 text-[10px] text-muted-foreground">
-                        输出：项目完成时生成独立产品 · 不生成 Revision
-                      </div>
-                      {capturesProjectIntent && form.intentGoals.length > 0 && (
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          {PROJECT_INTENT_OPTIONS.filter(option =>
-                            form.intentGoals.includes(option.id)
-                          ).map(option => (
-                            <span
-                              key={option.id}
-                              className="rounded-full border border-border bg-card px-2 py-1 text-[9px] font-semibold text-foreground"
-                            >
-                              {option.label}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div>
-                    <Kicker className="mb-3">
-                      {categoryConfig.name} SOP 流程 · {sopPhases.length} 个阶段
-                      · {sopTaskCount} 个任务
-                    </Kicker>
-                    <div className="space-y-2">
-                      {sopPhases.map((phase, idx) => (
+                      <ChevronRight
+                        size={15}
+                        className="shrink-0 text-muted-foreground transition-transform group-open:rotate-90"
+                      />
+                    </summary>
+                    <div className="grid grid-cols-1 gap-2 border-t border-border p-3 sm:grid-cols-2">
+                      {sopPhases.map((phase, index) => (
                         <div
                           key={phase.id}
-                          className="flex items-start gap-3 rounded-[8px] border border-border bg-card p-3"
+                          className="flex items-start gap-2 rounded-[7px] bg-secondary/40 px-3 py-2"
                         >
-                          <div
-                            className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white num"
+                          <span
+                            className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-bold text-white num"
                             style={{ backgroundColor: phase.color }}
                           >
-                            {idx + 1}
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="mb-0.5 flex items-center gap-2">
-                              <span className="text-sm font-medium text-foreground">
-                                {phase.name}
-                              </span>
-                              <span className="text-[10px] text-muted-foreground">
-                                {phase.duration}
-                              </span>
+                            {index + 1}
+                          </span>
+                          <div className="min-w-0">
+                            <div className="text-xs font-medium text-foreground">
+                              {phase.name}
                             </div>
-                            <p className="text-xs text-muted-foreground">
-                              {phase.desc}
-                            </p>
-                            <div className="mt-1 flex items-center gap-1">
-                              <span className="text-[9px] font-semibold uppercase tracking-wide text-primary">
-                                Gate: {phase.gate}
-                              </span>
-                              <span className="text-[9px] text-muted-foreground">
-                                ·
-                              </span>
-                              <span className="text-[9px] text-muted-foreground num">
-                                {phase.tasks.length} 个任务
-                              </span>
+                            <div className="mt-0.5 text-[10px] text-muted-foreground">
+                              {phase.tasks.length} 个任务 · Gate: {phase.gate}
                             </div>
                           </div>
                         </div>
                       ))}
                     </div>
-                  </div>
+                  </details>
                 </div>
               )}
             </div>
@@ -1939,23 +2265,17 @@ export function ProjectListView({
                 onClick={() =>
                   step > 1 ? setStep((step - 1) as WizardStep) : handleClose()
                 }
-                className="flex items-center gap-1.5 rounded-[7px] border border-border px-4 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary"
+                disabled={isCreating}
+                className="flex items-center gap-1.5 rounded-[7px] border border-border px-4 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <ChevronLeft size={14} />
                 {step === 1 ? "取消" : "上一步"}
               </button>
 
-              {step < 3 ? (
+              {step < 2 ? (
                 <button
-                  onClick={() => {
-                    if (isStepAdvanceBlocked) return;
-                    setStep((step + 1) as WizardStep);
-                  }}
-                  disabled={isStepAdvanceBlocked}
-                  className={cn(
-                    "flex items-center gap-1.5 rounded-[7px] bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:opacity-90",
-                    isStepAdvanceBlocked && "cursor-not-allowed opacity-50"
-                  )}
+                  onClick={() => setStep(2)}
+                  className="flex items-center gap-1.5 rounded-[7px] bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:opacity-90"
                 >
                   下一步
                   <ChevronRight size={14} />
@@ -1963,20 +2283,19 @@ export function ProjectListView({
               ) : (
                 <button
                   onClick={handleCreate}
-                  disabled={isCreateBlocked}
+                  disabled={isCreateBlocked || isCreating}
                   className={cn(
                     "flex items-center gap-1.5 rounded-[7px] bg-primary px-5 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:opacity-90",
-                    isCreateBlocked && "cursor-not-allowed opacity-50"
+                    (isCreateBlocked || isCreating) && "cursor-not-allowed opacity-50"
                   )}
                 >
                   <Check size={14} />
-                  创建项目
+                  {isCreating ? "创建中…" : "创建项目"}
                 </button>
               )}
             </div>
-          </LinearCard>
-        </div>
-      )}
+        </DialogContent>
+      </Dialog>
 
       {/* ── Drag Move Confirmation Dialog ── */}
       <AlertDialog

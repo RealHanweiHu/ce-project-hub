@@ -210,7 +210,11 @@ describe("DRV project-track-v1 creation", () => {
     }
     expect(project!.customFields).toMatchObject({
       source: "project-track-create-test",
-      projectExecutionBaseline: validBaseline,
+      projectExecutionBaseline: {
+        ...validBaseline,
+        frozenAt: expect.any(String),
+        frozenBy: OWNER,
+      },
     });
 
     const [riskScope] = await db!.select()
@@ -285,6 +289,9 @@ describe("DRV project-track-v1 creation", () => {
 
   it("通用项目编辑既不能替换也不能删除冻结基线", async () => {
     const db = await getDb();
+    const beforeProject = await getProjectById(VALID_PROJECT);
+    const storedBaseline = (beforeProject!.customFields as Record<string, unknown>)
+      .projectExecutionBaseline;
     const beforeTasks = await db!.select().from(projectTasks)
       .where(eq(projectTasks.projectId, VALID_PROJECT));
 
@@ -303,7 +310,7 @@ describe("DRV project-track-v1 creation", () => {
     });
     let project = await getProjectById(VALID_PROJECT);
     expect((project!.customFields as Record<string, unknown>).projectExecutionBaseline)
-      .toEqual(validBaseline);
+      .toEqual(storedBaseline);
 
     await caller.update({
       id: VALID_PROJECT,
@@ -318,7 +325,7 @@ describe("DRV project-track-v1 creation", () => {
     project = await getProjectById(VALID_PROJECT);
     expect(project!.customFields).toMatchObject({
       source: "delete-attempt",
-      projectExecutionBaseline: validBaseline,
+      projectExecutionBaseline: storedBaseline,
     });
 
     const afterTasks = await db!.select().from(projectTasks)

@@ -1,0 +1,273 @@
+import { describe, expect, it } from "vitest";
+import {
+  DERIVATIVE_MODULE_TASK_IDS,
+  SOP_TEMPLATE_VERSION_CURRENT,
+  getDerivativePhasesForExecutionBaseline,
+} from "@shared/sop-templates";
+import {
+  PRODUCT_MODULE_IDS,
+  type ModuleReuseState,
+  type ProductModuleId,
+} from "./project-track-tailoring";
+import {
+  EMPTY_DERIVATIVE_MODULE_REUSE,
+  buildDerivativeChangeScopeDeclaration,
+  buildDerivativeExecutionBaseline,
+  createEmptyDerivativeReuseEvidence,
+  getDerivativeTaskPreview,
+  updateDerivativeModuleReuse,
+  validateDerivativeCreateBaseline,
+} from "../client/src/lib/derivative-create";
+import { EMPTY_CHANGE_SCOPE_DECLARATION } from "./sop-risk";
+
+describe("DRV create form model", () => {
+  it("默认六模块均不复用，并预览完整任务", () => {
+    const preview = getDerivativeTaskPreview(EMPTY_DERIVATIVE_MODULE_REUSE);
+
+    expect(preview.reusedModuleCount).toBe(0);
+    expect(preview.moduleTaskCount).toBe(
+      Object.values(DERIVATIVE_MODULE_TASK_IDS)
+        .reduce((total, taskIds) => total + taskIds.length, 0),
+    );
+    expect(preview.totalTaskCount).toBe(
+      preview.publicTaskCount + preview.moduleTaskCount,
+    );
+  });
+
+  it("复用一个模块只减少该模块任务包，公共任务数不变", () => {
+    const full = getDerivativeTaskPreview(EMPTY_DERIVATIVE_MODULE_REUSE);
+    const batteryReused = getDerivativeTaskPreview({
+      ...EMPTY_DERIVATIVE_MODULE_REUSE,
+      battery: "reused",
+    });
+
+    expect(batteryReused.publicTaskCount).toBe(full.publicTaskCount);
+    expect(full.totalTaskCount - batteryReused.totalTaskCount)
+      .toBe(DERIVATIVE_MODULE_TASK_IDS.battery.length);
+  });
+
+  it.each(PRODUCT_MODULE_IDS)("复用 %s 时预览只减少对应模块任务", moduleId => {
+    const full = getDerivativeTaskPreview(EMPTY_DERIVATIVE_MODULE_REUSE);
+    const tailored = getDerivativeTaskPreview({
+      ...EMPTY_DERIVATIVE_MODULE_REUSE,
+      [moduleId]: "reused",
+      ...(moduleId === "structure_mold" ? { id_cmf: "reused" as const } : {}),
+    });
+    const expectedRemoved = DERIVATIVE_MODULE_TASK_IDS[moduleId].length +
+      (moduleId === "structure_mold" ? DERIVATIVE_MODULE_TASK_IDS.id_cmf.length : 0);
+
+    expect(tailored.publicTaskCount).toBe(full.publicTaskCount);
+    expect(full.totalTaskCount - tailored.totalTaskCount).toBe(expectedRemoved);
+  });
+
+  it("ID/CMF 不复用联动结构不复用，且阻止反向非法选择", () => {
+    const bothReused = {
+      ...EMPTY_DERIVATIVE_MODULE_REUSE,
+      id_cmf: "reused" as const,
+      structure_mold: "reused" as const,
+    };
+    const idChanged = updateDerivativeModuleReuse(
+      bothReused,
+      "id_cmf",
+      "not_reused",
+    );
+    expect(idChanged).toMatchObject({
+      id_cmf: "not_reused",
+      structure_mold: "not_reused",
+    });
+
+    const blocked = updateDerivativeModuleReuse(
+      idChanged,
+      "structure_mold",
+      "reused",
+    );
+    expect(blocked).toBe(idChanged);
+  });
+
+  it("复用证据不完整时阻止创建，完整后预览与服务端模板任务数一致", () => {
+    const moduleReuse = {
+      ...EMPTY_DERIVATIVE_MODULE_REUSE,
+      battery: "reused" as const,
+    };
+    const reuseEvidence = createEmptyDerivativeReuseEvidence();
+    expect(validateDerivativeCreateBaseline({
+      productDefinitionRef: "SPEC-DRV-001",
+      moduleReuse,
+      reuseEvidence,
+    }).ok).toBe(false);
+
+    reuseEvidence.battery = {
+      sourceRef: "一代电池包",
+      modelOrVersion: "BAT-V3",
+      evidenceRef: "EV-BAT-001",
+      boundaryConfirmed: true,
+    };
+    expect(validateDerivativeCreateBaseline({
+      productDefinitionRef: "SPEC-DRV-001",
+      moduleReuse,
+      reuseEvidence,
+    })).toEqual({ ok: true, issues: [] });
+
+    const baseline = buildDerivativeExecutionBaseline({
+      productDefinitionRef: "SPEC-DRV-001",
+      moduleReuse,
+      reuseEvidence,
+      frozenAt: "2026-07-15T12:00:00.000Z",
+      frozenBy: 1,
+    });
+    const preview = getDerivativeTaskPreview(moduleReuse);
+    const runtime = getDerivativePhasesForExecutionBaseline(
+      baseline,
+      SOP_TEMPLATE_VERSION_CURRENT,
+    );
+    expect(runtime.reduce((total, phase) => total + phase.tasks.length, 0))
+      .toBe(preview.totalTaskCount);
+  });
+
+  it("冻结 payload 只保存复用模块证据并清理字符串空格", () => {
+    const reuseEvidence = createEmptyDerivativeReuseEvidence();
+    reuseEvidence.battery = {
+      sourceRef: "  一代电池包  ",
+      modelOrVersion: " BAT-V3 ",
+      evidenceRef: " EV-BAT-001 ",
+      boundaryConfirmed: true,
+    };
+    reuseEvidence.electronics = {
+      sourceRef: "不应保存",
+      modelOrVersion: "PCBA-V1",
+      evidenceRef: "EV-PCBA",
+      boundaryConfirmed: true,
+    };
+    const baseline = buildDerivativeExecutionBaseline({
+      productDefinitionRef: " SPEC-DRV-001 ",
+      moduleReuse: {
+        ...EMPTY_DERIVATIVE_MODULE_REUSE,
+        battery: "reused",
+      },
+      reuseEvidence,
+      frozenAt: "2026-07-15T12:00:00.000Z",
+      frozenBy: 7,
+    });
+
+    expect(baseline).toMatchObject({
+      modelVersion: "project-track-v1",
+      status: "frozen",
+      productDefinitionRef: "SPEC-DRV-001",
+      frozenAt: "2026-07-15T12:00:00.000Z",
+      frozenBy: 7,
+      reuseEvidence: {
+        battery: {
+          sourceRef: "一代电池包",
+          modelOrVersion: "BAT-V3",
+          evidenceRef: "EV-BAT-001",
+          boundaryConfirmed: true,
+        },
+      },
+    });
+    expect(Object.keys(baseline.reuseEvidence ?? {})).toEqual(["battery"]);
+  });
+
+  it("缺规格、任一复用证据字段或六模块全复用都会阻止创建", () => {
+    const moduleReuse = {
+      ...EMPTY_DERIVATIVE_MODULE_REUSE,
+      battery: "reused" as const,
+    };
+    const complete = createEmptyDerivativeReuseEvidence();
+    complete.battery = {
+      sourceRef: "一代电池包",
+      modelOrVersion: "BAT-V3",
+      evidenceRef: "EV-BAT-001",
+      boundaryConfirmed: true,
+    };
+    expect(validateDerivativeCreateBaseline({
+      productDefinitionRef: " ",
+      moduleReuse,
+      reuseEvidence: complete,
+    }).ok).toBe(false);
+    for (const evidence of [
+      { ...complete.battery, sourceRef: "" },
+      { ...complete.battery, modelOrVersion: "" },
+      { ...complete.battery, evidenceRef: "" },
+      { ...complete.battery, boundaryConfirmed: false },
+    ]) {
+      expect(validateDerivativeCreateBaseline({
+        productDefinitionRef: "SPEC-DRV-001",
+        moduleReuse,
+        reuseEvidence: { ...complete, battery: evidence },
+      }).ok).toBe(false);
+    }
+    expect(validateDerivativeCreateBaseline({
+      productDefinitionRef: "SPEC-DRV-001",
+      moduleReuse: Object.fromEntries(
+        PRODUCT_MODULE_IDS.map(moduleId => [moduleId, "reused"]),
+      ) as Record<ProductModuleId, ModuleReuseState>,
+      reuseEvidence: Object.fromEntries(
+        PRODUCT_MODULE_IDS.map(moduleId => [moduleId, complete.battery]),
+      ) as typeof complete,
+    }).ok).toBe(false);
+  });
+
+  it("所有合法模块组合的预览任务键与 current 服务端解析完全一致", () => {
+    for (let mask = 0; mask < 2 ** PRODUCT_MODULE_IDS.length; mask += 1) {
+      const moduleReuse = Object.fromEntries(PRODUCT_MODULE_IDS.map((moduleId, index) => [
+        moduleId,
+        mask & (1 << index) ? "reused" : "not_reused",
+      ])) as Record<ProductModuleId, ModuleReuseState>;
+      if (PRODUCT_MODULE_IDS.every(moduleId => moduleReuse[moduleId] === "reused")) continue;
+      if (moduleReuse.id_cmf === "not_reused" && moduleReuse.structure_mold === "reused") continue;
+      const reuseEvidence = createEmptyDerivativeReuseEvidence();
+      for (const moduleId of PRODUCT_MODULE_IDS) {
+        if (moduleReuse[moduleId] !== "reused") continue;
+        reuseEvidence[moduleId] = {
+          sourceRef: `source-${moduleId}`,
+          modelOrVersion: "V1",
+          evidenceRef: `EV-${moduleId}`,
+          boundaryConfirmed: true,
+        };
+      }
+      const baseline = buildDerivativeExecutionBaseline({
+        productDefinitionRef: "SPEC-DRV-001",
+        moduleReuse,
+        reuseEvidence,
+        frozenAt: "2026-07-15T12:00:00.000Z",
+        frozenBy: 1,
+      });
+      const previewKeys = getDerivativeTaskPreview(moduleReuse).phases
+        .flatMap(phase => phase.tasks.map(task => `${phase.id}:${task.id}`));
+      const runtimeKeys = getDerivativePhasesForExecutionBaseline(
+        baseline,
+        SOP_TEMPLATE_VERSION_CURRENT,
+      ).flatMap(phase => phase.tasks.map(task => `${phase.id}:${task.id}`));
+
+      expect(previewKeys, `mask=${mask}`).toEqual(runtimeKeys);
+    }
+  });
+
+  it("DRV 风险声明只保留未复用模块的相关问题，不接收目标市场或二供变化", () => {
+    const declaration = buildDerivativeChangeScopeDeclaration({
+      moduleReuse: {
+        ...EMPTY_DERIVATIVE_MODULE_REUSE,
+        battery: "reused",
+        software_connectivity: "reused",
+      },
+      declaration: {
+        ...EMPTY_CHANGE_SCOPE_DECLARATION,
+        batteryCellChange: true,
+        safetyRelatedSoftwareChange: true,
+        targetMarketExpansion: true,
+        criticalSafetySupplierChange: true,
+        pressurizedStructureChange: true,
+        eolTestChange: true,
+      },
+    });
+
+    expect(declaration).toMatchObject({
+      batteryCellChange: false,
+      safetyRelatedSoftwareChange: false,
+      targetMarketExpansion: false,
+      criticalSafetySupplierChange: false,
+      pressurizedStructureChange: true,
+      eolTestChange: true,
+    });
+  });
+});

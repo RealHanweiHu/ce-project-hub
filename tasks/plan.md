@@ -147,14 +147,14 @@
 **Description:** 在两步建项中提供六模块复用选择、复用证据字段、条件化安全追问和实时任务预览。
 
 **Acceptance criteria:**
-- [ ] DRV 默认六模块均“不复用”，复用时要求补齐证据字段。
-- [ ] ID/CMF 联动结构/模具，界面无法形成非法组合。
-- [ ] 公共、模块和总任务数实时显示，并与服务端创建结果一致。
+- [x] DRV 默认六模块均“不复用”，复用时要求补齐证据字段。
+- [x] ID/CMF 联动结构/模具，界面无法形成非法组合。
+- [x] 公共、模块和总任务数实时显示，并与服务端创建结果一致。
 
 **Verification:**
-- [ ] `pnpm check`
-- [ ] `pnpm build`
-- [ ] 本地浏览器创建 DRV，检查网络请求、任务数和控制台。
+- [x] `pnpm check`
+- [x] `pnpm build`
+- [x] 本地浏览器创建 DRV，检查任务数、持久化结果和控制台。
 
 **Dependencies:** Task 4
 
@@ -167,9 +167,9 @@
 
 ### Checkpoint A: DRV 可运行
 
-- [ ] DRV 纯逻辑、API、数据库和 UI 串通。
-- [ ] 风险/认证链路没有被模块选择绕过。
-- [ ] `pnpm check && pnpm test && pnpm build` 通过。
+- [x] DRV 纯逻辑、API、数据库和 UI 串通。
+- [x] 风险/认证链路没有被模块选择绕过。
+- [x] `pnpm check && pnpm test && pnpm build` 通过。
 
 ### Task 6: 组合 JDM 六阶段模板
 

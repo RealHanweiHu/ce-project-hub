@@ -165,11 +165,20 @@ export function getDerivativePhasesForExecutionBaseline(
   const isValid = baseline?.modelVersion === "project-track-v1" &&
     baseline.status === "frozen" &&
     validateProjectExecutionBaseline(baseline, { track: "drv" }).ok;
-  const phases = buildDerivativePhases(
+  return getDerivativePhasesForModuleReuse(
     isValid && baseline.moduleReuse
       ? baseline.moduleReuse
-      : allDerivativeModulesNotReused()
+      : allDerivativeModulesNotReused(),
+    templateVersion,
   );
+}
+
+/** Shared preview/runtime composer once the binary module state is known. */
+export function getDerivativePhasesForModuleReuse(
+  moduleReuse: Record<ProductModuleId, ModuleReuseState>,
+  templateVersion?: string | null,
+): SOPPhase[] {
+  const phases = buildDerivativePhases(moduleReuse);
   return templateVersion === SOP_TEMPLATE_VERSION_CURRENT
     ? buildCurrentPhases("derivative", phases)
     : phases;
@@ -4522,7 +4531,7 @@ const ALL_PROJECT_CATEGORY_CONFIGS: ProjectCategoryConfig[] = [
     textColor: "text-blue-800",
     borderColor: "border-blue-300",
     icon: "🚀",
-    desc: "全新品类产品，从0到1完整开发流程，包含概念立项、规划、设计、EVT/DVT/PVT 验证到量产，共 7 个阶段。",
+    desc: "全新品类产品，固定使用从概念立项、规划、设计到 EVT/DVT/PVT 和量产的完整流程。",
     phaseCount: 7,
     typicalDuration: "约 5-8 个月",
     phases: NPD_PHASES_CURRENT,
@@ -4578,7 +4587,7 @@ const ALL_PROJECT_CATEGORY_CONFIGS: ProjectCategoryConfig[] = [
     textColor: "text-indigo-800",
     borderColor: "border-indigo-300",
     icon: "🤝",
-    desc: "客户提供 ID/外观与产品规格，委托工厂完成结构、硬件与软件设计并量产；以设计输入冻结为入口，EVT/DVT/PVT 强制客户签核，共 6 个阶段。",
+    desc: "客户可能只有 ID 图或产品概念，由我方编制产品规格书、定义特殊要求并取得客户确认，再完成详细设计、验证和量产。",
     phaseCount: 6,
     typicalDuration: "约 4-6 个月",
     phases: JDM_PHASES_CURRENT,
@@ -4592,7 +4601,7 @@ const ALL_PROJECT_CATEGORY_CONFIGS: ProjectCategoryConfig[] = [
     textColor: "text-cyan-800",
     borderColor: "border-cyan-300",
     icon: "📦",
-    desc: "客户提供完整设计与 openBOM，工厂完成可制造性导入、首件确认、试产与量产；核心为 DFM 反馈与料件齐套，共 4 个阶段。",
+    desc: "客户提供可制造的设计与 BOM；未指定模块可提议我方标准模块，任何修改都需客户确认。若需要重新设计则停止 OBT 并转 JDM。",
     phaseCount: 4,
     typicalDuration: "约 1.5-3 个月",
     phases: OBT_PHASES_CURRENT,

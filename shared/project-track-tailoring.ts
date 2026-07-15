@@ -37,6 +37,10 @@ export const PRODUCT_MODULE_IDS = PRODUCT_MODULES.map(
   ({ id }) => id
 ) as ProductModuleId[];
 
+const PRODUCT_MODULE_LABELS = Object.fromEntries(
+  PRODUCT_MODULES.map(({ id, label }) => [id, label]),
+) as Record<ProductModuleId, string>;
+
 export type ModuleReuseState = "reused" | "not_reused";
 
 export interface ModuleReuseEvidence {
@@ -107,7 +111,7 @@ function validateReuseEvidence(
 
   return missingFields.map(field => ({
     code: "missing_reuse_evidence",
-    message: `${moduleId} 复用时必须提供${EVIDENCE_FIELD_LABELS[field]}`,
+    message: `${PRODUCT_MODULE_LABELS[moduleId]}复用时必须提供${EVIDENCE_FIELD_LABELS[field]}`,
     moduleId,
     field,
   }));
@@ -154,13 +158,13 @@ export function validateProjectExecutionBaseline(
       if (state === undefined) {
         issues.push({
           code: "missing_module_state",
-          message: `${moduleId} 缺少复用状态`,
+          message: `${PRODUCT_MODULE_LABELS[moduleId]}缺少复用状态`,
           moduleId,
         });
       } else if (state !== "reused" && state !== "not_reused") {
         issues.push({
           code: "invalid_module_state",
-          message: `${moduleId} 的复用状态无效`,
+          message: `${PRODUCT_MODULE_LABELS[moduleId]}的复用状态无效`,
           moduleId,
         });
       }
