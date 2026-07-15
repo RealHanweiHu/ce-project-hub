@@ -54,13 +54,13 @@
 **Description:** 建立六模块、二元复用、复用证据、draft/frozen 执行基线和任务组合结果的严格类型与纯校验函数。
 
 **Acceptance criteria:**
-- [ ] 六模块均有稳定 ID、显示名和责任域。
-- [ ] 复用模块缺来源、版本、证据或边界确认时校验失败。
-- [ ] 非法 ID/CMF 与结构组合、DRV 全模块复用均返回明确领域错误。
+- [x] 六模块均有稳定 ID、显示名和责任域。
+- [x] 复用模块缺来源、版本、证据或边界确认时校验失败。
+- [x] 非法 ID/CMF 与结构组合、DRV 全模块复用均返回明确领域错误。
 
 **Verification:**
-- [ ] RED→GREEN：`pnpm exec vitest run shared/project-track-tailoring.test.ts`
-- [ ] `pnpm check`
+- [x] RED→GREEN：`pnpm exec vitest run shared/project-track-tailoring.test.ts`
+- [x] `pnpm check`
 
 **Dependencies:** Task 0.1
 
@@ -75,14 +75,14 @@
 **Description:** 在项目上增加产品负责人字段，创建时默认当前创建人，项目经理继续使用 `pmUserId`，并统一权限/展示语义。
 
 **Acceptance criteria:**
-- [ ] 新项目保存 `productOwnerUserId`；未显式填写时默认创建人。
-- [ ] `pmUserId` 仍自动加入项目成员并获得 project_manager 角色。
-- [ ] 产品负责人和项目经理可以是不同用户，读取与权限判断不混淆。
+- [x] 新项目保存 `productOwnerUserId`；未显式填写时默认创建人。
+- [x] `pmUserId` 仍自动加入项目成员并获得 project_manager 角色。
+- [x] 产品负责人和项目经理可以是不同用户，读取与权限判断不混淆。
 
 **Verification:**
-- [ ] RED→GREEN：项目创建与角色集成测试。
-- [ ] `pnpm check`
-- [ ] `pnpm exec vitest run server/project-access-role.test.ts server/project-pm-membership.test.ts`
+- [x] RED→GREEN：项目创建与角色集成测试。
+- [x] `pnpm check`
+- [x] `pnpm exec vitest run server/project-access-role.test.ts server/project-pm-membership.test.ts`
 
 **Dependencies:** Task 0.1
 

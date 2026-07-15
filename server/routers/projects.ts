@@ -162,6 +162,8 @@ const projectInputSchema = z.object({
   category: z.enum(PROJECT_CATEGORIES).default("npd"),
   /** PM user id (FK to users.id) */
   pmUserId: z.number().int().nullable().optional(),
+  /** Product owner; defaults to the project creator when omitted. */
+  productOwnerUserId: z.number().int().nullable().optional(),
   /** 关联产品(产品库 id);NPD 新产品可暂空 */
   productId: z.string().nullable().optional(),
   safetyRiskLevel: z.enum(PROJECT_SOP_RISK_LEVELS).optional(),
@@ -689,6 +691,7 @@ export const projectsRouter = router({
         projectNumber: input.projectNumber,
         category: input.category,
         pmUserId: input.pmUserId ?? null,
+        productOwnerUserId: input.productOwnerUserId ?? ctx.user.id,
         productId: input.productId ?? null,
         baseRevisionId: null,
         productDefinitionSnapshotId: handoffSnapshot?.id ?? null,

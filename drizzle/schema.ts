@@ -167,6 +167,8 @@ export const projects = pgTable("projects", {
    * Use JOIN to get display name; no pmName string field.
    */
   pmUserId: integer("pmUserId"),
+  /** Product owner who approves product definition and design-scope changes. */
+  productOwnerUserId: integer("productOwnerUserId"),
   /** 项目描述 / 背景 / 客户 / 价值（立项基础信息） */
   description: text("description"),
   customer: varchar("customer", { length: 256 }),

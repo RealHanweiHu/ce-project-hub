@@ -477,6 +477,13 @@
       "when": 1784026800000,
       "tag": "0067_decouple_software_product_revision",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1784109600000,
+      "tag": "0068_project_product_owner",
+      "breakpoints": true
     }
   ]
 }
