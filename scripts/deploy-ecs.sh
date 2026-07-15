@@ -41,6 +41,11 @@ scp -q -P "$ECS_PORT" "${SSH_COMMON[@]}" .env.production "$ECS:$DIR/.env"
 echo "==> 构建并启动（app + minio，数据库用 RDS）"
 "${SSH_CMD[@]}" "cd $DIR && docker compose -f docker-compose.prod.yml up -d --build"
 
+echo "==> 预提交需跨事务生效的枚举值（兼容已存在数据库；全新数据库安全跳过）"
+ENUM_PREP_JS='const{Pool}=require("pg");const p=new Pool({connectionString:process.env.DATABASE_URL});const q="DO $block$ BEGIN IF EXISTS (SELECT 1 FROM pg_type WHERE typname = $enum$action_item_kind$enum$) THEN ALTER TYPE action_item_kind ADD VALUE IF NOT EXISTS $enum$condition_followup$enum$; END IF; END $block$;";p.query(q).then(()=>{console.log("enum precommit OK");return p.end()}).catch(e=>{console.error("ENUM_PRECOMMIT_ERR",e.code||"",e.message);process.exit(1)})'
+ENUM_PREP_B64=$(printf '%s' "$ENUM_PREP_JS" | base64 | tr -d '\n')
+"${SSH_CMD[@]}" "cd $DIR && docker compose -f docker-compose.prod.yml run --rm -T app sh -c 'echo $ENUM_PREP_B64 | base64 -d | node -'"
+
 echo "==> 应用数据库迁移（drizzle-orm migrator，幂等；prod 镜像不含 drizzle-kit 故走 runtime migrator）"
 MIGRATE_JS='const{drizzle}=require("drizzle-orm/node-postgres");const{migrate}=require("drizzle-orm/node-postgres/migrator");const{Pool}=require("pg");const p=new Pool({connectionString:process.env.DATABASE_URL});migrate(drizzle(p),{migrationsFolder:"./drizzle"}).then(()=>{console.log("migrated OK");return p.end()}).catch(e=>{console.error("MIGRATE_ERR",e.message);process.exit(1)})'
 MIGRATE_B64=$(printf '%s' "$MIGRATE_JS" | base64 | tr -d '\n')
