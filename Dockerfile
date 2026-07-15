@@ -7,7 +7,8 @@ ENV PNPM_CONFIG_FETCH_RETRIES=5 \
 RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY patches ./patches
-RUN pnpm install --frozen-lockfile
+RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
+    pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm build
 
@@ -21,7 +22,8 @@ ENV PNPM_CONFIG_FETCH_RETRIES=5 \
 RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY patches ./patches
-RUN pnpm install --frozen-lockfile --prod
+RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
+    pnpm install --frozen-lockfile --prod
 COPY --from=build /app/dist ./dist
 COPY drizzle ./drizzle
 COPY drizzle.config.ts ./
