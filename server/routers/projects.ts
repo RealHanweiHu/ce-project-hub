@@ -62,6 +62,10 @@ import {
 } from "../../shared/npd-v3";
 import { todayShanghai as todayInShanghaiISO } from "../../shared/shanghai-date";
 import { redlineKindForTask } from "../../shared/redline-four-eyes";
+import {
+  validateProjectExecutionBaseline,
+  type ProjectExecutionBaseline,
+} from "../../shared/project-track-tailoring";
 
 const DEFAULT_MEETING = { enabled: true, weekday: 3, time: "15:00", durationMin: 60, title: "项目周会" };
 const isoDateInput = z.string().refine(isISODate, "日期必须是有效的 YYYY-MM-DD");
@@ -204,6 +208,34 @@ const projectCreateInputSchema = projectInputSchema.extend({
   npdAttributes: npdAttributesSchema.optional(),
   npdTemplateDowngradeReason: z.string().trim().min(4).max(1000).optional(),
 });
+
+function requireValidDrvExecutionBaseline(
+  customFields: Record<string, unknown> | undefined,
+): ProjectExecutionBaseline {
+  const value = customFields?.projectExecutionBaseline;
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    (value as Record<string, unknown>).modelVersion !== "project-track-v1" ||
+    (value as Record<string, unknown>).status !== "frozen"
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "DRV 创建时必须提交已冻结的产品规格与六模块执行基线",
+    });
+  }
+
+  const baseline = value as ProjectExecutionBaseline;
+  const validation = validateProjectExecutionBaseline(baseline, { track: "drv" });
+  if (!validation.ok) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `DRV 执行基线无效：${validation.issues.map((issue) => issue.message).join("；")}`,
+    });
+  }
+  return baseline;
+}
 
 async function getConfirmedProductDefinitionSnapshotIfAvailable(productId: string, actorId: number) {
   const definition = await getProductDefinitionByProductId(productId);
@@ -635,6 +667,9 @@ export const projectsRouter = router({
           code: "BAD_REQUEST",
           message: "IDR 已停止新建：包装/标签/简单换色等小改请在产品库登记轻量变更；需要多人跨专业协作的外观翻新请选择 DRV",
         });
+      }
+      if (input.category === "derivative") {
+        requireValidDrvExecutionBaseline(input.customFields);
       }
       const linkedProduct = input.productId ? await getProductById(input.productId) : undefined;
       if (input.productId && !linkedProduct) {

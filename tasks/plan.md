@@ -123,14 +123,14 @@
 **Description:** 创建接口校验冻结基线和风险声明，数据库直接种最终有效阶段/任务，不再依赖建项后的策略应用。
 
 **Acceptance criteria:**
-- [ ] API 拒绝缺复用证据、非法模块组合和六模块全复用。
-- [ ] 创建后的任务数与共享组合器完全一致，项目无需再次应用策略。
-- [ ] DRV 创建时仍生成风险声明版本并运行风险/认证评估。
+- [x] API 拒绝缺复用证据、非法模块组合和六模块全复用。
+- [x] 创建后的任务数与共享组合器完全一致，项目无需再次应用策略。
+- [x] DRV 创建时仍生成风险声明版本并运行风险/认证评估。
 
 **Verification:**
-- [ ] RED→GREEN：`server/project-track-create.test.ts`
-- [ ] `pnpm exec vitest run server/project-track-create.test.ts server/sop-entry-hardcards.test.ts`
-- [ ] `pnpm check`
+- [x] RED→GREEN：`server/project-track-create.test.ts`
+- [x] `pnpm exec vitest run server/project-track-create.test.ts server/sop-entry-hardcards.test.ts`
+- [x] `pnpm check`
 
 **Dependencies:** Tasks 2, 3
 
@@ -319,14 +319,14 @@
 **Description:** 清除四级复用类型、策略应用、旧 resolver、自动豁免和设置面板，确保不存在旧任务 ID 的运行时入口。
 
 **Acceptance criteria:**
-- [ ] `DerivativeReuseLevel`、`derivativeReuseStrategy` 和旧策略 mutation 无生产引用。
-- [ ] 新项目不创建 skipped 任务或自动豁免记录。
-- [ ] 任务、交付物和排期均只读取新执行基线。
+- [x] `DerivativeReuseLevel`、`derivativeReuseStrategy` 和旧策略 mutation 无生产引用。
+- [x] 新项目不创建 skipped 任务或自动豁免记录。
+- [x] 任务、交付物和排期均只读取新执行基线。
 
 **Verification:**
-- [ ] 删除前测试先改为新行为并确认 RED，再完成 GREEN。
-- [ ] 符号搜索结果清零。
-- [ ] `pnpm check`
+- [x] 删除前测试先改为新行为并确认 RED，再完成 GREEN。
+- [x] 符号搜索结果清零。
+- [x] `pnpm check`
 
 **Dependencies:** Tasks 4, 7
 

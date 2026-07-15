@@ -14,7 +14,7 @@
 - [x] Task 1：项目执行基线领域模型与失败测试
 - [x] Task 2：项目产品负责人字段、迁移与角色测试
 - [x] Task 3：DRV 六阶段模板、交付物、Gate 和依赖
-- [ ] Task 4：DRV 创建服务端链路
+- [x] Task 4：DRV 创建服务端链路
 - [ ] Task 5：DRV 创建界面与任务预览
 - [ ] Checkpoint A：DRV 全链路验证
 - [ ] Task 6：JDM draft/frozen 六阶段模板
@@ -23,7 +23,7 @@
 - [ ] Task 9：OBT 四阶段模板和入口硬卡
 - [ ] Task 10：OBT 创建界面
 - [ ] Task 11：风险、认证和盲点链路保护
-- [ ] Task 12：删除旧 DRV 四级策略链路
+- [x] Task 12：删除旧 DRV 四级策略链路
 - [ ] Task 13：删除 NPD 分档和附加包死逻辑
 - [ ] Checkpoint B：第一增量全量验证与测试项目重建
 

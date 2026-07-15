@@ -5765,6 +5765,12 @@ function assertNoProtectedTailoring(project: ProjectTemplateLike, targets: Tailo
   assertNoNpdV3RedlineTailoring(project, targets);
 }
 
+function assertLegacyTailoringAllowed(project: ProjectTemplateLike): void {
+  if (project.category === "derivative") {
+    throw new Error("DRV 任务减负只允许通过创建时冻结的六模块执行基线；受控变更将在下一增量开放");
+  }
+}
+
 export async function listProjectTailoring(projectId: string): Promise<ProjectTailoring[]> {
   const db = await getDb();
   if (!db) return [];
@@ -5786,6 +5792,7 @@ export async function createProjectTailoringRequest(input: {
   if (!db) throw new Error("Database not available");
   const project = await getProjectById(input.projectId);
   if (!project) throw new Error("项目不存在");
+  assertLegacyTailoringAllowed(project);
   const targets = normalizeTailoringTargets(input.targets);
   if (targets.length === 0) throw new Error("请至少选择一个裁剪对象");
   assertNoProtectedTailoring(project, targets);
@@ -5893,6 +5900,7 @@ export async function reviewProjectTailoring(input: {
   if (!project) throw new Error("项目不存在");
 
   if (input.decision === "approved") {
+    assertLegacyTailoringAllowed(project);
     assertNoProtectedTailoring(project, tailoring.targets ?? []);
     await applyTailoringTargets(
       tailoring.projectId,
@@ -5974,6 +5982,9 @@ export async function setDeliverableOverride(input: {
   if (!db) throw new Error("Database not available");
   const project = await getProjectById(input.projectId);
   if (!project) throw new Error("项目不存在");
+  if (project.category === "derivative" && input.action !== "clear") {
+    throw new Error("DRV 任务与 Gate 交付物只允许通过创建时冻结的六模块执行基线确定；受控变更将在下一增量开放");
+  }
   const phases = getEffectivePhasesForProjectLike(project);
   if (!phases.some((phase) => phase.id === input.nodePhaseId)) {
     throw new Error("交付物提交节点不存在");
@@ -6068,8 +6079,19 @@ export async function applyGrandfatherExemptions(
 export async function getProjectEffectiveProcess(projectId: string): Promise<EffectiveProcess | null> {
   const project = await getProjectById(projectId);
   if (!project) return null;
-  const sets = await getApprovedTailoringSets(projectId);
-  const overrides = await listDeliverableOverrides(projectId);
+  let sets = {
+    tailoredPhaseIds: new Set<string>(),
+    tailoredTaskIds: new Set<string>(),
+  };
+  let overrides: ProjectDeliverableOverride[] = [];
+  // DRV 第一增量只有冻结的六模块执行基线可以减任务。即使数据库中存在
+  // 旧裁剪/豁免记录，读取路径也必须 fail closed，不能绕过公共任务和 Gate 证据。
+  if (project.category !== "derivative") {
+    [sets, overrides] = await Promise.all([
+      getApprovedTailoringSets(projectId),
+      listDeliverableOverrides(projectId),
+    ]);
+  }
   const highRisk = isHighSopRisk(project);
   const npdV3RedlinePolicy = getNpdV3RedlinePolicy(project);
   const basePhases = getEffectivePhasesForProjectLike(project);

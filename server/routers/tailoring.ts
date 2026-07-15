@@ -68,6 +68,15 @@ function assertAdmin(user: { role: string }) {
   }
 }
 
+function assertLegacyTailoringAvailable(project: ProjectTemplateLike) {
+  if (project.category === "derivative") {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "DRV 任务与 Gate 交付物由创建时冻结的六模块执行基线确定；受控变更将在下一增量开放",
+    });
+  }
+}
+
 function getEffectiveDeliverableLibrary(project: ProjectTemplateLike): string[] {
   const names = new Set<string>();
   for (const phase of getEffectivePhasesForProjectLike(project)) {
@@ -98,6 +107,7 @@ export const tailoringRouter = router({
     }))
     .mutation(async ({ ctx, input }) => {
       const project = await assertCanProposeOrOverride(input.projectId, ctx.user);
+      assertLegacyTailoringAvailable(project);
       const phases = getEffectivePhasesForProjectLike(project);
       const redlineTaskIds = getNpdV3RedlinePolicy(project).taskIds;
       const redlineTargets = input.targets.filter((target) => {
@@ -232,6 +242,7 @@ export const tailoringRouter = router({
     }))
     .mutation(async ({ ctx, input }) => {
       const project = await assertCanProposeOrOverride(input.projectId, ctx.user);
+      if (input.action !== "clear") assertLegacyTailoringAvailable(project);
       const phases = getEffectivePhasesForProjectLike(project);
       if (!phases.some((phase) => phase.id === input.nodePhaseId)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "交付物提交节点不存在" });

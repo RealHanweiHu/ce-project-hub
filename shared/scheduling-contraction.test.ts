@@ -82,7 +82,7 @@ describe("contractSchedTasks", () => {
     expect(sched.drv_common_dfm_validation_plan.start >= sched.drv_common_kickoff_gate.due).toBe(true);
     expect(sched.drv_common_evt_build.start >= sched.drv_common_design_gate.due).toBe(true);
     expect(
-      sched.drv_common_software_function_validation.start >=
+      sched.drv_common_software_validation.start >=
       sched.drv_software_special_validation.due
     ).toBe(true);
     expect(sched.drv_common_dvt_build.start >= sched.drv_common_evt_gate.due).toBe(true);

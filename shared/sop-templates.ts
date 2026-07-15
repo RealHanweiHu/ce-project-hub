@@ -2934,7 +2934,7 @@ const DERIVATIVE_MODULE_PACKS: Record<ProductModuleId, DerivativeModulePack> = {
         durationDays: 4,
       }),
       drvTask({
-        id: "drv_core_function_special_validation",
+        id: "drv_core_special_validation",
         name: "核心功能部件专项验证",
         desc: "验证性能、温升、噪音、寿命和装配接口",
         owner: "QA",
@@ -2958,7 +2958,7 @@ const DERIVATIVE_MODULE_PACKS: Record<ProductModuleId, DerivativeModulePack> = {
     ],
     evtTasks: [
       drvTask({
-        id: "drv_electronics_sample_integration",
+        id: "drv_electronics_sample_build",
         name: "电子硬件样件与联调",
         desc: "完成 PCBA 样件、上电、接口和软硬件联调",
         owner: "硬件研发",
@@ -2966,7 +2966,7 @@ const DERIVATIVE_MODULE_PACKS: Record<ProductModuleId, DerivativeModulePack> = {
         durationDays: 5,
       }),
       drvTask({
-        id: "drv_electronics_special_validation",
+        id: "drv_electronics_special_test",
         name: "电子硬件专项验证",
         desc: "验证电源、驱动、传感、EMC 前置和关键器件边界",
         owner: "QA",
@@ -2990,7 +2990,7 @@ const DERIVATIVE_MODULE_PACKS: Record<ProductModuleId, DerivativeModulePack> = {
     ],
     evtTasks: [
       drvTask({
-        id: "drv_software_development_integration",
+        id: "drv_software_dev_integration",
         name: "软件开发与联调",
         desc: "完成受控软件版本开发、烧录、接口和整机联调",
         owner: "软件研发",
@@ -3263,7 +3263,7 @@ export function buildDerivativePhases(
     }),
     ...evtModuleTasks,
     drvTask({
-      id: "drv_common_system_function_regression",
+      id: "drv_common_system_regression",
       name: "整机功能和兼容性回归",
       desc: "验证整机核心功能、性能、接口和模块集成兼容性",
       owner: "QA",
@@ -3272,7 +3272,7 @@ export function buildDerivativePhases(
       durationDays: 5,
     }),
     drvTask({
-      id: "drv_common_software_function_validation",
+      id: "drv_common_software_validation",
       name: "软件功能验证",
       desc: "独立验证软件功能、异常恢复、APP/OTA、连接和生产接口",
       owner: "QA",
@@ -3287,8 +3287,8 @@ export function buildDerivativePhases(
       owner: "项目经理",
       ownerRole: "project_manager",
       dependsOn: [
-        "drv_common_system_function_regression",
-        "drv_common_software_function_validation",
+        "drv_common_system_regression",
+        "drv_common_software_validation",
       ],
       durationDays: 3,
     }),
@@ -3304,7 +3304,7 @@ export function buildDerivativePhases(
       durationDays: 5,
     }),
     drvTask({
-      id: "drv_common_reliability_validation",
+      id: "drv_common_reliability_test",
       name: "可靠性验证（内部测试）",
       desc: "独立完成环境、机械、寿命和使用场景可靠性测试",
       owner: "QA",
@@ -3313,7 +3313,7 @@ export function buildDerivativePhases(
       durationDays: 8,
     }),
     drvTask({
-      id: "drv_common_safety_certification_validation",
+      id: "drv_common_safety_cert_test",
       name: "安规/认证验证",
       desc: "独立完成目标市场安规、认证、运输和证书覆盖验证",
       owner: "认证",
@@ -3322,7 +3322,7 @@ export function buildDerivativePhases(
       durationDays: 8,
     }),
     drvTask({
-      id: "drv_common_accessory_confirmation",
+      id: "drv_common_accessory_confirm",
       name: "配件确认",
       desc: "独立确认配件样件、接口、规格、数量和检验要求",
       owner: "SCM",
@@ -3355,9 +3355,9 @@ export function buildDerivativePhases(
       owner: "项目经理",
       ownerRole: "project_manager",
       dependsOn: [
-        "drv_common_reliability_validation",
-        "drv_common_safety_certification_validation",
-        "drv_common_accessory_confirmation",
+        "drv_common_reliability_test",
+        "drv_common_safety_cert_test",
+        "drv_common_accessory_confirm",
         "drv_common_packaging_validation",
         "drv_common_logistics_validation",
       ],
@@ -3375,7 +3375,7 @@ export function buildDerivativePhases(
       durationDays: 4,
     }),
     drvTask({
-      id: "drv_common_eol_test_program_confirmation",
+      id: "drv_common_eol_program_confirm",
       name: "EOL/测试程序确认",
       desc: "独立确认量产测试程序、覆盖率、限值和版本",
       owner: "PE",
@@ -3391,7 +3391,7 @@ export function buildDerivativePhases(
       ownerRole: "mfg",
       dependsOn: [
         "drv_common_fixture_confirmation",
-        "drv_common_eol_test_program_confirmation",
+        "drv_common_eol_program_confirm",
       ],
       durationDays: 6,
     }),

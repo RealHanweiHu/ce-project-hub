@@ -81,15 +81,15 @@ describe("DRV 六模块动态模板", () => {
         "drv_common_project_plan",
         "drv_common_dfm_validation_plan",
         "drv_common_evt_build",
-        "drv_common_system_function_regression",
-        "drv_common_software_function_validation",
-        "drv_common_reliability_validation",
-        "drv_common_safety_certification_validation",
-        "drv_common_accessory_confirmation",
+        "drv_common_system_regression",
+        "drv_common_software_validation",
+        "drv_common_reliability_test",
+        "drv_common_safety_cert_test",
+        "drv_common_accessory_confirm",
         "drv_common_packaging_validation",
         "drv_common_logistics_validation",
         "drv_common_fixture_confirmation",
-        "drv_common_eol_test_program_confirmation",
+        "drv_common_eol_program_confirm",
         "drv_common_pvt_trial",
         "drv_common_release_files",
       ]),
@@ -123,10 +123,10 @@ describe("DRV 六模块动态模板", () => {
     }
     expect([...tailoredIds]).toEqual(
       expect.arrayContaining([
-        "drv_common_system_function_regression",
-        "drv_common_software_function_validation",
-        "drv_common_reliability_validation",
-        "drv_common_safety_certification_validation",
+        "drv_common_system_regression",
+        "drv_common_software_validation",
+        "drv_common_reliability_test",
+        "drv_common_safety_cert_test",
         "drv_common_packaging_validation",
         "drv_common_logistics_validation",
       ]),
@@ -172,13 +172,13 @@ describe("DRV 六模块动态模板", () => {
   it("软件不复用时公共软件验证等待软件专项验证，复用时只等待 EVT Build", () => {
     const fullSoftwareValidation = buildDerivativePhases(allNotReused)
       .flatMap((phase) => phase.tasks)
-      .find((task) => task.id === "drv_common_software_function_validation");
+      .find((task) => task.id === "drv_common_software_validation");
     const reusedSoftwareValidation = buildDerivativePhases({
       ...allNotReused,
       software_connectivity: "reused",
     })
       .flatMap((phase) => phase.tasks)
-      .find((task) => task.id === "drv_common_software_function_validation");
+      .find((task) => task.id === "drv_common_software_validation");
 
     expect(fullSoftwareValidation?.dependsOn).toEqual(["drv_software_special_validation"]);
     expect(reusedSoftwareValidation?.dependsOn).toEqual(["drv_common_evt_build"]);
@@ -238,6 +238,7 @@ describe("DRV 六模块动态模板", () => {
           ),
         );
         for (const task of phase.tasks) {
+          expect(task.id.length, `${task.id} 超过数据库 taskId 长度`).toBeLessThanOrEqual(32);
           expect(TASK_DELIVERABLES[task.id]?.length, `${task.id} 缺任务交付物`).toBeGreaterThan(0);
           for (const dependencyId of task.dependsOn ?? []) {
             expect(ids.has(dependencyId), `${task.id}→${dependencyId} 悬空`).toBe(true);

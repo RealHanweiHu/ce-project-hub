@@ -428,7 +428,7 @@ describe("v3 版本路由与项目级访问器", () => {
     expect(ids).not.toEqual(expect.arrayContaining([...DERIVATIVE_MODULE_TASK_IDS.battery]));
     expect(ids).toEqual(expect.arrayContaining([
       ...DERIVATIVE_MODULE_TASK_IDS.core_function,
-      "drv_common_safety_certification_validation",
+      "drv_common_safety_cert_test",
     ]));
   });
 });
