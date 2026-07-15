@@ -1,5 +1,9 @@
 FROM node:22-alpine AS build
 WORKDIR /app
+ENV PNPM_CONFIG_FETCH_RETRIES=5 \
+    PNPM_CONFIG_FETCH_RETRY_MINTIMEOUT=10000 \
+    PNPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=120000 \
+    PNPM_CONFIG_FETCH_TIMEOUT=600000
 RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY patches ./patches
@@ -10,6 +14,10 @@ RUN pnpm build
 FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production
+ENV PNPM_CONFIG_FETCH_RETRIES=5 \
+    PNPM_CONFIG_FETCH_RETRY_MINTIMEOUT=10000 \
+    PNPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=120000 \
+    PNPM_CONFIG_FETCH_TIMEOUT=600000
 RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY patches ./patches
