@@ -20,6 +20,8 @@ import {
   submitProjectCloseHandoff,
   acceptProjectCloseHandoff,
   getProjectCloseHandoffReadiness,
+  openProjectGateSignoffRound,
+  upsertProjectGateSignoff,
 } from "./db";
 import { getReleaseGatePhase } from "../shared/sop-templates";
 import { EMPTY_CHANGE_SCOPE_DECLARATION, deriveSopRiskAssessment } from "../shared/sop-risk";
@@ -57,6 +59,21 @@ async function addGate(decision: "approved" | "conditional" | "rejected", roundN
     projectId, phaseId: "pvt", phaseName: "PVT", gateName: "MP准备就绪评审",
     reviewDate: "2026-06-01", decision, conditions: conditions ?? null, roundNumber, createdBy: 1,
   } as any);
+}
+async function approveCurrentGateSignoffs(projectId: string, phaseId: string) {
+  const round = await openProjectGateSignoffRound({ projectId, phaseId, openedBy: 1 });
+  for (const [slot, requirement] of Object.entries(round.requirements)) {
+    if (requirement === "not_applicable") continue;
+    await upsertProjectGateSignoff({
+      projectId,
+      phaseId,
+      roundNumber: round.roundNumber,
+      slot: slot as keyof typeof round.requirements,
+      requirement,
+      status: "approved",
+      signedBy: 1,
+    });
+  }
 }
 async function completeDeliverables(projectId: string = PRJ) {
   const phase = getReleaseGatePhase("npd")!;
@@ -378,6 +395,7 @@ describe("MP Release 正常发布（approved 普通路径）", () => {
     await acceptProjectCloseHandoff(PRJ2, 1);
     expect((await getProjectCloseHandoffReadiness(PRJ2)).ready).toBe(true);
 
+    await approveCurrentGateSignoffs(PRJ2, "mp");
     const close = await confirmGateReview(closeInput);
     expect(close.closed).toBe(true);
     expect((await getProjectById(PRJ2))?.archived).toBe(true);

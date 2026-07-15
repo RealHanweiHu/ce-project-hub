@@ -81,7 +81,13 @@ import {
 import {
   getPhasesForCategory,
   SOP_TEMPLATE_VERSION_CURRENT,
+  type SOPPhase,
 } from "../shared/sop-templates";
+import {
+  validateProjectExecutionBaseline,
+  type ProjectExecutionBaseline,
+} from "../shared/project-track-tailoring";
+import { isDeliverableSatisfied } from "../shared/deliverable-review";
 import { computeDownstreamImpact, type DownstreamImpactRow, type VariantStatus } from "../shared/oem-variant";
 import { computeGateReadiness, type GateReadiness } from "../shared/gate-readiness";
 import {
@@ -525,6 +531,16 @@ export async function getLatestProjectChangeScopeDeclaration(
   return row ?? null;
 }
 
+function isFrozenJdmProject(project: Pick<ProjectRow, "category" | "customFields">): boolean {
+  if (project.category !== "jdm") return false;
+  const customFields = project.customFields && typeof project.customFields === "object" && !Array.isArray(project.customFields)
+    ? project.customFields as Record<string, unknown>
+    : {};
+  const baseline = customFields.projectExecutionBaseline;
+  return !!baseline && typeof baseline === "object" && !Array.isArray(baseline) &&
+    (baseline as Record<string, unknown>).status === "frozen";
+}
+
 export async function createProjectChangeScopeDeclarationVersion(input: {
   projectId: string;
   declaration: ProjectChangeScopeDeclaration;
@@ -536,7 +552,37 @@ export async function createProjectChangeScopeDeclarationVersion(input: {
   const projectBefore = await getProjectById(input.projectId);
   if (!projectBefore) throw new Error("Project not found");
   const row = await db.transaction(async (tx) => {
+    // Gate progression, round creation, requirement additions and risk
+    // upgrades all serialize on the current phase before taking narrower
+    // locks. This makes the signoff snapshot a real point-in-time boundary.
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${input.projectId}:${projectBefore.currentPhase}`}))`);
     await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${input.projectId}:risk-scope`}))`);
+    const [lockedProject] = await tx.select().from(projects)
+      .where(eq(projects.id, input.projectId))
+      .limit(1);
+    if (!lockedProject) throw new Error("Project not found");
+    if (lockedProject.currentPhase !== projectBefore.currentPhase) {
+      throw new Error("项目阶段已变化，请刷新后重新提交风险声明");
+    }
+    if (isFrozenJdmProject(lockedProject)) {
+      throw new Error("JDM 产品定义与风险声明已在 Gate 冻结；受控变更将在下一增量开放");
+    }
+    // The assessment may have been derived before this request acquired the
+    // locks. Clamp it against the locked project so a stale concurrent
+    // standard assessment can never lower an already-high risk baseline.
+    const safetyRemainsHigh = lockedProject.safetyRiskLevel === "high";
+    const regulatoryRemainsHigh = lockedProject.regulatoryRiskLevel === "high";
+    const effectiveAssessment: SopRiskAssessment = {
+      ...input.assessment,
+      safetyRiskLevel: safetyRemainsHigh ? "high" : input.assessment.safetyRiskLevel,
+      regulatoryRiskLevel: regulatoryRemainsHigh ? "high" : input.assessment.regulatoryRiskLevel,
+      safetyReasons: safetyRemainsHigh
+        ? Array.from(new Set([...input.assessment.safetyReasons, "既有安全高风险基线（受控降级前保持）"]))
+        : input.assessment.safetyReasons,
+      regulatoryReasons: regulatoryRemainsHigh
+        ? Array.from(new Set([...input.assessment.regulatoryReasons, "既有法规高风险基线（受控降级前保持）"]))
+        : input.assessment.regulatoryReasons,
+    };
     const [latest] = await tx.select({
       maxVersion: drizzleSql<number>`coalesce(max(${projectChangeScopeDeclarations.version}), 0)::int`,
     }).from(projectChangeScopeDeclarations)
@@ -545,23 +591,29 @@ export async function createProjectChangeScopeDeclarationVersion(input: {
       projectId: input.projectId,
       version: (latest?.maxVersion ?? 0) + 1,
       declaration: input.declaration,
-      assessment: input.assessment,
-      ruleVersion: input.assessment.ruleVersion,
+      assessment: effectiveAssessment,
+      ruleVersion: effectiveAssessment.ruleVersion,
       declaredBy: input.declaredBy,
     } as InsertProjectChangeScopeDeclaration).returning();
     await tx.update(projects).set({
-      safetyRiskLevel: input.assessment.safetyRiskLevel,
-      regulatoryRiskLevel: input.assessment.regulatoryRiskLevel,
+      safetyRiskLevel: effectiveAssessment.safetyRiskLevel,
+      regulatoryRiskLevel: effectiveAssessment.regulatoryRiskLevel,
       updatedAt: new Date(),
     }).where(eq(projects.id, input.projectId));
+    const riskIncreased =
+      (lockedProject.safetyRiskLevel !== "high" && effectiveAssessment.safetyRiskLevel === "high") ||
+      (lockedProject.regulatoryRiskLevel !== "high" && effectiveAssessment.regulatoryRiskLevel === "high");
+    if (riskIncreased) {
+      await supersedeOpenGateSignoffRoundsInTransaction(
+        tx,
+        input.projectId,
+        input.declaredBy,
+        "风险升级：按新矩阵重开会签轮次",
+        lockedProject.currentPhase,
+      );
+    }
     return created;
   });
-  const riskIncreased =
-    (projectBefore.safetyRiskLevel !== "high" && input.assessment.safetyRiskLevel === "high") ||
-    (projectBefore.regulatoryRiskLevel !== "high" && input.assessment.regulatoryRiskLevel === "high");
-  if (riskIncreased) {
-    await supersedeOpenGateSignoffRounds(input.projectId, input.declaredBy, "风险升级：按新矩阵重开会签轮次");
-  }
   return row;
 }
 
@@ -573,13 +625,24 @@ export async function confirmProjectChangeScopeDeclaration(input: {
 }): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(projectChangeScopeDeclarations).set(input.kind === "engineering"
-    ? { engineeringConfirmedBy: input.confirmedBy, engineeringConfirmedAt: new Date() }
-    : { qaOrCertConfirmedBy: input.confirmedBy, qaOrCertConfirmedAt: new Date() })
-    .where(and(
-      eq(projectChangeScopeDeclarations.projectId, input.projectId),
-      eq(projectChangeScopeDeclarations.version, input.version),
-    ));
+  await db.transaction(async (tx) => {
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${input.projectId}:risk-scope`}))`);
+    const [lockedProject] = await tx.select({
+      category: projects.category,
+      customFields: projects.customFields,
+    }).from(projects).where(eq(projects.id, input.projectId)).limit(1);
+    if (!lockedProject) throw new Error("Project not found");
+    if (isFrozenJdmProject(lockedProject)) {
+      throw new Error("JDM 产品定义与风险声明已在 Gate 冻结；受控变更将在下一增量开放");
+    }
+    await tx.update(projectChangeScopeDeclarations).set(input.kind === "engineering"
+      ? { engineeringConfirmedBy: input.confirmedBy, engineeringConfirmedAt: new Date() }
+      : { qaOrCertConfirmedBy: input.confirmedBy, qaOrCertConfirmedAt: new Date() })
+      .where(and(
+        eq(projectChangeScopeDeclarations.projectId, input.projectId),
+        eq(projectChangeScopeDeclarations.version, input.version),
+      ));
+  });
 }
 
 export async function listProductCertificates(productId: string): Promise<ProductCertificate[]> {
@@ -4205,12 +4268,20 @@ async function buildGateReviewTraceSnapshot(exec: any, input: {
       ? { id: revision.id, revisionLabel: revision.revisionLabel, status: revision.status }
       : null;
   };
+  const projectCustomFields = project?.customFields && typeof project.customFields === "object" && !Array.isArray(project.customFields)
+    ? project.customFields as Record<string, unknown>
+    : {};
+  const executionBaseline = projectCustomFields.projectExecutionBaseline;
 
   return {
     capturedAt: new Date().toISOString(),
     projectId: input.projectId,
     phaseId: input.phaseId,
     gateName: input.gateName ?? "",
+    projectExecutionBaseline:
+      executionBaseline && typeof executionBaseline === "object" && !Array.isArray(executionBaseline)
+        ? executionBaseline as ProjectExecutionBaseline
+        : null,
     product: productRow
       ? {
         id: productRow.id,
@@ -4342,6 +4413,26 @@ async function buildProjectGateSignoffRequirementPreview(
   return buildGateSignoffRequirements(project.category, phase, project, additionMap);
 }
 
+async function buildProjectGateSignoffRequirementPreviewInTransaction(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  tx: any,
+  project: ProjectRow,
+  phaseId: string,
+): Promise<Record<GateSignoffSlot, GateSignoffRequirement>> {
+  const phase = getEffectivePhasesForProjectLike(project).find((item) => item.id === phaseId);
+  if (!phase) throw new Error("Gate phase not found");
+  const additions: ProjectGateSignoffAddition[] = await tx.select()
+    .from(projectGateSignoffAdditions)
+    .where(and(
+      eq(projectGateSignoffAdditions.projectId, project.id),
+      eq(projectGateSignoffAdditions.phaseId, phaseId),
+      eq(projectGateSignoffAdditions.active, true),
+    ))
+    .orderBy(projectGateSignoffAdditions.id);
+  const additionMap = Object.fromEntries(additions.map((row) => [row.slot, row.requirement])) as Partial<Record<GateSignoffSlot, GateSignoffRequirement>>;
+  return buildGateSignoffRequirements(project.category, phase, project, additionMap);
+}
+
 export async function getCurrentGateSignoffRound(projectId: string, phaseId: string): Promise<number> {
   const db = await getDb();
   if (!db) return 1;
@@ -4389,20 +4480,40 @@ export async function openProjectGateSignoffRound(input: {
 }): Promise<ProjectGateSignoffRound> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const [project, requirements, declaration] = await Promise.all([
-    getProjectById(input.projectId),
-    buildProjectGateSignoffRequirementPreview(input.projectId, input.phaseId),
-    getLatestProjectChangeScopeDeclaration(input.projectId),
-  ]);
-  if (!project) throw new Error("Project not found");
   return db.transaction(async (tx) => {
+    // A signoff round belongs only to the project's current Gate. Serialize
+    // opening with Gate completion so a stale screen cannot create a fresh
+    // round for a phase that has already advanced.
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${input.projectId}:${input.phaseId}`}))`);
     await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${input.projectId}:${input.phaseId}:signoff-round`}))`);
+    const [lockedProject] = await tx.select()
+      .from(projects)
+      .where(eq(projects.id, input.projectId))
+      .limit(1);
+    if (!lockedProject) throw new Error("Project not found");
+    if (lockedProject.currentPhase !== input.phaseId) {
+      throw new Error("只能为项目当前阶段开启 Gate 会签");
+    }
     const [existing] = await tx.select().from(projectGateSignoffRounds).where(and(
       eq(projectGateSignoffRounds.projectId, input.projectId),
       eq(projectGateSignoffRounds.phaseId, input.phaseId),
       eq(projectGateSignoffRounds.status, "open"),
     )).orderBy(desc(projectGateSignoffRounds.roundNumber)).limit(1);
     if (existing) return existing;
+
+    // Risk mutation follows phase -> risk lock order as well. Compute the
+    // requirement matrix and snapshot only after both locks are held, so a
+    // waiting opener cannot publish stale requirements.
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${input.projectId}:risk-scope`}))`);
+    const requirements = await buildProjectGateSignoffRequirementPreviewInTransaction(
+      tx,
+      lockedProject,
+      input.phaseId,
+    );
+    const [declaration] = await tx.select().from(projectChangeScopeDeclarations)
+      .where(eq(projectChangeScopeDeclarations.projectId, input.projectId))
+      .orderBy(desc(projectChangeScopeDeclarations.version))
+      .limit(1);
     const [roundMax] = await tx.select({
       value: drizzleSql<number>`greatest(
         coalesce((select max("roundNumber") from "project_gate_reviews" where "projectId" = ${input.projectId} and "phaseId" = ${input.phaseId}), 0),
@@ -4428,30 +4539,30 @@ export async function openProjectGateSignoffRound(input: {
       status: "open",
       requirements,
       riskSnapshot: {
-        safetyRiskLevel: project.safetyRiskLevel,
-        regulatoryRiskLevel: project.regulatoryRiskLevel,
+        safetyRiskLevel: lockedProject.safetyRiskLevel,
+        regulatoryRiskLevel: lockedProject.regulatoryRiskLevel,
         safetyReasons: declaration?.assessment.safetyReasons ?? [],
         regulatoryReasons: declaration?.assessment.regulatoryReasons ?? [],
       },
-      sopTemplateVersion: project.sopTemplateVersion,
+      sopTemplateVersion: lockedProject.sopTemplateVersion,
       openedBy: input.openedBy,
     } as InsertProjectGateSignoffRound).returning();
     return row;
   });
 }
 
-export async function supersedeOpenGateSignoffRounds(
+async function supersedeOpenGateSignoffRoundsInTransaction(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  tx: any,
   projectId: string,
   actorId: number,
   reason: string,
-  phaseId?: string,
+  phaseId: string,
 ): Promise<number> {
-  const db = await getDb();
-  if (!db) return 0;
   const where = phaseId
     ? and(eq(projectGateSignoffRounds.projectId, projectId), eq(projectGateSignoffRounds.phaseId, phaseId), eq(projectGateSignoffRounds.status, "open"))
     : and(eq(projectGateSignoffRounds.projectId, projectId), eq(projectGateSignoffRounds.status, "open"));
-  const rows = await db.update(projectGateSignoffRounds).set({
+  const rows = await tx.update(projectGateSignoffRounds).set({
     status: "superseded",
     supersededBy: actorId,
     supersededAt: new Date(),
@@ -4471,16 +4582,36 @@ export async function addProjectGateSignoffRequirement(input: {
 }): Promise<ProjectGateSignoffAddition> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const preview = await buildProjectGateSignoffRequirementPreview(input.projectId, input.phaseId);
-  const promoted = promoteGateSignoffRequirement(preview[input.slot], input.requirement);
-  if (promoted === preview[input.slot]) throw new Error("该槽位已达到相同或更高要求，不能降级或重复加签");
-  const [row] = await db.insert(projectGateSignoffAdditions).values({ ...input, active: true } as InsertProjectGateSignoffAddition)
-    .onConflictDoUpdate({
-      target: [projectGateSignoffAdditions.projectId, projectGateSignoffAdditions.phaseId, projectGateSignoffAdditions.slot],
-      set: { requirement: promoted, reason: input.reason, active: true, addedBy: input.addedBy, updatedAt: new Date() },
-    }).returning();
-  await supersedeOpenGateSignoffRounds(input.projectId, input.addedBy, `项目级加签：${input.slot}`, input.phaseId);
-  return row;
+  return db.transaction(async (tx) => {
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${input.projectId}:${input.phaseId}`}))`);
+    const [lockedProject] = await tx.select().from(projects)
+      .where(eq(projects.id, input.projectId))
+      .limit(1);
+    if (!lockedProject) throw new Error("Project not found");
+    if (lockedProject.currentPhase !== input.phaseId) {
+      throw new Error("Gate 已推进，不能修改历史阶段会签要求");
+    }
+    const preview = await buildProjectGateSignoffRequirementPreviewInTransaction(
+      tx,
+      lockedProject,
+      input.phaseId,
+    );
+    const promoted = promoteGateSignoffRequirement(preview[input.slot], input.requirement);
+    if (promoted === preview[input.slot]) throw new Error("该槽位已达到相同或更高要求，不能降级或重复加签");
+    const [row] = await tx.insert(projectGateSignoffAdditions).values({ ...input, active: true } as InsertProjectGateSignoffAddition)
+      .onConflictDoUpdate({
+        target: [projectGateSignoffAdditions.projectId, projectGateSignoffAdditions.phaseId, projectGateSignoffAdditions.slot],
+        set: { requirement: promoted, reason: input.reason, active: true, addedBy: input.addedBy, updatedAt: new Date() },
+      }).returning();
+    await supersedeOpenGateSignoffRoundsInTransaction(
+      tx,
+      input.projectId,
+      input.addedBy,
+      `项目级加签：${input.slot}`,
+      input.phaseId,
+    );
+    return row;
+  });
 }
 
 export async function listProjectGateSignoffs(
@@ -4511,28 +4642,92 @@ export async function upsertProjectGateSignoff(input: {
 }): Promise<ProjectGateSignoff> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const [row] = await db.insert(projectGateSignoffs).values({
-    ...input,
-    signedAt: input.status === "pending" || input.status === "not_applicable" ? null : new Date(),
-    note: input.note ?? null,
-  } as InsertProjectGateSignoff).onConflictDoUpdate({
-    target: [
-      projectGateSignoffs.projectId,
-      projectGateSignoffs.phaseId,
-      projectGateSignoffs.roundNumber,
-      projectGateSignoffs.slot,
-    ],
-    set: {
-      requirement: input.requirement,
-      status: input.status,
-      signedBy: input.signedBy,
+  return db.transaction(async (tx) => {
+    // Signatures and the final Gate decision share one project/phase lock. A
+    // signer that arrives after the review transaction completed must never
+    // be able to rewrite the now-historical round.
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${input.projectId}:${input.phaseId}`}))`);
+    const [lockedProject] = await tx.select({ currentPhase: projects.currentPhase })
+      .from(projects)
+      .where(eq(projects.id, input.projectId))
+      .limit(1);
+    if (!lockedProject) throw new Error("Project not found");
+    if (lockedProject.currentPhase !== input.phaseId) {
+      throw new Error("Gate 已推进，不能修改历史阶段会签");
+    }
+    const [round] = await tx.select({ status: projectGateSignoffRounds.status })
+      .from(projectGateSignoffRounds)
+      .where(and(
+        eq(projectGateSignoffRounds.projectId, input.projectId),
+        eq(projectGateSignoffRounds.phaseId, input.phaseId),
+        eq(projectGateSignoffRounds.roundNumber, input.roundNumber),
+      ))
+      .limit(1);
+    if (round?.status !== "open") {
+      throw new Error("Gate 会签轮次已关闭，不能修改签字");
+    }
+    const [row] = await tx.insert(projectGateSignoffs).values({
+      ...input,
       signedAt: input.status === "pending" || input.status === "not_applicable" ? null : new Date(),
       note: input.note ?? null,
-      viaDelegationId: input.viaDelegationId ?? null,
-      updatedAt: new Date(),
-    },
-  }).returning();
-  return row;
+    } as InsertProjectGateSignoff).onConflictDoUpdate({
+      target: [
+        projectGateSignoffs.projectId,
+        projectGateSignoffs.phaseId,
+        projectGateSignoffs.roundNumber,
+        projectGateSignoffs.slot,
+      ],
+      set: {
+        requirement: input.requirement,
+        status: input.status,
+        signedBy: input.signedBy,
+        signedAt: input.status === "pending" || input.status === "not_applicable" ? null : new Date(),
+        note: input.note ?? null,
+        viaDelegationId: input.viaDelegationId ?? null,
+        updatedAt: new Date(),
+      },
+    }).returning();
+    return row;
+  });
+}
+
+async function assertProjectGateSignoffsCompleteInTransaction(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  tx: any,
+  project: ProjectRow,
+  phaseId: string,
+): Promise<number> {
+  const [round] = await tx.select().from(projectGateSignoffRounds).where(and(
+    eq(projectGateSignoffRounds.projectId, project.id),
+    eq(projectGateSignoffRounds.phaseId, phaseId),
+    eq(projectGateSignoffRounds.status, "open"),
+  )).orderBy(desc(projectGateSignoffRounds.roundNumber)).limit(1);
+  if (!round) throw new Error("Gate 会签轮次未开启或已关闭");
+
+  const rows = await tx.select().from(projectGateSignoffs).where(and(
+    eq(projectGateSignoffs.projectId, project.id),
+    eq(projectGateSignoffs.phaseId, phaseId),
+    eq(projectGateSignoffs.roundNumber, round.roundNumber),
+  ));
+  const statuses = Object.fromEntries(rows.map((row: ProjectGateSignoff) => [row.slot, row.status])) as Partial<Record<GateSignoffSlot, GateSignoffStatus>>;
+  const readiness = gateSignoffsReady(round.requirements, statuses);
+  if (!readiness.ready) throw new Error(`Gate 会签未完成：${readiness.blockers.join("；")}`);
+
+  if (project.category === "jdm" && phaseId === "input") {
+    const productSignoff = rows.find((row: ProjectGateSignoff) => row.slot === "product");
+    if (productSignoff?.status !== "approved" || !productSignoff.signedBy) {
+      throw new Error("JDM 产品定义 Gate 缺少指定产品负责人的批准");
+    }
+    if (productSignoff.signedBy !== project.productOwnerUserId) {
+      const [signer] = await tx.select({ role: users.role }).from(users)
+        .where(eq(users.id, productSignoff.signedBy))
+        .limit(1);
+      if (!isSystemAdminRole(signer?.role)) {
+        throw new Error("JDM 产品定义 Gate 的 product 槽必须由指定产品负责人签署；系统管理员代签会保留审计记录");
+      }
+    }
+  }
+  return round.roundNumber;
 }
 
 export async function assertProjectGateSignoffsComplete(projectId: string, phaseId: string, actorId?: number): Promise<void> {
@@ -4552,17 +4747,28 @@ export async function assertProjectGateSignoffsComplete(projectId: string, phase
 /** Create a gate review */
 export type GateConditionInput = { description: string; ownerUserId: number; dueDate: string };
 
-export async function createProjectGateReview(
+export async function createProjectGateReviewWithRound(
   review: InsertProjectGateReview & { conditionItems?: GateConditionInput[] },
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  exec?: any
-): Promise<number> {
+  exec?: any,
+  requireCurrentPhase = true,
+): Promise<{ id: number; roundNumber: number }> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const { conditionItems = [], ...storedReview } = review;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const run = async (tx: any): Promise<number> => {
+  const run = async (tx: any): Promise<{ id: number; roundNumber: number }> => {
     await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${storedReview.projectId}:${storedReview.phaseId}`}))`);
+    if (requireCurrentPhase) {
+      const [lockedProject] = await tx.select({ currentPhase: projects.currentPhase })
+        .from(projects)
+        .where(eq(projects.id, storedReview.projectId))
+        .limit(1);
+      if (!lockedProject) throw new Error("Project not found");
+      if (lockedProject.currentPhase !== storedReview.phaseId) {
+        throw new Error("只能记录项目当前阶段的 Gate 评审");
+      }
+    }
     const [openRound] = await tx.select().from(projectGateSignoffRounds).where(and(
       eq(projectGateSignoffRounds.projectId, storedReview.projectId),
       eq(projectGateSignoffRounds.phaseId, storedReview.phaseId),
@@ -4634,11 +4840,20 @@ export async function createProjectGateReview(
         createdBy: storedReview.createdBy ?? storedReview.conditionOwnerUserId,
       }, tx);
     }
-    return reviewId;
+    return { id: reviewId, roundNumber: nextRound };
   };
   // exec 传入外层事务则并入之（advisory lock 绑定该事务）；否则自开事务
   if (exec) return run(exec);
   return db.transaction(run);
+}
+
+/** Backward-compatible id-only helper for callers that do not need round metadata. */
+export async function createProjectGateReview(
+  review: InsertProjectGateReview & { conditionItems?: GateConditionInput[] },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec?: any,
+): Promise<number> {
+  return (await createProjectGateReviewWithRound(review, exec, false)).id;
 }
 
 export async function listProjectStabilityReports(projectId: string): Promise<ProjectStabilityReport[]> {
@@ -4746,6 +4961,183 @@ export async function getProjectStabilityReadiness(projectId: string): Promise<{
   return { ready: blockers.length === 0, confirmedReportCount: confirmed.length, coveredDays, blockers };
 }
 
+export type JdmDefinitionFreezeInput = {
+  executionBaseline: ProjectExecutionBaseline;
+};
+
+const JDM_DEFINITION_REQUIRED_TASKS = [
+  ["jdm_product_spec", "产品规格书"],
+  ["jdm_csr", "CSR"],
+  ["drv_common_risk_scope", "风险声明"],
+  ["jdm_product_owner_approval", "产品负责人确认"],
+  ["jdm_customer_spec_csr_confirm", "客户确认"],
+] as const;
+
+const JDM_DEFINITION_REQUIRED_DELIVERABLES = [
+  "产品规格书 PSD",
+  "客户特殊要求清单 CSR",
+  "规格确认书（客户签字）",
+  "设计输入冻结确认（客户）",
+] as const;
+
+function buildFrozenJdmExecutionBaseline(
+  project: ProjectRow,
+  freeze: JdmDefinitionFreezeInput | null | undefined,
+  actorId: number,
+): ProjectExecutionBaseline {
+  const storedCustomFields = project.customFields && typeof project.customFields === "object" && !Array.isArray(project.customFields)
+    ? project.customFields as Record<string, unknown>
+    : {};
+  const storedBaseline = storedCustomFields.projectExecutionBaseline;
+  if (
+    !storedBaseline ||
+    typeof storedBaseline !== "object" ||
+    Array.isArray(storedBaseline) ||
+    (storedBaseline as Record<string, unknown>).modelVersion !== "project-track-v1" ||
+    (storedBaseline as Record<string, unknown>).status !== "draft"
+  ) {
+    throw new Error("JDM 产品定义 Gate 缺少可冻结的执行基线草稿");
+  }
+  const requested = freeze?.executionBaseline;
+  if (!requested || typeof requested !== "object" || Array.isArray(requested)) {
+    throw new Error("JDM 产品定义 Gate 必须提交完整的六模块执行基线");
+  }
+  const draft = storedBaseline as ProjectExecutionBaseline;
+  const baseline: ProjectExecutionBaseline = {
+    ...requested,
+    modelVersion: "project-track-v1",
+    status: "frozen",
+    // 客户原始概念快照在创建时已经冻结，Gate 只能沿用，不能被请求覆盖。
+    customerConceptRef: draft.customerConceptRef,
+    frozenAt: new Date().toISOString(),
+    frozenBy: actorId,
+  };
+  const validation = validateProjectExecutionBaseline(baseline, { track: "jdm" });
+  if (!validation.ok) {
+    throw new Error(`JDM 六模块执行基线无效：${validation.issues.map(issue => issue.message).join("；")}`);
+  }
+  return baseline;
+}
+
+async function assertJdmDefinitionGateHardcards(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  tx: any,
+  projectId: string,
+): Promise<number> {
+  const taskIds = JDM_DEFINITION_REQUIRED_TASKS.map(([taskId]) => taskId);
+  const taskRows: Array<{ taskId: string; status: string; completed: boolean }> = await tx
+    .select({ taskId: projectTasks.taskId, status: projectTasks.status, completed: projectTasks.completed })
+    .from(projectTasks)
+    .where(and(
+      eq(projectTasks.projectId, projectId),
+      eq(projectTasks.phaseId, "input"),
+      inArray(projectTasks.taskId, taskIds),
+    ));
+  const taskById = new Map(taskRows.map(row => [row.taskId, row]));
+  const incomplete = JDM_DEFINITION_REQUIRED_TASKS
+    .filter(([taskId]) => {
+      const task = taskById.get(taskId);
+      return !task || (task.status !== "done" && !task.completed);
+    })
+    .map(([, label]) => label);
+  if (incomplete.length > 0) {
+    throw new Error(`JDM 产品定义 Gate 未就绪：${incomplete.join("、")}尚未完成`);
+  }
+
+  const deliverableNames = [...JDM_DEFINITION_REQUIRED_DELIVERABLES];
+  const [files, reviews] = await Promise.all([
+    tx.select({ deliverableName: projectFiles.deliverableName, createdAt: projectFiles.createdAt })
+      .from(projectFiles)
+      .where(and(
+        eq(projectFiles.projectId, projectId),
+        eq(projectFiles.phaseId, "input"),
+        inArray(projectFiles.deliverableName, deliverableNames),
+      )),
+    tx.select({
+      deliverableName: projectDeliverableReviews.deliverableName,
+      status: projectDeliverableReviews.status,
+      reviewedAt: projectDeliverableReviews.reviewedAt,
+    }).from(projectDeliverableReviews)
+      .where(and(
+        eq(projectDeliverableReviews.projectId, projectId),
+        eq(projectDeliverableReviews.phaseId, "input"),
+        inArray(projectDeliverableReviews.deliverableName, deliverableNames),
+      )),
+  ]);
+  const latestFileByName = new Map<string, Date>();
+  for (const file of files) {
+    if (!file.deliverableName) continue;
+    const current = latestFileByName.get(file.deliverableName);
+    if (!current || file.createdAt > current) latestFileByName.set(file.deliverableName, file.createdAt);
+  }
+  const reviewByName = new Map<string, {
+    deliverableName: string;
+    status: "pending" | "approved" | "rejected";
+    reviewedAt: Date | null;
+  }>(reviews.map((review: {
+    deliverableName: string;
+    status: "pending" | "approved" | "rejected";
+    reviewedAt: Date | null;
+  }) => [review.deliverableName, review] as const));
+  const missingDeliverables = deliverableNames.filter(name => {
+    const fileAt = latestFileByName.get(name);
+    const review = reviewByName.get(name);
+    const reviewStatus = fileAt && review?.status === "approved" && review.reviewedAt && review.reviewedAt >= fileAt
+      ? "approved"
+      : review?.status === "approved"
+        ? null
+        : review?.status ?? null;
+    return !isDeliverableSatisfied(!!fileAt, reviewStatus);
+  });
+  if (missingDeliverables.length > 0) {
+    throw new Error(`JDM 产品定义 Gate 缺少已审核证据：${missingDeliverables.join("、")}`);
+  }
+
+  // 与风险版本写入使用同一把锁，保证“取最新版本→冻结 Gate”期间不会
+  // 并发插入另一版声明，留下无法证明 Gate 采用哪一版的审计歧义。
+  await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${projectId}:risk-scope`}))`);
+  const [riskDeclaration] = await tx.select({
+    version: projectChangeScopeDeclarations.version,
+    engineeringConfirmedAt: projectChangeScopeDeclarations.engineeringConfirmedAt,
+    qaOrCertConfirmedAt: projectChangeScopeDeclarations.qaOrCertConfirmedAt,
+  })
+    .from(projectChangeScopeDeclarations)
+    .where(eq(projectChangeScopeDeclarations.projectId, projectId))
+    .orderBy(desc(projectChangeScopeDeclarations.version))
+    .limit(1);
+  if (!riskDeclaration) {
+    throw new Error("JDM 产品定义 Gate 缺少正式风险声明与评估结论");
+  }
+  if (!riskDeclaration.engineeringConfirmedAt || !riskDeclaration.qaOrCertConfirmedAt) {
+    throw new Error("JDM 产品定义 Gate 的最新风险声明尚未完成研发与 QA/认证确认");
+  }
+  return riskDeclaration.version;
+}
+
+async function seedJdmExecutionPhases(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  tx: any,
+  projectId: string,
+  phases: SOPPhase[],
+  createdBy: number,
+): Promise<void> {
+  for (const phase of phases.filter(item => item.id !== "input")) {
+    // 不吞掉唯一键冲突：若数据库已有不完整的未来阶段残片，本次 Gate
+    // 必须整体回滚，由管理员先清理脏数据，不能伪装成一次成功的冻结。
+    await tx.insert(projectPhases).values({ projectId, phaseId: phase.id });
+    for (const task of phase.tasks) {
+      await tx.insert(projectTasks).values({
+        projectId,
+        phaseId: phase.id,
+        taskId: task.id,
+        completed: false,
+        visibleRoles: task.visibleRoles,
+        updatedBy: createdBy,
+      });
+    }
+  }
+}
+
 /**
  * 原子化「Gate 通过/有条件通过/不通过」：记录评审 → (非不通过时)标记 gate task 完成 → (复审当前阶段时)推进 currentPhase。
  * 三笔写入在同一事务：任一步失败整体回滚，不留「评审已记录但任务/阶段没动」的中间态
@@ -4767,6 +5159,7 @@ export async function confirmGateReview(input: {
   conditionItems?: GateConditionInput[];
   notes?: string | null;
   createdBy: number;
+  jdmDefinitionFreeze?: JdmDefinitionFreezeInput | null;
 }): Promise<{ reviewId: number; roundNumber: number; advancedTo: string | null; closed: boolean }> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -4803,10 +5196,26 @@ export async function confirmGateReview(input: {
     if (blockers.length > 0) throw new Error(`项目关闭条件未满足：${blockers.join("；")}`);
   }
 
-  const { reviewId, advancedTo, closed } = await db.transaction(async (tx) => {
-    const phases = projectTemplatePhases;
-    const phase = phases.find((item) => item.id === input.phaseId);
+  const { reviewId, roundNumber, advancedTo, closed, generatedJdmExecution } = await db.transaction(async (tx) => {
+    // 锁必须先于事务内的项目读取。否则两个并发请求都可能在事务外读到
+    // currentPhase=input，再各自写一轮评审和后续阶段。
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${input.projectId}:${input.phaseId}`}))`);
+    const [lockedProject] = await tx.select().from(projects)
+      .where(eq(projects.id, input.projectId))
+      .limit(1);
+    if (!lockedProject) throw new Error("Project not found");
+    if (lockedProject.currentPhase !== input.phaseId) {
+      throw new Error("只能裁决项目当前阶段的 Gate");
+    }
+
+    let phases = getEffectivePhasesForProjectLike(lockedProject);
+    let phase = phases.find((item) => item.id === input.phaseId);
     if (!phase) throw new Error("Gate phase not found");
+    const lockedGateTaskId = phase.gateTaskId;
+    if (!lockedGateTaskId) throw new Error("Gate task not found in effective phase");
+    if (input.gateTaskId && input.gateTaskId !== lockedGateTaskId) {
+      throw new Error("Gate task does not match the project's effective phase");
+    }
     if (phase.isCloseGate && input.decision === "conditional") {
       throw new Error("项目关闭 Gate 不允许有条件通过；请先关闭遗留条件或选择不通过");
     }
@@ -4817,10 +5226,65 @@ export async function confirmGateReview(input: {
         .limit(1);
       if (released.length === 0) throw new Error("项目尚未完成产品交付，不能关闭归档项目");
     }
+
+    let generatedJdmExecution = false;
+    let validatedSignoffRound: number | null = null;
+    if (
+      lockedProject.category === "jdm" &&
+      input.phaseId === "input" &&
+      lockedGateTaskId === "jdm_product_definition_gate" &&
+      input.decision !== "rejected"
+    ) {
+      const frozenBaseline = buildFrozenJdmExecutionBaseline(
+        lockedProject,
+        input.jdmDefinitionFreeze,
+        input.createdBy,
+      );
+      const riskScopeVersion = await assertJdmDefinitionGateHardcards(tx, input.projectId);
+      frozenBaseline.riskScopeVersion = riskScopeVersion;
+      // Product-owner/customer/professional signoffs are checked again under
+      // the same lock that freezes the definition and completes the round.
+      // This closes the gap between the router readiness check and commit.
+      validatedSignoffRound = await assertProjectGateSignoffsCompleteInTransaction(
+        tx,
+        lockedProject,
+        input.phaseId,
+      );
+      const customFields = lockedProject.customFields && typeof lockedProject.customFields === "object" && !Array.isArray(lockedProject.customFields)
+        ? lockedProject.customFields as Record<string, unknown>
+        : {};
+      const frozenCustomFields = {
+        ...customFields,
+        projectExecutionBaseline: frozenBaseline,
+      };
+      const frozenProject = { ...lockedProject, customFields: frozenCustomFields };
+      phases = getEffectivePhasesForProjectLike(frozenProject);
+      phase = phases.find((item) => item.id === input.phaseId);
+      if (!phase || phases.length <= 1 || phases[1]?.id !== "design") {
+        throw new Error("JDM 冻结执行基线未能生成有效的 P2-P6 流程");
+      }
+      // 先在事务内写正式基线，使 Gate 追溯快照读取到冻结后的事实；若
+      // 后续任一阶段/任务冲突，整个事务会连同基线更新一起回滚。
+      await tx.update(projects).set({
+        customFields: frozenCustomFields,
+        updatedAt: new Date(),
+      }).where(eq(projects.id, input.projectId));
+      await seedJdmExecutionPhases(tx, input.projectId, phases, input.createdBy);
+      generatedJdmExecution = true;
+    }
+
+    if (input.decision !== "rejected" && validatedSignoffRound === null) {
+      validatedSignoffRound = await assertProjectGateSignoffsCompleteInTransaction(
+        tx,
+        lockedProject,
+        input.phaseId,
+      );
+    }
+
     const gateTaskWhere = and(
       eq(projectTasks.projectId, input.projectId),
       eq(projectTasks.phaseId, input.phaseId),
-      eq(projectTasks.taskId, gateTaskId),
+      eq(projectTasks.taskId, lockedGateTaskId),
     );
     const [gateTask] = await tx.select({ id: projectTasks.id })
       .from(projectTasks)
@@ -4840,7 +5304,7 @@ export async function confirmGateReview(input: {
       approvalDecidedAt: null,
     }).where(gateTaskWhere);
     // 1) 记录评审（顾问锁并入本事务，自动算 roundNumber）
-    const reviewId = await createProjectGateReview({
+    const createdReview = await createProjectGateReviewWithRound({
       projectId: input.projectId,
       phaseId: input.phaseId,
       phaseName: input.phaseName ?? "",
@@ -4855,14 +5319,18 @@ export async function confirmGateReview(input: {
       notes: input.notes ?? null,
       createdBy: input.createdBy,
     }, tx);
+    const reviewId = createdReview.id;
+    if (validatedSignoffRound !== null && createdReview.roundNumber !== validatedSignoffRound) {
+      throw new Error("Gate 会签轮次与评审轮次不一致，请刷新后重试");
+    }
 
     let advancedTo: string | null = null;
     let closed = false;
     if (input.decision !== "rejected") {
       // 2) 标记 gate task 完成
-      await setTaskCompletion(input.projectId, input.phaseId, gateTaskId, true, input.createdBy, tx);
+      await setTaskCompletion(input.projectId, input.phaseId, lockedGateTaskId, true, input.createdBy, tx);
       // 3) 仅当复审的是「当前阶段」且存在下一阶段时才推进
-      if (project.currentPhase === input.phaseId) {
+      if (lockedProject.currentPhase === input.phaseId) {
         const idx = phases.findIndex((p) => p.id === input.phaseId);
         const next = idx >= 0 && idx < phases.length - 1 ? phases[idx + 1] : null;
         if (next) {
@@ -4870,7 +5338,7 @@ export async function confirmGateReview(input: {
           advancedTo = next.id;
         } else if (phase.isCloseGate && input.decision === "approved") {
           await updateProject(input.projectId, { archived: true }, tx);
-          if (project.productId) {
+          if (lockedProject.productId) {
             const [handoff] = await tx.select().from(projectCloseHandoffs)
               .where(and(
                 eq(projectCloseHandoffs.projectId, input.projectId),
@@ -4883,7 +5351,7 @@ export async function confirmGateReview(input: {
                 maintenanceOwnerUserId: handoff.maintenanceOwnerUserId,
                 afterSalesOwnerUserId: handoff.afterSalesOwnerUserId,
                 updatedAt: new Date(),
-              }).where(eq(products.id, project.productId));
+              }).where(eq(products.id, lockedProject.productId));
             }
           }
           closed = true;
@@ -4894,17 +5362,33 @@ export async function confirmGateReview(input: {
       // transaction as the review so task status and the review round cannot
       // diverge. A later approved/conditional round uses setTaskCompletion
       // above and moves the task to done.
-      await upsertProjectTask(input.projectId, input.phaseId, gateTaskId, {
+      await upsertProjectTask(input.projectId, input.phaseId, lockedGateTaskId, {
         status: "blocked",
         completedAt: null,
         updatedBy: input.createdBy,
       }, tx);
     }
-    return { reviewId, advancedTo, closed };
+    return {
+      reviewId,
+      roundNumber: createdReview.roundNumber,
+      advancedTo,
+      closed,
+      generatedJdmExecution,
+    };
   });
 
-  const reviews = await getProjectGateReviews(input.projectId, input.phaseId);
-  const roundNumber = reviews.find((r) => r.id === reviewId)?.roundNumber ?? 1;
+  // setTaskCompletion 在事务内无法从全局连接看到尚未提交的冻结基线；提交后
+  // 重新计算一次，确保 P2-P6 的依赖状态使用正式 JDM 模板。
+  if (generatedJdmExecution) {
+    try {
+      await refreshProjectTaskStatuses(input.projectId);
+    } catch (error) {
+      // Gate 主事务已经提交，提交后派生状态刷新不能把真实成功伪装成失败。
+      // 后续读取/定时刷新仍会按冻结后的模板自愈。
+      console.warn("[jdm-gate] post-commit task status refresh failed (non-fatal):", error);
+    }
+  }
+
   return { reviewId, roundNumber, advancedTo, closed };
 }
 

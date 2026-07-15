@@ -19,6 +19,7 @@ import { SYSTEM_ROLES, type SystemRole } from "../shared/system-roles";
 import type { GateSignoffRequirement, GateSignoffRoundStatus, GateSignoffSlot, GateSignoffStatus } from "../shared/gate-signoffs";
 import type { ProjectChangeScopeDeclaration, ProjectSopRiskLevel, SopRiskAssessment } from "../shared/sop-risk";
 import type { CertificateScopeType, CertificateStatus, CertificateType } from "../shared/certification";
+import type { ProjectExecutionBaseline } from "../shared/project-track-tailoring";
 import { PROJECT_MEMBER_ROLES, type ProjectMemberRole } from "../shared/project-roles";
 
 export { PROJECT_MEMBER_ROLES } from "../shared/project-roles";
@@ -1187,6 +1188,8 @@ export type GateReviewTraceSnapshot = {
   projectId: string;
   phaseId: string;
   gateName: string;
+  /** Frozen JDM/DRV execution baseline, including the bound risk declaration version. */
+  projectExecutionBaseline?: ProjectExecutionBaseline | null;
   product: {
     id: string;
     productNumber: string;

@@ -18,7 +18,7 @@
 - [x] Task 5：DRV 创建界面与任务预览
 - [x] Checkpoint A：DRV 全链路验证
 - [x] Task 6：JDM draft/frozen 六阶段模板
-- [ ] Task 7：JDM P1 Gate 后事务化生成 P2-P6
+- [x] Task 7：JDM P1 Gate 后事务化生成 P2-P6
 - [ ] Task 8：JDM 定义、预览、冻结与只读界面
 - [ ] Task 9：OBT 四阶段模板和入口硬卡
 - [ ] Task 10：OBT 创建界面

@@ -65,6 +65,28 @@ describe("Gate 召集/决策权拆分", () => {
     expect(r.success).toBe(true);
   });
 
+  it("project_manager 不能用 rejected 入口为历史阶段新增评审", async () => {
+    await expect(gates(PM).create({
+      projectId: PROJ, phaseId: "design", phaseName: "设计", gateName: "设计冻结",
+      reviewDate: "2026-07-06", decision: "rejected", notes: "尝试补写历史 Gate",
+    })).rejects.toThrow(/当前阶段/);
+
+    const db = await getDb();
+    const rows = await db!.select().from(projectGateReviews).where(eq(projectGateReviews.projectId, PROJ));
+    expect(rows.filter((row) => row.phaseId === "design")).toHaveLength(0);
+  });
+
+  it("project_manager 不能用 rejected 入口为未来阶段预写评审", async () => {
+    await expect(gates(PM).create({
+      projectId: PROJ, phaseId: "dvt", phaseName: "DVT", gateName: "DVT Gate",
+      reviewDate: "2026-07-06", decision: "rejected", notes: "尝试预写未来 Gate",
+    })).rejects.toThrow(/当前阶段/);
+
+    const db = await getDb();
+    const rows = await db!.select().from(projectGateReviews).where(eq(projectGateReviews.projectId, PROJ));
+    expect(rows.filter((row) => row.phaseId === "dvt")).toHaveLength(0);
+  });
+
   it("project_manager 不能给出 approved 决策", async () => {
     await expect(gates(PM).create({
       projectId: PROJ, phaseId: "evt", phaseName: "EVT", gateName: "EVT Gate",

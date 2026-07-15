@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import {
   getDb, confirmGateReview, getGateReadiness, getProjectGateReviews, getProjectById,
   getProjectTasks, openProjectGateSignoffRound, setTaskApprovalConfig,
+  upsertProjectGateSignoff,
 } from "./db";
 import { activityLogs, projects, projectTasks } from "../drizzle/schema";
 
@@ -15,6 +16,27 @@ import { activityLogs, projects, projectTasks } from "../drizzle/schema";
 const PROJECT = `gate-atomic-${Date.now()}`;
 const RECOVERY_PROJECT = `gate-recovery-${Date.now()}`;
 const OWNER = 985001;
+
+async function approveSignoffRound(projectId: string) {
+  const round = await openProjectGateSignoffRound({
+    projectId,
+    phaseId: "design",
+    openedBy: OWNER,
+  });
+  for (const [slot, requirement] of Object.entries(round.requirements)) {
+    if (requirement === "not_applicable") continue;
+    await upsertProjectGateSignoff({
+      projectId,
+      phaseId: "design",
+      roundNumber: round.roundNumber,
+      slot: slot as keyof typeof round.requirements,
+      requirement,
+      status: "approved",
+      signedBy: OWNER,
+    });
+  }
+  return round;
+}
 
 beforeAll(async () => {
   const db = await getDb();
@@ -31,6 +53,7 @@ beforeAll(async () => {
     { projectId: PROJECT, phaseId: "design", taskId: "d8" },
     { projectId: RECOVERY_PROJECT, phaseId: "design", taskId: "d8" },
   ]);
+  await approveSignoffRound(PROJECT);
 });
 
 afterAll(async () => {
@@ -124,11 +147,7 @@ describe("confirmGateReview atomicity", () => {
     expect(readiness?.dimensions.find((dimension) => dimension.dimension === "review_conditions"))
       .toMatchObject({ ok: false });
 
-    await openProjectGateSignoffRound({
-      projectId: RECOVERY_PROJECT,
-      phaseId: "design",
-      openedBy: OWNER,
-    });
+    await approveSignoffRound(RECOVERY_PROJECT);
     readiness = await getGateReadiness(RECOVERY_PROJECT, "design");
     expect(readiness?.dimensions.find((dimension) => dimension.dimension === "review_conditions"))
       .toMatchObject({ ok: true });

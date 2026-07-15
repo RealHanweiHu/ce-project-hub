@@ -243,6 +243,65 @@ function requireValidDrvExecutionBaseline(
   return baseline;
 }
 
+function requireValidJdmDraftExecutionBaseline(
+  customFields: Record<string, unknown> | undefined,
+): ProjectExecutionBaseline {
+  const value = customFields?.projectExecutionBaseline;
+  const record = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+  if (
+    !record ||
+    record.modelVersion !== "project-track-v1" ||
+    record.status !== "draft" ||
+    typeof record.customerConceptRef !== "string" ||
+    !record.customerConceptRef.trim()
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "JDM 创建时必须保存客户概念/ID 原始输入引用，并以 project-track-v1 草稿基线进入产品定义阶段",
+    });
+  }
+
+  const { frozenAt: _frozenAt, frozenBy: _frozenBy, ...draft } = value as ProjectExecutionBaseline;
+  return {
+    ...draft,
+    modelVersion: "project-track-v1",
+    status: "draft",
+    customerConceptRef: record.customerConceptRef.trim(),
+  };
+}
+
+function isEmptyChangeScopeDeclaration(
+  declaration: ReturnType<typeof changeScopeDeclarationSchema.parse>,
+): boolean {
+  return !declaration.batteryCellChange &&
+    !declaration.batteryPackOrBmsChange &&
+    !declaration.protectionParameterChange &&
+    !declaration.powerOrThermalBoundaryChange &&
+    !declaration.pressurizedStructureChange &&
+    !declaration.targetMarketExpansion &&
+    !declaration.criticalSafetySupplierChange &&
+    !declaration.safetyRelatedSoftwareChange &&
+    !declaration.eolTestChange &&
+    !declaration.otherSafetyOrRegulatoryChange &&
+    declaration.targetMarkets.length === 0 &&
+    !declaration.notes?.trim();
+}
+
+function hasFrozenJdmExecutionBaseline(project: {
+  category: string;
+  customFields: unknown;
+}): boolean {
+  if (project.category !== "jdm") return false;
+  const customFields = project.customFields && typeof project.customFields === "object" && !Array.isArray(project.customFields)
+    ? project.customFields as Record<string, unknown>
+    : {};
+  const baseline = customFields.projectExecutionBaseline;
+  return !!baseline && typeof baseline === "object" && !Array.isArray(baseline) &&
+    (baseline as Record<string, unknown>).status === "frozen";
+}
+
 async function getConfirmedProductDefinitionSnapshotIfAvailable(productId: string, actorId: number) {
   const definition = await getProductDefinitionByProductId(productId);
   if (!definition || definition.status !== "confirmed") {
@@ -677,11 +736,23 @@ export const projectsRouter = router({
       const drvExecutionBaseline = input.category === "derivative"
         ? requireValidDrvExecutionBaseline(input.customFields, ctx.user.id)
         : null;
+      const jdmDraftExecutionBaseline = input.category === "jdm"
+        ? requireValidJdmDraftExecutionBaseline(input.customFields)
+        : null;
       const linkedProduct = input.productId ? await getProductById(input.productId) : undefined;
       if (input.productId && !linkedProduct) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "关联产品不存在" });
       }
-      if (["jdm", "obt"].includes(input.category)) {
+      if (input.category === "jdm") {
+        const missing = [
+          !input.commercialBoundary?.trim() && "商务边界",
+          !input.customerSignoffOwnerUserId && "客户签核责任人",
+        ].filter(Boolean);
+        if (missing.length > 0) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: `JDM 原始输入未冻结：${missing.join("、")}` });
+        }
+      }
+      if (input.category === "obt") {
         const missing = [
           !input.customerInputVersion?.trim() && "客户输入版本",
           !input.customerPartNumber?.trim() && "客户料号",
@@ -689,7 +760,7 @@ export const projectsRouter = router({
           !input.customerSignoffOwnerUserId && "客户签核责任人",
         ].filter(Boolean);
         if (missing.length > 0) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: `JDM/OBT 入口未冻结：${missing.join("、")}` });
+          throw new TRPCError({ code: "BAD_REQUEST", message: `OBT 设计输入未冻结：${missing.join("、")}` });
         }
       }
       const handoffSnapshot = input.productId
@@ -729,7 +800,15 @@ export const projectsRouter = router({
               ...(input.customFields ?? {}),
               projectExecutionBaseline: drvExecutionBaseline,
             }
+          : input.category === "jdm"
+            ? {
+                ...(input.customFields ?? {}),
+                projectExecutionBaseline: jdmDraftExecutionBaseline,
+              }
           : (input.customFields ?? {});
+      const riskDeclarationSeed = input.category === "jdm" && isEmptyChangeScopeDeclaration(changeScopeDeclaration)
+        ? undefined
+        : { declaration: changeScopeDeclaration, assessment: riskAssessment };
       await createProjectWithSeed({
         id: input.id,
         name: input.name,
@@ -761,7 +840,7 @@ export const projectsRouter = router({
         targetDate: input.targetDate ?? null,
         createdBy: ctx.user.id,
         archived: false,
-      }, input.category, ctx.user.id, { declaration: changeScopeDeclaration, assessment: riskAssessment });
+      }, input.category, ctx.user.id, riskDeclarationSeed);
       // 选了项目经理且不是创建者本人 → 自动加入项目成员并赋 project_manager 角色（否则对方看不到项目）
       if (input.pmUserId && input.pmUserId !== ctx.user.id) {
         try { await ensureProjectMember(input.id, input.pmUserId, "project_manager", ctx.user.id); }
@@ -831,10 +910,13 @@ export const projectsRouter = router({
         });
       }
       if (
-        (existing.safetyRiskLevel === "high" && input.safetyRiskLevel === "standard") ||
-        (existing.regulatoryRiskLevel === "high" && input.regulatoryRiskLevel === "standard")
+        (input.safetyRiskLevel !== undefined && input.safetyRiskLevel !== existing.safetyRiskLevel) ||
+        (input.regulatoryRiskLevel !== undefined && input.regulatoryRiskLevel !== existing.regulatoryRiskLevel)
       ) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "系统或项目已升级为高风险，不能通过项目编辑降级；降级需走 QA/认证联合审批" });
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "安全与法规风险不能通过通用项目编辑修改；请提交结构化风险声明",
+        });
       }
       const linkedProduct = input.productId ? await getProductById(input.productId) : undefined;
       if (input.productId && !linkedProduct) {
@@ -909,8 +991,6 @@ export const projectsRouter = router({
         productId: input.productId ?? null,
         baseRevisionId: input.productId !== existing.productId ? null : existing.baseRevisionId,
         productDefinitionSnapshotId,
-        safetyRiskLevel: existing.safetyRiskLevel === "high" || input.safetyRiskLevel === "high" ? "high" : "standard",
-        regulatoryRiskLevel: existing.regulatoryRiskLevel === "high" || input.regulatoryRiskLevel === "high" ? "high" : "standard",
         customerInputVersion: input.customerInputVersion ?? existing.customerInputVersion ?? null,
         customerPartNumber: input.customerPartNumber ?? existing.customerPartNumber ?? null,
         commercialBoundary: input.commercialBoundary ?? existing.commercialBoundary ?? null,
@@ -975,6 +1055,12 @@ export const projectsRouter = router({
       if (!project) throw new TRPCError({ code: "NOT_FOUND" });
       const role = await getEffectiveRole(input.projectId, ctx.user.id);
       if (!role || !ROLE_PERMISSIONS[role].canEditProjectInfo) throw new TRPCError({ code: "FORBIDDEN" });
+      if (hasFrozenJdmExecutionBaseline(project)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "JDM 产品定义与风险声明已在 Gate 冻结；受控变更将在下一增量开放",
+        });
+      }
       const product = project.productId ? await getProductById(project.productId) : null;
       const certificateCoverage = project.productId ? await evaluateProductCertificationCoverage({
         productId: project.productId,
@@ -1005,7 +1091,7 @@ export const projectsRouter = router({
         action: "project.risk_scope_version",
         entityType: "risk_scope",
         entityId: String(row.id),
-        meta: { version: row.version, assessment },
+        meta: { version: row.version, assessment: row.assessment },
       });
       return row;
     }),
@@ -1014,12 +1100,20 @@ export const projectsRouter = router({
   confirmRiskScope: protectedProcedure
     .input(z.object({ projectId: z.string(), version: z.number().int().positive(), kind: z.enum(["engineering", "qa_or_cert"]) }))
     .mutation(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
       const role = await getEffectiveRole(input.projectId, ctx.user.id);
       const isAdmin = isSystemAdminRole(ctx.user.role);
       const allowed = input.kind === "engineering"
         ? ["rd_hw", "rd_sw", "rd_mech"].includes(role ?? "")
         : ["qa", "cert", "battery_safety"].includes(role ?? "");
       if (!isAdmin && !allowed) throw new TRPCError({ code: "FORBIDDEN", message: "当前角色不能确认该风险声明" });
+      if (hasFrozenJdmExecutionBaseline(project)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "JDM 产品定义与风险声明已在 Gate 冻结；受控变更将在下一增量开放",
+        });
+      }
       await confirmProjectChangeScopeDeclaration({ ...input, confirmedBy: ctx.user.id });
       await createActivityLog({
         projectId: input.projectId,

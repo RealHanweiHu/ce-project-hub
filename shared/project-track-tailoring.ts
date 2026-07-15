@@ -59,6 +59,8 @@ export interface ProjectExecutionBaseline {
   customerConceptRef?: string;
   customerInputVersion?: string;
   proposedStandardModules?: ProductModuleId[];
+  /** Latest fully confirmed structured risk declaration frozen with this baseline. */
+  riskScopeVersion?: number;
   frozenAt?: string;
   frozenBy?: number;
 }

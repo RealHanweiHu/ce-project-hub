@@ -3,7 +3,7 @@ import { protectedProcedure, router } from "../_core/trpc";
 import { TRPCError } from "@trpc/server";
 import {
   getProjectGateReviews,
-  createProjectGateReview,
+  createProjectGateReviewWithRound,
   confirmGateReview,
   updateProjectGateReview,
   createActivityLog,
@@ -20,6 +20,7 @@ import {
   assertProjectGateSignoffsComplete,
   getProjectConditionsReadiness,
   getProjectTasks,
+  type JdmDefinitionFreezeInput,
 } from "../db";
 import { getEffectivePhasesForProjectLike } from "../../shared/npd-v3";
 import { ROLE_PERMISSIONS } from "./members";
@@ -67,10 +68,39 @@ async function assertGateCanProceed(projectId: string, phaseId: string, decision
   });
 }
 
-async function assertGateSignoffsCanProceed(projectId: string, phaseId: string, decision: string, actorId: number) {
+function isJdmProductOwnerSlot(
+  project: { category: string; productOwnerUserId: number | null },
+  phaseId: string,
+  slot: string,
+): boolean {
+  return project.category === "jdm" && phaseId === "input" && slot === "product";
+}
+
+async function assertGateSignoffsCanProceed(
+  projectId: string,
+  phaseId: string,
+  decision: string,
+  actor: { id: number; systemRole: string },
+) {
   if (decision === "rejected") return;
   try {
-    await assertProjectGateSignoffsComplete(projectId, phaseId, actorId);
+    await assertProjectGateSignoffsComplete(projectId, phaseId, actor.id);
+    const project = await getProjectById(projectId);
+    if (project && isJdmProductOwnerSlot(project, phaseId, "product")) {
+      const roundNumber = await getCurrentGateSignoffRound(projectId, phaseId);
+      const productSignoff = (await listProjectGateSignoffs(projectId, phaseId, roundNumber))
+        .find(row => row.slot === "product");
+      if (!productSignoff?.signedBy) {
+        throw new Error("JDM 产品定义 Gate 缺少指定产品负责人的批准");
+      }
+      if (productSignoff.signedBy !== project.productOwnerUserId) {
+        const [signer] = await getUsersByIds([productSignoff.signedBy]);
+        const actorIsSigningAdmin = productSignoff.signedBy === actor.id && isSystemAdminRole(actor.systemRole);
+        if (!actorIsSigningAdmin && !isSystemAdminRole(signer?.role)) {
+          throw new Error("JDM 产品定义 Gate 的 product 槽必须由指定产品负责人签署；系统管理员代签会保留审计记录");
+        }
+      }
+    }
   } catch (error) {
     throw new TRPCError({
       code: "BAD_REQUEST",
@@ -105,6 +135,38 @@ const conditionItemSchema = z.object({
   description: z.string().trim().min(1).max(5000),
   ownerUserId: z.number().int().positive(),
   dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+});
+
+const moduleReuseStateSchema = z.enum(["reused", "not_reused"]);
+const moduleReuseEvidenceSchema = z.object({
+  sourceRef: z.string().trim().min(1).max(512),
+  modelOrVersion: z.string().trim().min(1).max(256),
+  evidenceRef: z.string().trim().min(1).max(512),
+  boundaryConfirmed: z.boolean(),
+});
+const jdmDefinitionFreezeSchema = z.object({
+  executionBaseline: z.object({
+    modelVersion: z.literal("project-track-v1"),
+    status: z.enum(["draft", "frozen"]),
+    productDefinitionRef: z.string().trim().min(1).max(512),
+    customerConceptRef: z.string().trim().min(1).max(512).optional(),
+    moduleReuse: z.object({
+      battery: moduleReuseStateSchema,
+      core_function: moduleReuseStateSchema,
+      electronics: moduleReuseStateSchema,
+      software_connectivity: moduleReuseStateSchema,
+      structure_mold: moduleReuseStateSchema,
+      id_cmf: moduleReuseStateSchema,
+    }),
+    reuseEvidence: z.object({
+      battery: moduleReuseEvidenceSchema.optional(),
+      core_function: moduleReuseEvidenceSchema.optional(),
+      electronics: moduleReuseEvidenceSchema.optional(),
+      software_connectivity: moduleReuseEvidenceSchema.optional(),
+      structure_mold: moduleReuseEvidenceSchema.optional(),
+      id_cmf: moduleReuseEvidenceSchema.optional(),
+    }).optional(),
+  }),
 });
 
 export const gateReviewsRouter = router({
@@ -163,14 +225,23 @@ export const gateReviewsRouter = router({
       }
       assertConditionalFollowUp(input);
       await assertGateCanProceed(input.projectId, input.phaseId, input.decision);
-      await assertGateSignoffsCanProceed(input.projectId, input.phaseId, input.decision, ctx.user.id);
-      const id = await createProjectGateReview({
-        ...input,
-        createdBy: ctx.user.id,
+      await assertGateSignoffsCanProceed(input.projectId, input.phaseId, input.decision, {
+        id: ctx.user.id,
+        systemRole: ctx.user.role,
       });
-      const createdReview = (await getProjectGateReviews(input.projectId, input.phaseId))
-        .find((review) => review.id === id);
-      const roundNumber = createdReview?.roundNumber ?? 1;
+      let created: Awaited<ReturnType<typeof createProjectGateReviewWithRound>>;
+      try {
+        created = await createProjectGateReviewWithRound({
+          ...input,
+          createdBy: ctx.user.id,
+        });
+      } catch (error) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: error instanceof Error ? error.message : "Gate 评审记录失败",
+        });
+      }
+      const { id, roundNumber } = created;
       const afterReview = { ...input, roundNumber, id, createdBy: ctx.user.id };
       await createActivityLog({
         projectId: input.projectId,
@@ -288,6 +359,7 @@ export const gateReviewsRouter = router({
       conditionDueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
       conditionItems: z.array(conditionItemSchema).max(20).optional(),
       notes: z.string().optional().nullable(),
+      jdmDefinitionFreeze: jdmDefinitionFreezeSchema.optional().nullable(),
     }))
     .mutation(async ({ ctx, input }) => {
       const role = await getEffectiveRole(input.projectId, ctx.user.id);
@@ -295,12 +367,24 @@ export const gateReviewsRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "只有管理层可以进行门评审" });
       }
       assertConditionalFollowUp(input);
-      await assertGateCanProceed(input.projectId, input.phaseId, input.decision);
-      await assertGateSignoffsCanProceed(input.projectId, input.phaseId, input.decision, ctx.user.id);
       const projectBefore = await getProjectById(input.projectId);
       if (!projectBefore) {
         throw new TRPCError({ code: "NOT_FOUND", message: "项目不存在" });
       }
+      if (
+        input.jdmDefinitionFreeze &&
+        !(projectBefore.category === "jdm" && input.phaseId === "input")
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "JDM 产品定义冻结数据只能用于 JDM 的 P1 产品定义 Gate",
+        });
+      }
+      await assertGateCanProceed(input.projectId, input.phaseId, input.decision);
+      await assertGateSignoffsCanProceed(input.projectId, input.phaseId, input.decision, {
+        id: ctx.user.id,
+        systemRole: ctx.user.role,
+      });
       if (projectBefore.currentPhase !== input.phaseId) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "只能裁决项目当前阶段的 Gate；历史记录请查看评审轮次" });
       }
@@ -335,6 +419,7 @@ export const gateReviewsRouter = router({
         conditionItems: input.conditionItems ?? [],
         notes: input.notes ?? null,
         createdBy: ctx.user.id,
+        jdmDefinitionFreeze: input.jdmDefinitionFreeze as JdmDefinitionFreezeInput | null | undefined,
       });
       if (input.decision !== "rejected") {
         const beforeEvent = {
@@ -449,6 +534,8 @@ export const gateReviewsRouter = router({
       const role = await getEffectiveRole(input.projectId, ctx.user.id);
       const roles = await getEffectiveProjectRolesById(input.projectId, ctx.user.id);
       if (!role || !ROLE_PERMISSIONS[role].canView) throw new TRPCError({ code: "FORBIDDEN" });
+      const project = await getProjectById(input.projectId);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND", message: "项目不存在" });
       const [roundNumber, requirements] = await Promise.all([
         getCurrentGateSignoffRound(input.projectId, input.phaseId),
         getProjectGateSignoffRequirements(input.projectId, input.phaseId),
@@ -482,7 +569,12 @@ export const gateReviewsRouter = router({
             note: row?.note ?? null,
             eligibleRoles: [...GATE_SIGNOFF_SLOT_ROLES[slot]],
             canSign: requirement !== "not_applicable" &&
-              (isSystemAdminRole(ctx.user.role) || canProjectRoleSignSlot(roles, slot)),
+              (
+                isSystemAdminRole(ctx.user.role) ||
+                (isJdmProductOwnerSlot(project, input.phaseId, slot)
+                  ? ctx.user.id === project.productOwnerUserId
+                  : canProjectRoleSignSlot(roles, slot))
+              ),
           };
         }),
       };
@@ -502,13 +594,25 @@ export const gateReviewsRouter = router({
       const role = await getEffectiveRole(input.projectId, ctx.user.id);
       const roles = await getEffectiveProjectRolesById(input.projectId, ctx.user.id);
       const isAdmin = isSystemAdminRole(ctx.user.role);
-      if (!role || (!isAdmin && !canProjectRoleSignSlot(roles, input.slot))) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "你不属于该会签槽位" });
-      }
       const project = await getProjectById(input.projectId);
       if (!project) throw new TRPCError({ code: "NOT_FOUND", message: "项目不存在" });
+      if (project.currentPhase !== input.phaseId) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Gate 已推进，不能修改历史阶段会签" });
+      }
+      const jdmProductOwnerSlot = isJdmProductOwnerSlot(project, input.phaseId, input.slot);
+      const canSignSlot = jdmProductOwnerSlot
+        ? ctx.user.id === project.productOwnerUserId
+        : canProjectRoleSignSlot(roles, input.slot);
+      if (!role || (!isAdmin && !canSignSlot)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: jdmProductOwnerSlot
+            ? "JDM 产品定义 Gate 的 product 槽只能由指定产品负责人签署"
+            : "你不属于该会签槽位",
+        });
+      }
       let signing: Awaited<ReturnType<typeof resolveProjectActedAsRole>> | null = null;
-      if (!isAdmin) {
+      if (!isAdmin && !jdmProductOwnerSlot) {
         try {
           signing = await resolveProjectActedAsRole({
             project,
@@ -523,11 +627,19 @@ export const gateReviewsRouter = router({
       if ((input.status === "conditional" || input.status === "rejected") && !input.note?.trim()) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "有条件同意或拒绝必须填写说明" });
       }
-      const round = await openProjectGateSignoffRound({
-        projectId: input.projectId,
-        phaseId: input.phaseId,
-        openedBy: ctx.user.id,
-      });
+      let round: Awaited<ReturnType<typeof openProjectGateSignoffRound>>;
+      try {
+        round = await openProjectGateSignoffRound({
+          projectId: input.projectId,
+          phaseId: input.phaseId,
+          openedBy: ctx.user.id,
+        });
+      } catch (error) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: error instanceof Error ? error.message : "无法开启 Gate 会签轮次",
+        });
+      }
       const roundNumber = round.roundNumber;
       const requirements = round.requirements;
       const requirement = requirements[input.slot];
@@ -545,17 +657,25 @@ export const gateReviewsRouter = router({
           }
         }
       }
-      const row = await upsertProjectGateSignoff({
-        projectId: input.projectId,
-        phaseId: input.phaseId,
-        roundNumber,
-        slot: input.slot,
-        requirement,
-        status: input.status,
-        signedBy: ctx.user.id,
-        note: input.note ?? null,
-        viaDelegationId: signing?.viaDelegationId ?? null,
-      });
+      let row: Awaited<ReturnType<typeof upsertProjectGateSignoff>>;
+      try {
+        row = await upsertProjectGateSignoff({
+          projectId: input.projectId,
+          phaseId: input.phaseId,
+          roundNumber,
+          slot: input.slot,
+          requirement,
+          status: input.status,
+          signedBy: ctx.user.id,
+          note: input.note ?? null,
+          viaDelegationId: signing?.viaDelegationId ?? null,
+        });
+      } catch (error) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: error instanceof Error ? error.message : "Gate 会签写入失败",
+        });
+      }
       await createActivityLog({
         projectId: input.projectId,
         userId: ctx.user.id,

@@ -200,14 +200,14 @@
 **Description:** 创建 JDM 时只种 P1；产品定义 Gate 通过时在同一事务冻结执行基线并幂等生成 P2-P6。
 
 **Acceptance criteria:**
-- [ ] JDM 创建不要求客户规格书、客户输入版本或模块状态，只保存原始输入快照。
-- [ ] 缺规格、CSR、模块基线、风险声明或客户确认时 P1 Gate 被阻塞。
-- [ ] Gate 成功后原子插入 P2-P6；失败回滚，重复提交不重复插入。
+- [x] JDM 创建不要求客户规格书、客户输入版本或模块状态，只保存原始输入快照。
+- [x] 缺规格、CSR、模块基线、风险声明或客户确认时 P1 Gate 被阻塞。
+- [x] Gate 成功后原子插入 P2-P6；失败回滚，重复提交不重复插入。
 
 **Verification:**
-- [ ] RED→GREEN：`server/jdm-two-stage-seed.test.ts`
-- [ ] `pnpm exec vitest run server/jdm-two-stage-seed.test.ts server/gate-confirm-atomicity.test.ts server/customer-track-seed.test.ts`
-- [ ] `pnpm check`
+- [x] RED→GREEN：`server/jdm-two-stage-seed.test.ts`、`server/jdm-product-owner-signoff.test.ts`
+- [x] 完整测试：176 个测试文件、1003 项测试全部通过（含 JDM、Gate 锁协议与风险并发回归）。
+- [x] `pnpm check`、`pnpm build`、`git diff --check`
 
 **Dependencies:** Tasks 2, 6
 
