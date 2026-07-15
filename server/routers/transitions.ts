@@ -16,6 +16,12 @@ export const transitionsRouter = router({
     toCategory: z.enum(PROJECT_CATEGORIES),
     reason: z.string().trim().min(10).max(5000),
   })).mutation(async ({ ctx, input }) => {
+    if (input.toCategory === "idr") {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "IDR 已停止新建或转入；小改走产品轴轻量变更，复杂外观翻新转 DRV",
+      });
+    }
     const role = await getEffectiveProjectRoleById(input.sourceProjectId, ctx.user.id);
     if (!role || !ROLE_PERMISSIONS[role].canEditProjectInfo) throw new TRPCError({ code: "FORBIDDEN", message: "只有项目管理者可以发起受控转轨" });
     const source = await getProjectById(input.sourceProjectId);

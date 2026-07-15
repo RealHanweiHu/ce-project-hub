@@ -33,6 +33,7 @@ import { isActionExternalApprovalType } from "./action-approval-submit";
 export const MP_RELEASE_APPROVAL = "mp_release";
 
 type ReleaseOverrideInput = { overrideReason: string; followUpOwner: number; dueDate: string };
+type ReleaseProductInput = { name?: string; productNumber?: string; category?: string; targetMarkets?: string[] };
 type Actor = { id: number; role: string };
 
 function toRecord(value: unknown): Record<string, unknown> {
@@ -42,6 +43,7 @@ function toRecord(value: unknown): Record<string, unknown> {
 async function getReleaseApprovalSnapshot(input: {
   projectId: string;
   actor: Actor;
+  product?: ReleaseProductInput;
   override?: ReleaseOverrideInput;
 }) {
   const project = await getProjectById(input.projectId);
@@ -54,7 +56,6 @@ async function getReleaseApprovalSnapshot(input: {
   const gate = await getReleaseGateStatus(project);
   const failedHardDimensions = gate.dimensions.filter((d) => !d.ok && d.dimension !== "review_conditions");
   const blockers: string[] = [];
-  if (!project.productId) blockers.push("未关联产品");
   if (openP0P1 > 0) blockers.push(`${openP0P1} 个未关闭的 P0/P1 问题`);
   if (!gate.phaseId) blockers.push("未定义 MP Release 前置 Gate");
   for (const dim of failedHardDimensions) blockers.push(dim.summary);
@@ -77,7 +78,7 @@ async function getReleaseApprovalSnapshot(input: {
       "业务类型": "MP Release",
       "项目名称": project.name,
       "项目编号": project.projectNumber,
-      "关联产品": product?.name ?? project.productId ?? "",
+      "输出产品": product?.name ?? input.product?.name?.trim() ?? project.name,
       "前置Gate": gate.gateName,
       "Gate决策": gate.decision ?? "",
       "Gate条件": gate.conditions ?? "",
@@ -91,6 +92,7 @@ async function getReleaseApprovalSnapshot(input: {
 export async function submitReleaseApproval(input: {
   projectId: string;
   actor: Actor;
+  product?: ReleaseProductInput;
   override?: ReleaseOverrideInput;
 }): Promise<{ instance: ExternalApprovalInstance; alreadyPending: boolean }> {
   const config = await getApprovalConfig(MP_RELEASE_APPROVAL);
@@ -123,7 +125,7 @@ export async function submitReleaseApproval(input: {
     originatorUserId: input.actor.id,
     dingtalkOriginatorUserId,
     formSnapshot: snapshot,
-    requestSnapshot: { formComponentValues, override: input.override ?? null },
+    requestSnapshot: { formComponentValues, product: input.product ?? null, override: input.override ?? null },
   });
 
   const created = await createApprovalInstance({
@@ -194,7 +196,7 @@ async function enqueueReleaseConfirmation(instance: ExternalApprovalInstance): P
 export async function confirmApprovedRelease(input: {
   approvalInstanceId: number;
   actorId: number;
-}): Promise<{ revisionId: number; revisionLabel: string }> {
+}): Promise<Awaited<ReturnType<typeof releaseProject>>> {
   const instance = await getExternalApprovalById(input.approvalInstanceId);
   if (!instance) throw new Error("审批实例不存在");
   if (instance.businessType !== MP_RELEASE_APPROVAL) throw new Error("不是 MP Release 审批实例");
@@ -205,11 +207,11 @@ export async function confirmApprovedRelease(input: {
   if (!actor) throw new Error("发布确认人不存在");
   const request = toRecord(instance.requestSnapshot);
   const override = request.override as ReleaseOverrideInput | null | undefined;
-  const project = await getProjectById(instance.entityId);
-  const product = project?.productId ? await getProductById(project.productId) : undefined;
+  const product = request.product as ReleaseProductInput | null | undefined;
   const result = await releaseProject({
     projectId: instance.entityId,
     actor: { id: actor.id, role: actor.role },
+    product: product ?? undefined,
     override: override ?? undefined,
     externalApprovalInstanceId: instance.id,
   });
@@ -224,12 +226,12 @@ export async function confirmApprovedRelease(input: {
     userId: actor.id,
     action: "mp.release",
     entityType: "mp_release",
-    entityId: `${instance.entityId}:${result.revisionId}`,
+    entityId: `${instance.entityId}:${result.productId}`,
     meta: {
       after: {
         projectId: instance.entityId,
-        productId: project?.productId ?? null,
-        productName: product?.name ?? null,
+        productId: result.productId,
+        productName: result.productName,
         revisionId: result.revisionId,
         revisionLabel: result.revisionLabel,
       },
@@ -240,12 +242,12 @@ export async function confirmApprovedRelease(input: {
     action: "mp.release",
     projectId: instance.entityId,
     entityType: "mp_release",
-    entityId: `${instance.entityId}:${result.revisionId}`,
+    entityId: `${instance.entityId}:${result.productId}`,
     actorId: actor.id,
     after: {
       projectId: instance.entityId,
-      productId: project?.productId ?? null,
-      productName: product?.name ?? null,
+      productId: result.productId,
+      productName: result.productName,
       revisionId: result.revisionId,
       revisionLabel: result.revisionLabel,
     },

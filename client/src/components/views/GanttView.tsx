@@ -7,6 +7,7 @@ import {
   Pencil, Check, X as XIcon, Lock,
 } from 'lucide-react';
 import { Project, PhaseDate, getPhaseProgress, getPhaseStatus, getProjectPhases, SOPPhase } from '@/lib/data';
+import { parseGanttDate, useGanttTimeline } from './gantt-timeline';
 
 // ── Duration defaults (days) ──────────────────────────────────────────────────
 const PHASE_DAYS: Record<string, number> = {
@@ -25,11 +26,7 @@ function addDays(date: Date, days: number): Date {
   return d;
 }
 
-function parseDate(str: string): Date | null {
-  if (!str) return null;
-  const d = new Date(str);
-  return isNaN(d.getTime()) ? null : d;
-}
+const parseDate = parseGanttDate;
 
 function toISODate(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -37,10 +34,6 @@ function toISODate(d: Date): string {
 
 function formatDate(d: Date): string {
   return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
-}
-
-function formatMonth(d: Date): string {
-  return d.toLocaleDateString('zh-CN', { year: 'numeric', month: 'short' });
 }
 
 interface PhaseBar {
@@ -92,14 +85,12 @@ function DateEditor({
 export function GanttView({ project, onUpdate, onPhaseClick, readOnly = false, phaseFilter }: GanttViewProps) {
   const [zoom, setZoom] = useState(1);
   const [editingPhase, setEditingPhase] = useState<string | null>(null);
-  const [editingField, setEditingField] = useState<'start' | 'end' | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Close any open editor panel when readOnly becomes true (e.g. permissions resolved)
   const prevReadOnly = useRef(readOnly);
   if (readOnly && !prevReadOnly.current && editingPhase) {
     setEditingPhase(null);
-    setEditingField(null);
   }
   prevReadOnly.current = readOnly;
 
@@ -192,37 +183,13 @@ export function GanttView({ project, onUpdate, onPhaseClick, readOnly = false, p
   }, [project, phaseFilter]);
 
   // ── Timeline grid ─────────────────────────────────────────────────────────
-  const totalDays = Math.max(
-    1,
-    Math.ceil((totalEnd.getTime() - totalStart.getTime()) / (1000 * 60 * 60 * 24))
-  );
-
-  const BASE_PX_PER_DAY = 4;
-  const pxPerDay = BASE_PX_PER_DAY * zoom;
-  const totalWidth = Math.round(totalDays * pxPerDay);
-
-  const monthTicks = useMemo(() => {
-    const ticks: { label: string; offsetPx: number }[] = [];
-    const d = new Date(totalStart);
-    d.setDate(1);
-    if (d < totalStart) d.setMonth(d.getMonth() + 1);
-    while (d <= totalEnd) {
-      const offsetDays = (d.getTime() - totalStart.getTime()) / (1000 * 60 * 60 * 24);
-      ticks.push({ label: formatMonth(d), offsetPx: Math.round(offsetDays * pxPerDay) });
-      d.setMonth(d.getMonth() + 1);
-    }
-    return ticks;
-  }, [totalStart, totalEnd, pxPerDay]);
-
-  const today = new Date();
-  const todayOffsetDays = (today.getTime() - totalStart.getTime()) / (1000 * 60 * 60 * 24);
-  const todayPx = Math.round(todayOffsetDays * pxPerDay);
-  const showToday = todayOffsetDays >= 0 && todayOffsetDays <= totalDays + 7;
-
-  const barLeft = (d: Date) =>
-    Math.max(0, Math.round(((d.getTime() - totalStart.getTime()) / (1000 * 60 * 60 * 24)) * pxPerDay));
-  const barWidth = (s: Date, e: Date) =>
-    Math.max(8, Math.round(((e.getTime() - s.getTime()) / (1000 * 60 * 60 * 24)) * pxPerDay));
+  const {
+    totalDays, pxPerDay, totalWidth,
+    left: barLeft, width: barWidth,
+    monthTicks, todayX: todayPx, showToday,
+  } = useGanttTimeline({
+    totalStart, totalEnd, zoom, basePxPerDay: 4, minBarPx: 8, clampLeft: true,
+  });
 
   const scrollBy = (px: number) => scrollRef.current?.scrollBy({ left: px, behavior: 'smooth' });
   const scrollToToday = () => {
@@ -337,7 +304,7 @@ export function GanttView({ project, onUpdate, onPhaseClick, readOnly = false, p
             {/* Month header */}
             <div className="relative h-8 border-b border-border bg-secondary" style={{ width: Math.max(totalWidth, 400) }}>
               {monthTicks.map((tick, i) => (
-                <div key={i} className="absolute top-0 flex h-full items-center" style={{ left: tick.offsetPx }}>
+                <div key={i} className="absolute top-0 flex h-full items-center" style={{ left: tick.x }}>
                   <div className="h-full w-px bg-border" />
                   <span className="ml-1.5 whitespace-nowrap text-[10px] text-muted-foreground num">{tick.label}</span>
                 </div>
@@ -361,7 +328,7 @@ export function GanttView({ project, onUpdate, onPhaseClick, readOnly = false, p
                 >
                   {/* Month grid lines */}
                   {monthTicks.map((tick, i) => (
-                    <div key={i} className="absolute top-0 h-full w-px bg-border" style={{ left: tick.offsetPx }} />
+                    <div key={i} className="absolute top-0 h-full w-px bg-border" style={{ left: tick.x }} />
                   ))}
                   {showToday && (
                     <div className="absolute top-0 z-10 h-full w-px bg-primary/50" style={{ left: todayPx }} />
@@ -374,7 +341,6 @@ export function GanttView({ project, onUpdate, onPhaseClick, readOnly = false, p
                     onDoubleClick={() => {
                       if (readOnly) return;
                       setEditingPhase(phase.id);
-                      setEditingField('start');
                     }}
                     onClick={() => !isEditing && onPhaseClick?.(phase.id)}
                     title={readOnly
@@ -481,7 +447,7 @@ export function GanttView({ project, onUpdate, onPhaseClick, readOnly = false, p
                 </button>
               )}
               <button
-                onClick={() => { setEditingPhase(null); setEditingField(null); }}
+                onClick={() => setEditingPhase(null)}
                 className="ml-auto flex items-center gap-1 rounded-[6px] border border-border px-2.5 py-1 text-[10px] uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
               >
                 <Check size={11} />完成

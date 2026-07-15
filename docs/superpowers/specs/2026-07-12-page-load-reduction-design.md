@@ -142,6 +142,14 @@ Gate 3 设计冻结 —— 还差 4 项
 - 🟠 statusSummary 补齐 health（与组合看板同源 RAG）/blockerCount/counts；总览页任务计数与"下一 Gate"改读摘要，删除本地重算。
 - 🟠 进度缓存改用当前（可能是事务）连接计算，修复事务内写旧值。
 
+第三轮整改（2026-07-13，用户复审 4+1 项）：
+- 跨项目"我的工作"补依赖判定：workbench 按项目有效依赖图（含裁剪收缩）计算 depsResolved，classifyMyWork 把前置未清的 todo 分入"等待别人"（等前置：…），可开始桶只收前置已清；配 shared/my-work.test.ts 专项测试。
+- 旧客户端队列回退已移除（分桶未返回时显示加载态，不再存在第二套口径）。
+- 任务排序日期改 todayShanghai()（UTC 在上海凌晨 0-8 点慢一天）。
+- 组合看板任务计数 SQL 与进度摘要同口径（skipped 双侧剔除、done 只算 done），同卡"13% vs 4/25"矛盾消除；一致性测试补断言。
+- Gate 任务详情不再重复渲染交付物勾选清单（完成度只在缺口清单一处；裁剪/审核动作面板保留）。
+- 性能：getPortfolio 支持单项目 scope，projects.get 与 statusSummary 不再各自全组合扫描。
+
 遗留（不阻塞使用，后续小步）：
 - §4 任务清单/审核状态页的交付物完成度改链接（数据已同源，呈现未收敛）。
 - §6 MyTasksView 独立页下线合并；待我签的 Gate 槽位与未读 @提醒两类源接入分桶；**钉钉每日摘要仍用自有数据与分类（personalDailyDigest.ts），切换到 classifyMyWork 是三桶完全统一的最后一步**。

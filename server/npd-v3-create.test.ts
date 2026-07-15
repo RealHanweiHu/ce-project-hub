@@ -18,12 +18,8 @@ const SUFFIX = Date.now().toString(36);
 const IDS = {
   directLite: `npdv3-lite-${SUFFIX}`,
   secondSeed: `npdv3-seed-${SUFFIX}`,
-  routerStandard: `npdv3-router-${SUFFIX}`,
-  missingLockedPack: `npdv3-lock-${SUFFIX}`,
-  missingDowngradeReason: `npdv3-down-${SUFFIX}`,
-  missingAttributes: `npdv3-attrs-${SUFFIX}`,
-  legacyHighRisk: `npdv3-risk-${SUFFIX}`,
-  validDowngrade: `npdv3-audit-${SUFFIX}`,
+  routerFull: `npdv3-full-${SUFFIX}`,
+  legacyConfigIgnored: `npdv3-fixed-${SUFFIX}`,
 };
 const ALL_IDS = Object.values(IDS);
 
@@ -78,187 +74,94 @@ describe("NPD v3 create seeding", () => {
     expect(rows.find((row) => row.taskId === "pc2")?.phaseId).toBe("verification");
   });
 
-  it("projects.create 默认写入 v3、持久化标准档配置并种 25 项", async () => {
+  it("projects.create 固定写入完整 NPD 流程并种 32 项", async () => {
     const caller = projectsRouter.createCaller({
-      user: { id: OWNER, role: "member", name: "NPD v3 creator", canCreateProject: true },
+      user: { id: OWNER, role: "member", name: "NPD creator", canCreateProject: true },
     } as any);
+
     await expect(caller.create({
-      id: IDS.routerStandard,
-      name: "NPD v3 router standard",
-      projectNumber: IDS.routerStandard,
+      id: IDS.routerFull,
+      name: "NPD fixed full process",
+      projectNumber: IDS.routerFull,
       category: "npd",
       risk: "low",
       currentPhase: "concept",
       progress: 0,
-      customFields: {
-        source: "router-test",
-        npdTemplate: { tier: "lite", packs: ["battery"] },
-      },
-      npdTemplate: { tier: "standard", packs: [] },
-      npdAttributes: {
-        hasBattery: false,
-        needsCert: false,
-        hasFirmware: false,
-        needsNewMold: true,
-        isNewPlatform: false,
-      },
+      customFields: { source: "router-test" },
     })).resolves.toEqual({ success: true });
 
     const db = await getDb();
     const [project] = await db!.select().from(projects)
-      .where(eq(projects.id, IDS.routerStandard));
+      .where(eq(projects.id, IDS.routerFull));
     const rows = await db!.select().from(projectTasks)
-      .where(eq(projectTasks.projectId, IDS.routerStandard));
+      .where(eq(projectTasks.projectId, IDS.routerFull));
+    const phases = await db!.select().from(projectPhases)
+      .where(eq(projectPhases.projectId, IDS.routerFull));
+
     expect(project.sopTemplateVersion).toBe("2026-07-v3");
     expect(project.customFields).toMatchObject({
       source: "router-test",
-      npdTemplate: { tier: "standard", packs: [] },
-    });
-    expect(rows).toHaveLength(25);
-    const phases = await db!.select().from(projectPhases)
-      .where(eq(projectPhases.projectId, IDS.routerStandard));
-    expect(phases).toHaveLength(7);
-  });
-
-  it("含锂电项目缺电池安全包时拒绝创建", async () => {
-    const caller = projectsRouter.createCaller({
-      user: { id: OWNER, role: "member", name: "NPD v3 creator", canCreateProject: true },
-    } as any);
-
-    await expect(caller.create({
-      id: IDS.missingLockedPack,
-      name: "NPD v3 missing battery pack",
-      projectNumber: IDS.missingLockedPack,
-      category: "npd",
-      risk: "low",
-      currentPhase: "concept",
-      progress: 0,
-      npdAttributes: {
-        hasBattery: true,
-        needsCert: false,
-        hasFirmware: false,
-        needsNewMold: false,
-        isNewPlatform: false,
-      },
-      npdTemplate: { tier: "lite", packs: [] },
-    } as any)).rejects.toThrow(/电池安全包/);
-  });
-
-  it("推荐 full 却提交 lite 且无降档理由时拒绝创建", async () => {
-    const caller = projectsRouter.createCaller({
-      user: { id: OWNER, role: "member", name: "NPD v3 creator", canCreateProject: true },
-    } as any);
-
-    await expect(caller.create({
-      id: IDS.missingDowngradeReason,
-      name: "NPD v3 missing downgrade reason",
-      projectNumber: IDS.missingDowngradeReason,
-      category: "npd",
-      risk: "low",
-      currentPhase: "concept",
-      progress: 0,
-      npdAttributes: {
-        hasBattery: true,
-        needsCert: true,
-        hasFirmware: false,
-        needsNewMold: false,
-        isNewPlatform: false,
-      },
-      npdTemplate: { tier: "lite", packs: ["battery", "cert"] },
-    } as any)).rejects.toThrow(/降档.*理由/);
-  });
-
-  it("NPD 创建缺少项目属性问答时拒绝创建", async () => {
-    const caller = projectsRouter.createCaller({
-      user: { id: OWNER, role: "member", name: "NPD v3 creator", canCreateProject: true },
-    } as any);
-
-    await expect(caller.create({
-      id: IDS.missingAttributes,
-      name: "NPD v3 missing attributes",
-      projectNumber: IDS.missingAttributes,
-      category: "npd",
-      risk: "low",
-      currentPhase: "concept",
-      progress: 0,
-      npdTemplate: { tier: "standard", packs: [] },
-    })).rejects.toThrow(/项目属性/);
-  });
-
-  it("旧 risk=high 契约仍触发强监管推荐，降档无理由时拒绝创建", async () => {
-    const caller = projectsRouter.createCaller({
-      user: { id: OWNER, role: "member", name: "NPD v3 creator", canCreateProject: true },
-    } as any);
-
-    await expect(caller.create({
-      id: IDS.legacyHighRisk,
-      name: "NPD v3 legacy high risk",
-      projectNumber: IDS.legacyHighRisk,
-      category: "npd",
-      risk: "high",
-      currentPhase: "concept",
-      progress: 0,
-      npdAttributes: {
-        hasBattery: false,
-        needsCert: false,
-        hasFirmware: false,
-        needsNewMold: false,
-        isNewPlatform: false,
-      },
-      npdTemplate: { tier: "lite", packs: [] },
-    })).rejects.toThrow(/降档.*理由/);
-  });
-
-  it("有理由降档时持久化推荐差异并写入创建活动审计", async () => {
-    const caller = projectsRouter.createCaller({
-      user: { id: OWNER, role: "member", name: "NPD v3 creator", canCreateProject: true },
-    } as any);
-    const downgradeReason = "沿用已量产平台，经负责人确认后降档";
-    const attributes = {
-      hasBattery: false,
-      needsCert: false,
-      hasFirmware: false,
-      needsNewMold: false,
-      isNewPlatform: true,
-    };
-
-    await expect(caller.create({
-      id: IDS.validDowngrade,
-      name: "NPD v3 audited downgrade",
-      projectNumber: IDS.validDowngrade,
-      category: "npd",
-      risk: "low",
-      currentPhase: "concept",
-      progress: 0,
-      npdAttributes: attributes,
-      npdTemplate: { tier: "lite", packs: [] },
-      npdTemplateDowngradeReason: downgradeReason,
-    })).resolves.toEqual({ success: true });
-
-    const db = await getDb();
-    const [project] = await db!.select().from(projects)
-      .where(eq(projects.id, IDS.validDowngrade));
-    expect(project.customFields).toMatchObject({
       npdTemplate: {
-        tier: "lite",
-        packs: [],
-        recommended: { tier: "full" },
-        attributes,
-        downgradeReason,
+        tier: "full",
+        packs: ["battery", "cert", "software", "mold"],
+        policy: "fixed_full_process",
       },
     });
+    expect(rows).toHaveLength(32);
+    expect(rows.map((row) => row.taskId)).toEqual(
+      expect.arrayContaining(["pb1", "pc1", "ps1", "pmo1"]),
+    );
+    expect(phases).toHaveLength(7);
 
     const [log] = await db!.select().from(activityLogs).where(and(
-      eq(activityLogs.projectId, IDS.validDowngrade),
+      eq(activityLogs.projectId, IDS.routerFull),
       eq(activityLogs.action, "project.create"),
     ));
     expect(log.meta).toMatchObject({
       npdTemplate: {
-        tier: "lite",
-        recommended: { tier: "full" },
-        attributes,
-        downgradeReason,
+        tier: "full",
+        packs: ["battery", "cert", "software", "mold"],
+        policy: "fixed_full_process",
       },
     });
+  });
+
+  it("忽略旧客户端提交的属性问答、精简档位和附加包选择", async () => {
+    const caller = projectsRouter.createCaller({
+      user: { id: OWNER, role: "member", name: "NPD creator", canCreateProject: true },
+    } as any);
+
+    await expect(caller.create({
+      id: IDS.legacyConfigIgnored,
+      name: "NPD legacy config ignored",
+      projectNumber: IDS.legacyConfigIgnored,
+      category: "npd",
+      risk: "low",
+      currentPhase: "concept",
+      progress: 0,
+      npdAttributes: {
+        hasBattery: false,
+        needsCert: false,
+        hasFirmware: false,
+        needsNewMold: false,
+        isNewPlatform: false,
+      },
+      npdTemplate: { tier: "lite", packs: [] },
+    })).resolves.toEqual({ success: true });
+
+    const db = await getDb();
+    const [project] = await db!.select().from(projects)
+      .where(eq(projects.id, IDS.legacyConfigIgnored));
+    const rows = await db!.select().from(projectTasks)
+      .where(eq(projectTasks.projectId, IDS.legacyConfigIgnored));
+
+    expect(project.customFields).toMatchObject({
+      npdTemplate: {
+        tier: "full",
+        packs: ["battery", "cert", "software", "mold"],
+        policy: "fixed_full_process",
+      },
+    });
+    expect(rows).toHaveLength(32);
   });
 });

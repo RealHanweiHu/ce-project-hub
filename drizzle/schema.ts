@@ -192,13 +192,13 @@ export const projects = pgTable("projects", {
   lifecycleChangedBy: integer("lifecycleChangedBy"),
   /** Reserved for future organization/workspace support */
   orgId: integer("orgId"),
-  /** 派生自哪个产品（PLM 脊梁）。现有项目为空。 */
+  /** 项目完成后交付到产品库的独立产品；项目执行期间可以为空。 */
   productId: varchar("productId", { length: 32 }),
   /** NPD 创建时锁定的产品定义快照，用于项目交接与后续追溯 */
   productDefinitionSnapshotId: integer("productDefinitionSnapshotId"),
-  /** 派生起点版本（量产后项目指向当前 Rev） */
+  /** 历史兼容：旧项目曾记录派生起点 Revision；新项目不再依赖。 */
   baseRevisionId: integer("baseRevisionId"),
-  /** 发布时回填的产出版本 */
+  /** 历史兼容：旧发布曾回填产出 Revision；新发布直接生成产品。 */
   resultRevisionId: integer("resultRevisionId"),
   /** SOP 风险分级；high 会自动恢复安全/认证验证项并升级 Gate 会签。 */
   safetyRiskLevel: varchar("safetyRiskLevel", { length: 16 }).$type<ProjectSopRiskLevel>().notNull().default("standard"),
@@ -1891,7 +1891,7 @@ export type InsertProductDefinitionChange = typeof productDefinitionChanges.$inf
 export const PRODUCT_REVISION_STATUSES = ["draft", "released", "superseded"] as const;
 export const productRevisionStatusEnum = pgEnum("product_revision_status", PRODUCT_REVISION_STATUSES);
 
-/** 主版本 / Product Revision = 产品型号下的冻结版本（PLM 轴）；版本链由项目串起 */
+/** Product Revision = 包装、印刷、标签等轻微改版记录；不由项目发布生成。 */
 export const productRevisions = pgTable(
   "product_revisions",
   {
@@ -1899,9 +1899,9 @@ export const productRevisions = pgTable(
     productId: varchar("productId", { length: 32 }).notNull(),
     /** Rev A / B / C */
     revisionLabel: varchar("revisionLabel", { length: 16 }).notNull(),
-    /** 父版本（自引用，量产后版本链） */
+    /** 父版本（自引用，轻微改版链） */
     parentRevisionId: integer("parentRevisionId"),
-    /** 产出该版本的来源项目 */
+    /** 历史兼容：旧 Revision 可能记录来源项目；新 Revision 来自产品库轻量变更。 */
     createdByProjectId: varchar("createdByProjectId", { length: 32 }),
     status: productRevisionStatusEnum("status").notNull().default("draft"),
     releasedAt: timestamp("releasedAt"),
@@ -1919,11 +1919,12 @@ export const productRevisions = pgTable(
 export type ProductRevision = typeof productRevisions.$inferSelect;
 export type InsertProductRevision = typeof productRevisions.$inferInsert;
 
-/** 量产发布记录 = 冻结快照（两轴交接点） */
+/** 量产发布记录 = 项目完成后生成/交付独立产品的冻结快照。 */
 export const mpReleases = pgTable("mp_releases", {
   id: serial("id").primaryKey(),
   productId: varchar("productId", { length: 32 }).notNull(),
-  revisionId: integer("revisionId").notNull(),
+  /** 历史发布可能关联 Revision；新发布不生成 Revision，因此为空。 */
+  revisionId: integer("revisionId"),
   projectId: varchar("projectId", { length: 32 }).notNull(),
   /** 外部审批实例 id（如钉钉 MP Release 审批），用于追溯审批来源 */
   externalApprovalInstanceId: integer("externalApprovalInstanceId"),
@@ -2355,7 +2356,8 @@ export const productSoftwareReleases = pgTable(
     productId: varchar("productId", { length: 32 })
       .notNull()
       .references(() => products.id, { onDelete: "cascade" }),
-    baseRevisionId: integer("baseRevisionId").notNull(),
+    /** 软件有自己的版本号，不依赖包装/印刷类 Product Revision。 */
+    baseRevisionId: integer("baseRevisionId"),
     version: varchar("version", { length: 64 }).notNull(),
     status: varchar("status", { length: 24 }).$type<ProductSoftwareReleaseStatus>().notNull().default("draft"),
     scopeSummary: text("scopeSummary").notNull(),

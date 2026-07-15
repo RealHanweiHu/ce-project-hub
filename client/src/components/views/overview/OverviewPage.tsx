@@ -3,7 +3,7 @@ import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Loader2, X } from "lucide-react";
 import { Kicker, LinearCard } from "@/components/linear/primitives";
-import type { PortfolioTableRow } from "./PortfolioTable";
+import type { PortfolioTableRow } from "./types";
 import { PerspectivePanel, type Lens } from "./PerspectivePanel";
 import { PortfolioDashboard } from "./PortfolioDashboard";
 import { TaskListView, type TaskRow, type TaskFocus } from "../TaskListView";
@@ -42,13 +42,14 @@ export function OverviewPage({ onSelectProject, onSelectView }: { onSelectProjec
     return <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground"><Loader2 size={16} className="animate-spin" />加载总览…</div>;
   }
 
-  if (activeLens == null) {
+  // generic（无特化视角的执行角色）也拦截跳「我的工作」：个人队列全站只在「我的工作」渲染一份（B5 去重）
+  if (activeLens == null || activeLens === "generic") {
     return (
       <div className="mx-auto mt-10 max-w-md text-center">
         <LinearCard className="p-8">
           <p className="text-[15px] font-semibold">总览面向管理层与项目经理</p>
-          <p className="mt-2 text-[13px] text-muted-foreground">你的待办、审核与在手任务请在「我的任务」查看。</p>
-          <button onClick={() => onSelectView ? onSelectView("mytasks") : (window.location.href = "/?view=mytasks")} className="mt-4 inline-flex h-8 items-center rounded-[7px] bg-primary px-4 text-[13px] font-medium text-white">前往我的任务</button>
+          <p className="mt-2 text-[13px] text-muted-foreground">你的待办、审批、待审核与提醒已合并到「我的工作」。</p>
+          <button onClick={() => onSelectView ? onSelectView("mytasks") : (window.location.href = "/?view=mytasks")} className="mt-4 inline-flex h-8 items-center rounded-[7px] bg-primary px-4 text-[13px] font-medium text-white">前往我的工作</button>
         </LinearCard>
       </div>
     );

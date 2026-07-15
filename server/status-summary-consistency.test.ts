@@ -61,6 +61,19 @@ describe("§5 状态口径一致性", () => {
     expect(summary.progress).toBeGreaterThan(0);
   });
 
+  it("组合看板计数口径 = 摘要口径（skipped 双侧剔除，同卡不再互相矛盾）", async () => {
+    const [summary, portfolio] = await Promise.all([
+      getProjectProgressSummary(PID),
+      getPortfolio(userId, { projectId: PID }),
+    ]);
+    const row = portfolio.find((item) => item.id === PID);
+    expect(row).toBeDefined();
+    const total = summary.phaseProgress.reduce((n, item) => n + item.total, 0);
+    const done = summary.phaseProgress.reduce((n, item) => n + item.done, 0);
+    expect(row!.taskTotal).toBe(total);
+    expect(row!.taskDone).toBe(done);
+  });
+
   it("组合看板行进度 = 单项目摘要进度", async () => {
     const [summary, portfolio] = await Promise.all([
       getProjectProgressSummary(PID),

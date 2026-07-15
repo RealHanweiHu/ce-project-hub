@@ -4,7 +4,8 @@
 // read-only <ProjectDashboard>; editing is moved behind this right-side Sheet, opened from the
 // dashboard's 「设置 →」 and the project-detail header ⚙ button.
 //
-// Reuses <OverviewPanel> as-is (passed in as children) — does NOT modify OverviewPanel internals.
+// The child settings panel contains editable project configuration only; read-only project summaries
+// stay in the project header and dashboard.
 
 import {
   Sheet,

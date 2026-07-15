@@ -267,13 +267,11 @@ export async function executeProjectTransition(input: {
   if (source.category === input.toCategory) throw new Error("目标轨道必须与当前轨道不同");
   const [existingTransition] = await db.select().from(projectTransitions).where(eq(projectTransitions.sourceProjectId, source.id)).limit(1);
   if (existingTransition) throw new Error("该项目已经完成过受控转轨");
-  const [linkedProduct, declaration] = await Promise.all([
-    source.productId ? db.select().from(products).where(eq(products.id, source.productId)).limit(1).then((rows) => rows[0] ?? null) : Promise.resolve(null),
-    db.select().from(projectChangeScopeDeclarations).where(eq(projectChangeScopeDeclarations.projectId, source.id)).orderBy(desc(projectChangeScopeDeclarations.version)).limit(1).then((rows) => rows[0] ?? null),
-  ]);
-  if (["eco", "derivative", "idr"].includes(input.toCategory) && !linkedProduct?.currentRevisionId) {
-    throw new Error("ECO/DRV/IDR 转轨必须关联已有产品和已发布基线 Revision");
-  }
+  const declaration = await db.select().from(projectChangeScopeDeclarations)
+    .where(eq(projectChangeScopeDeclarations.projectId, source.id))
+    .orderBy(desc(projectChangeScopeDeclarations.version))
+    .limit(1)
+    .then((rows) => rows[0] ?? null);
   if (["jdm", "obt"].includes(input.toCategory)) {
     const missing = [!source.customerInputVersion, !source.customerPartNumber, !source.commercialBoundary, !source.customerSignoffOwnerUserId].some(Boolean);
     if (missing) throw new Error("转入 JDM/OBT 前必须先补齐客户输入、客户料号、商务边界和签核责任人");
@@ -302,7 +300,7 @@ export async function executeProjectTransition(input: {
       lifecycle: "active",
       productId: source.productId,
       productDefinitionSnapshotId: source.productDefinitionSnapshotId,
-      baseRevisionId: ["eco", "derivative", "idr"].includes(input.toCategory) ? linkedProduct?.currentRevisionId ?? null : source.baseRevisionId,
+      baseRevisionId: null,
       safetyRiskLevel: source.safetyRiskLevel,
       regulatoryRiskLevel: source.regulatoryRiskLevel,
       customerInputVersion: source.customerInputVersion,

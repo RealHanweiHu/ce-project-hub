@@ -5,6 +5,7 @@ import {
   getArchivedProjects,
   getProjectsByMember,
   getProjectById,
+  getMpReleaseByProjectId,
   setProjectLifecycle,
   getProductById,
   createProjectWithSeed,
@@ -56,11 +57,8 @@ import {
 } from "../../shared/sop-risk";
 import { certificationRequirementLabel } from "../../shared/certification";
 import {
-  NPD_ADDON_PACKS,
+  NPD_FULL_TEMPLATE_CONFIG,
   getEffectivePhasesForProjectLike,
-  isNpdTierDowngrade,
-  normalizeNpdTemplateConfig,
-  recommendNpdTemplateConfig,
   type ProjectTemplateLike,
 } from "../../shared/npd-v3";
 import { todayShanghai as todayInShanghaiISO } from "../../shared/shanghai-date";
@@ -420,7 +418,8 @@ export const projectsRouter = router({
       const phases = getEffectivePhasesForProjectLike(project);
       const phase = phases.find((item) => item.id === project.currentPhase) ?? null;
       // health/计数与组合看板同源（设计4 §5：单一口径，不再让总览页自己聚合）
-      const portfolioRow = (await getPortfolio(ctx.user.id)).find((row) => row.id === input.projectId) ?? null;
+      const portfolioRow = (await getPortfolio(ctx.user.id, { projectId: input.projectId }))
+        .find((row) => row.id === input.projectId) ?? null;
       const gateTask = phase ? tasks.find((task) => task.taskId === phase.gateTaskId) ?? null : null;
       const gaps = (readiness?.dimensions ?? [])
         .filter((dim) => !dim.ok)
@@ -488,7 +487,7 @@ export const projectsRouter = router({
       if (!row) throw new TRPCError({ code: "NOT_FOUND" });
       const role = await getEffectiveRole(input.id, ctx.user.id);
       if (!role || !ROLE_PERMISSIONS[role].canView) throw new TRPCError({ code: "FORBIDDEN" });
-      const portfolio = await getPortfolio(ctx.user.id);
+      const portfolio = await getPortfolio(ctx.user.id, { projectId: input.id });
       const health = portfolio.find((item) => item.id === input.id);
       const isExternal = role === "external_customer" || role === "supplier";
       const safeRow = isExternal ? {
@@ -630,16 +629,15 @@ export const projectsRouter = router({
           message: '您没有创建项目的权限。请联系管理员授权。',
         });
       }
-      const baselineRequired = ["eco", "derivative", "idr"].includes(input.category);
-      const linkedProduct = input.productId ? await getProductById(input.productId) : undefined;
-      if (baselineRequired && !input.productId) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "ECO/DRV/IDR 必须选择已有产品和已发布基线版本" });
+      if (input.category === "idr") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "IDR 已停止新建：包装/标签/简单换色等小改请在产品库登记轻量变更；需要多人跨专业协作的外观翻新请选择 DRV",
+        });
       }
+      const linkedProduct = input.productId ? await getProductById(input.productId) : undefined;
       if (input.productId && !linkedProduct) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "关联产品不存在" });
-      }
-      if (baselineRequired && !linkedProduct?.currentRevisionId) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "所选产品没有已发布 Revision，不能作为本轨道基线" });
       }
       if (["jdm", "obt"].includes(input.category)) {
         const missing = [
@@ -661,7 +659,7 @@ export const projectsRouter = router({
         projectId: input.id,
         declaration: changeScopeDeclaration,
         baselineTargetMarkets: linkedProduct.targetMarkets ?? [],
-        baseRevisionId: baselineRequired ? linkedProduct.currentRevisionId : null,
+        baseRevisionId: null,
       }) : null;
       const riskAssessment = deriveSopRiskAssessment({
         declaration: changeScopeDeclaration,
@@ -672,52 +670,10 @@ export const projectsRouter = router({
       });
       let npdTemplateAudit: Record<string, unknown> | null = null;
       if (input.category === "npd") {
-        if (!input.npdAttributes) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "NPD 创建必须完成项目属性问答" });
-        }
-        const effectiveNpdAttributes = {
-          ...input.npdAttributes,
-          hasBattery: input.npdAttributes.hasBattery ||
-            changeScopeDeclaration.batteryCellChange ||
-            changeScopeDeclaration.batteryPackOrBmsChange ||
-            changeScopeDeclaration.protectionParameterChange ||
-            changeScopeDeclaration.pressurizedStructureChange,
-          needsCert: input.npdAttributes.needsCert ||
-            changeScopeDeclaration.targetMarketExpansion ||
-            changeScopeDeclaration.targetMarkets.length > 0,
-          hasFirmware: input.npdAttributes.hasFirmware ||
-            changeScopeDeclaration.safetyRelatedSoftwareChange,
-        };
-        const recommendation = recommendNpdTemplateConfig({
-          ...effectiveNpdAttributes,
-          safetyRiskLevel: riskAssessment.safetyRiskLevel,
-          regulatoryRiskLevel: riskAssessment.regulatoryRiskLevel,
-        });
-        const chosen = normalizeNpdTemplateConfig(input.npdTemplate);
-        const missingLockedPacks = recommendation.lockedPacks.filter(
-          (pack) => !chosen.packs.includes(pack)
-        );
-        if (missingLockedPacks.length > 0) {
-          const labels = missingLockedPacks.map((packId) =>
-            NPD_ADDON_PACKS.find((pack) => pack.id === packId)?.name ?? packId
-          );
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: `红线附加包不可取消：${labels.join("、")}`,
-          });
-        }
-        const downgradeReason = input.npdTemplateDowngradeReason?.trim() || null;
-        if (isNpdTierDowngrade(chosen.tier, recommendation.tier) && !downgradeReason) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "降档需填写理由（推荐档位高于所选档位）",
-          });
-        }
         npdTemplateAudit = {
-          ...chosen,
-          recommended: recommendation,
-          attributes: effectiveNpdAttributes,
-          downgradeReason,
+          tier: NPD_FULL_TEMPLATE_CONFIG.tier,
+          packs: [...NPD_FULL_TEMPLATE_CONFIG.packs],
+          policy: "fixed_full_process",
         };
       }
       const sopTemplateVersion = getDefaultTemplateVersionForCategory(input.category);
@@ -734,7 +690,7 @@ export const projectsRouter = router({
         category: input.category,
         pmUserId: input.pmUserId ?? null,
         productId: input.productId ?? null,
-        baseRevisionId: baselineRequired ? linkedProduct?.currentRevisionId ?? null : null,
+        baseRevisionId: null,
         productDefinitionSnapshotId: handoffSnapshot?.id ?? null,
         sopTemplateVersion,
         safetyRiskLevel: riskAssessment.safetyRiskLevel,
@@ -832,10 +788,9 @@ export const projectsRouter = router({
       ) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "系统或项目已升级为高风险，不能通过项目编辑降级；降级需走 QA/认证联合审批" });
       }
-      const baselineRequired = ["eco", "derivative", "idr"].includes(input.category);
       const linkedProduct = input.productId ? await getProductById(input.productId) : undefined;
-      if (baselineRequired && (!linkedProduct || !linkedProduct.currentRevisionId)) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "ECO/DRV/IDR 必须保留已有产品和已发布基线 Revision" });
+      if (input.productId && !linkedProduct) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "关联产品不存在" });
       }
       if (["jdm", "obt"].includes(input.category) && existing.inputBaselineFrozenAt) {
         const baselineChanged =
@@ -897,7 +852,7 @@ export const projectsRouter = router({
         category: input.category,
         pmUserId: nextPmUserId,
         productId: input.productId ?? null,
-        baseRevisionId: baselineRequired ? linkedProduct?.currentRevisionId ?? existing.baseRevisionId : existing.baseRevisionId,
+        baseRevisionId: input.productId !== existing.productId ? null : existing.baseRevisionId,
         productDefinitionSnapshotId,
         safetyRiskLevel: existing.safetyRiskLevel === "high" || input.safetyRiskLevel === "high" ? "high" : "standard",
         regulatoryRiskLevel: existing.regulatoryRiskLevel === "high" || input.regulatoryRiskLevel === "high" ? "high" : "standard",
@@ -1059,15 +1014,12 @@ export const projectsRouter = router({
       if (input.currentPhase !== undefined) patch.currentPhase = input.currentPhase;
       if (input.pmUserId !== undefined) patch.pmUserId = input.pmUserId;
       if (input.productId !== undefined) patch.productId = input.productId;
-      if (["eco", "derivative", "idr"].includes(existing.category) && input.productId !== undefined) {
-        if (!input.productId) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "该轨道不能解除产品基线" });
+      if (input.productId !== undefined) {
+        if (input.productId) {
+          const product = await getProductById(input.productId);
+          if (!product) throw new TRPCError({ code: "BAD_REQUEST", message: "关联产品不存在" });
         }
-        const product = await getProductById(input.productId);
-        if (!product?.currentRevisionId) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "目标产品没有已发布基线 Revision" });
-        }
-        patch.baseRevisionId = product.currentRevisionId;
+        if (input.productId !== existing.productId) patch.baseRevisionId = null;
       }
       const pmChanged = input.pmUserId !== undefined && input.pmUserId !== (existing.pmUserId ?? null);
       const meetingConfig = getStoredMeetingConfig(existing);
@@ -1355,10 +1307,10 @@ export const projectsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const existing = await getProjectById(input.id);
       if (!existing) throw new TRPCError({ code: "NOT_FOUND" });
-      if (existing.resultRevisionId !== null) {
+      if (await getMpReleaseByProjectId(existing.id)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "已发布项目保留在产品版本追溯中，不能永久删除",
+          message: "已完成产品交付的项目需要保留追溯，不能永久删除",
         });
       }
       // System admins can delete any project regardless of membership
@@ -1395,7 +1347,7 @@ export const projectsRouter = router({
         if (error instanceof Error && /released project/i.test(error.message)) {
           throw new TRPCError({
             code: "BAD_REQUEST",
-            message: "已发布项目保留在产品版本追溯中，不能永久删除",
+            message: "已完成产品交付的项目需要保留追溯，不能永久删除",
           });
         }
         throw error;

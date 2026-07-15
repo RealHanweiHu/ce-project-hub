@@ -11,7 +11,7 @@ import {
   listProductDefinitionChanges, createProductDefinitionChange,
   getProductDefinitionChangeById, updateProductDefinitionChange,
   getProductDefinitionDeviation,
-  createPlatform, listProductRevisions,
+  createPlatform, listProductRevisions, createLightweightProductRevision,
   setProjectProduct, getOpenP0P1Count, releaseProject, getProjectById,
   getReleaseGateStatus, isReleaseOverrideAuthorized, getMpReleaseByProjectId,
   createCustomerVariant, listVariantsByCustomer, listVariantsByParentProduct,
@@ -114,6 +114,13 @@ const productDefinitionChangeUpdateSchema = productDefinitionChangeCreateSchema
     id: z.number(),
     productId: z.string(),
   });
+
+const releaseProductDraftSchema = z.object({
+  name: z.string().trim().min(1).max(256),
+  productNumber: z.string().trim().max(64).optional(),
+  category: z.string().trim().max(64).optional(),
+  targetMarkets: z.array(z.string().trim().min(1)).max(32).optional(),
+});
 
 function canMaintainProductDefinition(
   user: { id: number; role: string; canCreateProject?: boolean | null },
@@ -316,7 +323,10 @@ export const productsRouter = router({
         scheduleImpact: patch.scheduleImpact ?? undefined,
         decisionNotes: patch.decisionNotes ?? undefined,
       });
-      return change;
+      const revision = change && input.status === "implemented" && existing.status !== "implemented"
+        ? await createLightweightProductRevision(product.id, ctx.user.id)
+        : null;
+      return change ? { ...change, generatedRevisionLabel: revision?.revisionLabel ?? null } : change;
     }),
 
   // ── OEM 客户版本 / Customer Revision（PLM 侧登记） ─────────────────────────
@@ -482,11 +492,12 @@ export const productsRouter = router({
       const openP0P1 = await getOpenP0P1Count(input.projectId);
       const gate = await getReleaseGateStatus(project);
       const existingRelease = await getMpReleaseByProjectId(input.projectId);
-      const hasProduct = !!project.productId;
+      const outputProduct = project.productId ? await getProductById(project.productId) : undefined;
+      const hasProduct = !!outputProduct;
       const failedHardDimensions = gate.dimensions.filter((d) => !d.ok && d.dimension !== "review_conditions");
 
       const hardPass =
-        hasProduct && openP0P1 === 0 &&
+        openP0P1 === 0 &&
         gate.phaseId !== null && failedHardDimensions.length === 0 &&
         gate.decision !== null && gate.decision !== "rejected";
 
@@ -495,8 +506,7 @@ export const productsRouter = router({
         await isReleaseOverrideAuthorized(project, { id: ctx.user.id, role: ctx.user.role });
 
       const blockers: string[] = [];
-      if (existingRelease) blockers.push("量产版本已发布，请完成稳定期后走 Close Gate");
-      if (!hasProduct) blockers.push("未关联产品");
+      if (existingRelease) blockers.push("产品交付已完成，请完成稳定期后走 Close Gate");
       if (openP0P1 > 0) blockers.push(`${openP0P1} 个未关闭的 P0/P1 问题`);
       if (gate.phaseId === null) blockers.push("未定义 MP Release 前置 Gate");
       for (const dim of failedHardDimensions) {
@@ -524,7 +534,13 @@ export const productsRouter = router({
 
       return {
         hasProduct,
-        productId: project.productId ?? null,
+        productId: outputProduct?.id ?? null,
+        productName: outputProduct?.name ?? null,
+        suggestedProduct: {
+          name: project.name,
+          productNumber: project.projectNumber,
+          category: typeof project.customFields?.productType === "string" ? project.customFields.productType : "",
+        },
         downstreamVariants,
         approvalRequired: !!approvalConfig?.enabled,
         approvalInstances,
@@ -546,6 +562,7 @@ export const productsRouter = router({
   submitReleaseApproval: protectedProcedure
     .input(z.object({
       projectId: z.string(),
+      product: releaseProductDraftSchema.optional(),
       override: z.object({
         overrideReason: z.string().min(1),
         followUpOwner: z.number(),
@@ -558,6 +575,7 @@ export const productsRouter = router({
         const result = await submitReleaseApproval({
           projectId: input.projectId,
           actor: { id: ctx.user.id, role: ctx.user.role },
+          product: input.product,
           override: input.override,
         });
         return { success: true, approval: result.instance, alreadyPending: result.alreadyPending } as const;
@@ -586,6 +604,7 @@ export const productsRouter = router({
     .input(z.object({
       projectId: z.string(),
       notes: z.string().optional(),
+      product: releaseProductDraftSchema.optional(),
       override: z.object({
         overrideReason: z.string().min(1),
         followUpOwner: z.number(),
@@ -599,18 +618,17 @@ export const productsRouter = router({
         if (approvalConfig?.enabled) {
           throw new Error("已启用钉钉发布审批，请先发起并通过 MP Release 审批");
         }
-        const project = await getProjectById(input.projectId);
-        const product = project?.productId ? await getProductById(project.productId) : undefined;
         const result = await releaseProject({
           projectId: input.projectId,
           actor: { id: ctx.user.id, role: ctx.user.role },
           notes: input.notes,
+          product: input.product,
           override: input.override,
         });
         const after = {
           projectId: input.projectId,
-          productId: project?.productId ?? null,
-          productName: product?.name ?? null,
+          productId: result.productId,
+          productName: result.productName,
           revisionId: result.revisionId,
           revisionLabel: result.revisionLabel,
         };
@@ -619,14 +637,14 @@ export const productsRouter = router({
           userId: ctx.user.id,
           action: "mp.release",
           entityType: "mp_release",
-          entityId: `${input.projectId}:${result.revisionId}`,
+          entityId: `${input.projectId}:${result.productId}`,
           meta: { after },
         });
         await emitAutomationEvent({
           action: "mp.release",
           projectId: input.projectId,
           entityType: "mp_release",
-          entityId: `${input.projectId}:${result.revisionId}`,
+          entityId: `${input.projectId}:${result.productId}`,
           actorId: ctx.user.id,
           after,
         });

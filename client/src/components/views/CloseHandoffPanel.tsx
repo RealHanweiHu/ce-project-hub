@@ -8,7 +8,7 @@ const ITEMS = [
   { key: 'controlled_documents', label: '受控资料', description: '量产图纸、BOM、规格、检验/工艺文件已进入受控版本。' },
   { key: 'maintenance_scope', label: '维护边界', description: '产品维护责任、版本决策边界和升级路径已写清。' },
   { key: 'after_sales_process', label: '售后入口', description: '售后问题的登记、分流、响应人与证据保存方式已确认。' },
-  { key: 'eco_process', label: 'ECO 入口', description: '量产变更必须基于当前 Revision 发起 ECO，禁止线下改版。' },
+  { key: 'eco_process', label: '变更分流', description: '包装、印刷、标签等轻改在产品库生成 Revision；复杂多人协作另建 ECO，不以 Revision 作为立项前提。' },
 ] as const;
 
 type ItemKey = typeof ITEMS[number]['key'];

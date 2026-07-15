@@ -225,6 +225,42 @@ function MentionComposer({
   );
 }
 
+// ── 内外线程共用的列表 / 发送按钮（B8 收敛：同一套渲染只写一份） ────────────────
+
+function CommentList({ comments, isLoading, emptyText }: { comments: CommentRow[]; isLoading: boolean; emptyText: string }) {
+  if (isLoading) return <Loader2 className="animate-spin text-primary" size={16} />;
+  return (
+    <div className="space-y-2.5">
+      {comments.map((c) => (
+        <div key={c.id} className="flex gap-2.5">
+          <div className="w-6 h-6 shrink-0 bg-secondary flex items-center justify-center text-[10px] text-muted-foreground uppercase">
+            {(c.authorName || 'U').charAt(0)}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-baseline gap-2">
+              <span className="text-xs font-medium text-foreground">{c.authorName || '用户'}</span>
+              <span className="text-[10px] text-muted-foreground">{new Date(c.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+            </div>
+            <div className="text-sm text-foreground whitespace-pre-wrap break-words">{renderBody(c.body)}</div>
+          </div>
+        </div>
+      ))}
+      {comments.length === 0 && <p className="text-xs text-muted-foreground">{emptyText}</p>}
+    </div>
+  );
+}
+
+function SendButton({ disabled, onClick }: { disabled: boolean; onClick: () => void }) {
+  return (
+    <button
+      disabled={disabled}
+      onClick={onClick}
+      className="self-end bg-primary hover:bg-primary/90 disabled:opacity-40 text-primary-foreground px-3 py-2 transition-colors"
+      title="发送 (⌘+Enter)"
+    ><Send size={14} /></button>
+  );
+}
+
 export function CommentThread({ entityType, entityId, projectId }: { entityType: string; entityId: string; projectId?: string | null }) {
   const utils = trpc.useUtils();
   const { data: comments = [], isLoading } = trpc.comments.list.useQuery({ entityType, entityId });
@@ -241,27 +277,7 @@ export function CommentThread({ entityType, entityId, projectId }: { entityType:
         <MessageSquare size={12} /> 评论 · {comments.length}
       </div>
 
-      {isLoading ? (
-        <Loader2 className="animate-spin text-primary" size={16} />
-      ) : (
-        <div className="space-y-2.5">
-          {(comments as CommentRow[]).map((c) => (
-            <div key={c.id} className="flex gap-2.5">
-              <div className="w-6 h-6 shrink-0 bg-secondary flex items-center justify-center text-[10px] text-muted-foreground uppercase">
-                {(c.authorName || 'U').charAt(0)}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-baseline gap-2">
-                  <span className="text-xs font-medium text-foreground">{c.authorName || '用户'}</span>
-                  <span className="text-[10px] text-muted-foreground">{new Date(c.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
-                </div>
-                <div className="text-sm text-foreground whitespace-pre-wrap break-words">{renderBody(c.body)}</div>
-              </div>
-            </div>
-          ))}
-          {comments.length === 0 && <p className="text-xs text-muted-foreground">还没有评论。用 @用户名 可以提及并通知对方。</p>}
-        </div>
-      )}
+      <CommentList comments={comments as CommentRow[]} isLoading={isLoading} emptyText="还没有评论。用 @用户名 可以提及并通知对方。" />
 
       <div className="flex gap-2 pt-1">
         <MentionComposer
@@ -271,12 +287,7 @@ export function CommentThread({ entityType, entityId, projectId }: { entityType:
           disabled={addM.isPending}
           onSubmit={submit}
         />
-        <button
-          disabled={!body.trim() || addM.isPending}
-          onClick={submit}
-          className="self-end bg-primary hover:bg-primary/90 disabled:opacity-40 text-primary-foreground px-3 py-2 transition-colors"
-          title="发送 (⌘+Enter)"
-        ><Send size={14} /></button>
+        <SendButton disabled={!body.trim() || addM.isPending} onClick={submit} />
       </div>
     </div>
   );
@@ -298,6 +309,7 @@ export function ExternalCommentThread({ projectId, audience }: { projectId: stri
     onError: (e) => toast.error(e.message),
   });
   const [body, setBody] = useState('');
+  const submit = () => addM.mutate({ ...input, body: body.trim() });
 
   return (
     <div className="space-y-3">
@@ -305,29 +317,10 @@ export function ExternalCommentThread({ projectId, audience }: { projectId: stri
         <MessageSquare size={12} /> {EXTERNAL_LABEL[audience]} · {comments.length}
       </div>
 
-      {isLoading ? (
-        <Loader2 className="animate-spin text-primary" size={16} />
-      ) : (
-        <div className="space-y-2.5">
-          {(comments as CommentRow[]).map((c) => (
-            <div key={c.id} className="flex gap-2.5">
-              <div className="w-6 h-6 shrink-0 bg-secondary flex items-center justify-center text-[10px] text-muted-foreground uppercase">
-                {(c.authorName || 'U').charAt(0)}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-baseline gap-2">
-                  <span className="text-xs font-medium text-foreground">{c.authorName || '用户'}</span>
-                  <span className="text-[10px] text-muted-foreground">{new Date(c.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
-                </div>
-                <div className="text-sm text-foreground whitespace-pre-wrap break-words">{renderBody(c.body)}</div>
-              </div>
-            </div>
-          ))}
-          {comments.length === 0 && <p className="text-xs text-muted-foreground">还没有外部协作留言。</p>}
-        </div>
-      )}
+      <CommentList comments={comments as CommentRow[]} isLoading={isLoading} emptyText="还没有外部协作留言。" />
 
       <div className="flex gap-2 pt-1">
+        {/* 外部线程刻意不带 @提及（外部人员不可提及内部成员），仅纯文本输入 */}
         <textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
@@ -335,17 +328,10 @@ export function ExternalCommentThread({ projectId, audience }: { projectId: stri
           placeholder={`写${EXTERNAL_LABEL[audience]}留言…`}
           className="flex-1 border border-border text-sm px-2 py-1.5 bg-card focus:border-muted-foreground resize-none"
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && body.trim()) {
-              addM.mutate({ ...input, body: body.trim() });
-            }
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && body.trim()) submit();
           }}
         />
-        <button
-          disabled={!body.trim() || addM.isPending}
-          onClick={() => addM.mutate({ ...input, body: body.trim() })}
-          className="self-end bg-primary hover:bg-primary/90 disabled:opacity-40 text-primary-foreground px-3 py-2 transition-colors"
-          title="发送 (⌘+Enter)"
-        ><Send size={14} /></button>
+        <SendButton disabled={!body.trim() || addM.isPending} onClick={submit} />
       </div>
     </div>
   );

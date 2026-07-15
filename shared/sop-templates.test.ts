@@ -51,6 +51,8 @@ describe("SOP templates", () => {
   });
 
   it("keeps category metadata and release gates consistent", () => {
+    expect(PROJECT_CATEGORIES.map((category) => category.id)).not.toContain("idr");
+    expect(CATEGORY_MAP.idr.badge).toBe("IDR"); // historical projects remain renderable
     for (const category of PROJECT_CATEGORIES) {
       expect(category.phaseCount).toBe(category.phases.length);
       expect(getReleaseGatePhase(category.id)?.isReleaseGate).toBe(true);
@@ -126,16 +128,14 @@ describe("SOP templates", () => {
     expect(task(ECO_PHASES, "pvt", "epv4").name).toBe("ECN 正式发布");
   });
 
-  it("adds product iteration / derivative development as the generational upgrade flow", () => {
+  it("uses DRV for complex collaborative iteration while routing small changes to the product axis", () => {
     expect(CATEGORY_MAP.derivative.name).toBe("产品迭代/衍生开发");
     expect(CATEGORY_MAP.derivative.badge).toBe("DRV");
     expect(CATEGORY_MAP.derivative.phaseCount).toBe(6);
-    expect(CATEGORY_MAP.derivative.desc).toContain("1 代升级到 2 代");
-    expect(CATEGORY_MAP.derivative.desc).toContain("大改款或中改款");
+    expect(CATEGORY_MAP.derivative.desc).toContain("多人跨专业协作");
+    expect(CATEGORY_MAP.derivative.desc).toContain("复杂外观/CMF 翻新");
     expect(CATEGORY_MAP.derivative.desc).toContain("Gate 深度");
-    expect(CATEGORY_MAP.derivative.desc).toContain("模块复用策略");
-    expect(CATEGORY_MAP.derivative.desc).toContain("极小改走 ECO");
-    expect(CATEGORY_MAP.derivative.desc).toContain("纯外观/换色走 IDR");
+    expect(CATEGORY_MAP.derivative.desc).toContain("小改留在产品轴");
     expect(DERIVATIVE_PHASES.reduce((sum, p) => sum + p.tasks.length, 0)).toBe(36);
     expect(getDerivativeEffectiveTaskIds().size).toBe(36);
     expect(DERIVATIVE_REUSE_MODULE_RULES.map((rule) => rule.id)).toEqual([
@@ -164,8 +164,8 @@ describe("SOP templates", () => {
     expect(task(DERIVATIVE_PHASES, "iteration", "di5").guide).toContain("EVT Gate 关闭选做/跳过项");
     expect(task(DERIVATIVE_PHASES, "iteration", "di5").guide).toContain("DVT Gate 确认 PVT 保留项");
     expect(task(DERIVATIVE_PHASES, "iteration", "di5").guide).toContain("不可裁剪边界");
-    expect(task(DERIVATIVE_PHASES, "iteration", "di1").guide).toContain("不是极小 ECO");
-    expect(task(DERIVATIVE_PHASES, "iteration", "di1").guide).toContain("不是纯 IDR 外观翻新");
+    expect(task(DERIVATIVE_PHASES, "iteration", "di1").guide).toContain("多人跨专业协作");
+    expect(task(DERIVATIVE_PHASES, "iteration", "di1").guide).toContain("产品轴轻量变更");
 
     const design = phase(DERIVATIVE_PHASES, "design");
     expect(design.gate).toBe("迭代设计冻结");
@@ -174,7 +174,7 @@ describe("SOP templates", () => {
     expect(task(DERIVATIVE_PHASES, "design", "dd2").name).toBe("机芯/马达/泵体升级设计");
     expect(task(DERIVATIVE_PHASES, "design", "dd3").name).toBe("PCBA/电源/主控升级设计");
     expect(task(DERIVATIVE_PHASES, "design", "dd4").name).toBe("软件/固件升级设计");
-    expect(task(DERIVATIVE_PHASES, "design", "dd5").name).toBe("结构设计与装配方案");
+    expect(task(DERIVATIVE_PHASES, "design", "dd5").name).toBe("ID/CMF、结构与装配方案");
     expect(task(DERIVATIVE_PHASES, "design", "dd6").guide).toContain("DFMEA");
     expect(task(DERIVATIVE_PHASES, "design", "dd7").name).toBe("投模评审/开模批准");
     expect(task(DERIVATIVE_PHASES, "design", "dd7").guide).toContain("未批准不得启动模具开发");
@@ -207,7 +207,7 @@ describe("SOP templates", () => {
     expect(pvt.gateTaskId).toBe("dp6");
     expect(pvt.gateStandard.requiredDeliverables).toEqual(expect.arrayContaining(["试产问题关闭报告", "良率改善报告", "EOL 100%测试能力验收记录", "UN38.3运输测试报告或复用确认", "MSDS", "电芯/电池包安全认证报告或复用确认"]));
     expect(task(DERIVATIVE_PHASES, "pvt", "dp4").name).toBe("试产问题关闭与良率改善");
-    expect(task(DERIVATIVE_PHASES, "pvt", "dp5").name).toBe("版本切换与文件发布");
+    expect(task(DERIVATIVE_PHASES, "pvt", "dp5").name).toBe("产品交付与文件发布");
 
     const mp = phase(DERIVATIVE_PHASES, "mp");
     expect(mp.gateTaskId).toBe("dm3");
@@ -275,7 +275,7 @@ describe("SOP templates", () => {
     }
   });
 
-  it("keeps IDR as appearance-led refresh with an upgrade guard", () => {
+  it("keeps the retired IDR template only for historical project compatibility", () => {
     expect(task(IDR_PHASES, "design", "ir1").owner).toBe("产品经理/ID");
     expect(task(IDR_PHASES, "design", "ir2").owner).toBe("项目经理/CM");
     expect(task(IDR_PHASES, "mp", "im5").owner).toBe("产品经理/市场/销售");

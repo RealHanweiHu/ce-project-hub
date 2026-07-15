@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toLocalISODate } from '@/lib/utils';
+import { TASK_STATUS_UI, TASK_PRIORITY_UI } from '@/lib/task-ui';
 import { type TaskStatus, type TaskPriority } from '@shared/const';
 import type { ProjectTemplateLike } from '@shared/npd-v3';
 import { resolveProjectPhase, resolveTaskName } from '@shared/sop-template-resolution';
@@ -48,30 +49,15 @@ interface TaskListViewProps {
   emptyDesc: string;
   onRefetch: () => void;
   onNavigateToProject?: (projectId: string, focus?: TaskFocus) => void;
-  /** Show assignee column (for overdue/blocked views where PM needs to see who owns it) */
-  showAssignee?: boolean;
   /** Show overdue indicator */
   showOverdueBadge?: boolean;
 }
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
-type Tone = { color: string; bg: string; border: string };
-const STATUS_CONFIG: Record<TaskStatus, { label: string; tone: Tone }> = {
-  todo:        { label: '待开始',  tone: { color: 'var(--secondary-foreground)', bg: 'var(--secondary)', border: 'var(--border)' } },
-  in_progress: { label: '进行中',  tone: { color: 'var(--primary)', bg: 'var(--acc-soft)', border: 'var(--acc-border)' } },
-  blocked:     { label: '已阻塞',  tone: { color: 'var(--destructive)', bg: 'color-mix(in srgb, var(--destructive) 10%, transparent)', border: 'color-mix(in srgb, var(--destructive) 30%, transparent)' } },
-  done:        { label: '已完成',  tone: { color: 'var(--success)', bg: 'color-mix(in srgb, var(--success) 12%, transparent)', border: 'color-mix(in srgb, var(--success) 30%, transparent)' } },
-  skipped:     { label: '已跳过',  tone: { color: 'var(--muted-foreground)', bg: 'var(--secondary)', border: 'var(--border)' } },
-  pending_approval: { label: '待审批', tone: { color: 'var(--warning)', bg: 'color-mix(in srgb, var(--warning) 14%, transparent)', border: 'color-mix(in srgb, var(--warning) 32%, transparent)' } },
-};
-
-const PRIORITY_CONFIG: Record<TaskPriority, { label: string; tone: Tone; dot: string }> = {
-  critical: { label: '紧急', tone: { color: 'var(--destructive)', bg: 'color-mix(in srgb, var(--destructive) 10%, transparent)', border: 'color-mix(in srgb, var(--destructive) 30%, transparent)' }, dot: 'var(--destructive)' },
-  high:     { label: '高',   tone: { color: 'var(--warning)', bg: 'color-mix(in srgb, var(--warning) 12%, transparent)', border: 'color-mix(in srgb, var(--warning) 30%, transparent)' }, dot: 'var(--warning)' },
-  medium:   { label: '中',   tone: { color: 'var(--primary)', bg: 'var(--acc-soft)', border: 'var(--acc-border)' }, dot: 'var(--primary)' },
-  low:      { label: '低',   tone: { color: 'var(--muted-foreground)', bg: 'var(--secondary)', border: 'var(--border)' }, dot: 'var(--muted-foreground)' },
-};
+// 状态/优先级展示口径统一从 lib/task-ui 引入（全站单一定义，B8 收敛）
+const STATUS_CONFIG = TASK_STATUS_UI;
+const PRIORITY_CONFIG = TASK_PRIORITY_UI;
 
 // ─── Project-bound template context ─────────────────────────────────────────
 
@@ -112,7 +98,6 @@ export function TaskListView({
   emptyDesc,
   onRefetch,
   onNavigateToProject,
-  showAssignee = false,
   showOverdueBadge = false,
 }: TaskListViewProps) {
   if (isLoading) {

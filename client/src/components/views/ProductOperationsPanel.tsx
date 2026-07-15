@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { AlertTriangle, CheckCircle2, GitBranch, Headphones, Loader2, Plus } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
+import { useUserNames } from '@/hooks/useUserNames';
 import { toast } from 'sonner';
 
 const SCOPE_FIELDS = [
@@ -30,7 +31,7 @@ type OperationsProduct = {
 
 export function ProductOperationsPanel({ product }: { product: OperationsProduct }) {
   const utils = trpc.useUtils();
-  const users = trpc.admin.listUsersForSelect.useQuery(undefined, { staleTime: 60_000 });
+  const { nameById } = useUserNames();
   const cases = trpc.handoffs.serviceCases.useQuery({ productId: product.id });
   const [caseTitle, setCaseTitle] = useState('');
   const [caseDescription, setCaseDescription] = useState('');
@@ -39,7 +40,6 @@ export function ProductOperationsPanel({ product }: { product: OperationsProduct
   const [ecoReason, setEcoReason] = useState('');
   const [serviceCaseId, setServiceCaseId] = useState<number | null>(null);
   const [scope, setScope] = useState<Record<ScopeKey, boolean>>(() => Object.fromEntries(SCOPE_FIELDS.map(([key]) => [key, false])) as Record<ScopeKey, boolean>);
-  const nameById = useMemo(() => new Map((users.data ?? []).map((user) => [user.id, user.name || user.username || `用户 #${user.id}`])), [users.data]);
 
   const createCase = trpc.handoffs.createServiceCase.useMutation({
     onSuccess: async () => {

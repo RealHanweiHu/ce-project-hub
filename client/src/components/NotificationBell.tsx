@@ -8,7 +8,7 @@ type NotificationRow = {
   entityType?: string | null; entityId?: string | null;
 };
 
-export function NotificationBell({ onNavigate }: { onNavigate?: (projectId: string) => void } = {}) {
+export function NotificationBell({ onNavigate, onGoMyWork }: { onNavigate?: (projectId: string) => void; onGoMyWork?: () => void } = {}) {
   const utils = trpc.useUtils();
   const [open, setOpen] = useState(false);
   const { data: unread = 0 } = trpc.notifications.unreadCount.useQuery(undefined, { refetchInterval: 30_000, refetchOnWindowFocus: true });
@@ -45,32 +45,20 @@ export function NotificationBell({ onNavigate }: { onNavigate?: (projectId: stri
               )}
             </div>
 
-            {/* ── 待审交付物 ──────────────────────────────────────────── */}
+            {/* ── 待审交付物：只留计数 + 跳转，明细统一在「我的工作」维护（B5 去重） ── */}
             {pending.length > 0 && (
-              <div>
-                <div className="flex items-center gap-1.5 px-3 py-1.5 bg-[color:var(--warning-soft)] border-b border-[color:var(--warning)]">
-                  <ClipboardCheck size={11} className="text-[color:var(--warning)]" />
-                  <span className="text-[10px] uppercase tracking-widest text-[color:var(--warning)]">待你审核的交付物 ({pending.length})</span>
-                </div>
-                {pending.map((r) => (
-                  <button
-                    key={r.id}
-                    onClick={() => {
-                      setOpen(false);
-                      onNavigate?.(r.projectId);
-                    }}
-                    className="w-full text-left px-3 py-2 border-b border-[color:var(--warning)] hover:bg-[color:var(--warning-soft)] transition-colors"
-                  >
-                    <div className="flex items-start gap-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-[color:var(--warning)] mt-1.5 shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <div className="text-xs font-medium text-foreground truncate">{r.deliverableName}</div>
-                        <div className="text-[10px] text-muted-foreground truncate">项目 {r.projectId} · {r.phaseId}</div>
-                      </div>
-                    </div>
-                  </button>
-                ))}
-              </div>
+              <button
+                onClick={() => {
+                  setOpen(false);
+                  if (onGoMyWork) onGoMyWork();
+                  else onNavigate?.(pending[0].projectId);
+                }}
+                className="w-full flex items-center gap-1.5 px-3 py-2 bg-[color:var(--warning-soft)] border-b border-[color:var(--warning)] hover:opacity-90 transition-opacity text-left"
+              >
+                <ClipboardCheck size={11} className="text-[color:var(--warning)] shrink-0" />
+                <span className="flex-1 text-[11px] font-medium text-[color:var(--warning)]">待你审核的交付物 {pending.length} 项</span>
+                <span className="text-[10px] text-[color:var(--warning)] shrink-0">去我的工作处理 →</span>
+              </button>
             )}
 
             {isLoading ? (

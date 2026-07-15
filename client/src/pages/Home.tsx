@@ -24,12 +24,7 @@ import { getLoginUrl } from '@/const';
 import { useQueryClient } from '@tanstack/react-query';
 import { getQueryKey } from '@trpc/react-query';
 import { isSystemAdminRole } from '@shared/system-roles';
-import {
-  isNpdTierDowngrade,
-  normalizeNpdTemplateConfig,
-  recommendNpdTemplateConfig,
-  type NpdProjectAttributes,
-} from '@shared/npd-v3';
+import { NPD_FULL_TEMPLATE_CONFIG } from '@shared/npd-v3';
 import { useProjectData } from '@/hooks/useProjectData';
 import { NotificationBell } from '@/components/NotificationBell';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
@@ -141,9 +136,6 @@ const KickoffWizard = lazy(() =>
 );
 const GlobalSearch = lazy(() =>
   import('@/components/GlobalSearch').then((module) => ({ default: module.GlobalSearch }))
-);
-const ChangePasswordDialog = lazy(() =>
-  import('@/components/ChangePasswordDialog').then((module) => ({ default: module.ChangePasswordDialog }))
 );
 const AccountPage = lazy(() => import('@/components/views/AccountPage').then((m) => ({ default: m.AccountPage })));
 
@@ -686,7 +678,6 @@ export default function Home() {
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
 
   // ── tRPC queries & mutations ─────────────────────────────────────────────
   const { data: projectRows = [], isLoading: projectsLoading } = trpc.projects.list.useQuery(
@@ -776,14 +767,8 @@ export default function Home() {
   }, []);
 
   const handleAddProject = async (data: ProjectCreateDraft) => {
-    const {
-      npdTemplate,
-      npdAttributes,
-      npdTemplateDowngradeReason,
-      ...projectData
-    } = data;
     const newProject = normalizeProject({
-      ...projectData,
+      ...data,
       id: nanoid(8),
       phases: {},
     } as Project);
@@ -791,7 +776,7 @@ export default function Home() {
       await createMutation.mutateAsync({
         ...projectToApiInput(newProject),
         ...(newProject.category === 'npd'
-          ? { npdTemplate, npdAttributes, npdTemplateDowngradeReason }
+          ? { npdTemplate: { tier: NPD_FULL_TEMPLATE_CONFIG.tier, packs: [...NPD_FULL_TEMPLATE_CONFIG.packs] } }
           : {}),
       });
       invalidateProjects();
@@ -848,34 +833,12 @@ export default function Home() {
       phases: freshPhases,
       phaseDates: undefined,
     } as Project);
-    const storedNpdTemplate = category === 'npd'
-      ? (source.customFields?.npdTemplate as ({ attributes?: Partial<NpdProjectAttributes> } & Record<string, unknown>) | undefined)
-      : undefined;
-    const npdTemplate = normalizeNpdTemplateConfig(storedNpdTemplate);
-    const storedAttributes = storedNpdTemplate?.attributes;
-    const npdAttributes: NpdProjectAttributes = {
-      hasBattery: storedAttributes?.hasBattery ?? npdTemplate.packs.includes('battery'),
-      needsCert: storedAttributes?.needsCert ?? npdTemplate.packs.includes('cert'),
-      hasFirmware: storedAttributes?.hasFirmware ?? npdTemplate.packs.includes('software'),
-      needsNewMold: storedAttributes?.needsNewMold ?? npdTemplate.packs.includes('mold'),
-      isNewPlatform: storedAttributes?.isNewPlatform ?? false,
-    };
-    const recommendation = recommendNpdTemplateConfig({
-      ...npdAttributes,
-      safetyRiskLevel: cloned.risk === 'high' ? 'high' : 'standard',
-      regulatoryRiskLevel: cloned.risk === 'high' ? 'high' : 'standard',
-    });
-    const isDowngrade = isNpdTierDowngrade(npdTemplate.tier, recommendation.tier);
-    const storedDowngradeReason = typeof storedNpdTemplate?.downgradeReason === 'string'
-      ? storedNpdTemplate.downgradeReason.trim()
-      : '';
-    const npdTemplateDowngradeReason = isDowngrade
-      ? storedDowngradeReason || '克隆沿用源项目流程配置'
-      : undefined;
     try {
       await createMutation.mutateAsync({
         ...projectToApiInput(cloned),
-        ...(category === 'npd' ? { npdTemplate, npdAttributes, npdTemplateDowngradeReason } : {}),
+        ...(category === 'npd'
+          ? { npdTemplate: { tier: NPD_FULL_TEMPLATE_CONFIG.tier, packs: [...NPD_FULL_TEMPLATE_CONFIG.packs] } }
+          : {}),
       });
       invalidateProjects();
       setSelectedProjectId(cloned.id);
@@ -889,7 +852,7 @@ export default function Home() {
 
   // ── Navigation ───────────────────────────────────────────────────────────
   const navItems = [
-    { id: 'mytasks' as View, label: '我的任务', labelEn: 'My Tasks', icon: ListChecks },
+    { id: 'mytasks' as View, label: '我的工作', labelEn: 'My Work', icon: ListChecks },
     { id: 'overview' as View, label: '总览', labelEn: 'Overview', icon: LayoutDashboard },
     { id: 'projects' as View, label: '项目管理', labelEn: 'Projects', icon: FolderKanban },
     { id: 'calendar' as View, label: '日历', labelEn: 'Calendar', icon: CalendarDays },
@@ -913,7 +876,7 @@ export default function Home() {
 
   const viewLabels: Record<View, string> = {
     overview: 'Overview',
-    mytasks: 'My Tasks',
+    mytasks: 'My Work',
     projects: 'Projects',
     calendar: 'Calendar',
     products: 'Products',
@@ -1109,7 +1072,7 @@ export default function Home() {
               </kbd>
             </button>
 
-            <NotificationBell onNavigate={(projectId) => handleSelectProject(projectId)} />
+            <NotificationBell onNavigate={(projectId) => handleSelectProject(projectId)} onGoMyWork={() => handleNavClick('mytasks')} />
           </div>
         </header>
 
@@ -1176,16 +1139,6 @@ export default function Home() {
           />
         </Suspense>
       )}
-      {/* Change Password Dialog */}
-      {changePasswordOpen && (
-        <Suspense fallback={null}>
-          <ChangePasswordDialog
-            open={changePasswordOpen}
-            onOpenChange={setChangePasswordOpen}
-          />
-        </Suspense>
-      )}
-
       {kickoffProject && (
         <Suspense fallback={null}>
           <KickoffWizard project={kickoffProject} onClose={() => setKickoffProject(null)} />

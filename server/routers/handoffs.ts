@@ -240,7 +240,6 @@ export const handoffsRouter = router({
       const product = await getProductById(input.productId);
       if (!product) throw new TRPCError({ code: "NOT_FOUND", message: "产品不存在" });
       if (product.lifecycleState === "eol") throw new TRPCError({ code: "BAD_REQUEST", message: "产品已停产，不能发起新的 ECO" });
-      if (!product.currentRevisionId) throw new TRPCError({ code: "BAD_REQUEST", message: "产品没有已发布基线 Revision，不能发起 ECO" });
       const allowed = isSystemAdminRole(ctx.user.role) ||
         systemRoleCanCreateProject(ctx.user) ||
         product.maintenanceOwnerUserId === ctx.user.id;
@@ -258,7 +257,7 @@ export const handoffsRouter = router({
         projectId: id,
         declaration,
         baselineTargetMarkets: product.targetMarkets ?? [],
-        baseRevisionId: product.currentRevisionId,
+        baseRevisionId: null,
       });
       const assessment = deriveSopRiskAssessment({
         declaration,
@@ -274,8 +273,8 @@ export const handoffsRouter = router({
         category: "eco",
         sopTemplateVersion: SOP_TEMPLATE_VERSION_CURRENT,
         pmUserId: product.maintenanceOwnerUserId ?? ctx.user.id,
-        productId: product.id,
-        baseRevisionId: product.currentRevisionId,
+        productId: null,
+        baseRevisionId: null,
         resultRevisionId: null,
         productDefinitionSnapshotId: null,
         safetyRiskLevel: assessment.safetyRiskLevel,
@@ -284,6 +283,11 @@ export const handoffsRouter = router({
         customer: null,
         background: "由产品维护轴发起",
         value: null,
+        customFields: {
+          sourceProductId: product.id,
+          sourceServiceCaseId: serviceCase?.id ?? null,
+          productType: product.category,
+        },
         risk: "low",
         currentPhase: firstPhase?.id ?? "change_request",
         progress: 0,

@@ -20,6 +20,7 @@ import { cn, toLocalISODate, localISODatePlus } from '@/lib/utils';
 import { PageHeader, SegToggle } from '@/components/linear/primitives';
 import type { TaskStatus, TaskPriority } from '@shared/const';
 import { taskProjectLike, type TaskFocus } from './TaskListView';
+import { MyWorkBuckets } from './overview/PerspectivePanel';
 import { resolveProjectPhase, resolveTaskName } from '@shared/sop-template-resolution';
 import { buildTaskCompletionActionPath } from '@shared/action-links';
 
@@ -195,8 +196,8 @@ export function MyTasksView({ onSelectProject }: { onSelectProject: (id: string,
   return (
     <div className="flex flex-col">
       <PageHeader
-        title="我的任务"
-        sub="只聚合指派给你的待办、待审核与质量复测；点击任意条目直达对应项目阶段与任务详情。"
+        title="我的工作"
+        sub="你的待办、审批、待审核与提醒都在这里；点击任意条目直达对应项目阶段与任务详情。"
         actions={
           <SegToggle<ViewMode>
             value={view}
@@ -208,6 +209,11 @@ export function MyTasksView({ onSelectProject }: { onSelectProject: (id: string,
           />
         }
       />
+
+      {/* 设计4 §6 三桶（现在处理 / 等待别人 / 仅关注）——个人队列全站唯一入口 */}
+      <div className="mb-4">
+        <MyWorkBuckets onSelectProject={onSelectProject} />
+      </div>
 
       {/* Filter bar: status segmented + search + meta */}
       <div className="mb-4 flex flex-wrap items-center gap-3 border-b border-border pb-4">

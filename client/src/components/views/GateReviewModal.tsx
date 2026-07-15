@@ -22,8 +22,6 @@ import {
   type GateSignoffSlot,
 } from '@shared/gate-signoffs';
 import { StabilityGatePanel } from './StabilityGatePanel';
-import { certificationRequirementLabel } from '@shared/certification';
-import { CloseHandoffPanel } from './CloseHandoffPanel';
 import type { ProjectMemberRole } from '@shared/project-roles';
 
 // ── Decision config ───────────────────────────────────────────────────────────
@@ -69,8 +67,7 @@ function ReviewTraceSummary({ review }: { review: GateReview }) {
   if (!trace) return null;
   const productLabel = trace.product
     ? `${trace.product.productNumber || trace.product.id} · ${trace.product.name}`
-    : '未关联产品';
-  const baseRevision = trace.baseRevision?.revisionLabel || '无基准版本';
+    : '项目完成后生成';
   const customerLabels = trace.customerVariants
     .slice(0, 3)
     .map((variant) => `${variant.customerName || variant.customerId || variant.variantCode}${variant.customerBomRevision ? ` ${variant.customerBomRevision}` : ''}`);
@@ -82,11 +79,13 @@ function ReviewTraceSummary({ review }: { review: GateReview }) {
       </div>
       <div className="mt-1 grid gap-1 text-muted-foreground sm:grid-cols-2">
         <div className="truncate">
-          <span className="text-foreground">产品：</span>{productLabel}
+          <span className="text-foreground">输出产品：</span>{productLabel}
         </div>
-        <div>
-          <span className="text-foreground">基准版本：</span>{baseRevision}
-        </div>
+        {trace.baseRevision && (
+          <div>
+            <span className="text-foreground">历史基准 Revision：</span>{trace.baseRevision.revisionLabel}
+          </div>
+        )}
         <div>
           <span className="text-foreground">工作 BOM：</span>{trace.workingBom.lineCount} 行
         </div>
@@ -372,11 +371,10 @@ interface GateReviewModalProps {
   gateName: string;
   gateStandard?: SOPGateStandard;
   existingReviews?: GateReview[];
-  /** 就绪检查未通过项;非空时提示评审改走「有条件通过」并记录例外（projectId+gateTaskId 缺省时的回退展示） */
-  blockers?: string[];
-  /** 提供 projectId + gateTaskId 时，改用服务端就绪度清单，取代源错的客户端 blockers 展示 */
-  projectId?: string;
-  gateTaskId?: string;
+  projectId: string;
+  gateTaskId: string;
+  /** Close Gate 硬卡未满足时「去项目设置处理」的跳转（调用方负责关弹窗、开设置抽屉） */
+  onOpenSettings?: () => void;
   /** 是否允许在就绪清单里上传/删除交付物证据（viewer 等无权者隐藏按钮） */
   canEditDeliverables?: boolean;
   canQualityGateBlock?: boolean;
@@ -390,10 +388,11 @@ interface GateReviewModalProps {
 }
 
 export function GateReviewModal({
-  open, phaseId, phaseName, gateName, gateStandard, existingReviews = [], blockers = [], projectId, gateTaskId, canEditDeliverables = false, canQualityGateBlock = false, canNpiGateBlock = false, onTaskClick, onConfirm, onCancel, readOnly = false, canDecide = true,
+  open, phaseId, phaseName, gateName, gateStandard, existingReviews = [], projectId, gateTaskId, onOpenSettings, canEditDeliverables = false, canQualityGateBlock = false, canNpiGateBlock = false, onTaskClick, onConfirm, onCancel, readOnly = false, canDecide = true,
 }: GateReviewModalProps) {
   // readOnly（无 canGateReview 权限）绝不能进表单：否则用户填完提交被静默丢弃
   const [showForm, setShowForm] = useState(existingReviews.length === 0 && !readOnly);
+  const [standardOpen, setStandardOpen] = useState(false);
   const latestReview = existingReviews[existingReviews.length - 1];
   const nextRound = existingReviews.length + 1;
   const utils = trpc.useUtils();
@@ -516,41 +515,52 @@ export function GateReviewModal({
           <div className="text-xs text-muted-foreground num">{gateName}</div>
         </div>
 
-        {/* 就绪度：有 projectId+gateTaskId 时用服务端清单，否则回退到传入的 blockers */}
-        {projectId && gateTaskId ? (
-          <GateReadinessChecklist
-            projectId={projectId}
-            phaseId={phaseId}
-            gateTaskId={gateTaskId}
-            canEdit={canEditDeliverables}
-            canQualityGateBlock={canQualityGateBlock}
-            canNpiGateBlock={canNpiGateBlock}
-            onTaskClick={onTaskClick}
-          />
-        ) : blockers.length > 0 ? (
-          <div className="border border-[color:var(--warning)] bg-[color:var(--warning-soft)] rounded-[9px] p-3 mb-4">
-            <div className="text-[11px] font-semibold text-[color:var(--warning)] mb-1">⚠ 就绪检查未通过</div>
-            <ul className="text-xs text-[color:var(--warning)] list-disc pl-4 space-y-0.5">
-              {blockers.map((b, i) => <li key={i}>{b}</li>)}
-            </ul>
-            <div className="text-[11px] text-[color:var(--warning)] mt-1.5">建议补齐后通过;如需放行,请选「有条件通过」并在条件里写明例外项的责任人与截止日期。</div>
-          </div>
-        ) : null}
+        <GateReadinessChecklist
+          projectId={projectId}
+          phaseId={phaseId}
+          gateTaskId={gateTaskId}
+          canEdit={canEditDeliverables}
+          canQualityGateBlock={canQualityGateBlock}
+          canNpiGateBlock={canNpiGateBlock}
+          onTaskClick={onTaskClick}
+        />
 
         {projectId && gateTaskId === 'project_close_review' && (
           <>
             <StabilityGatePanel projectId={projectId} canEdit={canEditDeliverables} />
-            <div className="mb-4"><CloseHandoffPanel projectId={projectId} /></div>
-            {((certificationCoverage.data?.missing.length ?? 0) > 0 || (conditionsReadiness.data?.openCount ?? 0) > 0 || (handoffReadiness.data?.blockers.length ?? 0) > 0) && (
-              <div className="mb-4 rounded-[9px] border border-[color:var(--warning)] bg-[color:var(--warning-soft)] p-3 text-xs text-[color:var(--warning)]">
-                <div className="font-semibold">Close Gate 增量硬卡未满足</div>
-                <ul className="mt-1 list-disc space-y-1 pl-4">
-                  {certificationCoverage.data?.missing.map((item) => <li key={`${item.type}:${item.market ?? '*'}`}>证书缺口：{certificationRequirementLabel(item)}</li>)}
-                  {conditionsReadiness.data?.blockers.map((item) => <li key={item}>条件项未闭环：{item}</li>)}
-                  {handoffReadiness.data?.blockers.map((item) => <li key={item}>量产移交未完成：{item}</li>)}
-                </ul>
-              </div>
-            )}
+            {/* 增量硬卡（证书/条件项/移交）只显示计数结论；明细与编辑统一在「项目设置 → 风险 / 关闭」分区，
+                同一缺口不在弹窗里重列一遍（设计4 §4：同一证据只出现一次） */}
+            {(() => {
+              const loaded = certificationCoverage.data && conditionsReadiness.data && handoffReadiness.data;
+              const certGap = certificationCoverage.data?.missing.length ?? 0;
+              const condGap = conditionsReadiness.data?.openCount ?? 0;
+              const handoffGap = handoffReadiness.data?.blockers.length ?? 0;
+              const parts = [
+                certGap > 0 ? `证书缺口 ${certGap}` : null,
+                condGap > 0 ? `条件项未闭环 ${condGap}` : null,
+                handoffGap > 0 ? `量产移交阻塞 ${handoffGap}` : null,
+              ].filter(Boolean);
+              const ok = !!loaded && parts.length === 0;
+              return (
+                <div className={`mb-4 rounded-[9px] border p-3 text-xs ${ok ? 'border-border text-muted-foreground' : 'border-[color:var(--warning)] bg-[color:var(--warning-soft)] text-[color:var(--warning)]'}`}>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-semibold">
+                      {!loaded
+                        ? '增量硬卡状态加载中…'
+                        : ok
+                          ? '增量硬卡已满足：证书 / 条件项 / 量产移交 ✓'
+                          : `增量硬卡未满足：${parts.join(' · ')}`}
+                    </span>
+                    {onOpenSettings && loaded && !ok && (
+                      <button type="button" onClick={onOpenSettings} className="shrink-0 font-medium text-primary hover:underline">
+                        去项目设置处理 →
+                      </button>
+                    )}
+                  </div>
+                  {loaded && !ok && <div className="mt-1 font-normal">明细在「项目设置 → 风险 / 关闭」分区维护，缺口清零后可给出通过结论。</div>}
+                </div>
+              );
+            })()}
           </>
         )}
 
@@ -619,12 +629,22 @@ export function GateReviewModal({
           </div>
         )}
 
+        {/* Gate 标准默认折叠：任务详情已内联展示同一份标准，弹窗里按需展开（设计4 §4） */}
         {gateStandard && (
-          <div className="border border-border rounded-[9px] p-3 mb-4">
-            <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-2">
-              Gate 管理标准
-            </div>
-            <GateStandardPanel standard={gateStandard} compact evidenceHint />
+          <div className="border border-border rounded-[9px] mb-4">
+            <button
+              type="button"
+              onClick={() => setStandardOpen((v) => !v)}
+              className="flex w-full items-center justify-between px-3 py-2.5 text-[10px] uppercase tracking-widest text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <span>Gate 管理标准</span>
+              {standardOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            </button>
+            {standardOpen && (
+              <div className="px-3 pb-3">
+                <GateStandardPanel standard={gateStandard} compact evidenceHint />
+              </div>
+            )}
           </div>
         )}
 

@@ -687,9 +687,11 @@ function buildMpReleaseMessage(
 ): AutomationMessage {
   const project = ctx.projectName ? `「${ctx.projectName}」` : "项目";
   const product = ctx.productName || String(event.after?.productName ?? "产品");
-  const revision = ctx.revisionLabel || String(event.after?.revisionLabel ?? event.after?.revisionId ?? "新版本");
   const messageTitle = "量产发布完成";
-  const text = `${project}已完成量产发布：${product} ${revision}。`;
+  const legacyRevision = ctx.revisionLabel || event.after?.revisionLabel;
+  const text = legacyRevision
+    ? `${project}已完成量产发布：${product} ${String(legacyRevision)}。`
+    : `${project}已完成量产发布并交付独立产品：${product}。`;
   return {
     title: messageTitle,
     text,

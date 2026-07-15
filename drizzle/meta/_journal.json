@@ -463,6 +463,20 @@
       "when": 1783760400000,
       "tag": "0065_multi_role_conflict_matrix",
       "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1784023200000,
+      "tag": "0066_decouple_project_product_revision",
+      "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1784026800000,
+      "tag": "0067_decouple_software_product_revision",
+      "breakpoints": true
     }
   ]
 }

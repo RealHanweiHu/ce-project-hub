@@ -16,6 +16,7 @@ import { handoffsRouter } from "./routers/handoffs";
 import {
   actionItems,
   activityLogs,
+  mpReleases,
   productRevisions,
   productServiceCases,
   products,
@@ -29,6 +30,7 @@ const PRODUCT_ID = `s2_product_${suffix}`;
 const PROJECT_ID = `s2_project_${suffix}`;
 const OWNER = 1;
 let revisionId = 0;
+let ecoProjectId: string | null = null;
 
 const caller = handoffsRouter.createCaller({
   user: { id: OWNER, role: "admin", name: "Sprint2 Owner", canCreateProject: true },
@@ -45,6 +47,12 @@ async function cleanup() {
   const db = await getDb();
   if (!db) return;
   await db.delete(productServiceCases).where(eq(productServiceCases.productId, PRODUCT_ID));
+  if (ecoProjectId) {
+    await db.delete(actionItems).where(eq(actionItems.projectId, ecoProjectId));
+    await db.delete(activityLogs).where(eq(activityLogs.projectId, ecoProjectId));
+    await db.delete(projects).where(eq(projects.id, ecoProjectId));
+    ecoProjectId = null;
+  }
   await db.delete(actionItems).where(eq(actionItems.projectId, PROJECT_ID));
   const linkedProjects = await db.select({ id: projects.id }).from(projects).where(eq(projects.productId, PRODUCT_ID));
   for (const row of linkedProjects) {
@@ -52,6 +60,7 @@ async function cleanup() {
     await db.delete(activityLogs).where(eq(activityLogs.projectId, row.id));
     await db.delete(projects).where(eq(projects.id, row.id));
   }
+  await db.delete(mpReleases).where(eq(mpReleases.productId, PRODUCT_ID));
   await db.delete(productRevisions).where(eq(productRevisions.productId, PRODUCT_ID));
   await db.delete(products).where(eq(products.id, PRODUCT_ID));
 }
@@ -82,6 +91,13 @@ describe("SOP governance Sprint 2", () => {
       progress: 95,
       createdBy: OWNER,
     }, "npd", OWNER);
+    await db!.insert(mpReleases).values({
+      productId: PRODUCT_ID,
+      revisionId: null,
+      projectId: PROJECT_ID,
+      releasedBy: OWNER,
+      releasedAt: new Date(),
+    });
   });
 
   afterAll(cleanup);
@@ -155,10 +171,15 @@ describe("SOP governance Sprint 2", () => {
         targetMarkets: ["US"],
       },
     });
+    ecoProjectId = eco.id;
     const project = await getProjectById(eco.id);
     expect(project?.category).toBe("eco");
-    expect(project?.productId).toBe(PRODUCT_ID);
-    expect(project?.baseRevisionId).toBe(revisionId);
+    expect(project?.productId).toBeNull();
+    expect(project?.baseRevisionId).toBeNull();
+    expect(project?.customFields).toMatchObject({
+      sourceProductId: PRODUCT_ID,
+      sourceServiceCaseId: serviceCase.id,
+    });
     expect(project?.safetyRiskLevel).toBe("high");
     const db = await getDb();
     const [updatedCase] = await db!.select().from(productServiceCases).where(eq(productServiceCases.id, serviceCase.id));

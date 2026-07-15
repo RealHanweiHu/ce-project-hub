@@ -3,11 +3,11 @@ import { useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { toLocalISODate, localISODatePlus } from "@/lib/utils";
-import { TaskListView, taskProjectLike, type TaskRow, type TaskFocus } from "../TaskListView";
+import { taskProjectLike, type TaskFocus } from "../TaskListView";
 import { resolvePhaseName, resolveTaskName } from "@shared/sop-template-resolution";
 import { MANAGEMENT_VALIDATION_PHASES } from "@shared/management-kpis";
 import type { TaskStatus, TaskPriority } from "@shared/const";
-import { isProjectedOverdue, type RagLevel } from "@shared/health";
+import { isProjectedOverdue } from "@shared/health";
 import {
   buildTodayItems, buildCoordinationQueue, projectHeadlineMetric,
   type TodayItem, type CoordItem,
@@ -15,32 +15,18 @@ import {
 import {
   AlertTriangle, Ban, Bug, CalendarClock, CheckCircle2, ChevronRight,
   ClipboardCheck, Clock, Cpu, FileCheck, Flag, Handshake, Inbox, ListChecks,
-  PackageCheck, Rocket, ShieldCheck, UserMinus, Wrench,
+  PackageCheck, ShieldCheck, UserMinus, Wrench,
 } from "lucide-react";
-import type { PortfolioTableRow } from "./PortfolioTable";
+import type { PortfolioTableRow } from "./types";
 import type { RoleDashboardLens } from "@shared/role-dashboard";
 
 export type Lens = RoleDashboardLens;
 
-type ScoredRow = { row: PortfolioTableRow; level: RagLevel; reasons: string[] };
 const MANAGEMENT_VALIDATION_PHASE_SET = new Set<string>(MANAGEMENT_VALIDATION_PHASES);
-
-const overdue = (r: PortfolioTableRow) => isProjectedOverdue(r.projectedEnd, r.targetDate);
-const byDue = (a: PortfolioTableRow, b: PortfolioTableRow) => (a.gateDueDate ?? "9999").localeCompare(b.gateDueDate ?? "9999");
-
-function scoreRow(row: PortfolioTableRow): ScoredRow {
-  return { row, level: row.ragLevel, reasons: row.ragReasons };
-}
 
 export function PerspectivePanel({ lens, rows, onSelectProject }: { lens: Lens; rows: PortfolioTableRow[]; onSelectProject: (id: string, focus?: TaskFocus) => void }) {
   const { user } = useAuth();
   const { data: workbench, isLoading: workbenchLoading, refetch: refetchWorkbench } = trpc.workbench.mine.useQuery();
-  const scored = useMemo(() => rows.map(scoreRow), [rows]);
-
-  if (lens === "exec") {
-    return <ExecutiveDecisionBoard rows={rows} scored={scored} onSelectProject={onSelectProject} />;
-  }
-
   if (lens === "project_manager") {
     return (
       <ProjectManagerCockpit
@@ -66,93 +52,6 @@ export function PerspectivePanel({ lens, rows, onSelectProject }: { lens: Lens; 
   }
 
   return <RoleWorkbench lens={lens} workbench={workbench} isLoading={workbenchLoading} onRefetch={() => refetchWorkbench()} onSelectProject={onSelectProject} />;
-}
-
-function ExecutiveDecisionBoard({
-  rows,
-  scored,
-  onSelectProject,
-}: {
-  rows: PortfolioTableRow[];
-  scored: ScoredRow[];
-  onSelectProject: (id: string) => void;
-}) {
-  const redYellow = scored
-    .filter((s) => s.level !== "green")
-    .sort((a, b) => (a.level === "red" ? 0 : 1) - (b.level === "red" ? 0 : 1));
-  const pendingGates = rows
-    .filter((r) => !r.gateDone && (r.gateReady || r.gateBlockers > 0 || r.gateDueDate))
-    .sort(byDue);
-  const forceRelease = rows
-    .filter((r) => r.releaseDecision === "conditional")
-    .sort((a, b) => b.releaseHardBlockers - a.releaseHardBlockers);
-  const majorIssues = rows
-    .filter((r) => r.criticalIssues > 0)
-    .sort((a, b) => b.criticalIssues - a.criticalIssues);
-  const delayRisk = rows
-    .filter(overdue)
-    .sort((a, b) => (a.projectedEnd ?? "").localeCompare(b.projectedEnd ?? ""));
-
-  return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <Panel title="Gate 评审入口" icon={<ClipboardCheck size={15} />}>
-          <DecisionRows
-            rows={pendingGates.slice(0, 6)}
-            empty="暂无待评审 Gate"
-            onSelectProject={onSelectProject}
-            renderMeta={(r) => (
-              <>
-                <Tag tone={r.gateReady ? "emerald" : r.gateNotReady === "red" ? "rose" : "amber"}>
-                  {r.gateReady ? "材料就绪" : `${r.gateBlockers} 项缺口`}
-                </Tag>
-                {r.deliverableGap > 0 && <Tag tone="amber">交付物缺 {r.deliverableGap}</Tag>}
-                {r.gateDueDate && <Tag tone="stone">{r.gateDueDate}</Tag>}
-              </>
-            )}
-            renderDetail={(r) => r.gateReady ? "评审材料已齐，可以进入结论页" : "先看缺项、风险与补齐责任人"}
-          />
-        </Panel>
-
-        <Panel title="强制发布判断" icon={<Rocket size={15} />}>
-          <DecisionRows
-            rows={forceRelease.slice(0, 6)}
-            empty="暂无有条件发布项目"
-            onSelectProject={onSelectProject}
-            renderMeta={(r) => (
-              <>
-                <Tag tone={r.releaseHardBlockers > 0 ? "rose" : "amber"}>
-                  硬卡 {r.releaseHardBlockers > 0 ? `缺 ${r.releaseHardBlockers}` : "满足"}
-                </Tag>
-                <Tag tone="stone">交付物 {r.releaseDeliverableDone}/{r.releaseDeliverableTotal}</Tag>
-              </>
-            )}
-            renderDetail={(r) => r.releaseConditions ? `条件：${r.releaseConditions}` : "需明确例外风险、跟进责任人与截止日"}
-          />
-        </Panel>
-
-        <Panel title="红黄项目" icon={<AlertTriangle size={15} />}>
-          <ScoredRows rows={redYellow.slice(0, 6)} onSelectProject={onSelectProject} />
-        </Panel>
-
-        <Panel title="重大问题与延期" icon={<Bug size={15} />}>
-          <DecisionRows
-            rows={[...majorIssues, ...delayRisk.filter((r) => !majorIssues.some((m) => m.id === r.id))].slice(0, 6)}
-            empty="暂无重大问题或延期项目"
-            onSelectProject={onSelectProject}
-            renderMeta={(r) => (
-              <>
-                {r.criticalIssues > 0 && <Tag tone="rose">P0/P1 {r.criticalIssues}</Tag>}
-                {overdue(r) && <Tag tone="rose">预计晚于目标</Tag>}
-                {r.pmName && <Tag tone="stone">PM {r.pmName}</Tag>}
-              </>
-            )}
-            renderDetail={(r) => r.criticalIssues > 0 ? "只展示摘要和责任人，进入项目后再看细节" : `预计完成 ${r.projectedEnd || "未排期"}`}
-          />
-        </Panel>
-      </div>
-    </div>
-  );
 }
 
 const TODAY_ICON: Record<TodayItem["kind"], React.ReactNode> = {
@@ -337,25 +236,15 @@ type QueueItem = {
   icon: React.ReactNode;
 };
 
-function RoleWorkbench({ lens, workbench, isLoading, onRefetch, onSelectProject }: {
+function RoleWorkbench({ lens, workbench, isLoading, onSelectProject }: {
   lens: Lens; workbench?: WorkbenchData; isLoading: boolean; onRefetch: () => void; onSelectProject: (id: string, focus?: TaskFocus) => void;
 }) {
   const tasks = workbench?.tasks ?? [];
   const roleTasks = workbench?.roleTasks ?? [];
   const reviews = workbench?.reviews ?? [];
   const issues = workbench?.issues ?? [];
-  const actionItems = workbench?.actionItems ?? [];
-  const snoozedActionItems = workbench?.snoozedActionItems ?? [];
   const gateBlockers = workbench?.gateBlockers ?? [];
   const portfolio = workbench?.portfolio ?? [];
-  const queue = useMemo(() => buildWorkbenchQueue(tasks, roleTasks, reviews, issues, actionItems), [tasks, roleTasks, reviews, issues, actionItems]);
-  const rows: TaskRow[] = mergeTasks(tasks, roleTasks).map((t) => ({
-    id: t.id, projectId: t.projectId, phaseId: t.phaseId, taskId: t.taskId,
-    projectName: t.projectName, projectNumber: t.projectNumber, projectCategory: t.projectCategory,
-    sopTemplateVersion: t.sopTemplateVersion, customFields: t.customFields,
-    status: t.status as TaskStatus, priority: (t.priority ?? "medium") as TaskPriority,
-    dueDate: t.dueDate ? String(t.dueDate) : null, assigneeUserId: t.assigneeUserId ?? null, completed: t.completed,
-  }));
 
   if (isLoading && !workbench) {
     return (
@@ -381,8 +270,28 @@ function RoleWorkbench({ lens, workbench, isLoading, onRefetch, onSelectProject 
     return <ExternalWorkbench portfolio={portfolio} onSelectProject={onSelectProject} />;
   }
 
-  // 设计4 §6："我的工作"三桶——现在处理（服务端分桶 + 富交互行）/ 等待别人 / 仅关注
+  // generic 员工视角已由 OverviewPage 拦截跳「我的工作」页；此处兜底渲染三桶（不再内嵌第二份任务清单，B5 去重）
+  return <MyWorkBuckets onSelectProject={onSelectProject} />;
+}
+
+/**
+ * 「我的工作」三桶（设计4 §6）：现在处理 / 等待别人 / 仅关注。
+ * 服务端分桶（workbench.mine.buckets），与钉钉每日摘要同源。
+ * 由「我的工作」页（MyTasksView）作为主入口渲染；个人队列全站只此一份。
+ */
+export function MyWorkBuckets({ onSelectProject }: { onSelectProject: (id: string, focus?: TaskFocus) => void }) {
+  const { data: workbench, isLoading } = trpc.workbench.mine.useQuery();
   const buckets = workbench?.buckets ?? null;
+  const snoozedActionItems = workbench?.snoozedActionItems ?? [];
+
+  if (isLoading && !workbench) {
+    return (
+      <Panel title="🔥 现在处理" icon={<Inbox size={15} />}>
+        <div className="text-sm text-muted-foreground">正在聚合你的任务、审批与提醒…</div>
+      </Panel>
+    );
+  }
+
   return (
     <div className="space-y-4">
       <Panel title="🔥 现在处理" icon={<Inbox size={15} />}>
@@ -408,8 +317,7 @@ function RoleWorkbench({ lens, workbench, isLoading, onRefetch, onSelectProject 
             </div>
           )
         ) : (
-          /* 服务端分桶未返回时回退旧队列，避免空白 */
-          <QueueRows items={queue.slice(0, 10)} onSelectProject={onSelectProject} />
+          <div className="text-sm text-muted-foreground">正在加载…</div>
         )}
       </Panel>
 
@@ -436,12 +344,6 @@ function RoleWorkbench({ lens, workbench, isLoading, onRefetch, onSelectProject 
           <SnoozedRows items={snoozedActionItems.slice(0, 6)} onSelectProject={onSelectProject} />
         </Panel>
       )}
-
-      <div className="overflow-hidden rounded-[10px] border border-border">
-        <TaskListView tasks={rows} isLoading={isLoading} emptyIcon={<CheckCircle2 size={24} />}
-          emptyTitle="没有待办任务" emptyDesc="当前没有指派给您的未完成任务。"
-          onRefetch={onRefetch} onNavigateToProject={onSelectProject} showOverdueBadge />
-      </div>
     </div>
   );
 }
@@ -496,35 +398,6 @@ function makeReviewItems(reviews: WorkbenchReview[]): QueueItem[] {
     priority: 92,
     icon: <FileCheck size={14} />,
   } satisfies QueueItem));
-}
-
-function makeActionItemItems(actionItems: WorkbenchActionItem[]): QueueItem[] {
-  return actionItems.map((item) => {
-    const target = targetFromActionItem(item);
-    return {
-      key: `action-${item.id}`,
-      projectId: item.projectId,
-      phaseId: target.phaseId,
-      taskId: target.taskId,
-      tab: target.tab,
-      taskTab: target.taskTab,
-      title: item.title,
-      detail: item.body || "需要你处理的行动项",
-      tag: actionItemTag(item.kind),
-      tone: item.priority === "critical" ? "rose" : "amber",
-      priority: 120 + (item.priority === "critical" ? 20 : item.priority === "high" ? 10 : 0),
-      icon: item.kind.startsWith("deliverable") ? <FileCheck size={14} /> : <ClipboardCheck size={14} />,
-    } satisfies QueueItem;
-  });
-}
-
-function actionItemTag(kind: string) {
-  if (kind === "task_approval") return "审批";
-  if (kind === "task_rework") return "返工";
-  if (kind === "deliverable_review") return "审核";
-  if (kind === "deliverable_rework") return "交付物返工";
-  if (kind === "critical_issue") return "P0/P1";
-  return "行动项";
 }
 
 function targetFromActionItem(item: WorkbenchActionItem): Pick<QueueItem, "phaseId" | "taskId" | "tab" | "taskTab"> {
@@ -826,25 +699,6 @@ function MetricStrip({ items }: { items: Array<{ label: string; value: number; t
   );
 }
 
-function buildWorkbenchQueue(tasks: MyTaskApiRow[], roleTasks: MyTaskApiRow[], reviews: WorkbenchReview[], issues: WorkbenchIssue[], actionItems: WorkbenchActionItem[]): QueueItem[] {
-  const taskKeys = new Set(tasks.map((task) => `${task.projectId}:${task.taskId}`));
-  const actionItemItems = makeActionItemItems(actionItems);
-  const taskItems = [
-    ...makeTaskItems(tasks, "我的任务"),
-    ...makeTaskItems(roleTasks, "角色待分配", 12),
-  ];
-  const reviewItems = makeReviewItems(reviews);
-  const issueItems = issues
-    .filter((issue) =>
-      issue.status === "resolved" ||
-      issue.severity === "P0" ||
-      issue.severity === "P1" ||
-      (issue.relatedTaskId ? taskKeys.has(`${issue.projectId}:${issue.relatedTaskId}`) : false)
-    )
-    .map((issue) => makeIssueItems([issue])[0]);
-  return [...actionItemItems, ...reviewItems, ...issueItems, ...taskItems].sort((a, b) => b.priority - a.priority);
-}
-
 function priorityScore(priority: string | null) {
   if (priority === "critical") return 40;
   if (priority === "high") return 30;
@@ -974,39 +828,8 @@ function DecisionRows({
   );
 }
 
-function ScoredRows({
-  rows,
-  onSelectProject,
-  empty = "暂无异常项目",
-}: {
-  rows: ScoredRow[];
-  onSelectProject: (id: string) => void;
-  empty?: string;
-}) {
-  if (rows.length === 0) return <div className="text-sm text-muted-foreground">{empty}</div>;
-  return (
-    <div className="divide-y divide-border">
-      {rows.map(({ row, level, reasons }) => (
-        <button key={row.id} onClick={() => onSelectProject(row.id)} className="-mx-2 w-full px-2 py-2.5 text-left transition-colors hover:bg-secondary">
-          <div className="flex items-center gap-3">
-            <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: level === "red" ? "var(--destructive)" : level === "amber" ? "var(--warning)" : "var(--success)" }} />
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium text-foreground">{row.name}</div>
-              <div className="num truncate text-[10px] text-muted-foreground">
-                {reasons.length ? reasons.join(" / ") : "需关注"}
-              </div>
-            </div>
-            {row.pmName && <Tag tone="stone">PM {row.pmName}</Tag>}
-            <ChevronRight size={13} className="shrink-0 text-muted-foreground" />
-          </div>
-        </button>
-      ))}
-    </div>
-  );
-}
-
 function HealthDot({ row }: { row: PortfolioTableRow }) {
-  const level = scoreRow(row).level;
+  const level = row.ragLevel;
   return <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full" style={{ background: level === "red" ? "var(--destructive)" : level === "amber" ? "var(--warning)" : "var(--success)" }} />;
 }
 

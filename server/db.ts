@@ -872,15 +872,16 @@ export async function saveProjectCloseHandoffDraft(input: {
   if (!db) throw new Error("Database not available");
   const project = await getProjectById(input.projectId);
   if (!project) throw new Error("项目不存在");
-  if (!project.productId) throw new Error("项目未关联产品，不能建立关闭移交单");
-  if (!project.resultRevisionId) throw new Error("量产版本尚未发布，不能提交关闭移交");
+  if (!project.productId) throw new Error("项目尚未生成交付产品，不能建立关闭移交单");
+  const release = await getMpReleaseByProjectId(input.projectId);
+  if (!release) throw new Error("项目尚未完成产品交付，不能提交关闭移交");
   const uniqueItems = new Map(input.items.map((item) => [item.itemKey, item]));
   const bundle = await db.transaction(async (tx) => {
     await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${input.projectId}:close-handoff`}))`);
     const [handoff] = await tx.insert(projectCloseHandoffs).values({
       projectId: input.projectId,
       productId: project.productId!,
-      revisionId: project.resultRevisionId,
+      revisionId: release.revisionId ?? null,
       status: "draft",
       maintenanceOwnerUserId: input.maintenanceOwnerUserId,
       afterSalesOwnerUserId: input.afterSalesOwnerUserId,
@@ -894,7 +895,7 @@ export async function saveProjectCloseHandoffDraft(input: {
       target: projectCloseHandoffs.projectId,
       set: {
         productId: project.productId!,
-        revisionId: project.resultRevisionId,
+        revisionId: release.revisionId ?? null,
         status: "draft",
         maintenanceOwnerUserId: input.maintenanceOwnerUserId,
         afterSalesOwnerUserId: input.afterSalesOwnerUserId,
@@ -1024,20 +1025,21 @@ export async function getProjectCloseHandoffReadiness(projectId: string): Promis
   handoff: ProjectCloseHandoff | null;
   items: ProjectCloseHandoffItem[];
 }> {
-  const [bundle, project] = await Promise.all([
+  const [bundle, project, release] = await Promise.all([
     getProjectCloseHandoff(projectId),
     getProjectById(projectId),
+    getMpReleaseByProjectId(projectId),
   ]);
   const blockers = closeHandoffContentBlockers(bundle);
   if (!project) blockers.push("项目不存在");
   else {
-    if (!project.productId) blockers.push("项目未关联产品");
-    if (!project.resultRevisionId) blockers.push("量产版本尚未发布");
+    if (!project.productId) blockers.push("项目尚未生成交付产品");
+    if (!release) blockers.push("项目尚未完成产品交付");
     if (bundle && project.productId && bundle.handoff.productId !== project.productId) {
       blockers.push("移交单关联产品与项目当前产品不一致，必须重新编制");
     }
-    if (bundle && project.resultRevisionId && bundle.handoff.revisionId !== project.resultRevisionId) {
-      blockers.push("移交单 Revision 与项目发布版本不一致，必须重新编制");
+    if (bundle && release?.revisionId && bundle.handoff.revisionId !== release.revisionId) {
+      blockers.push("历史移交单 Revision 与发布记录不一致，必须重新编制");
     }
   }
   if (bundle && bundle.handoff.status !== "accepted") {
@@ -1194,7 +1196,7 @@ export async function saveProductSoftwareReleaseDraft(input: {
   id?: number | null;
   releaseNumber: string;
   productId: string;
-  baseRevisionId: number;
+  baseRevisionId: number | null;
   version: string;
   scopeSummary: string;
   releaseNotes: string;
@@ -2277,14 +2279,16 @@ async function getRiskAggByProjectIds(db: DbClient, projectIds: string[]) {
 }
 
 /** 跨项目组合看板：用户可见项目 + 每项目健康度聚合(任务/逾期/阻塞/开放问题/预计完成) */
-export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
+export async function getPortfolio(userId: number, options?: { projectId?: string }): Promise<PortfolioRow[]> {
   const db = await getDb();
   if (!db) return [];
   const viewer = await getUserById(userId);
   const viewerIsAdmin = isSystemAdminRole(viewer?.role);
-  const allProjects = viewerIsAdmin
+  let allProjects = viewerIsAdmin
     ? await db.select().from(projects).where(eq(projects.archived, false))
     : await getProjectsByMember(userId);
+  // 单项目视角（项目详情/状态摘要）：只聚合这一个项目，避免详情页扫描整个组合
+  if (options?.projectId) allProjects = allProjects.filter((row) => row.id === options.projectId);
   const projById = new Map<string, ProjectRow>();
   for (const p of allProjects) projById.set(p.id, p);
   const ids = Array.from(projById.keys());
@@ -2293,8 +2297,10 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
 
   const taskAgg = await db.select({
     projectId: projectTasks.projectId,
-    total: drizzleSql<number>`count(*)::int`,
-    done: drizzleSql<number>`count(*) filter (where ${projectTasks.status} in ('done','skipped'))::int`,
+    // 口径与 getProjectProgressSummaries 一致（设计4 §5）：skipped 双侧剔除，
+    // 否则总览同一张卡上 "13%" 与 "4/25" 互相矛盾（裁剪项目尤甚）。
+    total: drizzleSql<number>`count(*) filter (where ${projectTasks.status} <> 'skipped')::int`,
+    done: drizzleSql<number>`count(*) filter (where ${projectTasks.status} = 'done')::int`,
     inProgress: drizzleSql<number>`count(*) filter (where ${projectTasks.status} = 'in_progress')::int`,
     overdue: drizzleSql<number>`count(*) filter (where ${projectTasks.dueDate} is not null and ${projectTasks.dueDate} < ${todayISO} and ${projectTasks.status} not in ('done','skipped'))::int`,
     blocked: drizzleSql<number>`count(*) filter (where ${projectTasks.status} = 'blocked')::int`,
@@ -4661,7 +4667,7 @@ export async function createProjectStabilityReport(
     throw new Error("产能达成率必须在 0–100% 之间");
   }
   const release = await getMpReleaseByProjectId(input.projectId);
-  if (!release) throw new Error("量产版本尚未发布，不能填写稳定期记录");
+  if (!release) throw new Error("项目尚未完成产品交付，不能填写稳定期记录");
   const releaseISO = release.releasedAt.toISOString().slice(0, 10);
   if (input.periodStart < releaseISO) throw new Error("稳定记录周期必须从量产发布日之后开始");
   const overlap = await db.select({ id: projectStabilityReports.id }).from(projectStabilityReports).where(and(
@@ -4803,7 +4809,7 @@ export async function confirmGateReview(input: {
         .from(mpReleases)
         .where(eq(mpReleases.projectId, input.projectId))
         .limit(1);
-      if (released.length === 0) throw new Error("量产版本尚未发布，不能关闭归档项目");
+      if (released.length === 0) throw new Error("项目尚未完成产品交付，不能关闭归档项目");
     }
     const gateTaskWhere = and(
       eq(projectTasks.projectId, input.projectId),
@@ -7215,71 +7221,6 @@ export async function confirmProductDefinition(productId: string, actorId: numbe
   return rows[0];
 }
 
-/**
- * NPD Gate 1 hand-off: make the project/product link and immutable product
- * definition baseline non-optional. Idempotent so a retried Gate does not
- * create duplicate products or snapshots.
- */
-export async function ensureNpdProductBaseline(projectId: string, actorId: number): Promise<{
-  productId: string;
-  snapshotId: number;
-}> {
-  const project = await getProjectById(projectId);
-  if (!project) throw new Error("Project not found");
-  if (project.category !== "npd") throw new Error("仅 NPD Gate 1 自动生成产品基线");
-
-  let productId = project.productId;
-  if (!productId) {
-    productId = `prd_${nanoid(12)}`;
-    const productType = typeof project.customFields?.productType === "string"
-      ? project.customFields.productType
-      : "未分类";
-    await createProduct({
-      id: productId,
-      productNumber: project.projectNumber || `PRD-${project.id}`.slice(0, 64),
-      name: project.name,
-      type: "finished",
-      category: productType,
-      lifecycleState: "development",
-      productManagerUserId: project.pmUserId ?? null,
-      createdBy: actorId,
-    });
-  }
-
-  let definition = await getProductDefinitionByProductId(productId);
-  if (!definition) {
-    definition = await upsertProductDefinition(productId, actorId, {
-      title: `${project.name} 产品定义基线`,
-      opportunityName: project.name,
-      opportunitySource: "NPD Gate 1",
-      targetCustomers: project.customer ?? null,
-      positioning: project.value?.trim() || "Gate 1 已立项，定位待后续 PRD 完善",
-      prdSummary: project.description?.trim() || project.background?.trim() || "NPD Gate 1 产品范围基线",
-      specs: [{
-        key: "gate1_baseline",
-        label: "Gate 1 产品定义基线",
-        target: "已立项",
-        verification: "后续 PRD/PSD Gate 更新",
-        ownerRole: "pm",
-      }],
-    });
-  }
-  if (definition.status !== "confirmed") await confirmProductDefinition(productId, actorId);
-  let snapshot = await getLatestProductDefinitionSnapshot(productId);
-  if (!snapshot) {
-    await confirmProductDefinition(productId, actorId);
-    snapshot = await getLatestProductDefinitionSnapshot(productId);
-  }
-  if (!snapshot) throw new Error("无法生成产品定义快照");
-
-  await updateProject(projectId, {
-    productId,
-    productDefinitionSnapshotId: snapshot.id,
-    baseRevisionId: null,
-  });
-  return { productId, snapshotId: snapshot.id };
-}
-
 type ProductDefinitionChangePatch = Partial<Omit<
   InsertProductDefinitionChange,
   "id" | "productId" | "createdBy" | "createdAt" | "updatedAt" | "approvedBy" | "approvedAt"
@@ -7365,6 +7306,43 @@ export async function createProductRevision(r: InsertProductRevision): Promise<n
   return res[0].id;
 }
 
+/** 产品库轻量变更实施后生成 Revision；项目发布不会调用此函数。 */
+export async function createLightweightProductRevision(
+  productId: string,
+  actorId: number,
+): Promise<{ id: number; revisionLabel: string }> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.transaction(async (tx) => {
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`light-revision:${productId}`}))`);
+    const [product] = await tx.select().from(products).where(eq(products.id, productId)).limit(1);
+    if (!product) throw new Error("产品不存在");
+    const existing = await tx.select({ id: productRevisions.id })
+      .from(productRevisions)
+      .where(eq(productRevisions.productId, productId));
+    const index = existing.length;
+    const revisionLabel = index < 26 ? `Rev ${String.fromCharCode(65 + index)}` : `Rev ${index + 1}`;
+    if (product.currentRevisionId) {
+      await tx.update(productRevisions)
+        .set({ status: "superseded" })
+        .where(eq(productRevisions.id, product.currentRevisionId));
+    }
+    const [revision] = await tx.insert(productRevisions).values({
+      productId,
+      revisionLabel,
+      parentRevisionId: product.currentRevisionId ?? null,
+      createdByProjectId: null,
+      status: "released",
+      releasedAt: new Date(),
+      releasedBy: actorId,
+    }).returning({ id: productRevisions.id });
+    await tx.update(products)
+      .set({ currentRevisionId: revision.id, updatedAt: new Date() })
+      .where(eq(products.id, productId));
+    return { id: revision.id, revisionLabel };
+  });
+}
+
 export async function listProductRevisions(productId: string): Promise<Array<ProductRevision & { snapshotChangelog: RevisionChangeEntry[] }>> {
   const db = await getDb();
   if (!db) return [];
@@ -7434,18 +7412,15 @@ export async function getDownstreamVariantImpact(
 
 // ── MP Release 量产发布 ───────────────────────────────────────────────────────
 
-/** 关联项目到产品；同时把项目派生起点设为产品当前版本 */
+/** 兼容旧数据的可选项目/产品关联；不再把 Product Revision 带入项目。 */
 export async function setProjectProduct(projectId: string, productId: string): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const [product, project] = await Promise.all([getProductById(productId), getProjectById(projectId)]);
   if (!product) throw new Error("关联产品不存在");
   if (!project) throw new Error("项目不存在");
-  if (["eco", "derivative", "idr"].includes(project.category) && !product.currentRevisionId) {
-    throw new Error("ECO/DRV/IDR 必须关联已有产品和已发布基线 Revision");
-  }
   await db.update(projects)
-    .set({ productId, baseRevisionId: product.currentRevisionId ?? null })
+    .set({ productId, baseRevisionId: null })
     .where(eq(projects.id, projectId));
 }
 
@@ -7662,14 +7637,14 @@ export async function isReleaseOverrideAuthorized(
   return member?.role === "owner" || member?.role === "manager";
 }
 
-/** 下一个版本号字母 Rev A/B/C… */
+/** 产品库轻量改版的下一个 Revision 标签。 */
 export async function nextRevisionLabel(productId: string): Promise<string> {
   const revs = await listProductRevisions(productId);
   return `Rev ${String.fromCharCode(65 + revs.length)}`;
 }
 
 /**
- * 量产发布：前置校验 → 事务内生成 Revision + 发布记录 + 产品转量产态。
+ * 项目完成：前置校验 → 事务内生成/交付独立产品 + 发布记录，不生成 Revision。
  * 项目保持活跃进入 2-8 周稳定期，只有最终 Close Gate 才归档。
  * 抛错表示校验未过（绕不过去的硬闸）。
  */
@@ -7722,13 +7697,29 @@ export async function setProjectLifecycle(input: {
   return { from, to: input.lifecycle };
 }
 
+export type ReleaseProductDraft = {
+  name?: string;
+  productNumber?: string;
+  category?: string;
+  targetMarkets?: string[];
+};
+
+export type ProjectReleaseResult = {
+  productId: string;
+  productName: string;
+  createdProduct: boolean;
+  revisionId: null;
+  revisionLabel: null;
+};
+
 export async function releaseProject(input: {
   projectId: string;
   actor: { id: number; role: string };
   notes?: string;
+  product?: ReleaseProductDraft;
   override?: { overrideReason: string; followUpOwner: number; dueDate: string };
   externalApprovalInstanceId?: number | null;
-}): Promise<{ revisionId: number; revisionLabel: string }> {
+}): Promise<ProjectReleaseResult> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const project = await getProjectById(input.projectId);
@@ -7738,9 +7729,7 @@ export async function releaseProject(input: {
   if (project.lifecycle === "terminated") throw new Error("项目已终止，不能量产发布");
   if (project.lifecycle === "paused") throw new Error("项目已暂停，恢复后才能量产发布");
 
-  // —— 绝对硬卡 1：已关联产品 ——
-  if (!project.productId) throw new Error("项目未关联产品，无法发布");
-  // —— 绝对硬卡 2：P0/P1 全关闭 ——
+  // —— 绝对硬卡 1：P0/P1 全关闭 ——
   const openCount = await getOpenP0P1Count(input.projectId);
   if (openCount > 0) throw new Error(`存在 ${openCount} 个未关闭的 P0/P1 问题，不能发布`);
 
@@ -7749,7 +7738,7 @@ export async function releaseProject(input: {
   if (!gate.phaseId) throw new Error("未定义 MP Release 前置 Gate，无法发布");
   const failedHardDimensions = gate.dimensions.filter((d) => !d.ok && d.dimension !== "review_conditions");
   const deliverableBlock = failedHardDimensions.find((d) => d.dimension === "deliverables");
-  // —— 绝对硬卡 3：交付物审核合格 ——
+  // —— 绝对硬卡 2：交付物审核合格 ——
   if (deliverableBlock) {
     throw new Error(`前置 Gate 必备交付物未审核通过（${gate.deliverables.done}/${gate.deliverables.total}）`);
   }
@@ -7757,7 +7746,7 @@ export async function releaseProject(input: {
   if (otherHardBlocks.length > 0) {
     throw new Error(`前置 Gate 未就绪：${otherHardBlocks.map((d) => d.summary).join("；")}`);
   }
-  // —— 绝对硬卡 4：Gate 有记录且非 rejected ——
+  // —— 绝对硬卡 3：Gate 有记录且非 rejected ——
   if (gate.decision === null || gate.decision === "rejected") {
     throw new Error("前置 Gate 未通过（无评审记录或已驳回），不能发布");
   }
@@ -7773,47 +7762,60 @@ export async function releaseProject(input: {
     overridden = true;
   }
 
-  const productId = project.productId;
-
   return db.transaction(async (tx) => {
     await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`release:${input.projectId}`}))`);
-    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`product:${productId}`}))`);
     const existingRelease = await tx.select({ id: mpReleases.id })
       .from(mpReleases)
       .where(eq(mpReleases.projectId, input.projectId))
       .limit(1);
     if (existingRelease.length > 0) throw new Error("项目已发布，不能重复发布");
 
-    const existingRevisions = await tx.select({ id: productRevisions.id })
-      .from(productRevisions)
-      .where(eq(productRevisions.productId, productId));
-    const label = `Rev ${String.fromCharCode(65 + existingRevisions.length)}`;
+    let productId = project.productId;
+    let productName = "";
+    let createdProduct = false;
+    if (productId) {
+      const [existingProduct] = await tx.select().from(products).where(eq(products.id, productId)).limit(1);
+      if (!existingProduct) throw new Error("项目关联的产品不存在");
+      productName = existingProduct.name;
+    } else {
+      productId = `prd_${nanoid(12)}`;
+      productName = input.product?.name?.trim() || project.name;
+      const productType = typeof project.customFields?.productType === "string"
+        ? project.customFields.productType.trim()
+        : "";
+      await tx.insert(products).values({
+        id: productId,
+        productNumber: input.product?.productNumber?.trim() || project.projectNumber,
+        name: productName,
+        type: "finished",
+        category: input.product?.category?.trim() || productType,
+        targetMarkets: input.product?.targetMarkets ?? [],
+        lifecycleState: "mass_production",
+        productManagerUserId: project.pmUserId ?? null,
+        createdBy: input.actor.id,
+      });
+      createdProduct = true;
+    }
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`product:${productId}`}))`);
 
     const open = await tx.select().from(projectIssues)
       .where(and(eq(projectIssues.projectId, input.projectId),
         drizzleSql`${projectIssues.status} NOT IN ('resolved','closed','wont_fix')`));
 
-    const [rev] = await tx.insert(productRevisions).values({
-      productId, revisionLabel: label,
-      parentRevisionId: project.baseRevisionId ?? null,
-      createdByProjectId: input.projectId,
-      status: "released", releasedAt: new Date(), releasedBy: input.actor.id,
-    }).returning({ id: productRevisions.id });
+    const frozenBom = await tx.select().from(bomItems)
+      .where(eq(bomItems.projectId, input.projectId))
+      .orderBy(bomItems.sortOrder, bomItems.id);
 
-    const frozenBom = await freezeBomToRevision(input.projectId, rev.id, tx);
-
-    // 盖章：把本项目 implemented+approved 的变更并入新版本，并由返回行生成快照(集合天然一致)
-    const stampedChanges = await tx.update(projectChangelog)
-      .set({ revisionId: rev.id })
+    // 项目交付快照独立保存，不再把项目变更盖章到 Product Revision。
+    const stampedChanges = await tx.select().from(projectChangelog)
       .where(and(
         eq(projectChangelog.projectId, input.projectId),
         inArray(projectChangelog.status, [...REVISION_CHANGE_STATUSES]),
-      ))
-      .returning();
+      ));
     const snapshotChangelog = buildRevisionChangelogSnapshot(stampedChanges as any);
 
     const [releaseRow] = await tx.insert(mpReleases).values({
-      productId, revisionId: rev.id, projectId: input.projectId,
+      productId, revisionId: null, projectId: input.projectId,
       externalApprovalInstanceId: input.externalApprovalInstanceId ?? null,
       snapshotBom: frozenBom as unknown[],
       snapshotChangelog: snapshotChangelog as unknown[],
@@ -7846,7 +7848,7 @@ export async function releaseProject(input: {
     }
 
     await tx.update(products)
-      .set({ currentRevisionId: rev.id, lifecycleState: "mass_production" })
+      .set({ lifecycleState: "mass_production" })
       .where(eq(products.id, productId));
 
     const releasePhases = getEffectivePhasesForProjectLike(project);
@@ -7854,12 +7856,14 @@ export async function releaseProject(input: {
     const stabilizationPhase = releasePhaseIndex >= 0 ? releasePhases[releasePhaseIndex + 1] : null;
     await tx.update(projects)
       .set({
-        resultRevisionId: rev.id,
+        productId,
+        baseRevisionId: null,
+        resultRevisionId: null,
         ...(stabilizationPhase ? { currentPhase: stabilizationPhase.id } : {}),
       })
       .where(eq(projects.id, input.projectId));
 
-    return { revisionId: rev.id, revisionLabel: label };
+    return { productId, productName, createdProduct, revisionId: null, revisionLabel: null };
   });
 }
 

@@ -1,11 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
-import { getDb, createProduct, createProductRevision, getProjectById, ensureNpdProductBaseline } from "./db";
+import { getDb, createProduct, createProductRevision, getProjectById } from "./db";
 import { projectsRouter } from "./routers/projects";
 import {
   activityLogs,
-  productDefinitionSnapshots,
-  productDefinitions,
   productRevisions,
   products,
   projectMembers,
@@ -16,10 +14,12 @@ import {
 
 const OWNER = 991001;
 const PRODUCT = `hardcard-product-${Date.now()}`;
+const LEGACY_PRODUCT = `hc-legacy-p-${Date.now()}`;
 const ECO = `hardcard-eco-${Date.now()}`;
+const LEGACY_ECO = `hc-legacy-e-${Date.now()}`;
+const RETIRED_IDR = `hc-idr-${Date.now()}`;
 const JDM = `hardcard-jdm-${Date.now()}`;
 const NPD = `hardcard-npd-${Date.now()}`;
-let generatedNpdProductId: string | null = null;
 const NPD_ATTRIBUTES = {
   hasBattery: false,
   needsCert: false,
@@ -31,18 +31,19 @@ const caller = projectsRouter.createCaller({
   user: { id: OWNER, role: "member", name: "Hardcard Owner", canCreateProject: true },
 } as any);
 
-const baseInput = (id: string, category: "eco" | "jdm") => ({
+const baseInput = (id: string, category: "eco" | "idr" | "jdm") => ({
   id,
   name: id,
   projectNumber: id,
   category,
   risk: "low" as const,
-  currentPhase: category === "jdm" ? "input" : "planning",
+  currentPhase: category === "jdm" ? "input" : category === "idr" ? "design" : "planning",
   progress: 0,
 });
 
 beforeAll(async () => {
   await createProduct({ id: PRODUCT, name: "Baseline Product", type: "finished", category: "test", createdBy: OWNER });
+  await createProduct({ id: LEGACY_PRODUCT, name: "Legacy Product", type: "finished", category: "test", createdBy: OWNER });
   const revisionId = await createProductRevision({
     productId: PRODUCT,
     revisionLabel: "Rev A",
@@ -57,29 +58,42 @@ beforeAll(async () => {
 afterAll(async () => {
   const db = await getDb();
   if (!db) return;
-  for (const id of [ECO, JDM, NPD]) {
+  for (const id of [ECO, LEGACY_ECO, RETIRED_IDR, JDM, NPD]) {
     await db.delete(activityLogs).where(eq(activityLogs.projectId, id));
     await db.delete(projectMembers).where(eq(projectMembers.projectId, id));
     await db.delete(projectTasks).where(eq(projectTasks.projectId, id));
     await db.delete(projectPhases).where(eq(projectPhases.projectId, id));
     await db.delete(projects).where(eq(projects.id, id));
   }
-  if (generatedNpdProductId) {
-    await db.delete(productDefinitionSnapshots).where(eq(productDefinitionSnapshots.productId, generatedNpdProductId));
-    await db.delete(productDefinitions).where(eq(productDefinitions.productId, generatedNpdProductId));
-    await db.delete(products).where(eq(products.id, generatedNpdProductId));
-  }
   await db.delete(productRevisions).where(eq(productRevisions.productId, PRODUCT));
+  await db.delete(products).where(eq(products.id, LEGACY_PRODUCT));
   await db.delete(products).where(eq(products.id, PRODUCT));
 });
 
 describe("SOP entry hard cards", () => {
-  it("rejects ECO/DRV/IDR without an existing released baseline", async () => {
-    await expect(caller.create(baseInput(ECO, "eco"))).rejects.toMatchObject({ code: "BAD_REQUEST" });
-    await expect(caller.create({ ...baseInput(ECO, "eco"), productId: PRODUCT })).resolves.toEqual({ success: true });
+  it("retires IDR creation and routes work by collaboration complexity", async () => {
+    await expect(caller.create({
+      ...baseInput(RETIRED_IDR, "idr"),
+      productId: PRODUCT,
+    })).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringContaining("IDR 已停止新建"),
+    });
+  });
+
+  it("creates ECO/DRV independently from Product and Revision", async () => {
+    await expect(caller.create(baseInput(ECO, "eco"))).resolves.toEqual({ success: true });
     const project = await getProjectById(ECO);
-    expect(project?.productId).toBe(PRODUCT);
-    expect(project?.baseRevisionId).toBeTruthy();
+    expect(project?.productId).toBeNull();
+    expect(project?.baseRevisionId).toBeNull();
+
+    await expect(caller.create({
+      ...baseInput(LEGACY_ECO, "eco"),
+      productId: LEGACY_PRODUCT,
+    })).resolves.toEqual({ success: true });
+    const legacyProject = await getProjectById(LEGACY_ECO);
+    expect(legacyProject?.productId).toBe(LEGACY_PRODUCT);
+    expect(legacyProject?.baseRevisionId).toBeNull();
   });
 
   it("freezes customer input fields for JDM/OBT at project entry", async () => {
@@ -96,7 +110,7 @@ describe("SOP entry hard cards", () => {
     expect(project?.inputBaselineFrozenAt).toBeTruthy();
   });
 
-  it("creates a product draft link and immutable definition snapshot at NPD Gate 1", async () => {
+  it("keeps NPD independent until project completion generates a product", async () => {
     await caller.create({
       id: NPD,
       name: "NPD Gate 1 baseline",
@@ -107,10 +121,8 @@ describe("SOP entry hard cards", () => {
       progress: 0,
       npdAttributes: NPD_ATTRIBUTES,
     });
-    const baseline = await ensureNpdProductBaseline(NPD, OWNER);
-    generatedNpdProductId = baseline.productId;
     const project = await getProjectById(NPD);
-    expect(project?.productId).toBe(baseline.productId);
-    expect(project?.productDefinitionSnapshotId).toBe(baseline.snapshotId);
+    expect(project?.productId).toBeNull();
+    expect(project?.productDefinitionSnapshotId).toBeNull();
   });
 });

@@ -9,6 +9,8 @@ export interface MyWorkTaskLike {
   projectName?: string | null;
   /** 展示名（服务端按项目模板解析）；缺省回退 taskId。 */
   title?: string | null;
+  /** 前置依赖是否已清（服务端按项目有效依赖图判定）；undefined = 无依赖信息按已清处理。 */
+  depsResolved?: boolean;
   phaseId: string;
   taskId: string;
   status: string;
@@ -53,7 +55,7 @@ const ACTIVE_TASK_STATUSES = new Set(["todo", "in_progress"]);
 function taskRank(task: MyWorkTaskLike, today: string): number {
   if (task.dueDate && task.dueDate < today) return 40;            // 逾期
   if (task.dueDate && task.dueDate === today) return 30;          // 今日到期
-  if (task.status === "todo") return 20;                          // 可开始
+  if (task.status === "todo" && task.depsResolved !== false) return 20; // 可开始（前置已清）
   if (task.status === "in_progress") return 10;                   // 进行中
   return 0;
 }
@@ -120,6 +122,15 @@ export function classifyMyWork(input: {
       continue;
     }
     if (!ACTIVE_TASK_STATUSES.has(task.status)) continue;
+    // 前置未清的 todo = 还没轮到（语义仍是待开始不是阻塞）→ 等待别人桶
+    if (task.status === "todo" && task.depsResolved === false) {
+      waiting.push({
+        key: `task-deps:${task.projectId}:${task.phaseId}:${task.taskId}`,
+        bucket: "waiting", kind: "task_waiting_deps",
+        title: `等前置：${task.title ?? task.taskId}`, rank: 4, ...base,
+      });
+      continue;
+    }
     now.push({
       key: `task:${task.projectId}:${task.phaseId}:${task.taskId}`,
       bucket: "now", kind: "task",

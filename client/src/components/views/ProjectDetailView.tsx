@@ -20,6 +20,8 @@ import {
   TaskDetails, FileAttachment, formatBytes, SOPTask, SOPPhase,
 } from '@/lib/data';
 import { CATEGORY_MAP } from '@/lib/sop-templates';
+import { TASK_STATUS_UI, TASK_PRIORITY_OPTIONS } from '@/lib/task-ui';
+import { FileNameBadges } from './FileBadges';
 import { LinearCard, StatusDot, LinearBar, SegToggle } from '@/components/linear/primitives';
 import { ProgressBar } from '@/components/shared/ProgressBar';
 import { GateStandardPanel } from '@/components/shared/GateStandardPanel';
@@ -58,6 +60,7 @@ import { canRoleContributeToDeliverable, canRoleReviewDeliverables, preferredDel
 import { isSystemAdminRole } from '@shared/system-roles';
 import type { ProjectMemberRole } from '@shared/project-roles';
 import { getTaskEvidenceLevel } from '@shared/npd-v3';
+import { todayShanghai } from '@shared/shanghai-date';
 import { resolveTaskName } from '@shared/sop-template-resolution';
 import { shouldOfferCompletionAfterEvidenceUpload } from '@shared/task-evidence-actions';
 import { buildTaskCompletionActionPath } from '@shared/action-links';
@@ -437,12 +440,7 @@ function FileUploadArea({
                 className={`flex-1 min-w-0 ${previewable ? 'cursor-pointer' : ''}`}
                 onClick={(e) => { if (previewable) { e.stopPropagation(); setPreviewFile(file); } }}
               >
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className={`text-sm text-foreground truncate ${previewable ? 'group-hover:text-primary' : ''}`}>{file.name}</span>
-                  {file.fileType && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground">{file.fileType}</span>}
-                  {file.fileVersion && <span className="shrink-0 text-[10px] num text-primary">{file.fileVersion}</span>}
-                  {file.visibility && file.visibility !== 'internal' && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-border text-muted-foreground">{file.visibility === 'customer' ? '客户可见' : file.visibility === 'supplier' ? '供应商可见' : '公开'}</span>}
-                </div>
+                <FileNameBadges name={file.name} fileType={file.fileType} fileVersion={file.fileVersion} visibility={file.visibility} nameClassName={previewable ? 'group-hover:text-primary' : ''} />
                 <div className="text-[10px] num text-muted-foreground">{formatBytes(file.size)}</div>
               </div>
               {previewable && (
@@ -511,22 +509,8 @@ function canSubmitDeliverableFromUi({
   return canRoleContributeToDeliverable(role, deliverableName);
 }
 
-// Static task-status / priority configs — hoisted out of TaskDetail so they aren't
-// re-created every render (no closure dependencies).
-const TASK_STATUS_CONFIG: Record<string, { label: string; className: string }> = {
-  todo: { label: '待开始', className: 'bg-secondary text-muted-foreground border-border' },
-  in_progress: { label: '进行中', className: 'bg-[color:var(--acc-soft)] text-primary border-[color:var(--acc-border)]' },
-  blocked: { label: '阻塞', className: 'bg-red-50 text-red-700 border-red-200' },
-  done: { label: '已完成', className: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-  skipped: { label: '跳过', className: 'bg-secondary text-muted-foreground border-border' },
-  pending_approval: { label: '待审批', className: 'bg-[color:var(--acc-soft)] text-[color:var(--warning)] border-[color:var(--acc-border)]' },
-};
-const TASK_PRIORITY_OPTIONS = [
-  { value: 'critical', label: 'P0 紧急' },
-  { value: 'high', label: 'P1 高' },
-  { value: 'medium', label: 'P2 中' },
-  { value: 'low', label: 'P3 低' },
-];
+// 状态标签/配色与优先级选项统一取自 lib/task-ui（全站单一口径，B8 收敛；
+// 原本地 className 版本含 red-50/emerald-50 等非 token 硬编码色，已一并消除）。
 
 function isProductDefinitionTask(taskId: string) {
   return taskId.startsWith('pd_');
@@ -673,9 +657,9 @@ function ProjectFocusBand({
         />
         <FocusItem
           icon={<Rocket size={15} />}
-          label="量产发布"
+          label="项目完成与产品交付"
           value={releaseLabel}
-          detail={releasePrecheck?.alreadyReleased ? '完成 2–8 周稳定期后走 Close Gate' : releaseBlocked ? releasePrecheck?.blockers[0] ?? '发布条件未满足' : releasePrecheck?.releaseGate?.decision === 'conditional' ? '有条件通过需留痕' : '发布前置条件'}
+          detail={releasePrecheck?.alreadyReleased ? '完成 2–8 周稳定期后走 Close Gate' : releaseBlocked ? releasePrecheck?.blockers[0] ?? '完成条件未满足' : releasePrecheck?.releaseGate?.decision === 'conditional' ? '有条件通过需留痕' : '完成与交付前置条件'}
           tone={releaseTone}
           actionLabel={canReleaseAction ? '打开预检' : '仅可查看'}
           onAction={onRelease}
@@ -723,18 +707,6 @@ function FocusItem({
       >
         {actionLabel}
       </button>
-    </div>
-  );
-}
-
-function ReadinessRow({ label, ok, detail, soft }: { label: string; ok: boolean; detail: React.ReactNode; soft?: boolean }) {
-  return (
-    <div className="flex items-center justify-between py-1 text-sm">
-      <span className="flex items-center gap-1.5">
-        {ok ? <CheckCircle2 size={14} className="text-emerald-600" /> : <AlertTriangle size={14} className={soft ? 'text-primary' : 'text-rose-500'} />}
-        <span className="text-foreground">{label}</span>
-      </span>
-      <span className={`text-xs num ${ok ? 'text-muted-foreground' : soft ? 'text-primary' : 'text-rose-600'}`}>{detail}</span>
     </div>
   );
 }
@@ -1407,7 +1379,7 @@ function TaskDetail({
     setApprovalMut.mutate({ projectId, phaseId, taskId, ...next });
   };
   const taskStatus = taskDetails?.taskStatus ?? 'todo';
-  const taskStatusCfg = TASK_STATUS_CONFIG[taskStatus] ?? TASK_STATUS_CONFIG.todo;
+  const taskStatusCfg = TASK_STATUS_UI[taskStatus as keyof typeof TASK_STATUS_UI] ?? TASK_STATUS_UI.todo;
   // 权限收口：优先级仅管理/PM 可改；附件上传/删除限负责人或管理/PM。
   // 未显式传入时（如 legacy 'full' 布局）沿用 canEdit，行为不回归。
   const priorityEditable = (canEditPriority ?? canEdit) && canEdit;
@@ -1635,7 +1607,7 @@ function TaskDetail({
         <div>
           <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">状态</div>
           <div className="flex h-[30px] items-center gap-1.5 px-1.5 text-xs">
-            <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] ${taskStatusCfg.className}`}>{taskStatusCfg.label}</span>
+            <span className="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px]" style={{ color: taskStatusCfg.tone.color, background: taskStatusCfg.tone.bg, borderColor: taskStatusCfg.tone.border }}>{taskStatusCfg.label}</span>
             <span className="text-[10px] text-muted-foreground">自动</span>
           </div>
         </div>
@@ -1717,7 +1689,7 @@ function TaskDetail({
         <div>
           <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">状态</div>
           <div className="flex h-[30px] items-center gap-1.5 px-1.5 text-xs">
-            <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] ${taskStatusCfg.className}`}>{taskStatusCfg.label}</span>
+            <span className="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px]" style={{ color: taskStatusCfg.tone.color, background: taskStatusCfg.tone.bg, borderColor: taskStatusCfg.tone.border }}>{taskStatusCfg.label}</span>
             <span className="text-[10px] text-muted-foreground">自动</span>
           </div>
         </div>
@@ -2167,7 +2139,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
   const myTaskRank = (task: { id: string; dependsOn?: string[] }): number => {
     const detail = activePhaseData?.taskDetails?.[task.id];
     const status = detail?.taskStatus ?? 'todo';
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayShanghai(); // 全系统状态判定按上海日期，UTC 会在凌晨 0-8 点慢一天
     const active = status === 'todo' || status === 'in_progress';
     if (active && detail?.dueDate && detail.dueDate < today) return 0;   // 逾期
     if (active && detail?.dueDate === today) return 1;                   // 今日到期
@@ -2379,7 +2351,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
   };
 
   // Gate Review Modal state
-  const [gateReviewPending, setGateReviewPending] = useState<{ phaseId: string } | null>(null);
+  const [gateReviewPending, setGateReviewPending] = useState<{ phaseId: string; gateTaskId: string } | null>(null);
   // MP Release dialog state
   const [releaseOpen, setReleaseOpen] = useState(false);
 
@@ -2389,7 +2361,12 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
       toast('Gate 已形成正式评审与阶段记录，不能从任务勾选撤销；如需回退请走受控阶段流程。');
       return;
     }
-    setGateReviewPending({ phaseId: activePhaseId });
+    setGateReviewPending({ phaseId: activePhaseId, gateTaskId: taskId });
+  };
+
+  const openActiveGateReview = () => {
+    if (!activePhase?.gateTaskId) return;
+    setGateReviewPending({ phaseId: activePhaseId, gateTaskId: activePhase.gateTaskId });
   };
 
   const handleGateReviewConfirm = async (review: GateReview) => {
@@ -2482,7 +2459,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                 onClick={() => setReleaseOpen(true)}
                 className="flex items-center gap-1.5 rounded-md text-xs font-medium bg-primary hover:opacity-90 text-white px-3 py-1.5 shadow-sm transition-opacity"
               >
-                <Rocket size={13} /> 量产发布
+                <Rocket size={13} /> 完成并交付
               </button>
             )}
           </div>
@@ -2662,28 +2639,30 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         </div>
       )}
 
-      <ProjectFocusBand
-        phaseName={activePhase?.name ?? activePhaseId}
-        activeProgress={activeProgress}
-        gateName={activePhase?.gate ?? 'Gate 评审'}
-        readiness={serverGateReadiness}
-        openIssueCount={projectOpenIssueCount}
-        pendingChangeCount={pendingChangeCount}
-        releasePrecheck={releasePrecheck}
-        canReleaseAction={perms.canEditProjectInfo}
-        onTasks={() => setMainTab('tasks')}
-        onGate={() => {
-          setMainTab('tasks');
-          if (activePhase?.gateTaskId) setSelectedTaskId(activePhase.gateTaskId);
-        }}
-        onIssues={() => {
-          if (firstOpenIssuePhaseId) setActivePhaseId(firstOpenIssuePhaseId);
-          setReviewsView('issues');
-          setMainTab('reviews');
-        }}
-        onChanges={() => setMainTab('activity')}
-        onRelease={() => setReleaseOpen(true)}
-      />
+      {mainTab !== 'overview' && (
+        <ProjectFocusBand
+          phaseName={activePhase?.name ?? activePhaseId}
+          activeProgress={activeProgress}
+          gateName={activePhase?.gate ?? 'Gate 评审'}
+          readiness={serverGateReadiness}
+          openIssueCount={projectOpenIssueCount}
+          pendingChangeCount={pendingChangeCount}
+          releasePrecheck={releasePrecheck}
+          canReleaseAction={perms.canEditProjectInfo}
+          onTasks={() => setMainTab('tasks')}
+          onGate={() => {
+            setMainTab('tasks');
+            if (activePhase?.gateTaskId) setSelectedTaskId(activePhase.gateTaskId);
+          }}
+          onIssues={() => {
+            if (firstOpenIssuePhaseId) setActivePhaseId(firstOpenIssuePhaseId);
+            setReviewsView('issues');
+            setMainTab('reviews');
+          }}
+          onChanges={() => setMainTab('activity')}
+          onRelease={() => setReleaseOpen(true)}
+        />
+      )}
 
       {/* Main Tab Bar (collapsed to 5): 总览 / 任务 / 评审与风险 / 物料与文件 / 动态 */}
       <div className="flex flex-nowrap items-center gap-1 px-1 overflow-x-auto border-b border-border">
@@ -2896,13 +2875,14 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                   ) : (
                     <div className="text-xs text-muted-foreground">本阶段尚无 Gate 评审记录。</div>
                   )}
+                  {/* 缺口明细只在缺口清单（GateReadinessChecklist）一处渲染，这里只留计数入口（设计4 §4） */}
                   {blockers.length > 0 && (
-                    <div className="text-xs text-muted-foreground">
-                      放行阻塞项：{blockers.join('、')}
+                    <div className="text-xs text-[color:var(--warning)]">
+                      距放行还差 {blockers.length} 项，打开评审弹窗查看缺口清单。
                     </div>
                   )}
                   <button
-                    onClick={() => setGateReviewPending({ phaseId: activePhaseId })}
+                    onClick={openActiveGateReview}
                     className="text-xs text-primary rounded-md border border-dashed border-[color:var(--acc-border)] px-3 py-2 hover:bg-[color:var(--acc-soft)] transition-colors"
                   >
                     {latest ? '查看 / 补充 Gate 评审记录' : '+ 填写 Gate 评审记录'}
@@ -3016,7 +2996,6 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
           canEdit={perms.canEditProjectInfo}
           canManageMembers={perms.canManageMembers}
           isAdmin={isSystemAdmin}
-          onOpenRiskOverride={perms.canEditProjectInfo ? openRiskOverrideEditor : undefined}
         />
       </ProjectSettingsDrawer>
 
@@ -3384,19 +3363,19 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                             <Target size={11} />
                             交付物
                           </div>
-                          <DeliverablesChecklist
-                            projectId={project.id}
-                            phaseId={activePhaseId}
-                            taskId={selectedTask.id}
-                            items={
-                              selectedTaskIsGate
-                                ? activeGateDeliverables
-                                : getTaskDeliverables(selectedTask.id)
-                            }
-                            status={selectedTaskDetails?.deliverables || {}}
-                            canEdit={canActOnSelectedTask && isCurrentPhaseUnlocked}
-                            carried={selectedTaskIsGate ? activeGateCarriedMap : undefined}
-                          />
+                          {/* Gate 任务的交付物完成度只在缺口清单（GateReadinessChecklist）展示一处，
+                              此处不再重复渲染勾选清单（设计4 §4：同一证据只出现一次）；
+                              裁剪与审核是"动作"面板，保留。 */}
+                          {!selectedTaskIsGate && (
+                            <DeliverablesChecklist
+                              projectId={project.id}
+                              phaseId={activePhaseId}
+                              taskId={selectedTask.id}
+                              items={getTaskDeliverables(selectedTask.id)}
+                              status={selectedTaskDetails?.deliverables || {}}
+                              canEdit={canActOnSelectedTask && isCurrentPhaseUnlocked}
+                            />
+                          )}
                           {selectedTaskIsGate && (
                             <GateDeliverableOverridePanel
                               projectId={project.id}
@@ -3513,7 +3492,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                                     )}
                                   </div>
                                   <button
-                                    onClick={() => setGateReviewPending({ phaseId: activePhaseId })}
+                                    onClick={openActiveGateReview}
                                     className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
                                   >
                                     查看历史
@@ -3535,7 +3514,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                           if (selectedTaskChecked && !latest) {
                             return (
                               <button
-                                onClick={() => setGateReviewPending({ phaseId: activePhaseId })}
+                                onClick={openActiveGateReview}
                                 className="w-full text-xs text-primary rounded-md border border-dashed border-[color:var(--acc-border)] py-2 hover:bg-[color:var(--acc-soft)] transition-colors"
                               >
                                 + 补充填写 Gate 评审记录
@@ -3874,7 +3853,11 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
           gateStandard={activePhase?.gateStandard}
           existingReviews={activePhaseData?.gateReviews}
           projectId={project.id}
-          gateTaskId={activePhase?.gateTaskId}
+          gateTaskId={gateReviewPending.gateTaskId}
+          onOpenSettings={() => {
+            setGateReviewPending(null);
+            setSettingsOpen(true);
+          }}
           /* 就绪清单上传/删除按钮：viewer 隐藏，避免点了就 403 */
           canEditDeliverables={perms.role !== 'viewer' && (perms.canEditProjectInfo || perms.canEditTasks)}
           canQualityGateBlock={perms.canQualityGateBlock}
@@ -3886,7 +3869,6 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
             setTaskView('list');
             setMainTab('tasks');
           }}
-          blockers={[]}
           onConfirm={perms.canGateReview
             ? handleGateReviewConfirm
             : perms.canConveneGateReview

@@ -3,7 +3,7 @@
 // 数据全部来自 project + 现有 hooks/selector，不新增后端调用。
 import {
   AlertTriangle, ArrowRight, CheckCircle2, Circle, Settings as SettingsIcon,
-  ListChecks, Bug, GaugeCircle, Flag, Calendar,
+  ListChecks, Bug, GaugeCircle, Flag,
 } from 'lucide-react';
 import {
   Project, HEALTH_CONFIG, getProjectPhases, getOverallProgress,
@@ -15,8 +15,6 @@ import { LinearCard, Kicker, LinearBar } from '@/components/linear/primitives';
 import { trpc } from '@/lib/trpc';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
-const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-
 function daysFromToday(iso?: string | null): number | null {
   if (!iso) return null;
   const today = new Date();
@@ -126,17 +124,6 @@ export function ProjectDashboard({
   // ── changelog: recent entries ───────────────────────────────────────────────
   const recentChanges: ChangeRecord[] = [...(project.changeLog ?? [])]
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
-
-  // ── next gate：与焦点卡同源（statusSummary.nextGate），不再本地重算另一套（设计4 §5）
-  const summaryNextGate = statusSummary?.nextGate ?? null;
-  const nextGate: { name: string; due: string; days: number } | null =
-    summaryNextGate?.dueDate
-      ? {
-          name: summaryNextGate.gateName,
-          due: summaryNextGate.dueDate,
-          days: daysFromToday(summaryNextGate.dueDate) ?? 0,
-        }
-      : null;
 
   const atRisk = project.risk === 'high' || project.risk === 'medium';
 
@@ -363,28 +350,24 @@ export function ProjectDashboard({
             </div>
           </LinearCard>
 
-          {/* 下一 GATE */}
+          {/* 保留原右栏两卡节奏；Gate 数据只在顶部焦点卡展示。 */}
           <LinearCard className="overflow-hidden p-0">
-            <div className="bg-primary p-4 text-primary-foreground">
-              <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] opacity-80">
-                <Flag size={12} />下一 GATE
-              </div>
-              {nextGate ? (
-                <div className="mt-2.5">
-                  <div className="num text-2xl font-semibold leading-none">
-                    {nextGate.days >= 0 ? `T-${nextGate.days} 天后` : `已超期 ${-nextGate.days} 天`}
-                  </div>
-                  <div className="mt-2 truncate text-sm font-medium">{nextGate.name}</div>
-                  <div className="mt-1 flex items-center gap-1.5 text-xs opacity-80">
-                    <Calendar size={11} />
-                    <span className="num">{nextGate.due}</span>
-                    <span>· {WEEKDAYS[new Date(`${nextGate.due}T00:00:00`).getDay()]}</span>
-                  </div>
+            <button
+              type="button"
+              onClick={() => onSelectTab('tasks')}
+              className="min-h-[116px] w-full bg-primary p-4 text-left text-primary-foreground transition-opacity hover:opacity-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+            >
+              <Kicker className="flex items-center gap-1.5 text-primary-foreground/80">
+                <Flag size={12} />Gate 评审入口
+              </Kicker>
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold">查看 Gate 任务</div>
+                  <div className="mt-1 text-xs text-primary-foreground/75">就绪清单与评审操作集中在任务页</div>
                 </div>
-              ) : (
-                <div className="mt-2.5 flex h-[68px] items-center text-sm opacity-80">暂无即将 Gate</div>
-              )}
-            </div>
+                <ArrowRight size={16} className="shrink-0" aria-hidden="true" />
+              </div>
+            </button>
           </LinearCard>
         </div>
       </div>

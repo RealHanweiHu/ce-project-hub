@@ -1,6 +1,7 @@
 import { and, desc, eq, inArray, sql as drizzleSql, or } from "drizzle-orm";
 import { classifyMyWork } from "../../shared/my-work";
 import { resolveTaskName } from "../../shared/sop-template-resolution";
+import { buildOperationalProjectSchedTasks } from "../../shared/schedule-graph";
 import { todayShanghai } from "../../shared/shanghai-date";
 import { protectedProcedure, router } from "../_core/trpc";
 import {
@@ -283,12 +284,41 @@ export const workbenchRouter = router({
       portfolio,
       admin,
       // 设计4 §6：三桶分类下沉服务端，网页"我的工作"与钉钉摘要共用同一结果
-      buckets: (() => {
+      buckets: await (async () => {
         const projectLikeById = new Map(portfolio.map((row) => [row.id, row]));
-        const enrichedTasks = (tasks as Array<{ projectId: string; phaseId: string; taskId: string }>).map((task) => ({
-          ...task,
-          title: resolveTaskName(projectLikeById.get(task.projectId) ?? { category: "npd" }, task.taskId, task.phaseId),
-        }));
+        // 跨项目依赖判定：按项目有效依赖图（含裁剪收缩）判断我的 todo 是否"还没轮到"
+        const myTaskProjectIds = Array.from(new Set((tasks as Array<{ projectId: string }>).map((t) => t.projectId)));
+        const statusRows = myTaskProjectIds.length === 0 ? [] : await db
+          .select({ projectId: projectTasks.projectId, taskId: projectTasks.taskId, status: projectTasks.status })
+          .from(projectTasks)
+          .where(inArray(projectTasks.projectId, myTaskProjectIds));
+        const statusByProject = new Map<string, Map<string, string>>();
+        for (const row of statusRows) {
+          const inner = statusByProject.get(row.projectId) ?? new Map<string, string>();
+          inner.set(row.taskId, row.status);
+          statusByProject.set(row.projectId, inner);
+        }
+        const depsByProject = new Map<string, Map<string, string[]>>();
+        for (const pid of myTaskProjectIds) {
+          const projectLike = projectLikeById.get(pid);
+          if (!projectLike) continue;
+          const rows = statusRows.filter((row) => row.projectId === pid);
+          const graph = buildOperationalProjectSchedTasks(projectLike, rows);
+          depsByProject.set(pid, new Map(graph.map((node) => [node.id, node.dependsOn ?? []])));
+        }
+        const enrichedTasks = (tasks as Array<{ projectId: string; phaseId: string; taskId: string }>).map((task) => {
+          const deps = depsByProject.get(task.projectId)?.get(task.taskId) ?? [];
+          const statuses = statusByProject.get(task.projectId);
+          const depsResolved = deps.every((depId) => {
+            const st = statuses?.get(depId);
+            return st === "done" || st === "skipped" || st == null;
+          });
+          return {
+            ...task,
+            depsResolved,
+            title: resolveTaskName(projectLikeById.get(task.projectId) ?? { category: "npd" }, task.taskId, task.phaseId),
+          };
+        });
         return classifyMyWork({
           userId: ctx.user.id,
           today: todayShanghai(),

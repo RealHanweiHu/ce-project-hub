@@ -74,7 +74,6 @@ export const productGovernanceRouter = router({
       const { product, canMaintain } = await productAccess(input.productId, ctx.user);
       if (!canMaintain) throw new TRPCError({ code: "FORBIDDEN", message: "只有产品经理或维护责任人可以编制软件发版单" });
       if (product.lifecycleState === "eol") throw new TRPCError({ code: "BAD_REQUEST", message: "产品已停产，不能新建软件发版单" });
-      if (!product.currentRevisionId) throw new TRPCError({ code: "BAD_REQUEST", message: "产品没有已发布基线 Revision" });
       if (input.safetyRelated || input.bomOrManufacturingImpact) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -89,7 +88,7 @@ export const productGovernanceRouter = router({
         const row = await saveProductSoftwareReleaseDraft({
           ...input,
           releaseNumber: `SWR-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${nanoid(6).toUpperCase()}`,
-          baseRevisionId: product.currentRevisionId,
+          baseRevisionId: null,
           savedBy: ctx.user.id,
         });
         await createProductGovernanceEvent({ productId: product.id, entityType: "software_release", entityId: String(row.id), action: input.id ? "draft_updated" : "draft_created", actorUserId: ctx.user.id, snapshot: { version: row.version, baseRevisionId: row.baseRevisionId, qaOwnerUserId: row.qaOwnerUserId } });

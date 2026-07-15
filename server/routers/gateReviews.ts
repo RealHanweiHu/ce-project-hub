@@ -18,7 +18,6 @@ import {
   listProjectGateSignoffs,
   upsertProjectGateSignoff,
   assertProjectGateSignoffsComplete,
-  ensureNpdProductBaseline,
   getProjectConditionsReadiness,
   getProjectTasks,
 } from "../db";
@@ -321,14 +320,6 @@ export const gateReviewsRouter = router({
         ? (await getProjectTasks(input.projectId, input.phaseId))
           .find((task) => task.taskId === gateTaskId)
         : null;
-      const firstPhase = effectivePhases[0];
-      if (
-        input.decision !== "rejected" &&
-        projectBefore.category === "npd" &&
-        firstPhase?.id === input.phaseId
-      ) {
-        await ensureNpdProductBaseline(input.projectId, ctx.user.id);
-      }
       const { reviewId, roundNumber, advancedTo, closed } = await confirmGateReview({
         projectId: input.projectId,
         phaseId: input.phaseId,

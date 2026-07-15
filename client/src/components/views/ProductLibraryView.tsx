@@ -770,7 +770,7 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
 
   const createDefinitionChange = trpc.products.createDefinitionChange.useMutation({
     onSuccess: async () => {
-      toast.success('产品定义变更已登记');
+      toast.success('轻量产品变更已登记');
       setChangeForm(emptyChangeForm);
       await refreshChanges();
     },
@@ -787,9 +787,15 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
   });
 
   const updateDefinitionChange = trpc.products.updateDefinitionChange.useMutation({
-    onSuccess: async () => {
-      toast.success('变更状态已更新');
-      await refreshChanges();
+    onSuccess: async (result) => {
+      toast.success(result?.generatedRevisionLabel
+        ? `轻量变更已实施并生成 ${result.generatedRevisionLabel}`
+        : '变更状态已更新');
+      await Promise.all([
+        refreshChanges(),
+        utils.products.revisions.invalidate({ productId: product.id }),
+        utils.products.list.invalidate(),
+      ]);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -942,7 +948,7 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
             </Button>
           </div>
           <DialogDescription className="sr-only">
-            维护产品型号、主版本、客户版本、SKU 与产品定义基线。
+            维护产品型号、轻微改版 Revision、客户版本、SKU 与产品定义基线。
           </DialogDescription>
         </DialogHeader>
 
@@ -979,7 +985,7 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
             <AccordionContent>
               <div className="border border-border bg-secondary p-4 space-y-3">
                 <p className="text-xs text-muted-foreground">
-                  作为 PLM 侧可复用的定义基线；项目立项不依赖这里。
+                  产品是项目完成后的独立交付物；也可以直接在产品库建档。项目立项、任务和 Gate 不依赖这里。
                 </p>
 
                 {definitionLoading ? (
@@ -1039,7 +1045,7 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
             <AccordionTrigger className="text-foreground">
               <span className="flex items-center gap-2">
                 <CheckCircle2 size={15} className="text-muted-foreground" />
-                <span className="text-base text-foreground">主版本时间线</span>
+                <span className="text-base text-foreground">轻微改版 Revision</span>
               </span>
             </AccordionTrigger>
             <AccordionContent>
@@ -1047,7 +1053,7 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
           {isLoading ? (
             <div className="flex justify-center py-6"><Loader2 className="animate-spin text-primary" /></div>
           ) : revisions.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-6 text-center">还没有主版本。项目「量产发布」后会在这里出现 {productModelCode(product)} Rev A。</p>
+            <p className="text-sm text-muted-foreground py-6 text-center">暂无 Revision。包装、印刷、标签等轻量变更标记为“已实施”后，会在这里生成 {productModelCode(product)} Rev A。</p>
           ) : (
             <div className="space-y-0">
               {(revisions as { id: number; revisionLabel: string; status: string; releasedAt: string | null; createdByProjectId: string | null; snapshotChangelog?: { number: string; type: string; title: string; reason: string | null }[] }[]).map((r, i) => (
@@ -1066,7 +1072,7 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
                     </div>
                     <div className="text-[11px] text-muted-foreground mt-0.5">
                       {r.releasedAt ? new Date(r.releasedAt).toLocaleString('zh-CN') : '—'}
-                      {r.createdByProjectId ? ` · 来源项目 ${r.createdByProjectId}` : ''}
+                      {r.createdByProjectId ? ` · 历史来源项目 ${r.createdByProjectId}` : ' · 产品库轻量变更'}
                     </div>
                     {r.status === 'released' && (
                       <details className="mt-1.5">
@@ -1153,11 +1159,14 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
             <AccordionTrigger className="text-foreground">
               <span className="flex items-center gap-2">
                 <History size={15} className="text-muted-foreground" />
-                <span className="text-base text-foreground">产品需求变更</span>
+                <span className="text-base text-foreground">轻量产品变更 · 无需建项目</span>
               </span>
             </AccordionTrigger>
             <AccordionContent>
               <div className="border border-border bg-secondary p-4 space-y-4">
+            <div className="rounded-[7px] border border-border bg-white px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+              包装、印刷、标签、文案、简单换色或其他单点小改在这里留痕，不创建项目。变更标记为“已实施”时生成新的 Revision；若变化需要多人跨专业协作、排期、任务、验证或 Gate，请改建 ECO / DRV 项目。
+            </div>
             <div className="grid grid-cols-1 lg:grid-cols-6 gap-3">
               <label className="block space-y-1.5 lg:col-span-1">
                 <span className="text-[10px] uppercase tracking-widest text-muted-foreground">范围</span>
@@ -1172,7 +1181,7 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
                 </select>
               </label>
               <div className="lg:col-span-3">
-                <Field label="变更标题" value={changeForm.title} onChange={(value) => setChangeForm({ ...changeForm, title: value })} placeholder="例：删除照明功能以降低 BOM 成本" />
+                <Field label="变更标题" value={changeForm.title} onChange={(value) => setChangeForm({ ...changeForm, title: value })} placeholder="例：更新包装警示语与标签位置" />
               </div>
               <div className="lg:col-span-2">
                 <Field label="来源项目" value={changeForm.sourceProjectId} onChange={(value) => setChangeForm({ ...changeForm, sourceProjectId: value })} placeholder="可选，项目 ID" />
@@ -1216,7 +1225,7 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
             {changesLoading ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 size={14} className="animate-spin" />加载变更记录…</div>
             ) : changes.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-2">暂无产品定义变更。</p>
+              <p className="text-sm text-muted-foreground py-2">暂无轻量产品变更。</p>
             ) : (
               <div className="space-y-2">
                 {changes.map((change) => (
@@ -1248,7 +1257,7 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
                                 : 'bg-white text-muted-foreground border-border hover:border-[color:var(--acc-border)]'
                             }`}
                           >
-                            {CHANGE_STATUS_LABELS[status]}
+                            {status === 'implemented' ? '实施并生成 Revision' : CHANGE_STATUS_LABELS[status]}
                           </button>
                         ))}
                       </div>

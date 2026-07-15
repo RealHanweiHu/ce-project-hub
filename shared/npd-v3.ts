@@ -670,6 +670,17 @@ export const NPD_ADDON_PACKS: NpdAddonPack[] = [
   },
 ];
 
+/**
+ * 新建 NPD 的唯一流程配置。
+ *
+ * 新产品开发不再按属性问答分档，也不再让用户选择附加包；完整流程固定包含
+ * 7 个阶段与全部专业工作线。历史项目仍按自身已保存的配置解析，保证追溯兼容。
+ */
+export const NPD_FULL_TEMPLATE_CONFIG: NpdTemplateConfig = {
+  tier: "full",
+  packs: ["battery", "cert", "software", "mold"],
+};
+
 // ── 轻量档（15 任务，EVT+DVT 合并为 verification）──────────────────────────
 const coreTask = (id: string): SOPTask => {
   for (const phase of NPD_V3_CORE_PHASES) {

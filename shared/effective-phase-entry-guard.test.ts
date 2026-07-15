@@ -31,7 +31,7 @@ const ALLOWED: Record<string, Allowance[]> = {
     { pattern: /getPhasesForCategory\(projectLike\.category, projectLike\.sopTemplateVersion\)/, max: 1 },
   ],
   "shared/sop-templates.ts": [
-    { pattern: /getPhasesForCategory\('derivative', templateVersion\)/, max: 2 },
+    { pattern: /getPhasesForCategory\(["']derivative["'], templateVersion\)/, max: 2 },
     { pattern: /getPhasesForCategory\(category, templateVersion\)/, max: 1 },
   ],
 };

@@ -4,8 +4,6 @@ import { describe, expect, it } from "vitest";
 
 const OVERVIEW_PROJECT_COMPONENTS = [
   "PortfolioDashboard.tsx",
-  "PortfolioTable.tsx",
-  "RagHealthPanel.tsx",
   "PerspectivePanel.tsx",
 ] as const;
 

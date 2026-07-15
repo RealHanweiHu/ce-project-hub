@@ -4,14 +4,8 @@ import { useMemo, useRef, useState } from 'react';
 import { Project, getProjectPhases } from '@/lib/data';
 import { criticalPathTasksForProjectRows } from '@shared/schedule-graph';
 import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, CalendarDays, AlertTriangle, Flame } from 'lucide-react';
+import { DAY_MS as dayMs, parseGanttDate as parseDate, useGanttTimeline } from './gantt-timeline';
 
-function parseDate(s?: string | null): Date | null {
-  if (!s) return null;
-  const d = new Date(s);
-  return isNaN(d.getTime()) ? null : d;
-}
-const dayMs = 86400000;
-const fmtMonth = (d: Date) => `${d.getFullYear()}/${d.getMonth() + 1}`;
 const fmt = (d: Date) => `${d.getMonth() + 1}/${d.getDate()}`;
 
 interface TaskBar {
@@ -66,23 +60,9 @@ export function TaskGanttView({ project, onTaskClick, phaseFilter }: { project: 
     return { rows, totalStart, totalEnd, critTotal };
   }, [project, phaseFilter]);
 
-  const totalDays = Math.max(1, Math.ceil((totalEnd.getTime() - totalStart.getTime()) / dayMs) + 1);
-  const pxPerDay = 6 * zoom;
-  const totalWidth = Math.round(totalDays * pxPerDay);
-  const left = (d: Date) => Math.round(((d.getTime() - totalStart.getTime()) / dayMs) * pxPerDay);
-  const width = (s: Date, e: Date) => Math.max(4, Math.round(((e.getTime() - s.getTime()) / dayMs + 1) * pxPerDay));
-
-  const monthTicks = useMemo(() => {
-    const ticks: { label: string; x: number }[] = [];
-    const d = new Date(totalStart); d.setDate(1);
-    if (d < totalStart) d.setMonth(d.getMonth() + 1);
-    while (d <= totalEnd) { ticks.push({ label: fmtMonth(d), x: left(d) }); d.setMonth(d.getMonth() + 1); }
-    return ticks;
-  }, [totalStart, totalEnd, pxPerDay]);
-
-  const today = new Date();
-  const todayX = left(today);
-  const showToday = today >= totalStart && today.getTime() <= totalEnd.getTime() + 7 * dayMs;
+  const { totalWidth, left, width, monthTicks, todayX, showToday } = useGanttTimeline({
+    totalStart, totalEnd, zoom, basePxPerDay: 6, minBarPx: 4, inclusiveEnd: true,
+  });
   const scrollBy = (dx: number) => scrollRef.current?.scrollBy({ left: dx, behavior: 'smooth' });
 
   const taskRows = rows.filter((r) => r.kind === 'task') as Extract<Row, { kind: 'task' }>[];

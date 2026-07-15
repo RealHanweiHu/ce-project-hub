@@ -2,12 +2,13 @@
 // Linear redesign — 富卡片（名称 + 负责人头像 + 截止），列高上限内部滚动。Presentation only。
 import { Project, getProjectPhases } from '@/lib/data';
 import { trpc } from '@/lib/trpc';
+import { TASK_STATUS_UI } from '@/lib/task-ui';
 
-// 状态徽标：阻塞 / 待审批 / 跳过。done 列内的常规完成无徽标。
+// 状态徽标：阻塞 / 待审批 / 跳过。done 列内的常规完成无徽标。标签与配色取自全站统一口径（B8 收敛）。
 const STATUS_BADGE: Record<string, { label: string; color: string }> = {
-  blocked: { label: '阻塞', color: 'var(--destructive)' },
-  pending_approval: { label: '待审批', color: 'var(--warning)' },
-  skipped: { label: '跳过', color: 'var(--muted-foreground)' },
+  blocked: { label: TASK_STATUS_UI.blocked.label, color: TASK_STATUS_UI.blocked.tone.color },
+  pending_approval: { label: TASK_STATUS_UI.pending_approval.label, color: TASK_STATUS_UI.pending_approval.tone.color },
+  skipped: { label: TASK_STATUS_UI.skipped.label, color: TASK_STATUS_UI.skipped.tone.color },
 };
 
 type Card = {

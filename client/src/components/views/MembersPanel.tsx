@@ -15,7 +15,6 @@ import { toast } from 'sonner';
 // Role metadata for display
 const ROLE_META: Record<string, {
   label: string;
-  labelEn: string;
   color: string;
   bg: string;
   border: string;
@@ -23,103 +22,103 @@ const ROLE_META: Record<string, {
   description: string;
 }> = {
   owner: {
-    label: '创建者', labelEn: 'Owner',
+    label: '创建者',
     color: 'text-primary', bg: 'bg-[color:var(--acc-soft)]', border: 'border-[color:var(--acc-border)]',
     icon: <Crown size={11} />,
     description: '全部权限，不可被移除',
   },
   manager: {
-    label: '管理层', labelEn: 'Manager',
+    label: '管理层',
     color: 'text-primary', bg: 'bg-[color:var(--acc-soft)]', border: 'border-[color:var(--acc-border)]',
     icon: <Shield size={11} />,
     description: '可通过 Gate 评审、管理成员、编辑所有内容',
   },
   project_manager: {
-    label: '项目经理/PMO', labelEn: 'Project Manager',
+    label: '项目经理/PMO',
     color: 'text-primary', bg: 'bg-[color:var(--acc-soft)]', border: 'border-[color:var(--acc-border)]',
     icon: <BriefcaseBusiness size={11} />,
     description: '负责计划、成员、任务推进和 Gate 组织',
   },
   pm: {
-    label: '产品经理', labelEn: 'PM',
+    label: '产品经理',
     color: 'text-primary', bg: 'bg-[color:var(--acc-soft)]', border: 'border-[color:var(--acc-border)]',
     icon: <Edit3 size={11} />,
     description: '负责产品定义、需求范围、目标成本和产品变更',
   },
   rd_hw: {
-    label: '硬件研发', labelEn: 'HW Eng',
+    label: '硬件研发',
     color: 'text-primary', bg: 'bg-[color:var(--acc-soft)]', border: 'border-[color:var(--acc-border)]',
     icon: <Edit3 size={11} />,
     description: '可编辑任务和问题',
   },
   rd_sw: {
-    label: '软件研发', labelEn: 'SW Eng',
+    label: '软件研发',
     color: 'text-primary', bg: 'bg-[color:var(--acc-soft)]', border: 'border-[color:var(--acc-border)]',
     icon: <Edit3 size={11} />,
     description: '可编辑任务和问题',
   },
   rd_mech: {
-    label: '结构/ID', labelEn: 'Mech/ID',
+    label: '结构/ID',
     color: 'text-primary', bg: 'bg-[color:var(--acc-soft)]', border: 'border-[color:var(--acc-border)]',
     icon: <Edit3 size={11} />,
     description: '可编辑任务和问题',
   },
   qa: {
-    label: '测试/品质', labelEn: 'QA',
+    label: '测试/品质',
     color: 'text-primary', bg: 'bg-[color:var(--acc-soft)]', border: 'border-[color:var(--acc-border)]',
     icon: <CheckCircle2 size={11} />,
     description: '可编辑问题清单（Issue List）',
   },
   scm: {
-    label: '供应链', labelEn: 'SCM',
+    label: '供应链',
     color: 'text-primary', bg: 'bg-[color:var(--acc-soft)]', border: 'border-[color:var(--acc-border)]',
     icon: <Edit3 size={11} />,
     description: '可编辑变更记录中的成本相关字段',
   },
   pe: {
-    label: '工艺/设备', labelEn: 'Process/Equip',
+    label: '工艺/设备',
     color: 'text-primary', bg: 'bg-[color:var(--acc-soft)]', border: 'border-[color:var(--acc-border)]',
     icon: <Wrench size={11} />,
     description: 'DFM/工装/量产准备，负责/会签任务',
   },
   mfg: {
-    label: '生产', labelEn: 'Manufacturing',
+    label: '生产',
     color: 'text-primary', bg: 'bg-[color:var(--acc-soft)]', border: 'border-[color:var(--acc-border)]',
     icon: <Factory size={11} />,
     description: '试产/量产爬坡，负责/会签任务',
   },
   sales: {
-    label: '销售/渠道', labelEn: 'Sales',
+    label: '销售/渠道',
     color: 'text-primary', bg: 'bg-[color:var(--acc-soft)]', border: 'border-[color:var(--acc-border)]',
     icon: <Megaphone size={11} />,
     description: '需求/市场输入，可提问题与需求',
   },
   cert: {
-    label: '认证', labelEn: 'Certification',
+    label: '认证',
     color: 'text-primary', bg: 'bg-[color:var(--acc-soft)]', border: 'border-[color:var(--acc-border)]',
     icon: <BadgeCheck size={11} />,
     description: '安规/认证资料，Gate 会签责任人',
   },
   battery_safety: {
-    label: '电池安全', labelEn: 'Battery Safety',
+    label: '电池安全',
     color: 'text-primary', bg: 'bg-[color:var(--acc-soft)]', border: 'border-[color:var(--acc-border)]',
     icon: <BatteryCharging size={11} />,
     description: '电池/安全合规，Gate 会签责任人',
   },
   external_customer: {
-    label: '外部客户', labelEn: 'Customer',
+    label: '外部客户',
     color: 'text-primary', bg: 'bg-[color:var(--acc-soft)]', border: 'border-[color:var(--acc-border)]',
     icon: <Handshake size={11} />,
     description: '仅可访问授权的客户可见文件',
   },
   supplier: {
-    label: '外部供应商', labelEn: 'Supplier',
+    label: '外部供应商',
     color: 'text-primary', bg: 'bg-[color:var(--acc-soft)]', border: 'border-[color:var(--acc-border)]',
     icon: <Factory size={11} />,
     description: '仅可访问授权的供应商可见文件',
   },
   viewer: {
-    label: '只读', labelEn: 'Viewer',
+    label: '只读',
     color: 'text-primary', bg: 'bg-[color:var(--acc-soft)]', border: 'border-[color:var(--acc-border)]',
     icon: <Eye size={11} />,
     description: '仅查看，不可修改任何内容',

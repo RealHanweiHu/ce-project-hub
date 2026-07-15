@@ -1,9 +1,8 @@
 // 项目总揽：左侧分区导航 + 右侧内容。把原先堆在一页的功能整理为
 // 基础信息 / 团队与分工 / 排期与周会 / 钉钉群 / 自定义字段 五个分区。
 import { useEffect, useState } from 'react';
-import { Project, HEALTH_CONFIG, getProjectPhases, getOverallProgress } from '@/lib/data';
+import { Project, getProjectPhases } from '@/lib/data';
 import {
-  CATEGORY_MAP,
   DERIVATIVE_REUSE_LEVEL_LABELS,
   DERIVATIVE_REUSE_MODULE_RULES,
   getDerivativeEffectiveTaskIds,
@@ -14,8 +13,8 @@ import {
 import { trpc } from '@/lib/trpc';
 import { useProjectPermission } from '@/hooks/useProjectPermission';
 import {
-  Hash, User, AlertTriangle, CalendarRange, Flag, GaugeCircle, ListChecks, Bug, GitBranch,
-  Users, CalendarClock, RefreshCw, UserCheck, Rocket, FileText, MessagesSquare, CheckCircle2, Loader2, Boxes, ShieldAlert, Edit3,
+  AlertTriangle, ListChecks, GitBranch,
+  Users, CalendarClock, RefreshCw, UserCheck, Rocket, FileText, MessagesSquare, CheckCircle2, Loader2, Boxes, ShieldAlert,
   PauseCircle,
   Handshake,
   WalletCards,
@@ -107,48 +106,28 @@ export function OverviewPanel({
   canEdit,
   canManageMembers,
   isAdmin,
-  onOpenRiskOverride,
 }: {
   project: Project;
   onUpdate: (p: Project) => void;
   canEdit: boolean;
   canManageMembers: boolean;
   isAdmin: boolean;
-  onOpenRiskOverride?: () => void;
 }) {
   // 多岗成员按"有效角色集合"判权，不再只看主角色（accessRole）——否则兼任 scm/cert
   // 的成员在费用/认证面板拿不到 extraRoles 授予的能力（一人多岗设计 §2.1）。
   const unionPerms = useProjectPermission(project.id);
   const hasAnyRole = (list: readonly string[]) =>
     unionPerms.roles.some((role) => list.includes(role)) || list.includes(project.accessRole ?? '');
-  const { data: members = [] } = trpc.members.list.useQuery({ projectId: project.id });
-  const { data: users = [] } = trpc.admin.listUsersForSelect.useQuery(undefined, { staleTime: 60_000 });
-  const { data: productList = [] } = trpc.products.list.useQuery(undefined, { staleTime: 60_000 });
   const { data: productHandoff, isLoading: productHandoffLoading } = trpc.projects.productHandoff.useQuery(
     { projectId: project.id },
     { staleTime: 60_000 },
   );
-  const linkedProduct = project.productId ? (productList as Array<{ id: string; name: string }>).find((p) => p.id === project.productId) : null;
   const utils = trpc.useUtils();
 
   const [section, setSection] = useState<SectionKey>('info');
   const [kickoffOpen, setKickoffOpen] = useState(false);
 
-  const catConfig = project.category ? CATEGORY_MAP[project.category] : null;
   const phases = getProjectPhases(project);
-  const currentPhaseName = phases.find((p) => p.id === project.currentPhase)?.name ?? project.currentPhase;
-  const overallProgress = getOverallProgress(project);
-  const health = HEALTH_CONFIG[project.risk];
-  const pmName = project.pmUserId ? users.find((u) => u.id === project.pmUserId)?.name ?? '—' : '—';
-
-  let doneTasks = 0, totalTasks = 0;
-  for (const phase of phases) {
-    const taskState = project.phases[phase.id]?.tasks ?? {};
-    for (const task of phase.tasks) { totalTasks += 1; if (taskState[task.id]) doneTasks += 1; }
-  }
-  const taskRate = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
-  const openIssues = phases.reduce((sum, phase) => sum + (project.phases[phase.id]?.issues ?? []).filter((i) => i.status === 'open' || i.status === 'in_progress').length, 0);
-  const pendingChanges = (project.changeLog ?? []).filter((r) => r.status === 'proposed').length;
 
   let projectedEnd: string | null = null;
   for (const phase of phases) {
@@ -212,64 +191,6 @@ export function OverviewPanel({
               canGenerate={canEdit}
             />
 
-            {catConfig && (
-              <div className={`rounded-[11px] border border-border bg-card flex items-start gap-4 border ${catConfig.borderColor} ${catConfig.color} p-4 shadow-none`}>
-                <span className="text-3xl leading-none">{catConfig.icon}</span>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className={`text-sm font-semibold ${catConfig.textColor}`}>{catConfig.name}</span>
-                    <span className={`text-[10px] px-1.5 py-0.5 border ${catConfig.borderColor} ${catConfig.textColor}`}>{catConfig.badge}</span>
-                    <span className="text-[10px] text-muted-foreground">{catConfig.phaseCount} 阶段 · {catConfig.typicalDuration}</span>
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{catConfig.desc}</p>
-                </div>
-              </div>
-            )}
-
-            <div>
-              <h3 className="text-[11px] uppercase tracking-widest text-muted-foreground mb-3">关键信息</h3>
-              <div className="grid grid-cols-2 gap-x-8 gap-y-5 rounded-[12px] border border-border bg-card px-5 py-[18px] md:grid-cols-3">
-                <InfoCell icon={<Hash size={13} />} label="项目编号" value={project.code || '—'} mono />
-                <InfoCell icon={<User size={13} />} label="项目经理" value={pmName} />
-                <InfoCell icon={<Boxes size={13} />} label="关联产品" value={linkedProduct ? linkedProduct.name : (project.productId ? project.productId : '新产品 / 未关联')} />
-                <InfoCell icon={<AlertTriangle size={13} />} label="项目健康度" value={
-                  <div className="space-y-1.5">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className={`inline-flex items-center gap-1.5 ${health?.color}`}>
-                        <span className={`h-1.5 w-1.5 rounded-full ${health?.dot ?? 'bg-muted-foreground'}`} />
-                        {health?.label ?? project.risk}
-                      </span>
-                      <span className="text-[10px] text-muted-foreground">{project.riskOverrideRisk ? '手动覆盖' : '自动计算'}</span>
-                      {canEdit && onOpenRiskOverride && (
-                        <button
-                          type="button"
-                          onClick={onOpenRiskOverride}
-                          className="rounded-[7px] inline-flex items-center gap-1 border border-border bg-card px-2 py-1 text-[10px] text-[color:var(--secondary-foreground)] transition-colors hover:border-[color:var(--acc-border)] hover:text-foreground"
-                        >
-                          <Edit3 size={10} />
-                          手动覆盖
-                        </button>
-                      )}
-                    </div>
-                    {project.riskOverrideReason && (
-                      <div className="text-[11px] leading-relaxed text-muted-foreground">原因：{project.riskOverrideReason}</div>
-                    )}
-                    {!canEdit && (
-                      <div className="text-[11px] text-muted-foreground">仅 Owner / 管理层 / PM 可覆盖</div>
-                    )}
-                  </div>
-                } />
-                <InfoCell icon={<Flag size={13} />} label="当前阶段" value={currentPhaseName} />
-                <InfoCell icon={<CalendarRange size={13} />} label="计划起止" value={`${project.startDate || '—'} ~ ${project.targetDate || '—'}`} mono />
-                <InfoCell className="col-span-2 md:col-span-3" icon={<GaugeCircle size={13} />} label="整体进度" value={
-                  <div className="flex items-center gap-3">
-                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-secondary min-w-[48px]"><div className="h-full rounded-full bg-primary" style={{ width: `${overallProgress}%` }} /></div>
-                    <span className="num text-xs text-[color:var(--secondary-foreground)]">{overallProgress}%</span>
-                  </div>
-                } />
-              </div>
-            </div>
-
             <div>
               <h3 className="text-[11px] uppercase tracking-widest text-muted-foreground mb-3">立项信息</h3>
               <div className="grid grid-cols-1 gap-x-8 gap-y-[18px] rounded-[12px] border border-border bg-card px-5 py-[18px] md:grid-cols-2">
@@ -280,15 +201,6 @@ export function OverviewPanel({
               </div>
             </div>
 
-            <div>
-              <h3 className="text-[11px] uppercase tracking-widest text-muted-foreground mb-3">关键指标</h3>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <Metric icon={<ListChecks size={15} />} label="任务完成率" value={`${taskRate}%`} sub={`${doneTasks}/${totalTasks}`} />
-                <Metric icon={<Bug size={15} />} label="开放问题" value={String(openIssues)} accent={openIssues > 0 ? 'text-[color:var(--destructive)]' : undefined} />
-                <Metric icon={<GitBranch size={15} />} label="待决变更" value={String(pendingChanges)} accent={pendingChanges > 0 ? 'text-[color:var(--warning)]' : undefined} />
-                <Metric icon={<Users size={15} />} label="项目成员" value={String(members.length)} />
-              </div>
-            </div>
           </>
         )}
 
@@ -612,7 +524,7 @@ function ProductDefinitionHandoffPanel({
   );
 }
 
-/** 项目生命周期面板：暂停（可恢复）/ 恢复 / 终止（终局，理由必填+善后说明留痕）。权限同量产发布。 */
+/** 项目生命周期面板：暂停（可恢复）/ 恢复 / 终止（终局，理由必填+善后说明留痕）。权限同项目完成与产品交付。 */
 function ProjectLifecyclePanel({ project, canEdit }: { project: Project; canEdit: boolean }) {
   const utils = trpc.useUtils();
   const lifecycle = project.lifecycle ?? 'active';
@@ -654,7 +566,7 @@ function ProjectLifecyclePanel({ project, canEdit }: { project: Project; canEdit
 
       {lifecycle === 'terminated' && (
         <p className="text-xs text-muted-foreground">
-          项目已终止并归档：不再出现在活跃列表与统计中，不能量产发布，也不可恢复。善后记录见项目动态。
+          项目已终止并归档：不再出现在活跃列表与统计中，不能完成产品交付，也不可恢复。善后记录见项目动态。
         </p>
       )}
 
@@ -768,7 +680,7 @@ function DerivativeReuseStrategyPanel({
                 模块复用驱动的 DRV 裁剪
               </div>
               <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">
-                大改款/中改款先按电池、机芯、PCBA、软件、结构/模具、包装/认证判断复用等级，再绑定保留任务、交付物和 Gate 深度。极小改仍走 ECO，纯外观/换色仍走 IDR。
+                需要多人跨专业协作的迭代或复杂外观/CMF 翻新，按电池、机芯、PCBA、软件、结构/模具、包装/认证判断复用等级，再绑定保留任务、交付物和 Gate 深度。包装、标签、文案、简单换色等单点小改留在产品库，不创建项目。
               </p>
               <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">
                 同一个任务只要仍被任一非直接复用模块需要，就会保留；当多个模块都直接复用且边界未变时，有效任务数会自动减少。
@@ -1064,27 +976,6 @@ function Field({ label, value, onCommit, canEdit, placeholder, textarea, classNa
         <input value={draft} onChange={(e) => setDraft(e.target.value)} onBlur={commit} placeholder={placeholder}
           className={editClass} />
       )}
-    </div>
-  );
-}
-
-function InfoCell({ icon, label, value, mono, className }: { icon: React.ReactNode; label: string; value: React.ReactNode; mono?: boolean; className?: string }) {
-  return (
-    <div className={className}>
-      <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground mb-1">{icon}{label}</div>
-      <div className={`text-sm text-foreground ${mono ? 'num' : ''}`}>{value}</div>
-    </div>
-  );
-}
-
-function Metric({ icon, label, value, sub, accent }: { icon: React.ReactNode; label: string; value: string; sub?: string; accent?: string }) {
-  return (
-    <div className="rounded-[10px] border border-border bg-card p-4">
-      <div className="flex items-center gap-1.5 text-muted-foreground">{icon}<span className="text-[10px] uppercase tracking-wider">{label}</span></div>
-      <div className="mt-2 flex items-baseline gap-1.5">
-        <span className={`text-2xl font-semibold ${accent ?? 'text-foreground'}`}>{value}</span>
-        {sub && <span className="text-[11px] num text-muted-foreground">{sub}</span>}
-      </div>
     </div>
   );
 }
