@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Loader2, Cpu, AlertCircle, Eye, EyeOff } from 'lucide-react';
+import { Loader2, Cpu, AlertCircle, Eye, EyeOff, Milestone, ListChecks, Users } from 'lucide-react';
 
 type Mode = 'login' | 'register';
 
@@ -141,11 +141,92 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center p-4">
+    <div className="min-h-screen bg-background flex">
+      {/* 桌面端品牌与价值说明区 */}
+      <div className="relative hidden lg:flex lg:w-1/2 flex-col justify-between overflow-hidden border-r border-border bg-sidebar px-12 py-10">
+        {/* 轻量几何装饰 */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -top-24 -right-24 h-72 w-72 rounded-full border border-[color:var(--acc-border)] opacity-60"
+        />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -top-10 -right-40 h-72 w-72 rounded-full bg-accent opacity-50"
+        />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -bottom-28 -left-16 h-64 w-64 rounded-full border border-[color:var(--acc-border)] opacity-40"
+        />
+
+        <div className="relative flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
+            <Cpu size={20} className="text-primary-foreground" />
+          </div>
+          <div>
+            <p className="text-base font-semibold text-foreground leading-tight">CE Project Hub</p>
+            <p className="text-[10px] uppercase tracking-widest text-muted-foreground">
+              Consumer Electronics · Product Development
+            </p>
+          </div>
+        </div>
+
+        <div className="relative max-w-md">
+          <h2 className="text-3xl font-semibold leading-snug text-foreground mb-4">
+            让产品开发的
+            <br />
+            每个阶段清晰可控
+          </h2>
+          <p className="text-sm text-muted-foreground leading-relaxed mb-10">
+            面向消费电子产品开发的项目协作平台，从立项到量产，阶段、任务与评审在同一处推进。
+          </p>
+          <ul className="space-y-5">
+            <li className="flex items-start gap-3.5">
+              <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent text-accent-foreground">
+                <Milestone size={17} aria-hidden="true" />
+              </span>
+              <div>
+                <p className="text-sm font-medium text-foreground">阶段与 Gate 评审</p>
+                <p className="text-xs text-muted-foreground leading-relaxed mt-0.5">
+                  按阶段推进项目，评审要点与证据一目了然
+                </p>
+              </div>
+            </li>
+            <li className="flex items-start gap-3.5">
+              <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent text-accent-foreground">
+                <ListChecks size={17} aria-hidden="true" />
+              </span>
+              <div>
+                <p className="text-sm font-medium text-foreground">任务与交付物追踪</p>
+                <p className="text-xs text-muted-foreground leading-relaxed mt-0.5">
+                  执行、提交证据、确认完成，主路径始终清晰
+                </p>
+              </div>
+            </li>
+            <li className="flex items-start gap-3.5">
+              <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent text-accent-foreground">
+                <Users size={17} aria-hidden="true" />
+              </span>
+              <div>
+                <p className="text-sm font-medium text-foreground">多人多设备实时同步</p>
+                <p className="text-xs text-muted-foreground leading-relaxed mt-0.5">
+                  团队成员随时随地保持同一份项目视图
+                </p>
+              </div>
+            </li>
+          </ul>
+        </div>
+
+        <p className="relative text-xs text-muted-foreground">
+          © {new Date().getFullYear()} CE Project Hub
+        </p>
+      </div>
+
+      {/* 表单区 */}
+      <div className="flex flex-1 items-center justify-center p-4">
       <div className="w-full max-w-sm">
-        {/* Logo */}
-        <div className="flex items-center justify-center gap-3 mb-8">
-          <div className="w-10 h-10 bg-primary flex items-center justify-center">
+        {/* Logo（移动端 / 窄屏） */}
+        <div className="flex items-center justify-center gap-3 mb-8 lg:hidden">
+          <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
             <Cpu size={20} className="text-primary-foreground" />
           </div>
           <div>
@@ -156,6 +237,16 @@ export default function Login() {
           </div>
         </div>
 
+        {/* 桌面端表单标题 */}
+        <div className="hidden lg:block mb-6">
+          <h1 className="text-xl font-semibold text-foreground">
+            {mode === 'login' ? '欢迎回来' : '创建账号'}
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            {mode === 'login' ? '登录以继续你的项目工作' : '注册后即可加入团队协作'}
+          </p>
+        </div>
+
         <Card className="border-border shadow-sm">
           {/* Tab switcher */}
           <CardHeader className="pb-0 pt-4 px-4">
@@ -163,7 +254,7 @@ export default function Login() {
               <button
                 type="button"
                 onClick={() => switchMode('login')}
-                className={`flex-1 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
+                className={`flex-1 py-2.5 min-h-11 text-sm font-medium transition-colors border-b-2 -mb-px ${
                   mode === 'login'
                     ? 'border-primary text-primary'
                     : 'border-transparent text-muted-foreground hover:text-foreground'
@@ -175,7 +266,7 @@ export default function Login() {
                 <button
                   type="button"
                   onClick={() => switchMode('register')}
-                  className={`flex-1 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
+                  className={`flex-1 py-2.5 min-h-11 text-sm font-medium transition-colors border-b-2 -mb-px ${
                     mode === 'register'
                       ? 'border-primary text-primary'
                       : 'border-transparent text-muted-foreground hover:text-foreground'
@@ -290,9 +381,11 @@ export default function Login() {
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                    aria-label={showPassword ? '隐藏密码' : '显示密码'}
+                    aria-pressed={showPassword}
+                    className="absolute inset-y-0 right-0 flex w-11 items-center justify-center rounded-r-md text-muted-foreground hover:text-foreground transition-colors focus-visible:ring-ring/50 focus-visible:ring-[3px] outline-none"
                   >
-                    {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+                    {showPassword ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
                   </button>
                 </div>
               </div>
@@ -321,7 +414,7 @@ export default function Login() {
 
               <Button
                 type="submit"
-                className="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-medium"
+                className="w-full h-11 bg-primary hover:bg-primary/90 text-primary-foreground font-medium"
                 disabled={isPending}
               >
                 {isPending ? (
@@ -342,6 +435,7 @@ export default function Login() {
             注册后默认为成员，项目创建及其他权限<br />由管理员在后台授权
           </p>
         )}
+      </div>
       </div>
     </div>
   );

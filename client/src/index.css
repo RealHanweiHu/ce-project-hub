@@ -114,6 +114,22 @@
     font-family: var(--font-sans);
     letter-spacing: 0;
     background: var(--background);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  /* 品牌淡色选区（输入框内保留各自的 selection 样式） */
+  ::selection {
+    background: var(--acc-soft);
+    color: var(--foreground);
+  }
+  /* 尊重系统「减少动态效果」设置 */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
   h1, h2, h3 { font-family: var(--font-sans); font-weight: 700; letter-spacing: -0.01em; }
   .font-serif { font-family: var(--font-sans) !important; }
@@ -163,20 +179,20 @@
     }
   }
   
-  /* Custom scrollbar */
+  /* Custom scrollbar：与 zinc 中性令牌保持一致 */
   ::-webkit-scrollbar {
     width: 6px;
     height: 6px;
   }
   ::-webkit-scrollbar-track {
-    background: oklch(0.961 0.001 106.424);
+    background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background: oklch(0.869 0.005 56.366);
+    background: var(--border);
     border-radius: 3px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: oklch(0.553 0.013 58.071);
+    background: var(--muted-foreground);
   }
 }
 

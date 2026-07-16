@@ -15,9 +15,7 @@ const NotFound = lazy(() => import("./pages/NotFound"));
 function RouteLoading() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background">
-      <div className="text-sm uppercase tracking-widest text-muted-foreground">
-        Loading...
-      </div>
+      <div className="text-sm tracking-widest text-muted-foreground">正在加载…</div>
     </div>
   );
 }

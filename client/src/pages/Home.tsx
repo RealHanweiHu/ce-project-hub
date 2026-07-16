@@ -851,8 +851,17 @@ export default function Home() {
 
   if (!user) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="text-center space-y-6 max-w-sm px-6">
+      <div className="relative min-h-screen flex items-center justify-center bg-background overflow-hidden">
+        {/* 轻量几何装饰 */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -top-28 -right-28 h-80 w-80 rounded-full border border-[color:var(--acc-border)] opacity-50"
+        />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -bottom-32 -left-24 h-72 w-72 rounded-full bg-accent opacity-40"
+        />
+        <div className="relative text-center space-y-6 max-w-sm px-6">
           <div className="flex justify-center">
             <div className="w-14 h-14 rounded-[12px] bg-primary text-white flex items-center justify-center">
               <Cpu size={26} />
@@ -864,10 +873,10 @@ export default function Home() {
               Consumer Electronics · Product Development
             </p>
           </div>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-sm text-muted-foreground leading-relaxed">
             请登录以访问您的项目数据，支持多人多设备实时同步。
           </p>
-          <Button asChild>
+          <Button asChild size="lg" className="min-h-11 px-8">
             <a href={getLoginUrl()}>
               <LogIn size={16} />
               登录 / 注册
