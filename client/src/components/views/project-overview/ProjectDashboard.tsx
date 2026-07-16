@@ -2,14 +2,13 @@
 // 固定排版：每张卡片高度固定，列表区 overflow-y-auto；增删条目不改变整体高度。
 // 数据全部来自 project + 现有 hooks/selector，不新增后端调用。
 import {
-  AlertTriangle, ArrowRight, CheckCircle2, Circle, Settings as SettingsIcon,
+  AlertTriangle, ArrowRight, CheckCircle2, Circle,
   ListChecks, Bug, GaugeCircle, Flag, Calendar,
 } from 'lucide-react';
 import {
   Project, HEALTH_CONFIG, getProjectPhases, computeOverallProgress,
   Issue, ChangeRecord, ISSUE_SEVERITIES,
 } from '@/lib/data';
-import { CATEGORY_MAP } from '@/lib/sop-templates';
 import { CHANGE_TYPE_CONFIG } from './../ChangeLog';
 import { LinearCard, Kicker, LinearBar } from '@/components/linear/primitives';
 import { trpc } from '@/lib/trpc';
@@ -74,8 +73,6 @@ export function ProjectDashboard({
   const phases = getProjectPhases(project);
   const overallProgress = computeOverallProgress(project);
   const health = HEALTH_CONFIG[project.risk];
-  const pmName = project.pmUserId ? users.find((u) => u.id === project.pmUserId)?.name ?? '—' : '—';
-  const productLine = project.category ? CATEGORY_MAP[project.category]?.name ?? project.category : '—';
   const currentPhaseName = phases.find((p) => p.id === project.currentPhase)?.name ?? project.currentPhase;
 
   // ── tasks: flatten across phases ────────────────────────────────────────────
@@ -170,7 +167,7 @@ export function ProjectDashboard({
           {/* 待办任务 */}
           <LinearCard className="p-4">
             <CardHeader title="待办任务" actionLabel="查看全部" onAction={() => onSelectTab('tasks')} />
-            <div className="h-[248px] overflow-y-auto -mr-1 pr-1">
+            <div className="h-[400px] overflow-y-auto -mr-1 pr-1">
               {todoTasks.length === 0 ? (
                 <EmptyState text="暂无待办" />
               ) : (
@@ -194,6 +191,11 @@ export function ProjectDashboard({
             </div>
           </LinearCard>
 
+        </div>
+
+        {/* 中列 */}
+        {/* 关键信息卡已移除（P0-3）：编号/PM/日期/阶段等已在页头身份区与执行摘要展示，不再重复 */}
+        <div className="space-y-4">
           {/* 未关闭问题 */}
           <LinearCard className="p-4">
             <CardHeader title="未关闭问题" actionLabel="查看全部" onAction={() => onSelectTab('issues')} />
@@ -216,22 +218,6 @@ export function ProjectDashboard({
                   ))}
                 </ul>
               )}
-            </div>
-          </LinearCard>
-        </div>
-
-        {/* 中列 */}
-        <div className="space-y-4">
-          {/* 关键信息 */}
-          <LinearCard className="p-4">
-            <CardHeader title="关键信息" actionLabel="设置" onAction={onOpenSettings} icon={<SettingsIcon size={12} />} />
-            <div className="grid grid-cols-2 gap-x-6 gap-y-3.5 pt-1">
-              <InfoCell label="项目编号" value={project.code || '—'} mono />
-              <InfoCell label="项目经理" value={pmName} />
-              <InfoCell label="产品线" value={productLine} />
-              <InfoCell label="当前阶段" value={currentPhaseName} />
-              <InfoCell label="开始" value={project.startDate || '—'} mono />
-              <InfoCell label="目标量产" value={project.targetDate || '—'} mono />
             </div>
           </LinearCard>
 
@@ -336,15 +322,6 @@ function CardHeader({ title, actionLabel, onAction, icon }: {
 function EmptyState({ text }: { text: string }) {
   return (
     <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{text}</div>
-  );
-}
-
-function InfoCell({ label, value, mono }: { label: string; value: React.ReactNode; mono?: boolean }) {
-  return (
-    <div className="min-w-0">
-      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
-      <div className={`mt-0.5 truncate text-sm text-foreground ${mono ? 'num' : ''}`}>{value}</div>
-    </div>
   );
 }
 

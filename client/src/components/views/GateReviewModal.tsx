@@ -414,27 +414,35 @@ export function GateReviewModal({
           </div>
         ) : null}
 
+        {/* 首屏聚焦（P0-5）：完整标准与历史记录默认折叠，首屏只留未达成项与评审操作 */}
         {gateStandard && (
-          <div className="border border-border rounded-[9px] p-3 mb-4">
-            <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-2">
-              Gate 管理标准
+          <details className="group border border-border rounded-[9px] mb-4">
+            <summary className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-2.5 text-[10px] uppercase tracking-widest text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
+              <ChevronRight size={12} className="shrink-0 transition-transform group-open:rotate-90" />
+              Gate 管理标准（准入 / 准出条件）
+            </summary>
+            <div className="px-3 pb-3">
+              <GateStandardPanel standard={gateStandard} compact evidenceHint />
             </div>
-            <GateStandardPanel standard={gateStandard} compact evidenceHint />
-          </div>
+          </details>
         )}
 
-        {/* History */}
+        {/* History：默认折叠，摘要行保留最近一次结论 */}
         {existingReviews.length > 0 && (
-          <div className="mb-4">
-            <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-3">
+          <details className="group border border-border rounded-[9px] mb-4">
+            <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 text-[10px] uppercase tracking-widest text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
+              <ChevronRight size={12} className="shrink-0 transition-transform group-open:rotate-90" />
               评审历史 · {existingReviews.length} 次
-            </div>
-            <div className="space-y-0">
+              <span className="ml-auto normal-case tracking-normal">
+                <GateReviewBadge review={existingReviews[existingReviews.length - 1]} size="xs" />
+              </span>
+            </summary>
+            <div className="space-y-0 px-3 pb-3">
               {existingReviews.map((r, i) => (
                 <ReviewHistoryItem key={r.id} review={r} index={i} total={existingReviews.length} />
               ))}
             </div>
-          </div>
+          </details>
         )}
 
         {/* Add new review or show button */}

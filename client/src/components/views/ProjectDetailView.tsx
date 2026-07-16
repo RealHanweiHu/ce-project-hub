@@ -4,7 +4,7 @@
 // gate review / deliverable review) and tab state are preserved unchanged.
 // ProjectDetailView: phase navigation, Gantt chart tab, task checklist, task details, file upload
 
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react';
 import {
   ArrowLeft, CheckCircle2, Circle, ChevronRight,
   Upload, Download, Trash2, Paperclip, FileText, Image as ImageIcon,
@@ -1859,68 +1859,43 @@ function PhaseStepper({
   );
 }
 
-function TaskPhaseFilterRail({
-  project,
-  phases,
-  value,
-  onChange,
+// 阶段导航去重（P0-4）：项目内只保留顶部 PhaseStepper 一套完整阶段轨道，
+// 任务/问题/Gate 等子区域改用这一行紧凑的「当前阶段 + 下拉切换」，不再重复完整轨道。
+const GATE_DECISION_LABEL: Record<string, string> = {
+  approved: '通过',
+  conditional: '有条件通过',
+  rejected: '未通过',
+};
+
+function ActivePhaseSelect({
+  label, phases, value, onChange, allLabel, optionInfo, children,
 }: {
-  project: Project;
+  label: string;
   phases: SOPPhase[];
   value: string;
   onChange: (id: string) => void;
+  allLabel?: string;
+  optionInfo?: (phase: SOPPhase) => string;
+  children?: ReactNode;
 }) {
   return (
-    <LinearCard className="overflow-x-auto">
-      <div className="flex min-w-max">
-        <button
-          type="button"
-          onClick={() => onChange('all')}
-          className={`flex-1 min-w-[96px] p-3 text-left transition-all border-b-2 ${
-            value === 'all' ? 'border-b-primary bg-secondary' : 'border-b-transparent hover:bg-secondary'
-          }`}
-        >
-          <div className="mb-0.5 text-[9px] num uppercase tracking-widest text-muted-foreground">ALL</div>
-          <div className={`text-xs font-medium ${value === 'all' ? 'text-primary' : 'text-muted-foreground'}`}>
-            全部阶段
-          </div>
-          <div className="mt-1.5 flex items-center gap-1">
-            <ListChecks size={10} className="shrink-0 text-muted-foreground" />
-          </div>
-        </button>
-        {phases.map((phase) => {
-          const status = getPhaseStatus(project, phase.id);
-          const isActive = value === phase.id;
-          const unlocked = isPhaseUnlocked(project, phase.id);
-          return (
-            <button
-              key={phase.id}
-              type="button"
-              onClick={() => onChange(phase.id)}
-              className={`flex-1 min-w-[96px] p-3 text-left transition-all border-b-2 ${
-                isActive ? 'border-b-primary bg-secondary' : 'border-b-transparent hover:bg-secondary'
-              } ${!unlocked ? 'opacity-60' : ''}`}
-            >
-              <div className="mb-0.5 text-[9px] num uppercase tracking-widest text-muted-foreground">{phase.code}</div>
-              <div className={`text-xs font-medium ${isActive ? 'text-primary' : 'text-muted-foreground'}`}>
-                {phase.nameEn}
-              </div>
-              <div className="mt-1.5 flex items-center gap-1">
-                {!unlocked ? (
-                  <Lock size={10} className="shrink-0 text-muted-foreground" />
-                ) : status === 'completed' ? (
-                  <CheckCircle2 size={10} className="shrink-0 text-emerald-500" />
-                ) : status === 'active' ? (
-                  <Zap size={10} className="shrink-0 text-primary" />
-                ) : (
-                  <Circle size={10} className="shrink-0 text-muted-foreground" />
-                )}
-              </div>
-            </button>
-          );
-        })}
-      </div>
-    </LinearCard>
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[9px] border border-border bg-card px-3 py-2">
+      <span className="shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label={label}
+        className="h-11 md:h-8 min-w-0 max-w-full cursor-pointer rounded-[7px] border border-border bg-card px-2 text-base md:text-[12.5px] font-medium text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+      >
+        {allLabel && <option value="all">{allLabel}</option>}
+        {phases.map((phase) => (
+          <option key={phase.id} value={phase.id}>
+            {phase.code} · {phase.name}{optionInfo ? optionInfo(phase) : ''}
+          </option>
+        ))}
+      </select>
+      {children && <div className="ml-auto flex min-w-0 items-center gap-2">{children}</div>}
+    </div>
   );
 }
 
@@ -2409,6 +2384,19 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                 inputClassName="text-3xl lg:text-4xl font-bold tracking-[-0.4px] text-foreground leading-tight w-full"
               />
             </h1>
+            {/* 一句话项目定义（P0-3）：目标市场/客户/复用与新增统一写在这里，不再拆分字段 */}
+            {(project.description || perms.canEditProjectInfo) && (
+              <div className="mt-1.5 max-w-2xl">
+                <EditableText
+                  value={project.description ?? ''}
+                  onChange={perms.canEditProjectInfo ? (v) => updateFieldAny('description', v) : () => {}}
+                  readOnly={!perms.canEditProjectInfo}
+                  placeholder="一句话项目定义：做什么、给谁做、复用与新增…"
+                  className="text-[13px] leading-relaxed text-muted-foreground"
+                  inputClassName="text-[13px] w-full"
+                />
+              </div>
+            )}
             <div className="flex flex-wrap items-center gap-x-6 gap-y-2 mt-3 text-xs text-muted-foreground">
               <div className="flex items-center gap-1.5">
                 <span className="text-[10px] uppercase tracking-wider text-muted-foreground">类型</span>
@@ -2674,37 +2662,30 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
       {/* ── Issues sub-view ───────────────────────────────────────────────── */}
       {mainTab === 'reviews' && reviewsView === 'issues' && (
         <div className="space-y-4">
-          {/* Phase Navigation (compact) — 任何阶段都可记录问题 */}
-          <LinearCard className="overflow-x-auto">
-            <div className="flex min-w-max">
-              {projectPhases.map((phase) => {
-                const isActive = phase.id === activePhaseId;
+          {/* 阶段切换（紧凑下拉）— 任何阶段都可记录问题 */}
+          <ActivePhaseSelect
+            label="问题阶段"
+            phases={projectPhases}
+            value={activePhaseId}
+            onChange={(id) => setActivePhaseId(id)}
+            optionInfo={(phase) => {
+              const phaseIssues = project.phases[phase.id]?.issues || [];
+              const openCount = phaseIssues.filter((i) => i.status === 'open' || i.status === 'in_progress').length;
+              return openCount > 0 ? ` · ${openCount} 待处理` : '';
+            }}
+          >
+            {(() => {
+              const total = projectPhases.reduce((sum, phase) => {
                 const phaseIssues = project.phases[phase.id]?.issues || [];
-                const openCount = phaseIssues.filter((i) => i.status === 'open' || i.status === 'in_progress').length;
-                return (
-                  <button
-                    key={phase.id}
-                    onClick={() => setActivePhaseId(phase.id)}
-                    className={`flex-1 min-w-[100px] p-3 text-left transition-all border-b-2 ${
-                      isActive ? 'border-b-rose-600 bg-rose-50/30' : 'border-b-transparent hover:bg-secondary'
-                    }`}
-                  >
-                    <div className="text-[9px] num uppercase tracking-widest text-muted-foreground mb-0.5">{phase.code}</div>
-                    <div className={`text-xs font-medium ${isActive ? 'text-rose-700' : 'text-muted-foreground'}`}>{phase.name}</div>
-                    <div className="mt-1 flex items-center gap-1">
-                      {openCount > 0 ? (
-                        <span className="text-[9px] num rounded bg-rose-100 text-rose-700 border border-rose-200 px-1 py-0.5">
-                          {openCount} 待处理
-                        </span>
-                      ) : (
-                        <span className="text-[9px] num text-muted-foreground">{phaseIssues.length} 问题</span>
-                      )}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </LinearCard>
+                return sum + phaseIssues.filter((i) => i.status === 'open' || i.status === 'in_progress').length;
+              }, 0);
+              return total > 0 ? (
+                <span className="num rounded bg-[color:var(--destructive-soft)] px-1.5 py-0.5 text-[10px] text-destructive">
+                  全项目 {total} 待处理
+                </span>
+              ) : null;
+            })()}
+          </ActivePhaseSelect>
           <IssueList
             projectId={project.id}
             phaseId={activePhaseId}
@@ -2740,30 +2721,23 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
       {/* ── Gate sub-view：复用现有 Gate 评审就绪度 + GateReviewModal 流程 ────── */}
       {mainTab === 'reviews' && reviewsView === 'gate' && (
         <div className="p-6 space-y-4">
-          <LinearCard className="overflow-x-auto">
-            <div className="flex min-w-max">
-              {projectPhases.map((phase) => {
-                const isActive = phase.id === activePhaseId;
-                const reviews = project.phases[phase.id]?.gateReviews || [];
-                const latest = reviews[reviews.length - 1];
-                return (
-                  <button
-                    key={phase.id}
-                    onClick={() => setActivePhaseId(phase.id)}
-                    className={`flex-1 min-w-[100px] p-3 text-left transition-all border-b-2 ${
-                      isActive ? 'border-b-primary bg-secondary' : 'border-b-transparent hover:bg-secondary'
-                    }`}
-                  >
-                    <div className="text-[9px] num uppercase tracking-widest text-muted-foreground mb-0.5">{phase.code}</div>
-                    <div className={`text-xs font-medium ${isActive ? 'text-primary' : 'text-muted-foreground'}`}>{phase.name}</div>
-                    <div className="mt-1.5 flex items-center gap-1">
-                      {latest ? <GateReviewBadge review={latest} /> : <span className="text-[9px] num text-muted-foreground">未评审</span>}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </LinearCard>
+          <ActivePhaseSelect
+            label="评审节点"
+            phases={projectPhases}
+            value={activePhaseId}
+            onChange={(id) => setActivePhaseId(id)}
+            optionInfo={(phase) => {
+              const reviews = project.phases[phase.id]?.gateReviews || [];
+              const latest = reviews[reviews.length - 1];
+              return latest ? ` · ${GATE_DECISION_LABEL[latest.decision] ?? '已评审'}` : ' · 未评审';
+            }}
+          >
+            {(() => {
+              const reviews = activePhaseData?.gateReviews || [];
+              const latest = reviews[reviews.length - 1];
+              return latest ? <GateReviewBadge review={latest} /> : null;
+            })()}
+          </ActivePhaseSelect>
           <LinearCard className="p-5 space-y-3">
             <div className="flex items-center gap-2">
               <Target size={14} className="text-primary" />
@@ -2939,10 +2913,10 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
             </div>
           </div>
 
-          {/* 阶段筛选器：列表子视图已有下方阶段轴，避免重复；其他任务视图保留同风格筛选能力。 */}
+          {/* 阶段筛选：紧凑下拉，完整阶段轨道只保留顶部一套 */}
           {taskView !== 'list' && (
-            <TaskPhaseFilterRail
-              project={project}
+            <ActivePhaseSelect
+              label="阶段筛选"
               phases={projectPhases}
               value={taskPhaseFilter}
               onChange={(id) => {
@@ -2950,53 +2924,34 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                 if (id !== 'all') setActivePhaseId(id);
                 setSelectedTaskId(null);
               }}
+              allLabel="全部阶段"
+              optionInfo={(phase) => {
+                if (!isPhaseUnlocked(project, phase.id)) return ' · 未解锁';
+                const status = getPhaseStatus(project, phase.id);
+                return status === 'completed' ? ' ✓' : phase.id === project.currentPhase ? ' · 当前' : '';
+              }}
             />
           )}
 
           {/* ── 列表 sub-view ──────────────────────────────────────────────── */}
           {taskView === 'list' && (
         <>
-          {/* Phase Navigation */}
-          <LinearCard className="overflow-x-auto">
-            <div className="flex min-w-max">
-              {projectPhases.map((phase) => {
-                const status = getPhaseStatus(project, phase.id);
-                const isActive = phase.id === activePhaseId;
-                const unlocked = isPhaseUnlocked(project, phase.id);
-                return (
-                  <button
-                    key={phase.id}
-                    onClick={() => {
-                      setActivePhaseId(phase.id);
-                      setTaskPhaseFilter(phase.id);
-                      setSelectedTaskId(null);
-                    }}
-                    className={`flex-1 min-w-[80px] p-3 text-left transition-all border-b-2 relative ${
-                      isActive
-                        ? 'border-b-primary bg-secondary'
-                        : 'border-b-transparent hover:bg-secondary'
-                    } ${!unlocked ? 'opacity-60' : ''}`}
-                  >
-                    <div className="text-[9px] num uppercase tracking-widest text-muted-foreground mb-0.5">{phase.code}</div>
-                    <div className={`text-xs font-medium ${isActive ? 'text-primary' : 'text-muted-foreground'}`}>
-                      {phase.nameEn}
-                    </div>
-                    <div className="mt-1.5 flex items-center gap-1">
-                      {!unlocked ? (
-                        <Lock size={10} className="text-muted-foreground shrink-0" />
-                      ) : status === 'completed' ? (
-                        <CheckCircle2 size={10} className="text-emerald-500 shrink-0" />
-                      ) : status === 'active' ? (
-                        <Zap size={10} className="text-primary shrink-0" />
-                      ) : (
-                        <Circle size={10} className="text-muted-foreground shrink-0" />
-                      )}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </LinearCard>
+          {/* 阶段切换：紧凑下拉（完整轨道只保留顶部 PhaseStepper） */}
+          <ActivePhaseSelect
+            label="阶段任务"
+            phases={projectPhases}
+            value={activePhaseId}
+            onChange={(id) => {
+              setActivePhaseId(id);
+              setTaskPhaseFilter(id);
+              setSelectedTaskId(null);
+            }}
+            optionInfo={(phase) => {
+              if (!isPhaseUnlocked(project, phase.id)) return ' · 未解锁';
+              const status = getPhaseStatus(project, phase.id);
+              return status === 'completed' ? ' ✓' : phase.id === project.currentPhase ? ' · 当前' : '';
+            }}
+          />
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Task List */}

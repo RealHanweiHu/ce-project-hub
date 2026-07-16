@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { trpc } from "@/lib/trpc";
-import { CheckCircle2, XCircle, Upload, Trash2, FileText } from "lucide-react";
+import { CheckCircle2, ChevronRight, XCircle, Upload, Trash2, FileText } from "lucide-react";
 import { toast } from "sonner";
 
 const DIM_LABEL: Record<string, string> = {
@@ -10,6 +10,8 @@ const DIM_LABEL: Record<string, string> = {
   critical_issues: "本阶段 P0/P1",
   role_blocks: "QA / PE 阻断",
   review_conditions: "遗留评审条件",
+  npi_readiness: "PE/NPI 就绪",
+  sample_signoffs: "样品签样",
 };
 
 type FileRow = { id: number; name: string; deliverableName: string | null; storageUrl: string };
@@ -71,6 +73,35 @@ export function GateReadinessChecklist({
   }
 
   const deliverablesDim = readiness.dimensions.find((d) => d.dimension === "deliverables");
+  // 首屏聚焦（P0-5）：未达成维度展开在首屏，已满足维度折叠成一行
+  const blockingDims = readiness.dimensions.filter((d) => !d.ok);
+  const passedDims = readiness.dimensions.filter((d) => d.ok);
+
+  const renderDim = (dim: (typeof readiness.dimensions)[number]) => (
+    <div key={dim.dimension} className="text-sm">
+      <div className="flex items-center gap-2">
+        {dim.ok
+          ? <CheckCircle2 size={14} className="text-[color:var(--success)] shrink-0" />
+          : <XCircle size={14} className="text-destructive shrink-0" />}
+        <span className="font-medium text-foreground">{DIM_LABEL[dim.dimension] ?? dim.dimension}</span>
+        <span className="text-muted-foreground text-xs">· {dim.summary}</span>
+      </div>
+      {dim.dimension === "deliverables" && (
+        <DeliverableRows
+          missing={deliverablesDim?.blockers ?? []}
+          files={files as FileRow[]}
+          canEdit={canEdit}
+          onUpload={uploadFor}
+          onDelete={(id) => del.mutate({ id, projectId })}
+        />
+      )}
+      {dim.dimension !== "deliverables" && !dim.ok && dim.blockers.length > 0 && (
+        <ul className="ml-6 mt-0.5 text-xs text-muted-foreground list-disc pl-3 space-y-0.5">
+          {dim.blockers.map((b, i) => <li key={i}>{b}</li>)}
+        </ul>
+      )}
+    </div>
+  );
 
   return (
     <div className="border border-border bg-secondary rounded-[9px] p-3 mb-4 space-y-2">
@@ -80,31 +111,17 @@ export function GateReadinessChecklist({
           {readiness.ready ? "已就绪" : `还差 ${readiness.blockerCount} 项不能过会`}
         </span>
       </div>
-      {readiness.dimensions.map((dim) => (
-        <div key={dim.dimension} className="text-sm">
-          <div className="flex items-center gap-2">
-            {dim.ok
-              ? <CheckCircle2 size={14} className="text-[color:var(--success)] shrink-0" />
-              : <XCircle size={14} className="text-destructive shrink-0" />}
-            <span className="font-medium text-foreground">{DIM_LABEL[dim.dimension] ?? dim.dimension}</span>
-            <span className="text-muted-foreground text-xs">· {dim.summary}</span>
-          </div>
-          {dim.dimension === "deliverables" && (
-            <DeliverableRows
-              missing={deliverablesDim?.blockers ?? []}
-              files={files as FileRow[]}
-              canEdit={canEdit}
-              onUpload={uploadFor}
-              onDelete={(id) => del.mutate({ id, projectId })}
-            />
-          )}
-          {dim.dimension !== "deliverables" && !dim.ok && dim.blockers.length > 0 && (
-            <ul className="ml-6 mt-0.5 text-xs text-muted-foreground list-disc pl-3 space-y-0.5">
-              {dim.blockers.map((b, i) => <li key={i}>{b}</li>)}
-            </ul>
-          )}
-        </div>
-      ))}
+      {blockingDims.map(renderDim)}
+      {passedDims.length > 0 && (
+        <details className="group">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
+            <ChevronRight size={12} className="shrink-0 transition-transform group-open:rotate-90" />
+            <CheckCircle2 size={12} className="shrink-0 text-[color:var(--success)]" />
+            已满足 {passedDims.length} 项：{passedDims.map((d) => DIM_LABEL[d.dimension] ?? d.dimension).join('、')}
+          </summary>
+          <div className="mt-2 space-y-2">{passedDims.map(renderDim)}</div>
+        </details>
+      )}
       <GateBlockerControls
         projectId={projectId}
         phaseId={phaseId}
@@ -223,33 +240,48 @@ function DeliverableRows({
   const uploadedNames = Array.from(new Set(files.map((f) => f.deliverableName).filter((n): n is string => !!n)));
   const names = Array.from(new Set([...uploadedNames, ...missing]));
   if (names.length === 0) return null;
+
+  const row = (name: string) => {
+    const versions = files.filter((f) => f.deliverableName === name).sort((a, b) => b.id - a.id);
+    const has = versions.length > 0;
+    return (
+      <div key={name} className="text-xs">
+        <div className="flex items-center gap-2">
+          {has ? <CheckCircle2 size={12} className="text-[color:var(--success)] shrink-0" /> : <XCircle size={12} className="text-destructive shrink-0" />}
+          <span className={has ? "text-foreground" : "text-muted-foreground"}>{name}</span>
+          {canEdit && <UploadButton onPick={(f) => onUpload(name, f)} />}
+        </div>
+        {versions.map((v, idx) => (
+          <div key={v.id} className="flex items-center gap-1 ml-5 mt-0.5 text-muted-foreground">
+            <FileText size={11} className="shrink-0" />
+            <a href={v.storageUrl} target="_blank" rel="noreferrer" className="hover:underline truncate max-w-[180px]">{v.name}</a>
+            {idx === 0 && <span className="text-[10px] text-[color:var(--success)]">最新</span>}
+            {canEdit && (
+              <button onClick={() => onDelete(v.id)} className="text-muted-foreground hover:text-destructive" title="删除该版本">
+                <Trash2 size={11} />
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  // 首屏聚焦：缺失项展开在外，已上传项折叠
+  const missingNames = names.filter((n) => !files.some((f) => f.deliverableName === n));
+  const doneNames = names.filter((n) => files.some((f) => f.deliverableName === n));
   return (
     <div className="ml-6 mt-1 space-y-1">
-      {names.map((name) => {
-        const versions = files.filter((f) => f.deliverableName === name).sort((a, b) => b.id - a.id);
-        const has = versions.length > 0;
-        return (
-          <div key={name} className="text-xs">
-            <div className="flex items-center gap-2">
-              {has ? <CheckCircle2 size={12} className="text-[color:var(--success)] shrink-0" /> : <XCircle size={12} className="text-destructive shrink-0" />}
-              <span className={has ? "text-foreground" : "text-muted-foreground"}>{name}</span>
-              {canEdit && <UploadButton onPick={(f) => onUpload(name, f)} />}
-            </div>
-            {versions.map((v, idx) => (
-              <div key={v.id} className="flex items-center gap-1 ml-5 mt-0.5 text-muted-foreground">
-                <FileText size={11} className="shrink-0" />
-                <a href={v.storageUrl} target="_blank" rel="noreferrer" className="hover:underline truncate max-w-[180px]">{v.name}</a>
-                {idx === 0 && <span className="text-[10px] text-[color:var(--success)]">最新</span>}
-                {canEdit && (
-                  <button onClick={() => onDelete(v.id)} className="text-muted-foreground hover:text-destructive" title="删除该版本">
-                    <Trash2 size={11} />
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-        );
-      })}
+      {missingNames.map(row)}
+      {doneNames.length > 0 && (
+        <details className="group">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
+            <ChevronRight size={11} className="shrink-0 transition-transform group-open:rotate-90" />
+            已上传 {doneNames.length} 项交付物
+          </summary>
+          <div className="mt-1 space-y-1">{doneNames.map(row)}</div>
+        </details>
+      )}
     </div>
   );
 }
