@@ -98,9 +98,9 @@ export function PortfolioDashboard({
 
   const kpis: KpiSpec[] = [
     { label: "进行中", value: data.activeProjects, sub: `${scopeLabel}` },
-    { label: "按期", value: data.onTime, sub: `占比 ${onTimeRate}%`, tone: "green" },
+    { label: "按期", value: data.onTime, sub: `占比 ${onTimeRate}%`, tone: "neutral" },
     { label: "风险", value: needAttention, sub: `${data.health.amber} 中 · ${data.health.red} 高`, tone: data.health.red > 0 ? "red" : needAttention > 0 ? "amber" : "neutral" },
-    { label: "即将 Gate", value: data.upcomingGateCount, sub: "待评审", tone: "acc" },
+    { label: "即将 Gate", value: data.upcomingGateCount, sub: "待评审", tone: "neutral" },
     { label: "未关闭问题", value: data.openIssues, sub: `P0/P1 ${data.criticalIssues}`, tone: data.criticalIssues > 0 ? "red" : "neutral" },
     { label: "逾期任务", value: data.overdueTasks, sub: `阻塞 ${data.blockedTasks}`, tone: data.overdueTasks > 0 ? "red" : "neutral", onClick: () => onDrill("overdue") },
   ];
@@ -323,25 +323,25 @@ function ManagementKpiBoard({
       label: "延期预测",
       value: data.delayPrediction.delayedCount,
       sub: `${fmtPct(data.delayPrediction.delayedRatePct)} · 最大 ${data.delayPrediction.maxSlipDays ?? 0} 天`,
-      tone: data.delayPrediction.delayedCount > 0 ? "red" : "green",
+      tone: data.delayPrediction.delayedCount > 0 ? "red" : "neutral",
     },
     {
       label: "Gate 一次通过",
       value: fmtPct(data.gateFirstPass.ratePct),
       sub: `${data.gateFirstPass.firstPassCount}/${data.gateFirstPass.reviewedGateCount}`,
-      tone: data.gateFirstPass.ratePct != null && data.gateFirstPass.ratePct < 70 ? "amber" : "green",
+      tone: data.gateFirstPass.ratePct != null && data.gateFirstPass.ratePct < 70 ? "amber" : "neutral",
     },
     {
       label: "P0/P1 Aging",
       value: avgAge == null ? "—" : `${avgAge}d`,
       sub: `${data.p0p1Aging.openCount} open · >14d ${data.p0p1Aging.over14Days}`,
-      tone: data.p0p1Aging.over14Days > 0 ? "red" : data.p0p1Aging.openCount > 0 ? "amber" : "green",
+      tone: data.p0p1Aging.over14Days > 0 ? "red" : data.p0p1Aging.openCount > 0 ? "amber" : "neutral",
     },
     {
       label: "EVT/DVT/PVT 关闭",
       value: fmtPct(closureRate),
       sub: `${closureClosed}/${closureTotal} test case`,
-      tone: closureRate != null && closureRate < 80 ? "amber" : "green",
+      tone: closureRate != null && closureRate < 80 ? "amber" : "neutral",
     },
     {
       label: "BOM 超目标",
@@ -353,7 +353,7 @@ function ManagementKpiBoard({
       label: "客户项目风险",
       value: topCustomerRisk ? topCustomerRisk.score : 0,
       sub: topCustomerRisk ? `${topCustomerRisk.customer} · ${topCustomerRisk.projectName}` : "暂无客户风险",
-      tone: topCustomerRisk && topCustomerRisk.score > 0 ? "red" : "green",
+      tone: topCustomerRisk && topCustomerRisk.score > 0 ? "red" : "neutral",
     },
   ];
 

@@ -12,7 +12,7 @@ import {
   DndContext, PointerSensor, useSensor, useSensors, useDraggable, useDroppable,
   type DragEndEvent,
 } from '@dnd-kit/core';
-import { Plus, Minus, Trash2, ChevronRight, ChevronLeft, Check, Copy, Lock, AlertTriangle, Search, Star, LayoutGrid, List as ListIcon, GanttChartSquare, X as XIcon, CalendarDays } from 'lucide-react';
+import { Plus, Minus, Trash2, ChevronRight, ChevronLeft, Check, Copy, Eye, Lock, AlertTriangle, Search, Star, LayoutGrid, List as ListIcon, GanttChartSquare, X as XIcon, CalendarDays } from 'lucide-react';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -604,12 +604,13 @@ export function ProjectListView({
           isLaneCollapsed={isLaneCollapsed}
           onToggleLane={toggleLane}
           onToggleStar={toggleStar}
-          onOpen={setDetailId}
+          onOpen={onSelectProject}
+          onPreview={setDetailId}
         />
       ) : viewMode === 'list' ? (
-        <ListView rows={visibleRows} groupBy={groupBy} lanes={lanes} onOpen={setDetailId} />
+        <ListView rows={visibleRows} groupBy={groupBy} lanes={lanes} onOpen={onSelectProject} />
       ) : (
-        <TimelineView rows={visibleRows} groupBy={groupBy} lanes={lanes} onOpen={setDetailId} />
+        <TimelineView rows={visibleRows} groupBy={groupBy} lanes={lanes} onOpen={onSelectProject} />
       )}
 
       {/* ── Detail Drawer ── */}
@@ -1217,7 +1218,7 @@ export function ProjectListView({
   );
 
   // ── Sub-components defined inline so they close over canCreateProject etc. ──
-  function ProjectCard({ row, onOpen, onToggleStar, draggable = false }: { row: Row; onOpen: (id: string) => void; onToggleStar: (id: string) => void; draggable?: boolean }) {
+  function ProjectCard({ row, onOpen, onPreview, onToggleStar, draggable = false }: { row: Row; onOpen: (id: string) => void; onPreview?: (id: string) => void; onToggleStar: (id: string) => void; draggable?: boolean }) {
     const p = row.project;
     const drag = useDraggable({ id: p.id, disabled: !draggable || !canDrag(p) });
     // dnd-kit's CSS.Translate without the @dnd-kit/utilities package (not installed)
@@ -1243,10 +1244,21 @@ export function ProjectListView({
           <span className="ml-auto inline-flex h-[18px] items-center rounded-[5px] border border-[color:var(--acc-border)] bg-[color:var(--acc-soft)] px-1.5 text-[9.5px] font-semibold text-primary">
             {row.catBadge}
           </span>
+          {onPreview && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onPreview(p.id); }}
+              className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+              title="快速预览"
+              aria-label="快速预览"
+            >
+              <Eye size={14} />
+            </button>
+          )}
           <button
             onClick={(e) => { e.stopPropagation(); onToggleStar(p.id); }}
             className="shrink-0"
             title="标星"
+            aria-label={row.isStarred ? '取消标星' : '标星'}
           >
             <Star size={14} style={row.isStarred ? { fill: 'var(--star)', color: 'var(--star)' } : { color: 'var(--muted-foreground)' }} />
           </button>
@@ -1270,16 +1282,16 @@ export function ProjectListView({
   }
 
   function KanbanView({
-    stages, groupBy, lanes, rows, isLaneCollapsed, onToggleLane, onToggleStar, onOpen,
+    stages, groupBy, lanes, rows, isLaneCollapsed, onToggleLane, onToggleStar, onOpen, onPreview,
   }: {
     stages: typeof STAGE_COLUMNS; groupBy: GroupBy; lanes: Lane[]; rows: Row[];
-    isLaneCollapsed: (k: string) => boolean; onToggleLane: (k: string) => void; onToggleStar: (id: string) => void; onOpen: (id: string) => void;
+    isLaneCollapsed: (k: string) => boolean; onToggleLane: (k: string) => void; onToggleStar: (id: string) => void; onOpen: (id: string) => void; onPreview?: (id: string) => void;
   }) {
     // Droppable stage column. laneKey='' for ungrouped (Task 3); Task 4 will pass
     // a real laneKey for cross-lane reassign via the same makeDropId encoding.
     const column = (laneKey: string, stageId: string, label: string, items: Row[]) => (
       <StageColumn key={`${laneKey}::${stageId}`} dropId={makeDropId(laneKey, stageId)} stageId={stageId} label={label} count={items.length}>
-        {items.map((r) => <ProjectCard key={r.project.id} row={r} onOpen={onOpen} onToggleStar={onToggleStar} draggable />)}
+        {items.map((r) => <ProjectCard key={r.project.id} row={r} onOpen={onOpen} onPreview={onPreview} onToggleStar={onToggleStar} draggable />)}
       </StageColumn>
     );
 

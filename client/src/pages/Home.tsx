@@ -638,6 +638,16 @@ export default function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
+  // lg 断点（与侧栏样式一致）：移动端抽屉关闭时需对其设置 inert/aria-hidden
+  const [isDesktop, setIsDesktop] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia('(min-width: 1024px)').matches : true
+  );
+  useEffect(() => {
+    const mql = window.matchMedia('(min-width: 1024px)');
+    const onChange = () => setIsDesktop(mql.matches);
+    mql.addEventListener('change', onChange);
+    return () => mql.removeEventListener('change', onChange);
+  }, []);
 
   // ── tRPC queries & mutations ─────────────────────────────────────────────
   const { data: projectRows = [], isLoading: projectsLoading } = trpc.projects.list.useQuery(
@@ -824,13 +834,13 @@ export default function Home() {
   };
 
   const viewLabels: Record<View, string> = {
-    overview: 'Overview',
-    mytasks: 'My Tasks',
-    projects: 'Projects',
-    calendar: 'Calendar',
-    products: 'Products',
-    requirements: 'Requirements',
-    sop: 'SOP Library',
+    overview: '总览',
+    mytasks: '我的任务',
+    projects: '项目管理',
+    calendar: '日历',
+    products: '产品库',
+    requirements: '需求池',
+    sop: 'SOP 库',
     account: '账户设置',
   };
 
@@ -898,30 +908,31 @@ export default function Home() {
         />
       )}
 
-      {/* Sidebar — 60px icon rail */}
+      {/* Sidebar — 桌面 60px 图标栏 / 移动端图标+文字抽屉 */}
       <aside
-        className={`fixed lg:sticky top-0 left-0 h-screen w-[60px] bg-sidebar border-r border-border flex flex-col items-center z-40 shrink-0 transition-transform duration-300 ${
+        inert={!sidebarOpen && !isDesktop}
+        aria-hidden={!sidebarOpen && !isDesktop}
+        className={`fixed lg:sticky top-0 left-0 h-screen w-[264px] lg:w-[60px] bg-sidebar border-r border-border flex flex-col z-40 shrink-0 transition-transform duration-300 ${
           sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
         }`}
       >
-        {/* Logo */}
-        <div className="h-[52px] w-full flex items-center justify-center shrink-0">
+        {/* Logo（移动端带产品名）+ 关闭按钮 */}
+        <div className="h-[52px] w-full flex items-center gap-2.5 px-4 lg:px-0 lg:justify-center shrink-0">
           <div className="w-[30px] h-[30px] rounded-[8px] bg-primary text-white flex items-center justify-center shrink-0">
             <Cpu size={16} />
           </div>
+          <span className="text-[14px] font-semibold text-foreground lg:hidden">CE Project Hub</span>
+          <button
+            onClick={() => setSidebarOpen(false)}
+            aria-label="关闭菜单"
+            className="lg:hidden ml-auto -mr-2 w-11 h-11 flex items-center justify-center rounded-[9px] text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <X size={18} />
+          </button>
         </div>
 
-        {/* Mobile close */}
-        <button
-          onClick={() => setSidebarOpen(false)}
-          aria-label="关闭菜单"
-          className="lg:hidden absolute top-2 right-1 text-muted-foreground hover:text-foreground transition-colors"
-        >
-          <X size={14} />
-        </button>
-
         {/* Navigation */}
-        <nav className="flex-1 w-full flex flex-col items-center gap-1 py-2 overflow-y-auto">
+        <nav className="flex-1 w-full flex flex-col gap-1 py-2 px-3 lg:px-0 lg:items-center overflow-y-auto">
           {navItems.map(({ id, label, icon: Icon }) => {
             const isActive = view === id;
             return (
@@ -931,35 +942,46 @@ export default function Home() {
                     onClick={() => handleNavClick(id)}
                     aria-label={label}
                     aria-current={isActive ? 'page' : undefined}
-                    className={`w-[38px] h-[38px] rounded-[9px] flex items-center justify-center transition-colors ${
+                    className={`w-full min-h-11 px-3 rounded-[9px] flex items-center gap-3 text-left lg:w-[38px] lg:h-[38px] lg:min-h-0 lg:px-0 lg:justify-center transition-colors ${
                       isActive
                         ? 'bg-[color:var(--acc-soft)] text-primary'
                         : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
                     }`}
                   >
-                    <Icon size={18} />
+                    <Icon size={18} className="shrink-0" />
+                    <span className={`text-[13.5px] font-medium lg:hidden ${isActive ? 'text-primary' : 'text-foreground'}`}>
+                      {label}
+                    </span>
                   </button>
                 </TooltipTrigger>
-                <TooltipContent side="right">{label}</TooltipContent>
+                <TooltipContent side="right" className="hidden lg:block">{label}</TooltipContent>
               </Tooltip>
             );
           })}
         </nav>
 
         {/* User actions */}
-        <div className="w-full flex flex-col items-center gap-1 py-2 shrink-0">
+        <div className="w-full flex flex-col gap-1 py-2 px-3 lg:px-0 lg:items-center shrink-0 border-t border-border lg:border-t-0">
           <Tooltip>
             <TooltipTrigger asChild>
               <button
                 onClick={() => handleNavClick('account')}
                 aria-label="账户设置"
                 aria-current={view === 'account' ? 'page' : undefined}
-                className="w-[28px] h-[28px] rounded-full bg-primary text-white flex items-center justify-center text-[11px] font-medium uppercase shrink-0 mt-1"
+                className={`w-full min-h-11 px-2 rounded-[9px] flex items-center gap-3 text-left lg:w-auto lg:min-h-0 lg:px-0 lg:justify-center transition-colors ${
+                  view === 'account' ? 'bg-[color:var(--acc-soft)]' : 'hover:bg-secondary'
+                } lg:bg-transparent lg:hover:bg-transparent`}
               >
-                {(user.name || user.email || 'U').charAt(0)}
+                <span className="w-[28px] h-[28px] rounded-full bg-primary text-white flex items-center justify-center text-[11px] font-medium uppercase shrink-0 lg:mt-1">
+                  {(user.name || user.email || 'U').charAt(0)}
+                </span>
+                <span className="min-w-0 flex-1 lg:hidden">
+                  <span className="block truncate text-[13.5px] font-medium text-foreground">{user.name || user.email}</span>
+                  <span className="block text-[11px] text-muted-foreground">账户设置</span>
+                </span>
               </button>
             </TooltipTrigger>
-            <TooltipContent side="right">{user.name || user.email}</TooltipContent>
+            <TooltipContent side="right" className="hidden lg:block">{user.name || user.email}</TooltipContent>
           </Tooltip>
         </div>
       </aside>
@@ -971,7 +993,7 @@ export default function Home() {
           <button
             onClick={() => setSidebarOpen(true)}
             aria-label="打开菜单"
-            className="lg:hidden text-muted-foreground hover:text-foreground transition-colors"
+            className="lg:hidden -ml-2 w-11 h-11 flex items-center justify-center rounded-[9px] text-muted-foreground hover:text-foreground transition-colors shrink-0"
           >
             <Menu size={20} />
           </button>
@@ -1018,10 +1040,17 @@ export default function Home() {
               )}
             </div>
 
-            {/* Search box */}
+            {/* Search：移动端只保留图标，点击后进入全局搜索 */}
             <button
               onClick={() => setSearchOpen(true)}
-              className="flex items-center gap-2 w-[180px] sm:w-[230px] h-8 border border-border rounded-[8px] bg-white px-3 text-muted-foreground transition-colors hover:border-foreground/20 focus:outline-none focus:ring-2 focus:ring-ring"
+              aria-label="搜索"
+              className="sm:hidden w-11 h-11 flex items-center justify-center rounded-[9px] text-muted-foreground hover:text-foreground transition-colors shrink-0"
+            >
+              <Search size={18} />
+            </button>
+            <button
+              onClick={() => setSearchOpen(true)}
+              className="hidden sm:flex items-center gap-2 w-[230px] h-8 border border-border rounded-[8px] bg-white px-3 text-muted-foreground transition-colors hover:border-foreground/20 focus:outline-none focus:ring-2 focus:ring-ring"
             >
               <Search size={14} className="shrink-0" />
               <span className="text-[13px] flex-1 text-left">搜索项目、任务…</span>
