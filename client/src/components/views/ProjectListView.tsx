@@ -93,11 +93,9 @@ import {
 } from "@shared/project-track-tailoring";
 import {
   EMPTY_DERIVATIVE_MODULE_REUSE,
-  buildDerivativeChangeScopeDeclaration,
   buildDerivativeExecutionBaseline,
   createEmptyDerivativeReuseEvidence,
   getDerivativeTaskPreview,
-  getDerivativeChangeScopeRules,
   updateDerivativeModuleReuse,
   validateDerivativeCreateBaseline,
 } from "@/lib/derivative-create";
@@ -164,16 +162,6 @@ const ECO_CHANGE_SCOPE_OPTIONS: Array<{
   { key: "eolTestChange", label: "EOL 测试项目、限值或能力变化" },
   { key: "otherSafetyOrRegulatoryChange", label: "其他安全或法规变化" },
 ];
-
-const PROJECT_INTENT_OPTIONS = [
-  { id: "efficiency", label: "提升研发 / 生产效率" },
-  { id: "new_capability", label: "增加功能或能力" },
-  { id: "appearance", label: "跨专业外观 / CMF 升级" },
-  { id: "quality", label: "改善质量与可靠性" },
-  { id: "cost", label: "降低成本" },
-] as const;
-
-type ProjectIntentGoal = (typeof PROJECT_INTENT_OPTIONS)[number]["id"];
 
 // ── Kanban stage columns (display-only) ─────────────────────────────────────────
 // The 6 canonical lifecycle stages. Each project's currentPhase is mapped onto one of
@@ -357,7 +345,7 @@ export function ProjectListView({
   const [step, setStep] = useState<WizardStep>(1);
   const [selectedCategory, setSelectedCategory] =
     useState<ProjectCategory>("npd");
-  const capturesProjectIntent = selectedCategory === "derivative";
+  const isDerivative = selectedCategory === "derivative";
   const capturesEcoChangeScope = selectedCategory === "eco";
   const isJdm = selectedCategory === "jdm";
   const isObt = selectedCategory === "obt";
@@ -589,9 +577,6 @@ export function ProjectListView({
     customerPartNumber: "",
     commercialBoundary: "",
     customerSignoffOwnerUserId: null as number | null,
-    intentGoals: [] as ProjectIntentGoal[],
-    efficiencySummary: "",
-    newCapabilitySummary: "",
     productDefinitionRef: "",
     moduleReuse: { ...EMPTY_DERIVATIVE_MODULE_REUSE },
     reuseEvidence: createEmptyDerivativeReuseEvidence(),
@@ -622,9 +607,6 @@ export function ProjectListView({
       customerPartNumber: "",
       commercialBoundary: "",
       customerSignoffOwnerUserId: null,
-      intentGoals: [],
-      efficiencySummary: "",
-      newCapabilitySummary: "",
       productDefinitionRef: "",
       moduleReuse: { ...EMPTY_DERIVATIVE_MODULE_REUSE },
       reuseEvidence: createEmptyDerivativeReuseEvidence(),
@@ -650,7 +632,7 @@ export function ProjectListView({
       ? buildJdmCreateExecutionBaseline(form.customerConceptRef)
       : null;
     let derivativeBaseline = null;
-    if (capturesProjectIntent) {
+    if (isDerivative) {
       const validation = validateDerivativeCreateBaseline({
         productDefinitionRef: form.productDefinitionRef,
         moduleReuse: form.moduleReuse,
@@ -676,15 +658,6 @@ export function ProjectListView({
       });
     }
     const firstPhaseId = sopPhases[0]?.id || "concept";
-    const reusedModuleSummary = capturesProjectIntent
-      ? PRODUCT_MODULES
-          .filter(module => form.moduleReuse[module.id] === "reused")
-          .map(module => {
-            const moduleEvidence = form.reuseEvidence[module.id];
-            return `${module.label}（${moduleEvidence.sourceRef.trim()} / ${moduleEvidence.modelOrVersion.trim()}）`;
-          })
-          .join("、")
-      : "";
     setIsCreating(true);
     try {
       const projectDraft: ProjectCreateDraft = {
@@ -704,42 +677,13 @@ export function ProjectListView({
           ? form.commercialBoundary.trim()
           : null,
         customerSignoffOwnerUserId: form.customerSignoffOwnerUserId,
-        description: capturesProjectIntent
-          ? [
-              reusedModuleSummary && `复用基础：${reusedModuleSummary}`,
-              form.efficiencySummary.trim() &&
-                `改进目标：${form.efficiencySummary.trim()}`,
-              form.newCapabilitySummary.trim() &&
-                `新增能力：${form.newCapabilitySummary.trim()}`,
-            ]
-              .filter(Boolean)
-              .join("\n") || null
-          : null,
-        background: capturesProjectIntent
-          ? [
-              reusedModuleSummary && "复用成熟方案",
-              ...PROJECT_INTENT_OPTIONS.filter(option =>
-                form.intentGoals.includes(option.id)
-              ).map(option => option.label),
-            ].filter(Boolean).join("、") || null
-          : null,
-        value: capturesProjectIntent
-          ? [form.efficiencySummary.trim(), form.newCapabilitySummary.trim()]
-              .filter(Boolean)
-              .join("；") || null
-          : null,
+        description: null,
+        background: null,
+        value: null,
         customFields: {
           productType: form.type,
-          ...(capturesProjectIntent
+          ...(isDerivative
             ? {
-                projectIntent: {
-                  goals: form.intentGoals,
-                  reusedModules: PRODUCT_MODULES
-                    .filter(module => form.moduleReuse[module.id] === "reused")
-                    .map(module => module.id),
-                  efficiencySummary: form.efficiencySummary.trim(),
-                  newCapabilitySummary: form.newCapabilitySummary.trim(),
-                },
                 projectExecutionBaseline: derivativeBaseline,
               }
             : isJdm
@@ -756,11 +700,6 @@ export function ProjectListView({
                 .map(market => market.trim())
                 .filter(Boolean),
             }
-          : capturesProjectIntent
-            ? buildDerivativeChangeScopeDeclaration({
-                moduleReuse: form.moduleReuse,
-                declaration: form.changeScopeDeclaration,
-              })
           : { ...EMPTY_CHANGE_SCOPE_DECLARATION },
         pm: "",
         currentPhase: firstPhaseId,
@@ -798,10 +737,6 @@ export function ProjectListView({
       reuseEvidence: form.reuseEvidence,
     }),
     [form.moduleReuse, form.productDefinitionRef, form.reuseEvidence],
-  );
-  const derivativeChangeScopeRules = useMemo(
-    () => getDerivativeChangeScopeRules(form.moduleReuse),
-    [form.moduleReuse],
   );
   const jdmCreateValidation = useMemo(
     () => validateJdmCreateInput({
@@ -1870,78 +1805,7 @@ export function ProjectListView({
                       </select>
                     </div>
                   )}
-                  {capturesProjectIntent && (
-                    <div className="space-y-3 rounded-[8px] border border-border bg-card p-3">
-                      <div>
-                        <Kicker>DRV 项目目标</Kicker>
-                        <p className="mt-1 text-[11px] text-muted-foreground">
-                          说明这次为什么做、要改善什么、要新增什么。模块复用情况在下方单独确认，内容会写入项目概览。
-                        </p>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {PROJECT_INTENT_OPTIONS.map(option => {
-                          const checked = form.intentGoals.includes(option.id);
-                          return (
-                            <label
-                              key={option.id}
-                              className={cn(
-                                "flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-[11px] font-medium transition-colors",
-                                checked
-                                  ? "border-primary bg-[color:var(--acc-soft)] text-primary"
-                                  : "border-border bg-secondary/40 text-muted-foreground hover:bg-secondary"
-                              )}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={event =>
-                                  setForm({
-                                    ...form,
-                                    intentGoals: event.target.checked
-                                      ? [...form.intentGoals, option.id]
-                                      : form.intentGoals.filter(
-                                          goal => goal !== option.id
-                                        ),
-                                  })
-                                }
-                                className="h-3 w-3 accent-primary"
-                              />
-                              {option.label}
-                            </label>
-                          );
-                        })}
-                      </div>
-                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                        <textarea
-                          value={form.efficiencySummary}
-                          onChange={event =>
-                            setForm({
-                              ...form,
-                              efficiencySummary: event.target.value,
-                            })
-                          }
-                          rows={3}
-                          aria-label="DRV 改进目标"
-                          placeholder="要改善什么？例如：装配工时降低 20%，良率提升至 98%"
-                          className="resize-none rounded-[7px] border border-border bg-secondary/30 px-3 py-2 text-xs outline-none focus:border-[color:var(--acc-border)]"
-                        />
-                        <textarea
-                          value={form.newCapabilitySummary}
-                          onChange={event =>
-                            setForm({
-                              ...form,
-                              newCapabilitySummary: event.target.value,
-                            })
-                          }
-                          rows={3}
-                          aria-label="DRV 新增功能或能力"
-                          placeholder="新增什么？例如：增加双档充气、APP 远程状态查看"
-                          className="resize-none rounded-[7px] border border-border bg-secondary/30 px-3 py-2 text-xs outline-none focus:border-[color:var(--acc-border)]"
-                        />
-                      </div>
-                    </div>
-                  )}
-                  {capturesProjectIntent && (
+                  {isDerivative && (
                     <div className="space-y-4 rounded-[10px] border border-[color:var(--acc-border)] bg-[color:var(--acc-soft)] p-4">
                       <div>
                         <Kicker>产品规格与六模块执行基线</Kicker>
@@ -2145,64 +2009,6 @@ export function ProjectListView({
                       )}
                     </div>
                   )}
-                  {capturesProjectIntent && (
-                    <details className="group rounded-[8px] border border-border bg-card">
-                      <summary className="flex cursor-pointer list-none items-start justify-between gap-3 px-3 py-3">
-                        <div>
-                          <Kicker>安全 / 法规影响确认</Kicker>
-                          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-                            仅显示与“不复用”模块相关的问题。新增目标市场、供应商或二供变化不在 DRV 中处理，应按程度进入产品库变更或 ECO。
-                          </p>
-                        </div>
-                        <ChevronRight
-                          size={15}
-                          className="mt-0.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-90"
-                        />
-                      </summary>
-                      <div className="space-y-3 border-t border-border p-3">
-                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                          {derivativeChangeScopeRules.map(option => (
-                            <label
-                              key={option.key}
-                              className="flex cursor-pointer items-start gap-2 rounded-[7px] bg-secondary/40 px-3 py-2.5 text-xs text-foreground"
-                            >
-                              <input
-                                type="checkbox"
-                                checked={Boolean(form.changeScopeDeclaration[option.key])}
-                                onChange={event =>
-                                  setForm({
-                                    ...form,
-                                    changeScopeDeclaration: {
-                                      ...form.changeScopeDeclaration,
-                                      [option.key]: event.target.checked,
-                                    },
-                                  })
-                                }
-                                className="mt-0.5 h-3.5 w-3.5 accent-primary"
-                              />
-                              <span>{option.label}</span>
-                            </label>
-                          ))}
-                        </div>
-                        <textarea
-                          value={form.changeScopeDeclaration.notes ?? ""}
-                          onChange={event =>
-                            setForm({
-                              ...form,
-                              changeScopeDeclaration: {
-                                ...form.changeScopeDeclaration,
-                                notes: event.target.value,
-                              },
-                            })
-                          }
-                          rows={2}
-                          aria-label="DRV 安全法规影响补充说明"
-                          placeholder="补充安全边界、验证重点或不确定项（可选）"
-                          className="w-full resize-none rounded-[7px] border border-border bg-secondary/30 px-3 py-2 text-sm outline-none focus:border-[color:var(--acc-border)]"
-                        />
-                      </div>
-                    </details>
-                  )}
                   {capturesEcoChangeScope && (
                     <div className="space-y-3 rounded-[8px] border border-border bg-card p-3">
                       <div>
@@ -2268,48 +2074,50 @@ export function ProjectListView({
                       />
                     </div>
                   )}
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <Kicker className="mb-1.5">
-                        安全风险（仅可主动升级）
-                      </Kicker>
-                      <select
-                        value={form.safetyRiskLevel}
-                        onChange={e =>
-                          setForm({
-                            ...form,
-                            safetyRiskLevel: e.target.value as
-                              | "standard"
-                              | "high",
-                          })
-                        }
-                        className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none focus:border-[color:var(--acc-border)]"
-                      >
-                        <option value="standard">标准</option>
-                        <option value="high">高风险（锁定安全验证）</option>
-                      </select>
+                  {capturesEcoChangeScope && (
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <Kicker className="mb-1.5">
+                          安全风险（仅可主动升级）
+                        </Kicker>
+                        <select
+                          value={form.safetyRiskLevel}
+                          onChange={e =>
+                            setForm({
+                              ...form,
+                              safetyRiskLevel: e.target.value as
+                                | "standard"
+                                | "high",
+                            })
+                          }
+                          className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none focus:border-[color:var(--acc-border)]"
+                        >
+                          <option value="standard">标准</option>
+                          <option value="high">高风险（锁定安全验证）</option>
+                        </select>
+                      </div>
+                      <div>
+                        <Kicker className="mb-1.5">
+                          法规风险（仅可主动升级）
+                        </Kicker>
+                        <select
+                          value={form.regulatoryRiskLevel}
+                          onChange={e =>
+                            setForm({
+                              ...form,
+                              regulatoryRiskLevel: e.target.value as
+                                | "standard"
+                                | "high",
+                            })
+                          }
+                          className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none focus:border-[color:var(--acc-border)]"
+                        >
+                          <option value="standard">标准</option>
+                          <option value="high">高风险（强制认证会签）</option>
+                        </select>
+                      </div>
                     </div>
-                    <div>
-                      <Kicker className="mb-1.5">
-                        法规风险（仅可主动升级）
-                      </Kicker>
-                      <select
-                        value={form.regulatoryRiskLevel}
-                        onChange={e =>
-                          setForm({
-                            ...form,
-                            regulatoryRiskLevel: e.target.value as
-                              | "standard"
-                              | "high",
-                          })
-                        }
-                        className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none focus:border-[color:var(--acc-border)]"
-                      >
-                        <option value="standard">标准</option>
-                        <option value="high">高风险（强制认证会签）</option>
-                      </select>
-                    </div>
-                  </div>
+                  )}
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <Kicker className="mb-1.5">开始日期</Kicker>

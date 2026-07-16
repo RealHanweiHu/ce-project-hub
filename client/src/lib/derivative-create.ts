@@ -12,54 +12,6 @@ import {
   type ProductModuleId,
   type ProjectExecutionBaseline,
 } from "@shared/project-track-tailoring";
-import {
-  EMPTY_CHANGE_SCOPE_DECLARATION,
-  type ProjectChangeScopeDeclaration,
-} from "@shared/sop-risk";
-
-type DerivativeChangeScopeKey = Exclude<
-  keyof ProjectChangeScopeDeclaration,
-  "targetMarkets" | "notes" | "targetMarketExpansion" | "criticalSafetySupplierChange"
->;
-
-export const DERIVATIVE_CHANGE_SCOPE_RULES: Array<{
-  key: DerivativeChangeScopeKey;
-  label: string;
-  moduleIds: ProductModuleId[];
-}> = [
-  { key: "batteryCellChange", label: "新增或更换电芯", moduleIds: ["battery"] },
-  { key: "batteryPackOrBmsChange", label: "电池包 / BMS / 保护板发生变化", moduleIds: ["battery"] },
-  { key: "protectionParameterChange", label: "充放电策略或保护参数发生变化", moduleIds: ["battery", "electronics", "software_connectivity"] },
-  { key: "powerOrThermalBoundaryChange", label: "功率、电流、温升或连续工作边界发生变化", moduleIds: ["battery", "core_function", "electronics", "structure_mold"] },
-  { key: "pressurizedStructureChange", label: "受压结构或过压保护边界发生变化", moduleIds: ["core_function", "structure_mold"] },
-  { key: "safetyRelatedSoftwareChange", label: "安全相关固件、APP、OTA 或烧录发生变化", moduleIds: ["software_connectivity"] },
-  { key: "eolTestChange", label: "EOL 测试项目、限值或能力需要变化", moduleIds: [] },
-  { key: "otherSafetyOrRegulatoryChange", label: "其他安全或法规边界发生变化", moduleIds: [] },
-];
-
-export function getDerivativeChangeScopeRules(
-  moduleReuse: Record<ProductModuleId, ModuleReuseState>,
-) {
-  return DERIVATIVE_CHANGE_SCOPE_RULES.filter(rule =>
-    rule.moduleIds.length === 0 ||
-    rule.moduleIds.some(moduleId => moduleReuse[moduleId] === "not_reused"),
-  );
-}
-
-export function buildDerivativeChangeScopeDeclaration(input: {
-  moduleReuse: Record<ProductModuleId, ModuleReuseState>;
-  declaration: ProjectChangeScopeDeclaration;
-}): ProjectChangeScopeDeclaration {
-  const result: ProjectChangeScopeDeclaration = {
-    ...EMPTY_CHANGE_SCOPE_DECLARATION,
-    notes: input.declaration.notes ?? null,
-  };
-  for (const { key } of getDerivativeChangeScopeRules(input.moduleReuse)) {
-    result[key] = input.declaration[key];
-  }
-  return result;
-}
-
 export const EMPTY_DERIVATIVE_MODULE_REUSE: Record<
   ProductModuleId,
   ModuleReuseState

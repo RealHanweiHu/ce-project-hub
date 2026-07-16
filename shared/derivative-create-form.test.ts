@@ -11,14 +11,12 @@ import {
 } from "./project-track-tailoring";
 import {
   EMPTY_DERIVATIVE_MODULE_REUSE,
-  buildDerivativeChangeScopeDeclaration,
   buildDerivativeExecutionBaseline,
   createEmptyDerivativeReuseEvidence,
   getDerivativeTaskPreview,
   updateDerivativeModuleReuse,
   validateDerivativeCreateBaseline,
 } from "../client/src/lib/derivative-create";
-import { EMPTY_CHANGE_SCOPE_DECLARATION } from "./sop-risk";
 
 describe("DRV create form model", () => {
   it("默认六模块均不复用，并预览完整任务", () => {
@@ -243,31 +241,4 @@ describe("DRV create form model", () => {
     }
   });
 
-  it("DRV 风险声明只保留未复用模块的相关问题，不接收目标市场或二供变化", () => {
-    const declaration = buildDerivativeChangeScopeDeclaration({
-      moduleReuse: {
-        ...EMPTY_DERIVATIVE_MODULE_REUSE,
-        battery: "reused",
-        software_connectivity: "reused",
-      },
-      declaration: {
-        ...EMPTY_CHANGE_SCOPE_DECLARATION,
-        batteryCellChange: true,
-        safetyRelatedSoftwareChange: true,
-        targetMarketExpansion: true,
-        criticalSafetySupplierChange: true,
-        pressurizedStructureChange: true,
-        eolTestChange: true,
-      },
-    });
-
-    expect(declaration).toMatchObject({
-      batteryCellChange: false,
-      safetyRelatedSoftwareChange: false,
-      targetMarketExpansion: false,
-      criticalSafetySupplierChange: false,
-      pressurizedStructureChange: true,
-      eolTestChange: true,
-    });
-  });
 });
