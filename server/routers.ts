@@ -30,6 +30,7 @@ import { productsRouter } from "./routers/products";
 import { bomRouter } from "./routers/bom";
 import { commentsRouter, notificationsRouter } from "./routers/collab";
 import { customFieldsRouter } from "./routers/customFields";
+import { projectCollectionsRouter } from "./routers/projectCollections";
 import { automationRouter } from "./routers/automation";
 import { meetingsRouter } from "./routers/meetings";
 import { tailoringRouter } from "./routers/tailoring";
@@ -341,6 +342,7 @@ export const appRouter = router({
   files: filesRouter,
   requirements: requirementsRouter,
   customFields: customFieldsRouter,
+  projectCollections: projectCollectionsRouter,
   automation: automationRouter,
   meetings: meetingsRouter,
   workbench: workbenchRouter,

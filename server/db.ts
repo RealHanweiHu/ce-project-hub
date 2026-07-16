@@ -60,6 +60,8 @@ import {
   automationRuns, AutomationRunRow, InsertAutomationRun,
   automationClaims,
   customFieldDefs, CustomFieldDef, InsertCustomFieldDef,
+  projectCollections, ProjectCollection,
+  projectCollectionItems,
   projectTailoring, ProjectTailoring, InsertProjectTailoring, TailoringTarget,
   projectDeliverableOverrides, ProjectDeliverableOverride,
   projectDeliverableReviews, ProjectDeliverableReview,
@@ -3831,6 +3833,133 @@ export async function deleteCustomFieldDef(id: number): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.delete(customFieldDefs).where(eq(customFieldDefs.id, id));
+}
+
+// ── 项目集 helpers ────────────────────────────────────────────────────────────
+
+export type ProjectCollectionWithCount = ProjectCollection & { projectCount: number };
+
+/** List all collections with their project counts (newest first). */
+export async function listProjectCollections(): Promise<ProjectCollectionWithCount[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({
+      collection: projectCollections,
+      projectCount: drizzleSql<number>`count(${projectCollectionItems.id})::int`,
+    })
+    .from(projectCollections)
+    .leftJoin(projectCollectionItems, eq(projectCollectionItems.collectionId, projectCollections.id))
+    .groupBy(projectCollections.id)
+    .orderBy(desc(projectCollections.createdAt));
+  return rows.map((r) => ({ ...r.collection, projectCount: r.projectCount }));
+}
+
+export async function getProjectCollection(id: string): Promise<ProjectCollection | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(projectCollections).where(eq(projectCollections.id, id)).limit(1);
+  return rows[0];
+}
+
+/** Create a collection; returns the new id. Name is globally unique (uq_project_collection_name). */
+export async function createProjectCollection(input: {
+  name: string;
+  description?: string | null;
+  createdBy: number;
+}): Promise<string> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const id = `col_${nanoid(12)}`;
+  await db.insert(projectCollections).values({ id, ...input });
+  return id;
+}
+
+export async function updateProjectCollection(
+  id: string,
+  patch: Partial<Pick<ProjectCollection, "name" | "description">>
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(projectCollections).set(patch).where(eq(projectCollections.id, id));
+}
+
+export async function deleteProjectCollection(id: string): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(projectCollections).where(eq(projectCollections.id, id));
+}
+
+/** Add projects to a collection (idempotent — existing memberships are skipped). */
+export async function addProjectsToCollection(
+  collectionId: string,
+  projectIds: string[],
+  addedBy: number
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  if (projectIds.length === 0) return;
+  await db
+    .insert(projectCollectionItems)
+    .values(projectIds.map((projectId) => ({ collectionId, projectId, addedBy })))
+    .onConflictDoNothing();
+}
+
+export async function removeProjectFromCollection(collectionId: string, projectId: string): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db
+    .delete(projectCollectionItems)
+    .where(and(eq(projectCollectionItems.collectionId, collectionId), eq(projectCollectionItems.projectId, projectId)));
+}
+
+export type CollectionProjectRow = {
+  id: string;
+  name: string;
+  category: string;
+  sopTemplateVersion: string | null;
+  customFields: unknown;
+  currentPhase: string | null;
+  progress: number | null;
+  pmUserId: number | null;
+  archived: boolean;
+  lifecycle: string;
+  addedAt: Date;
+};
+
+/** Projects inside a collection (display fields only), oldest membership first. */
+export async function listCollectionProjects(collectionId: string): Promise<CollectionProjectRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({
+      id: projects.id,
+      name: projects.name,
+      category: projects.category,
+      sopTemplateVersion: projects.sopTemplateVersion,
+      customFields: projects.customFields,
+      currentPhase: projects.currentPhase,
+      progress: projects.progress,
+      pmUserId: projects.pmUserId,
+      archived: projects.archived,
+      lifecycle: projects.lifecycle,
+      addedAt: projectCollectionItems.createdAt,
+    })
+    .from(projectCollectionItems)
+    .innerJoin(projects, eq(projects.id, projectCollectionItems.projectId))
+    .where(eq(projectCollectionItems.collectionId, collectionId))
+    .orderBy(projectCollectionItems.createdAt);
+}
+
+/** Collection ids a project belongs to. */
+export async function getCollectionIdsForProject(projectId: string): Promise<string[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({ collectionId: projectCollectionItems.collectionId })
+    .from(projectCollectionItems)
+    .where(eq(projectCollectionItems.projectId, projectId));
+  return rows.map((r) => r.collectionId);
 }
 
 // ── Gate Reviews helpers ──────────────────────────────────────────────────────

@@ -2943,3 +2943,43 @@ export const customFieldDefs = pgTable(
 );
 export type CustomFieldDef = typeof customFieldDefs.$inferSelect;
 export type InsertCustomFieldDef = typeof customFieldDefs.$inferInsert;
+
+// ── 项目集（手动将若干项目组合成一个集合，如「2027 上海展」「A客户」）───────────
+/** 项目集：跨产品线/类别的人工分组，与产品库（结构性归属）正交。 */
+export const projectCollections = pgTable(
+  "project_collections",
+  {
+    /** col_<nanoid(12)> */
+    id: varchar("id", { length: 32 }).primaryKey(),
+    name: varchar("name", { length: 128 }).notNull(),
+    description: text("description"),
+    createdBy: integer("createdBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (t) => ({ uqName: uniqueIndex("uq_project_collection_name").on(t.name) })
+);
+export type ProjectCollection = typeof projectCollections.$inferSelect;
+export type InsertProjectCollection = typeof projectCollections.$inferInsert;
+
+/** 项目↔项目集 多对多：一个项目可同时属于多个项目集（如既在「2027 上海展」又在「A客户」）。 */
+export const projectCollectionItems = pgTable(
+  "project_collection_items",
+  {
+    id: serial("id").primaryKey(),
+    collectionId: varchar("collectionId", { length: 32 })
+      .notNull()
+      .references(() => projectCollections.id, { onDelete: "cascade" }),
+    projectId: varchar("projectId", { length: 32 })
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    addedBy: integer("addedBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    uqItem: uniqueIndex("uniq_collection_project").on(t.collectionId, t.projectId),
+    idxProject: index("idx_collection_items_project").on(t.projectId),
+  })
+);
+export type ProjectCollectionItem = typeof projectCollectionItems.$inferSelect;
+export type InsertProjectCollectionItem = typeof projectCollectionItems.$inferInsert;
