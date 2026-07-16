@@ -61,7 +61,6 @@ export function updateDerivativeModuleReuse(
 }
 
 export function buildDerivativeExecutionBaseline(input: {
-  productDefinitionRef: string;
   moduleReuse: Record<ProductModuleId, ModuleReuseState>;
   reuseEvidence: Record<ProductModuleId, ModuleReuseEvidence>;
   frozenAt: string;
@@ -70,7 +69,6 @@ export function buildDerivativeExecutionBaseline(input: {
   return {
     modelVersion: "project-track-v1",
     status: "frozen",
-    productDefinitionRef: input.productDefinitionRef.trim(),
     moduleReuse: { ...input.moduleReuse },
     reuseEvidence: Object.fromEntries(
       PRODUCT_MODULE_IDS
@@ -91,7 +89,6 @@ export function buildDerivativeExecutionBaseline(input: {
 }
 
 export function validateDerivativeCreateBaseline(input: {
-  productDefinitionRef: string;
   moduleReuse: Record<ProductModuleId, ModuleReuseState>;
   reuseEvidence: Record<ProductModuleId, ModuleReuseEvidence>;
 }): BaselineValidationResult {

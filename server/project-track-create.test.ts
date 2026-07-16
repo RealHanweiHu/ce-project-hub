@@ -73,7 +73,6 @@ function frozenBaseline(
   return {
     modelVersion: "project-track-v1",
     status: "frozen",
-    productDefinitionRef: "SPEC-DRV-SERVER-001",
     moduleReuse,
     reuseEvidence: Object.fromEntries(
       PRODUCT_MODULE_IDS

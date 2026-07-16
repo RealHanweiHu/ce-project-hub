@@ -89,7 +89,6 @@ describe("DRV create form model", () => {
     };
     const reuseEvidence = createEmptyDerivativeReuseEvidence();
     expect(validateDerivativeCreateBaseline({
-      productDefinitionRef: "SPEC-DRV-001",
       moduleReuse,
       reuseEvidence,
     }).ok).toBe(false);
@@ -101,13 +100,11 @@ describe("DRV create form model", () => {
       boundaryConfirmed: true,
     };
     expect(validateDerivativeCreateBaseline({
-      productDefinitionRef: "SPEC-DRV-001",
       moduleReuse,
       reuseEvidence,
     })).toEqual({ ok: true, issues: [] });
 
     const baseline = buildDerivativeExecutionBaseline({
-      productDefinitionRef: "SPEC-DRV-001",
       moduleReuse,
       reuseEvidence,
       frozenAt: "2026-07-15T12:00:00.000Z",
@@ -137,7 +134,6 @@ describe("DRV create form model", () => {
       boundaryConfirmed: true,
     };
     const baseline = buildDerivativeExecutionBaseline({
-      productDefinitionRef: " SPEC-DRV-001 ",
       moduleReuse: {
         ...EMPTY_DERIVATIVE_MODULE_REUSE,
         battery: "reused",
@@ -150,7 +146,6 @@ describe("DRV create form model", () => {
     expect(baseline).toMatchObject({
       modelVersion: "project-track-v1",
       status: "frozen",
-      productDefinitionRef: "SPEC-DRV-001",
       frozenAt: "2026-07-15T12:00:00.000Z",
       frozenBy: 7,
       reuseEvidence: {
@@ -162,10 +157,11 @@ describe("DRV create form model", () => {
         },
       },
     });
+    expect(baseline).not.toHaveProperty("productDefinitionRef");
     expect(Object.keys(baseline.reuseEvidence ?? {})).toEqual(["battery"]);
   });
 
-  it("缺规格、任一复用证据字段或六模块全复用都会阻止创建", () => {
+  it("任一复用证据字段缺失或六模块全复用都会阻止创建", () => {
     const moduleReuse = {
       ...EMPTY_DERIVATIVE_MODULE_REUSE,
       battery: "reused" as const,
@@ -177,11 +173,6 @@ describe("DRV create form model", () => {
       evidenceRef: "EV-BAT-001",
       boundaryConfirmed: true,
     };
-    expect(validateDerivativeCreateBaseline({
-      productDefinitionRef: " ",
-      moduleReuse,
-      reuseEvidence: complete,
-    }).ok).toBe(false);
     for (const evidence of [
       { ...complete.battery, sourceRef: "" },
       { ...complete.battery, modelOrVersion: "" },
@@ -189,13 +180,11 @@ describe("DRV create form model", () => {
       { ...complete.battery, boundaryConfirmed: false },
     ]) {
       expect(validateDerivativeCreateBaseline({
-        productDefinitionRef: "SPEC-DRV-001",
         moduleReuse,
         reuseEvidence: { ...complete, battery: evidence },
       }).ok).toBe(false);
     }
     expect(validateDerivativeCreateBaseline({
-      productDefinitionRef: "SPEC-DRV-001",
       moduleReuse: Object.fromEntries(
         PRODUCT_MODULE_IDS.map(moduleId => [moduleId, "reused"]),
       ) as Record<ProductModuleId, ModuleReuseState>,
@@ -224,7 +213,6 @@ describe("DRV create form model", () => {
         };
       }
       const baseline = buildDerivativeExecutionBaseline({
-        productDefinitionRef: "SPEC-DRV-001",
         moduleReuse,
         reuseEvidence,
         frozenAt: "2026-07-15T12:00:00.000Z",

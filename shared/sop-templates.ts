@@ -3005,7 +3005,7 @@ export function buildDerivativePhases(
     drvTask({
       id: "drv_common_product_baseline",
       name: "产品定义/规格基线确认",
-      desc: "确认为什么做、要做成什么样以及产品规格基线",
+      desc: "提交并确认为什么做、要做成什么样以及产品规格书基线",
       owner: "产品经理",
       ownerRole: "pm",
       durationDays: 2,

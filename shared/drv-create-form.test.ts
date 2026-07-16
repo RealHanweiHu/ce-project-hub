@@ -11,10 +11,12 @@ const projectListView = readFileSync(
 
 describe("DRV create form", () => {
   it("只显示决定任务组合的必要输入", () => {
-    expect(projectListView).toContain("产品规格与六模块执行基线");
-    expect(projectListView).toContain("产品定义 / 规格书引用 *");
+    expect(projectListView).toContain("六模块执行基线");
     expect(projectListView).toContain("复用来源产品或模块");
+    expect(projectListView).toContain("产品规格书在创建后的");
 
+    expect(projectListView).not.toContain("产品定义 / 规格书引用 *");
+    expect(projectListView).not.toContain("productDefinitionRef: form.");
     expect(projectListView).not.toContain("DRV 项目目标");
     expect(projectListView).not.toContain("DRV 改进目标");
     expect(projectListView).not.toContain("DRV 新增功能或能力");

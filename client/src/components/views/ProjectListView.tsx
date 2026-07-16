@@ -577,7 +577,6 @@ export function ProjectListView({
     customerPartNumber: "",
     commercialBoundary: "",
     customerSignoffOwnerUserId: null as number | null,
-    productDefinitionRef: "",
     moduleReuse: { ...EMPTY_DERIVATIVE_MODULE_REUSE },
     reuseEvidence: createEmptyDerivativeReuseEvidence(),
     changeScopeDeclaration: { ...EMPTY_CHANGE_SCOPE_DECLARATION },
@@ -607,7 +606,6 @@ export function ProjectListView({
       customerPartNumber: "",
       commercialBoundary: "",
       customerSignoffOwnerUserId: null,
-      productDefinitionRef: "",
       moduleReuse: { ...EMPTY_DERIVATIVE_MODULE_REUSE },
       reuseEvidence: createEmptyDerivativeReuseEvidence(),
       changeScopeDeclaration: { ...EMPTY_CHANGE_SCOPE_DECLARATION },
@@ -634,7 +632,6 @@ export function ProjectListView({
     let derivativeBaseline = null;
     if (isDerivative) {
       const validation = validateDerivativeCreateBaseline({
-        productDefinitionRef: form.productDefinitionRef,
         moduleReuse: form.moduleReuse,
         reuseEvidence: form.reuseEvidence,
       });
@@ -650,7 +647,6 @@ export function ProjectListView({
         return;
       }
       derivativeBaseline = buildDerivativeExecutionBaseline({
-        productDefinitionRef: form.productDefinitionRef,
         moduleReuse: form.moduleReuse,
         reuseEvidence: form.reuseEvidence,
         frozenAt: new Date().toISOString(),
@@ -732,11 +728,10 @@ export function ProjectListView({
   );
   const derivativeBaselineValidation = useMemo(
     () => validateDerivativeCreateBaseline({
-      productDefinitionRef: form.productDefinitionRef,
       moduleReuse: form.moduleReuse,
       reuseEvidence: form.reuseEvidence,
     }),
-    [form.moduleReuse, form.productDefinitionRef, form.reuseEvidence],
+    [form.moduleReuse, form.reuseEvidence],
   );
   const jdmCreateValidation = useMemo(
     () => validateJdmCreateInput({
@@ -1808,27 +1803,10 @@ export function ProjectListView({
                   {isDerivative && (
                     <div className="space-y-4 rounded-[10px] border border-[color:var(--acc-border)] bg-[color:var(--acc-soft)] p-4">
                       <div>
-                        <Kicker>产品规格与六模块执行基线</Kicker>
+                        <Kicker>六模块执行基线</Kicker>
                         <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-                          默认均为“不复用”。只有型号、接口、参数和适用边界完全不变时才选择“复用”；系统会直接移除该模块任务包。
+                          默认均为“不复用”。只有型号、接口、参数和适用边界完全不变时才选择“复用”；系统会直接移除该模块任务包。产品规格书在创建后的“产品定义/规格基线确认”任务中提交。
                         </p>
-                      </div>
-
-                      <div>
-                        <Kicker className="mb-1.5">产品定义 / 规格书引用 *</Kicker>
-                        <input
-                          value={form.productDefinitionRef}
-                          onChange={event =>
-                            setForm({
-                              ...form,
-                              productDefinitionRef: event.target.value,
-                            })
-                          }
-                          aria-label="产品定义或规格书引用"
-                          aria-required="true"
-                          placeholder="例如：PRS-CE1000-V1.0 或已确认规格书链接"
-                          className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none focus:border-[color:var(--acc-border)]"
-                        />
                       </div>
 
                       <div className="grid grid-cols-3 gap-2">

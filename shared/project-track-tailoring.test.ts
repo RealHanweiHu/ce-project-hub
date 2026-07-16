@@ -154,6 +154,14 @@ describe("项目执行基线领域模型", () => {
     );
   });
 
+  it("DRV 创建时只冻结模块基线，不要求产品规格书引用", () => {
+    const baseline = frozenDrv();
+    delete baseline.productDefinitionRef;
+
+    expect(validateProjectExecutionBaseline(baseline, { track: "drv" }))
+      .toEqual({ ok: true, issues: [] });
+  });
+
   it("冻结基线要求规格、六模块状态、冻结时间和冻结人完整", () => {
     const result = validateProjectExecutionBaseline(
       {

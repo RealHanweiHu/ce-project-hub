@@ -255,7 +255,7 @@ function requireValidDrvExecutionBaseline(
   ) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: "DRV 创建时必须提交已冻结的产品规格与六模块执行基线",
+      message: "DRV 创建时必须提交已冻结的六模块执行基线",
     });
   }
 

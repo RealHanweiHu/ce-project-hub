@@ -149,7 +149,7 @@ export function validateProjectExecutionBaseline(
         issues: [
           {
             code: "drv_requires_frozen_baseline",
-            message: "DRV 创建时必须提交已冻结的产品规格与六模块执行基线",
+            message: "DRV 创建时必须提交已冻结的六模块执行基线",
           },
         ],
       };
@@ -160,10 +160,10 @@ export function validateProjectExecutionBaseline(
   }
 
   if (baseline.status === "frozen") {
-    if (!isNonBlank(baseline.productDefinitionRef)) {
+    if (options.track === "jdm" && !isNonBlank(baseline.productDefinitionRef)) {
       issues.push({
         code: "missing_product_definition",
-        message: "冻结执行基线前必须确认产品定义或规格书引用",
+        message: "JDM 产品定义 Gate 冻结前必须确认产品定义或规格书引用",
       });
     }
 
