@@ -153,7 +153,10 @@ export function ProjectListView({
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
 
   // ── Board presentation state (local only; collapse/WIP prefs are persisted via useBoardPrefs) ──
-  const [viewMode, setViewMode] = useState<ViewMode>('kanban');
+  // 移动端默认纵向列表（看板横向内容远超窄屏宽度），桌面端默认看板
+  const [viewMode, setViewMode] = useState<ViewMode>(() =>
+    typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches ? 'list' : 'kanban'
+  );
   const [groupBy, setGroupBy] = useState<GroupBy>('none');
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null);
   const [search, setSearch] = useState('');
@@ -1437,20 +1440,65 @@ export function ProjectListView({
       </div>
     );
 
+    // 移动端：纵向摘要行（名称/阶段 + 编号/负责人/目标 + 进度），避免窄屏表格挤压
+    const mobileRowEl = (r: Row) => (
+      <button
+        key={r.project.id}
+        type="button"
+        onClick={() => onOpen(r.project.id)}
+        className="flex w-full flex-col gap-1.5 border-b border-border px-4 py-3 text-left transition-colors hover:bg-secondary"
+      >
+        <div className="flex w-full items-center gap-2">
+          <StatusDot tone={r.tone} />
+          <span className="min-w-0 flex-1 truncate text-[14px] font-medium">{r.project.name}</span>
+          <span className="inline-flex shrink-0 items-center gap-1.5 rounded-[6px] border border-border bg-secondary px-2 py-0.5 text-[11px] font-medium text-[color:var(--secondary-foreground)]">
+            {STAGE_SHORT[r.stage]}
+          </span>
+        </div>
+        <div className="flex w-full items-center gap-2 pl-[26px] text-[11.5px] text-muted-foreground">
+          {r.project.code && (
+            <>
+              <span className="num shrink-0">{r.project.code}</span>
+              <span aria-hidden="true">·</span>
+            </>
+          )}
+          <span className="min-w-0 truncate">{pmLabel(r.project) || '未分配'}</span>
+          <span className="num ml-auto shrink-0">{r.project.targetDate || '—'}</span>
+        </div>
+        <div className="flex w-full items-center gap-2 pl-[26px]">
+          <LinearBar value={r.overall} className="flex-1" />
+          <span className="num text-[11px] text-muted-foreground">{r.overall}%</span>
+        </div>
+      </button>
+    );
+    const laneHead = (lane: Lane) => (
+      <div className="flex items-center gap-2 bg-secondary px-4 py-2">
+        <span className="h-2 w-2 rounded-full" style={{ background: lane.color }} />
+        <span className="text-[12.5px] font-semibold">{lane.label}</span>
+        <span className="text-[12px] text-muted-foreground num">{lane.rows.length}</span>
+      </div>
+    );
+
     return (
       <LinearCard className="overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="md:hidden">
+          {groupBy === 'none'
+            ? rows.map(mobileRowEl)
+            : lanes.map((lane) => (
+              <div key={lane.key}>
+                {laneHead(lane)}
+                {lane.rows.map(mobileRowEl)}
+              </div>
+            ))}
+        </div>
+        <div className="hidden overflow-x-auto md:block">
           <div className="min-w-[760px]">
             {tableHead}
             {groupBy === 'none'
               ? rows.map(rowEl)
               : lanes.map((lane) => (
                 <div key={lane.key}>
-                  <div className="flex items-center gap-2 bg-secondary px-4 py-2">
-                    <span className="h-2 w-2 rounded-full" style={{ background: lane.color }} />
-                    <span className="text-[12.5px] font-semibold">{lane.label}</span>
-                    <span className="text-[12px] text-muted-foreground num">{lane.rows.length}</span>
-                  </div>
+                  {laneHead(lane)}
                   {lane.rows.map(rowEl)}
                 </div>
               ))}
