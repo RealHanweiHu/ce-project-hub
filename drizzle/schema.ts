@@ -2962,7 +2962,7 @@ export const projectCollections = pgTable(
 export type ProjectCollection = typeof projectCollections.$inferSelect;
 export type InsertProjectCollection = typeof projectCollections.$inferInsert;
 
-/** 项目↔项目集 多对多：一个项目可同时属于多个项目集（如既在「2027 上海展」又在「A客户」）。 */
+/** 项目↔项目集：一个项目最多属于一个项目集；重新归类时移动到新的项目集。 */
 export const projectCollectionItems = pgTable(
   "project_collection_items",
   {
@@ -2977,8 +2977,8 @@ export const projectCollectionItems = pgTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => ({
-    uqItem: uniqueIndex("uniq_collection_project").on(t.collectionId, t.projectId),
-    idxProject: index("idx_collection_items_project").on(t.projectId),
+    uqProject: uniqueIndex("uniq_project_collection_membership").on(t.projectId),
+    idxCollection: index("idx_collection_items_collection").on(t.collectionId),
   })
 );
 export type ProjectCollectionItem = typeof projectCollectionItems.$inferSelect;

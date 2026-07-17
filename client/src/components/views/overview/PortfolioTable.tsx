@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { HEALTH_CONFIG } from "@/lib/data";
 import { CATEGORY_MAP } from "@/lib/sop-templates";
 import { ProgressBar } from "@/components/shared/ProgressBar";
-import { ChevronRight, ArrowUpDown } from "lucide-react";
+import { ChevronRight, ArrowUpDown, FolderMinus } from "lucide-react";
 import { isProjectedOverdue, type RagLevel } from "@shared/health";
 import { resolvePhaseName } from "@shared/sop-template-resolution";
 
@@ -56,7 +56,15 @@ function fmtMinor(currency: string | null | undefined, value: number | null | un
   return `${currency ?? ""} ${(value / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`.trim();
 }
 
-export function PortfolioTable({ rows, onSelectProject }: { rows: PortfolioTableRow[]; onSelectProject: (id: string) => void }) {
+export function PortfolioTable({
+  rows,
+  onSelectProject,
+  onRemoveProject,
+}: {
+  rows: PortfolioTableRow[];
+  onSelectProject: (id: string) => void;
+  onRemoveProject?: (row: PortfolioTableRow) => void;
+}) {
   const [healthFilter, setHealthFilter] = useState("");
   const [catFilter, setCatFilter] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("risk");
@@ -150,7 +158,22 @@ export function PortfolioTable({ rows, onSelectProject }: { rows: PortfolioTable
                     <span className={overdue ? "text-[color:var(--destructive)]" : "text-[color:var(--secondary-foreground)]"}>{r.projectedEnd || "未排期"}</span>
                     {overdue && <span className="block text-[9px] text-[color:var(--destructive)]">超目标 {r.targetDate}</span>}
                   </td>
-                  <td className="px-3 py-2.5 text-muted-foreground"><ChevronRight size={14} /></td>
+                  <td className="px-3 py-2.5 text-muted-foreground">
+                    {onRemoveProject ? (
+                      <button
+                        type="button"
+                        aria-label={`将${r.name}移出项目集`}
+                        title="移出项目集"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onRemoveProject(r);
+                        }}
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-[7px] transition-colors hover:bg-secondary hover:text-[color:var(--destructive)]"
+                      >
+                        <FolderMinus size={14} />
+                      </button>
+                    ) : <ChevronRight size={14} />}
+                  </td>
                 </tr>
               );
             })}

@@ -3890,7 +3890,10 @@ export async function deleteProjectCollection(id: string): Promise<void> {
   await db.delete(projectCollections).where(eq(projectCollections.id, id));
 }
 
-/** Add projects to a collection (idempotent — existing memberships are skipped). */
+/**
+ * Classify projects into a collection.
+ * A project has at most one collection: assigning it again moves it atomically.
+ */
 export async function addProjectsToCollection(
   collectionId: string,
   projectIds: string[],
@@ -3902,7 +3905,10 @@ export async function addProjectsToCollection(
   await db
     .insert(projectCollectionItems)
     .values(projectIds.map((projectId) => ({ collectionId, projectId, addedBy })))
-    .onConflictDoNothing();
+    .onConflictDoUpdate({
+      target: projectCollectionItems.projectId,
+      set: { collectionId, addedBy, createdAt: new Date() },
+    });
 }
 
 export async function removeProjectFromCollection(collectionId: string, projectId: string): Promise<void> {
@@ -3951,7 +3957,7 @@ export async function listCollectionProjects(collectionId: string): Promise<Coll
     .orderBy(projectCollectionItems.createdAt);
 }
 
-/** Collection ids a project belongs to. */
+/** Collection ids a project belongs to (zero or one; array kept for caller compatibility). */
 export async function getCollectionIdsForProject(projectId: string): Promise<string[]> {
   const db = await getDb();
   if (!db) return [];
@@ -3960,6 +3966,26 @@ export async function getCollectionIdsForProject(projectId: string): Promise<str
     .from(projectCollectionItems)
     .where(eq(projectCollectionItems.projectId, projectId));
   return rows.map((r) => r.collectionId);
+}
+
+export type ProjectCollectionAssignment = {
+  projectId: string;
+  collectionId: string;
+  collectionName: string;
+};
+
+/** Current collection assignment for projects, used to explain move semantics in the UI. */
+export async function listProjectCollectionAssignments(): Promise<ProjectCollectionAssignment[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({
+      projectId: projectCollectionItems.projectId,
+      collectionId: projectCollectionItems.collectionId,
+      collectionName: projectCollections.name,
+    })
+    .from(projectCollectionItems)
+    .innerJoin(projectCollections, eq(projectCollections.id, projectCollectionItems.collectionId));
 }
 
 // ── Gate Reviews helpers ──────────────────────────────────────────────────────

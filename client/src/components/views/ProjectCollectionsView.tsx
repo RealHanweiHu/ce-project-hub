@@ -1,28 +1,26 @@
-// 项目集：手动把若干项目组合成一个集合（如「2027 上海展」「A客户」），与产品库的结构性归属正交。
-// 一个项目可同时属于多个项目集；删除项目集只解散分组，不影响项目本身。
+// 项目集：手动把若干项目归类到一个管理容器（如「2027 上海展」「A客户」），与产品库正交。
+// 一个项目最多属于一个项目集；重新归类即移动，删除项目集只解除归类、不影响项目本身。
 import { useMemo, useState } from 'react';
 import { trpc } from '@/lib/trpc';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { toast } from 'sonner';
-import { Boxes, Plus, Pencil, Trash2, ArrowLeft, FolderKanban, Loader2 } from 'lucide-react';
+import { Boxes, Plus, Pencil, Trash2, ArrowLeft, FolderKanban, FolderMinus, Loader2 } from 'lucide-react';
 import { PageHeader, Kicker, LinearCard, TypeBadge, LinearBar } from '@/components/linear/primitives';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog';
 import { isSystemAdminRole } from '@shared/system-roles';
-import { getEffectivePhasesForProjectLike, type ProjectTemplateLike } from '@shared/npd-v3';
+import { resolvePhaseName } from '@shared/sop-template-resolution';
+import { KpiStrip } from '@/components/views/overview/KpiStrip';
+import { RagHealthPanel } from '@/components/views/overview/RagHealthPanel';
+import { PortfolioTable, type PortfolioTableRow } from '@/components/views/overview/PortfolioTable';
 
 const CATEGORY_BADGE: Record<string, string> = {
   npd: 'NPD', eco: 'ECO', derivative: 'DRV', idr: 'IDR', jdm: 'JDM', obt: 'OBT',
 };
-
-function phaseLabel(project: ProjectTemplateLike, phaseId: string | null): string {
-  if (!phaseId) return '—';
-  return getEffectivePhasesForProjectLike(project).find((p) => p.id === phaseId)?.name ?? phaseId;
-}
 
 type CollectionForm = { id?: string; name: string; description: string };
 
@@ -40,9 +38,15 @@ export function ProjectCollectionsView({ onSelectProject }: { onSelectProject?: 
     { id: selectedId ?? '' },
     { enabled: !!selectedId }
   );
+  const portfolioQ = trpc.projects.portfolio.useQuery(undefined, { enabled: !!selectedId });
+  const portfolioRows = useMemo(() => {
+    const ids = new Set((detailQ.data?.projects ?? []).map((project) => project.id));
+    return ((portfolioQ.data ?? []) as PortfolioTableRow[]).filter((row) => ids.has(row.id));
+  }, [detailQ.data?.projects, portfolioQ.data]);
 
   const invalidate = () => {
     utils.projectCollections.list.invalidate();
+    utils.projectCollections.assignments.invalidate();
     if (selectedId) utils.projectCollections.get.invalidate({ id: selectedId });
   };
 
@@ -75,10 +79,12 @@ export function ProjectCollectionsView({ onSelectProject }: { onSelectProject?: 
     <div className="flex flex-col">
       <PageHeader
         title={<span className="inline-flex items-center gap-2"><Boxes size={20} className="text-primary" />项目集</span>}
-        sub="跨类别、跨产品线的人工分组 — 展会、客户、专题"
-        actions={canManage ? (
+        sub="按你的管理需要自由归类项目，不改变项目与产品库的关联"
+        actions={canManage && !selectedId ? (
           <Button size="sm" onClick={() => setForm({ name: '', description: '' })}>
-            <Plus size={14} className="mr-1" />新建项目集
+            <Plus size={14} className="mr-1" />
+            <span className="sm:hidden">新建</span>
+            <span className="hidden sm:inline">新建项目集</span>
           </Button>
         ) : undefined}
       />
@@ -94,7 +100,8 @@ export function ProjectCollectionsView({ onSelectProject }: { onSelectProject?: 
           key={selectedId}
           collectionId={selectedId}
           detail={detailQ.data}
-          loading={detailQ.isLoading}
+          portfolioRows={portfolioRows}
+          loading={detailQ.isLoading || portfolioQ.isLoading}
           canManage={canManage}
           onBack={() => setSelectedId(null)}
           onEdit={(c) => setForm({ id: c.id, name: c.name, description: c.description ?? '' })}
@@ -110,6 +117,7 @@ export function ProjectCollectionsView({ onSelectProject }: { onSelectProject?: 
         <DialogContent className="sm:max-w-[420px]">
           <DialogHeader>
             <DialogTitle>{form?.id ? '编辑项目集' : '新建项目集'}</DialogTitle>
+            <DialogDescription>填写自定义名称；说明仅用于补充这个项目集的管理用途。</DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-3">
             <div>
@@ -163,7 +171,7 @@ function CollectionGrid({ loading, collections, onOpen }: {
     return (
       <div className="py-16 flex flex-col items-center gap-2 text-muted-foreground">
         <Boxes size={28} className="opacity-40" />
-        <p className="text-sm">还没有项目集 — 用「新建项目集」把相关项目组合起来（展会、客户、专题）</p>
+        <p className="text-sm">还没有项目集 — 新建一个项目集，把需要集中管理的项目归类进来</p>
       </div>
     );
   }
@@ -202,9 +210,10 @@ type DetailData = {
   hiddenCount: number;
 };
 
-function CollectionDetail({ collectionId, detail, loading, canManage, onBack, onEdit, onDelete, onSelectProject }: {
+function CollectionDetail({ collectionId, detail, portfolioRows, loading, canManage, onBack, onEdit, onDelete, onSelectProject }: {
   collectionId: string;
   detail: DetailData | undefined;
+  portfolioRows: PortfolioTableRow[];
   loading: boolean;
   canManage: boolean;
   onBack: () => void;
@@ -219,8 +228,9 @@ function CollectionDetail({ collectionId, detail, loading, canManage, onBack, on
     onSuccess: () => {
       utils.projectCollections.get.invalidate({ id: collectionId });
       utils.projectCollections.list.invalidate();
+      utils.projectCollections.assignments.invalidate();
       setAdding(false);
-      toast.success('已加入项目集');
+      toast.success('项目已归类到此项目集');
     },
     onError: (e) => toast.error(e.message),
   });
@@ -228,6 +238,7 @@ function CollectionDetail({ collectionId, detail, loading, canManage, onBack, on
     onSuccess: () => {
       utils.projectCollections.get.invalidate({ id: collectionId });
       utils.projectCollections.list.invalidate();
+      utils.projectCollections.assignments.invalidate();
     },
     onError: (e) => toast.error(e.message),
   });
@@ -236,6 +247,8 @@ function CollectionDetail({ collectionId, detail, loading, canManage, onBack, on
     return <div className="py-16 flex justify-center text-muted-foreground"><Loader2 size={18} className="animate-spin" /></div>;
   }
   const { collection, projects, hiddenCount } = detail;
+  const portfolioProjectIds = new Set(portfolioRows.map((row) => row.id));
+  const unaggregatedProjects = projects.filter((project) => !portfolioProjectIds.has(project.id));
 
   return (
     <div className="flex flex-col gap-4">
@@ -258,7 +271,7 @@ function CollectionDetail({ collectionId, detail, loading, canManage, onBack, on
         {canManage && (
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={() => setAdding(true)}>
-              <Plus size={14} className="mr-1" />加入项目
+              <Plus size={14} className="mr-1" />归类项目
             </Button>
             <Button variant="outline" size="sm" onClick={() => onEdit(collection)}>
               <Pencil size={14} className="mr-1" />编辑
@@ -277,62 +290,81 @@ function CollectionDetail({ collectionId, detail, loading, canManage, onBack, on
       {projects.length === 0 ? (
         <div className="py-12 flex flex-col items-center gap-2 text-muted-foreground">
           <FolderKanban size={24} className="opacity-40" />
-          <p className="text-sm">项目集还是空的{canManage ? ' — 点「加入项目」开始组合' : ''}</p>
+          <p className="text-sm">项目集还是空的{canManage ? ' — 点「归类项目」开始集中管理' : ''}</p>
         </div>
       ) : (
-        <LinearCard className="overflow-hidden p-0">
-          <table className="w-full text-[13px]">
-            <thead>
-              <tr className="border-b border-border text-left text-[11px] uppercase tracking-wider text-muted-foreground">
-                <th className="px-4 py-2.5 font-medium">项目</th>
-                <th className="px-3 py-2.5 font-medium">类别</th>
-                <th className="px-3 py-2.5 font-medium">阶段</th>
-                <th className="w-[160px] px-3 py-2.5 font-medium">进度</th>
-                {canManage && <th className="w-[60px] px-3 py-2.5" />}
-              </tr>
-            </thead>
-            <tbody>
-              {projects.map((p) => (
-                <tr key={p.id} className="border-b border-border last:border-b-0 hover:bg-secondary/50">
-                  <td className="px-4 py-2.5">
+        <div className="flex flex-col gap-4">
+          {portfolioRows.length === 0 ? (
+            <LinearCard className="p-6 text-sm text-muted-foreground">
+              当前项目集内暂无可汇总的项目。
+            </LinearCard>
+          ) : (
+            <>
+              <KpiStrip rows={portfolioRows} />
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                <RagHealthPanel rows={portfolioRows} onSelectProject={(id) => onSelectProject?.(id)} />
+                <CollectionPhasePanel rows={portfolioRows} />
+              </div>
+              <div>
+                <div className="mb-2 flex items-end justify-between gap-3">
+                  <div>
+                    <Kicker>项目明细</Kicker>
+                    <p className="mt-1 text-xs text-muted-foreground">健康度、进度与问题数据均来自项目实时状态。</p>
+                  </div>
+                </div>
+                <PortfolioTable
+                  rows={portfolioRows}
+                  onSelectProject={(id) => onSelectProject?.(id)}
+                  onRemoveProject={canManage ? (row) => {
+                    if (confirm(`把「${row.name}」移出项目集？项目本身不会被删除。`)) {
+                      removeM.mutate({ id: collectionId, projectId: row.id });
+                    }
+                  } : undefined}
+                />
+              </div>
+            </>
+          )}
+          {unaggregatedProjects.length > 0 && (
+            <LinearCard className="overflow-hidden p-0">
+              <div className="border-b border-border px-4 py-3">
+                <Kicker>未纳入组合指标</Kicker>
+                <p className="mt-1 text-xs text-muted-foreground">已归档或暂不可汇总的项目仍保留在项目集中。</p>
+              </div>
+              <div className="divide-y divide-border">
+                {unaggregatedProjects.map((project) => (
+                  <div key={project.id} className="flex flex-wrap items-center gap-2 px-4 py-3">
                     <button
-                      className="text-left font-medium text-foreground hover:text-primary hover:underline"
-                      onClick={() => onSelectProject?.(p.id)}
+                      type="button"
+                      className="min-w-0 flex-1 truncate text-left text-sm font-medium text-foreground hover:text-primary hover:underline"
+                      onClick={() => onSelectProject?.(project.id)}
                     >
-                      {p.name}
+                      {project.name}
                     </button>
-                    {(p.archived || p.lifecycle !== 'active') && (
-                      <span className="ml-2 rounded-[5px] border border-border bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                        {p.archived ? '已归档' : p.lifecycle === 'paused' ? '已暂停' : '已终止'}
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2.5"><TypeBadge type={CATEGORY_BADGE[p.category] ?? p.category.toUpperCase()} /></td>
-                  <td className="px-3 py-2.5 text-muted-foreground">{phaseLabel(p, p.currentPhase)}</td>
-                  <td className="px-3 py-2.5">
-                    <div className="flex items-center gap-2">
-                      <LinearBar value={p.progress ?? 0} className="flex-1" />
-                      <span className="w-9 text-right text-[11px] tabular-nums text-muted-foreground">{p.progress ?? 0}%</span>
-                    </div>
-                  </td>
-                  {canManage && (
-                    <td className="px-3 py-2.5 text-right">
+                    <TypeBadge type={CATEGORY_BADGE[project.category] ?? project.category.toUpperCase()} />
+                    <span className="text-xs text-muted-foreground">
+                      {project.archived ? '已归档' : project.lifecycle === 'paused' ? '已暂停' : project.lifecycle === 'terminated' ? '已终止' : '暂不可汇总'}
+                    </span>
+                    {canManage && (
                       <button
-                        className="text-muted-foreground transition-colors hover:text-destructive"
-                        aria-label="移出项目集"
+                        type="button"
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-[7px] text-muted-foreground transition-colors hover:bg-secondary hover:text-destructive"
+                        aria-label={`将${project.name}移出项目集`}
+                        title="移出项目集"
                         onClick={() => {
-                          if (confirm(`把「${p.name}」移出项目集？`)) removeM.mutate({ id: collectionId, projectId: p.id });
+                          if (confirm(`把「${project.name}」移出项目集？项目本身不会被删除。`)) {
+                            removeM.mutate({ id: collectionId, projectId: project.id });
+                          }
                         }}
                       >
-                        <Trash2 size={14} />
+                        <FolderMinus size={14} />
                       </button>
-                    </td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </LinearCard>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </LinearCard>
+          )}
+        </div>
       )}
 
       {hiddenCount > 0 && (
@@ -341,6 +373,8 @@ function CollectionDetail({ collectionId, detail, loading, canManage, onBack, on
 
       {adding && (
         <AddProjectsDialog
+          collectionId={collectionId}
+          collectionName={collection.name}
           existingIds={projects.map((p) => p.id)}
           pending={addM.isPending}
           onClose={() => setAdding(false)}
@@ -351,17 +385,55 @@ function CollectionDetail({ collectionId, detail, loading, canManage, onBack, on
   );
 }
 
+function CollectionPhasePanel({ rows }: { rows: PortfolioTableRow[] }) {
+  const phases = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const row of rows) {
+      const label = resolvePhaseName(row, row.currentPhase);
+      counts.set(label, (counts.get(label) ?? 0) + 1);
+    }
+    return Array.from(counts, ([label, count]) => ({ label, count }))
+      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+  }, [rows]);
+
+  const max = Math.max(1, ...phases.map((phase) => phase.count));
+  return (
+    <LinearCard className="p-5">
+      <div className="mb-4">
+        <h3 className="text-lg text-foreground">阶段分布</h3>
+        <p className="mt-0.5 text-[10px] uppercase tracking-widest text-muted-foreground">PROJECT PHASES</p>
+      </div>
+      <div className="space-y-3">
+        {phases.map((phase) => (
+          <div key={phase.label} className="grid grid-cols-[minmax(0,1fr)_minmax(120px,2fr)_32px] items-center gap-3">
+            <span className="truncate text-xs text-[color:var(--secondary-foreground)]">{phase.label}</span>
+            <LinearBar value={(phase.count / max) * 100} />
+            <span className="text-right text-xs tabular-nums text-muted-foreground">{phase.count}</span>
+          </div>
+        ))}
+      </div>
+    </LinearCard>
+  );
+}
+
 // ── 加入项目弹窗 ─────────────────────────────────────────────────────────────
 
-function AddProjectsDialog({ existingIds, pending, onClose, onAdd }: {
+function AddProjectsDialog({ collectionId, collectionName, existingIds, pending, onClose, onAdd }: {
+  collectionId: string;
+  collectionName: string;
   existingIds: string[];
   pending: boolean;
   onClose: () => void;
   onAdd: (ids: string[]) => void;
 }) {
   const projectsQ = trpc.projects.list.useQuery();
+  const assignmentsQ = trpc.projectCollections.assignments.useQuery();
   const [keyword, setKeyword] = useState('');
   const [checked, setChecked] = useState<Set<string>>(new Set());
+  const assignmentByProject = useMemo(
+    () => new Map((assignmentsQ.data ?? []).map((assignment) => [assignment.projectId, assignment])),
+    [assignmentsQ.data],
+  );
 
   const candidates = useMemo(() => {
     const existing = new Set(existingIds);
@@ -379,11 +451,24 @@ function AddProjectsDialog({ existingIds, pending, onClose, onAdd }: {
     });
   };
 
+  const submit = () => {
+    const ids = Array.from(checked);
+    const moving = ids.filter((id) => {
+      const current = assignmentByProject.get(id);
+      return current && current.collectionId !== collectionId;
+    });
+    if (moving.length > 0 && !confirm(`其中 ${moving.length} 个项目已属于其他项目集，将移动到「${collectionName}」。是否继续？`)) {
+      return;
+    }
+    onAdd(ids);
+  };
+
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
       <DialogContent className="sm:max-w-[440px]">
         <DialogHeader>
-          <DialogTitle>加入项目</DialogTitle>
+          <DialogTitle>归类项目</DialogTitle>
+          <DialogDescription>未归类项目会直接加入；已有归属的项目会在确认后移动到当前项目集。</DialogDescription>
         </DialogHeader>
         <Input
           placeholder="搜索项目名…"
@@ -391,7 +476,7 @@ function AddProjectsDialog({ existingIds, pending, onClose, onAdd }: {
           onChange={(e) => setKeyword(e.target.value)}
         />
         <div className="max-h-[300px] overflow-y-auto rounded-[8px] border border-border">
-          {projectsQ.isLoading ? (
+          {projectsQ.isLoading || assignmentsQ.isLoading ? (
             <div className="py-8 flex justify-center text-muted-foreground"><Loader2 size={16} className="animate-spin" /></div>
           ) : candidates.length === 0 ? (
             <p className="py-8 text-center text-xs text-muted-foreground">没有可加入的项目</p>
@@ -408,6 +493,11 @@ function AddProjectsDialog({ existingIds, pending, onClose, onAdd }: {
                   onChange={() => toggle(p.id)}
                 />
                 <span className="flex-1 text-[13px] text-foreground">{p.name}</span>
+                {assignmentByProject.get(p.id) && (
+                  <span className="max-w-[130px] truncate text-[10px] text-[color:var(--warning)]" title={assignmentByProject.get(p.id)?.collectionName}>
+                    当前：{assignmentByProject.get(p.id)?.collectionName}
+                  </span>
+                )}
                 <TypeBadge type={CATEGORY_BADGE[p.category] ?? p.category.toUpperCase()} />
               </label>
             ))
@@ -415,9 +505,9 @@ function AddProjectsDialog({ existingIds, pending, onClose, onAdd }: {
         </div>
         <DialogFooter>
           <Button variant="outline" size="sm" onClick={onClose}>取消</Button>
-          <Button size="sm" disabled={checked.size === 0 || pending} onClick={() => onAdd(Array.from(checked))}>
+          <Button size="sm" disabled={checked.size === 0 || pending} onClick={submit}>
             {pending && <Loader2 size={14} className="mr-1 animate-spin" />}
-            加入 {checked.size > 0 ? `(${checked.size})` : ''}
+            归类 {checked.size > 0 ? `(${checked.size})` : ''}
           </Button>
         </DialogFooter>
       </DialogContent>

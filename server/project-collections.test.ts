@@ -9,6 +9,7 @@ import {
   addProjectsToCollection,
   removeProjectFromCollection,
   listCollectionProjects,
+  listProjectCollectionAssignments,
   getCollectionIdsForProject,
   createProjectWithSeed,
 } from "./db";
@@ -79,22 +80,28 @@ describe("project collections", () => {
     await deleteProjectCollection(id);
   });
 
-  it("a project can belong to multiple collections; deleting a collection keeps the project", async () => {
+  it("moves a project between collections and keeps the project when the collection is deleted", async () => {
     const expo = await createProjectCollection({ name: `上海展 ${SUF}`, createdBy: 1 });
     const customer = await createProjectCollection({ name: `B客户 ${SUF}`, createdBy: 1 });
     await addProjectsToCollection(expo, [PROJECT_A], 1);
     await addProjectsToCollection(customer, [PROJECT_A], 1);
 
-    expect((await getCollectionIdsForProject(PROJECT_A)).sort()).toEqual([customer, expo].sort());
-
-    // 删除项目集只解散分组，项目与另一集合的归属不受影响
-    await deleteProjectCollection(expo);
     expect(await getCollectionIdsForProject(PROJECT_A)).toEqual([customer]);
+    expect((await listProjectCollectionAssignments()).find((row) => row.projectId === PROJECT_A)).toMatchObject({
+      collectionId: customer,
+      collectionName: `B客户 ${SUF}`,
+    });
+    expect((await listCollectionProjects(expo)).map((row) => row.id)).not.toContain(PROJECT_A);
+    expect((await listCollectionProjects(customer)).map((row) => row.id)).toContain(PROJECT_A);
+
+    // 删除项目集只解除归类，项目本身仍然存在。
+    await deleteProjectCollection(customer);
+    expect(await getCollectionIdsForProject(PROJECT_A)).toEqual([]);
     const db = await getDb();
     const { sql } = await import("drizzle-orm");
     const stillThere = await db!.execute(sql`SELECT id FROM projects WHERE id = ${PROJECT_A}`);
     expect(stillThere.rows.length).toBe(1);
 
-    await deleteProjectCollection(customer);
+    await deleteProjectCollection(expo);
   });
 });

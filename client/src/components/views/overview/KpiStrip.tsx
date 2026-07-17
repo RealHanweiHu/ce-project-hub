@@ -5,7 +5,7 @@ import { isProjectedOverdue } from "@shared/health";
 
 const isOverdue = (r: PortfolioTableRow) => isProjectedOverdue(r.projectedEnd, r.targetDate);
 
-export function KpiStrip({ rows, onDrill }: { rows: PortfolioTableRow[]; onDrill: (kind: "overdue" | "blocked") => void }) {
+export function KpiStrip({ rows, onDrill }: { rows: PortfolioTableRow[]; onDrill?: (kind: "overdue" | "blocked") => void }) {
   const total = rows.length;
   const active = rows.filter((r) => r.currentPhase !== "mp").length;
   const redHealth = rows.filter((r) => r.ragLevel === "red").length;
@@ -19,8 +19,8 @@ export function KpiStrip({ rows, onDrill }: { rows: PortfolioTableRow[]; onDrill
       <Kpi icon={<Activity size={15} />} label="进行中" value={active} />
       <Kpi icon={<AlertTriangle size={15} />} label="红灯项目" value={redHealth} accent={redHealth > 0 ? "text-[color:var(--destructive)]" : undefined} />
       <Kpi icon={<TrendingUp size={15} />} label="延期率" value={`${delayRate}%`} accent={delayRate > 0 ? "text-[color:var(--warning)]" : undefined} />
-      <Kpi icon={<CalendarClock size={15} />} label="逾期任务" value={overdueTasks} accent={overdueTasks > 0 ? "text-[color:var(--destructive)]" : undefined} onClick={() => onDrill("overdue")} />
-      <Kpi icon={<Ban size={15} />} label="阻塞任务" value={blockedTasks} accent={blockedTasks > 0 ? "text-[color:var(--warning)]" : undefined} onClick={() => onDrill("blocked")} />
+      <Kpi icon={<CalendarClock size={15} />} label="逾期任务" value={overdueTasks} accent={overdueTasks > 0 ? "text-[color:var(--destructive)]" : undefined} onClick={onDrill ? () => onDrill("overdue") : undefined} />
+      <Kpi icon={<Ban size={15} />} label="阻塞任务" value={blockedTasks} accent={blockedTasks > 0 ? "text-[color:var(--warning)]" : undefined} onClick={onDrill ? () => onDrill("blocked") : undefined} />
     </div>
   );
 }

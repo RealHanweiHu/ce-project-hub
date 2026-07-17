@@ -16,6 +16,7 @@ import {
   addProjectsToCollection,
   removeProjectFromCollection,
   listCollectionProjects,
+  listProjectCollectionAssignments,
   getProjectsByMember,
 } from "../db";
 
@@ -59,6 +60,15 @@ export const projectCollectionsRouter = router({
   list: protectedProcedure.query(async ({ ctx }) => {
     assertCanView(ctx.user);
     return listProjectCollections();
+  }),
+
+  /** 当前项目归属，用于在重新归类前明确提示“将从原项目集移入”。 */
+  assignments: protectedProcedure.query(async ({ ctx }) => {
+    assertCanView(ctx.user);
+    const rows = await listProjectCollectionAssignments();
+    if (isSystemAdminRole(ctx.user.role)) return rows;
+    const accessible = new Set((await getProjectsByMember(ctx.user.id)).map((project) => project.id));
+    return rows.filter((row) => accessible.has(row.projectId));
   }),
 
   /** 项目集详情：集合 + 成员项目。非管理员只看到自己有权限的项目，其余计入 hiddenCount。 */
@@ -147,6 +157,12 @@ export const projectCollectionsRouter = router({
     .mutation(async ({ ctx, input }) => {
       assertCanManage(ctx.user);
       await requireCollection(input.id);
+      if (!isSystemAdminRole(ctx.user.role)) {
+        const accessible = new Set((await getProjectsByMember(ctx.user.id)).map((project) => project.id));
+        if (!accessible.has(input.projectId)) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "只能调整您有权限的项目" });
+        }
+      }
       await removeProjectFromCollection(input.id, input.projectId);
       return { success: true } as const;
     }),
