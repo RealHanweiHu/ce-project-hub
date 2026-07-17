@@ -126,7 +126,7 @@ const RequirementsView = lazy(() =>
   import('@/components/views/RequirementsView').then((module) => ({ default: module.RequirementsView }))
 );
 const ProductLibraryView = lazy(() =>
-  import('@/components/views/ProductLibraryView').then((module) => ({ default: module.ProductLibraryView }))
+  import('@/components/views/PlmWorkspaceView').then((module) => ({ default: module.PlmWorkspaceView }))
 );
 const CalendarPage = lazy(() =>
   import('@/components/views/CalendarPage').then((module) => ({ default: module.CalendarPage }))
