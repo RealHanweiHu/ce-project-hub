@@ -193,9 +193,9 @@ describe("DRV 六模块动态模板", () => {
 
     for (const invalid of [
       { ...frozenBaseline({ ...allNotReused, battery: "reused" }), status: "draft" },
-      { ...frozenBaseline({ ...allNotReused, battery: "reused" }), reuseEvidence: {} },
+      frozenBaseline(allNotReused),
       frozenBaseline({ ...allNotReused, structure_mold: "reused", id_cmf: "not_reused" }),
-      frozenBaseline(Object.fromEntries(PRODUCT_MODULE_IDS.map((moduleId) => [moduleId, "reused"])) as Record<ProductModuleId, ModuleReuseState>),
+      { ...frozenBaseline({ ...allNotReused, battery: "reused" }), frozenAt: "" },
     ]) {
       const ids = taskIds(getDerivativePhasesForExecutionBaseline(invalid, SOP_TEMPLATE_VERSION_CURRENT));
       for (const moduleId of PRODUCT_MODULE_IDS) {

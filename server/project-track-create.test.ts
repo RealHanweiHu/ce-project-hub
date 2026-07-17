@@ -33,11 +33,12 @@ import {
 const OWNER = 996401;
 const SUFFIX = Date.now().toString(36);
 const VALID_PROJECT = `drv-create-${SUFFIX}`;
+const ALL_REUSED_PROJECT = `drv-all-reused-${SUFFIX}`;
 const INVALID_PROJECTS = Array.from(
   { length: 6 },
   (_, index) => `drv-bad${index}-${SUFFIX}`,
 );
-const ALL_PROJECTS = [VALID_PROJECT, ...INVALID_PROJECTS];
+const ALL_PROJECTS = [VALID_PROJECT, ALL_REUSED_PROJECT, ...INVALID_PROJECTS];
 
 const caller = projectsRouter.createCaller({
   user: {
@@ -146,12 +147,11 @@ describe("DRV project-track-v1 creation", () => {
       "已冻结",
     ],
     [
-      "复用模块缺证据",
-      frozenBaseline(
-        { ...allNotReused, battery: "reused" },
-        { reuseEvidence: {} },
-      ),
-      "复用时必须提供",
+      "模块状态不完整",
+      frozenBaseline({
+        battery: "reused",
+      } as Record<ProductModuleId, ModuleReuseState>),
+      "缺少复用状态",
     ],
     [
       "ID/CMF 与结构非法组合",
@@ -163,11 +163,9 @@ describe("DRV project-track-v1 creation", () => {
       "ID/CMF",
     ],
     [
-      "六模块全部复用",
-      frozenBaseline(Object.fromEntries(
-        PRODUCT_MODULE_IDS.map((moduleId) => [moduleId, "reused"]),
-      ) as Record<ProductModuleId, ModuleReuseState>),
-      "全部复用",
+      "六模块全部不复用",
+      frozenBaseline(allNotReused),
+      "至少需要复用一个",
     ],
   ])("拒绝%s", async (_label, baseline, message) => {
     const id = INVALID_PROJECTS.shift()!;
@@ -175,6 +173,17 @@ describe("DRV project-track-v1 creation", () => {
       code: "BAD_REQUEST",
       message: expect.stringContaining(message),
     });
+  });
+
+  it("允许六模块全部复用", async () => {
+    const allReused = Object.fromEntries(
+      PRODUCT_MODULE_IDS.map((moduleId) => [moduleId, "reused"]),
+    ) as Record<ProductModuleId, ModuleReuseState>;
+
+    await expect(caller.create(createInput(
+      ALL_REUSED_PROJECT,
+      frozenBaseline(allReused),
+    ))).resolves.toEqual({ success: true });
   });
 
   it("直接种入共享组合器的最终任务，并保留风险声明", async () => {

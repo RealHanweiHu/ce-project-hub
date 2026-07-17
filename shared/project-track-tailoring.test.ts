@@ -26,7 +26,7 @@ function frozenDrv(
     modelVersion: "project-track-v1",
     status: "frozen",
     productDefinitionRef: "SPEC-DRV-001",
-    moduleReuse: allNotReused,
+    moduleReuse: { ...allNotReused, software_connectivity: "reused" },
     frozenAt: "2026-07-15T09:00:00.000Z",
     frozenBy: 1001,
     ...overrides,
@@ -50,29 +50,14 @@ describe("项目执行基线领域模型", () => {
     }
   });
 
-  it.each([
-    ["sourceRef", { sourceRef: "" }],
-    ["modelOrVersion", { modelOrVersion: " " }],
-    ["evidenceRef", { evidenceRef: "" }],
-    ["boundaryConfirmed", { boundaryConfirmed: false }],
-  ] as const)("复用证据缺少 %s 时失败", (field, patch) => {
+  it("DRV 复用模块不再要求自由文本证据", () => {
     const baseline = frozenDrv({
       moduleReuse: { ...allNotReused, battery: "reused" },
-      reuseEvidence: {
-        battery: { ...reusedEvidence, ...patch },
-      },
     });
 
     const result = validateProjectExecutionBaseline(baseline, { track: "drv" });
 
-    expect(result.ok).toBe(false);
-    expect(result.issues).toContainEqual(
-      expect.objectContaining({
-        code: "missing_reuse_evidence",
-        moduleId: "battery",
-        field,
-      })
-    );
+    expect(result).toEqual({ ok: true, issues: [] });
   });
 
   it("拒绝 ID/CMF 不复用但结构/模具复用的非法组合", () => {
@@ -93,7 +78,7 @@ describe("项目执行基线领域模型", () => {
     );
   });
 
-  it("拒绝六模块全部复用的 DRV", () => {
+  it("允许六模块全部复用的 DRV", () => {
     const moduleReuse = Object.fromEntries(
       PRODUCT_MODULE_IDS.map(moduleId => [moduleId, "reused"])
     ) as Record<ProductModuleId, "reused">;
@@ -106,9 +91,18 @@ describe("项目执行基线领域模型", () => {
       { track: "drv" }
     );
 
+    expect(result).toEqual({ ok: true, issues: [] });
+  });
+
+  it("拒绝六模块全部不复用的 DRV", () => {
+    const result = validateProjectExecutionBaseline(
+      frozenDrv({ moduleReuse: allNotReused }),
+      { track: "drv" },
+    );
+
     expect(result.ok).toBe(false);
     expect(result.issues).toContainEqual(
-      expect.objectContaining({ code: "drv_all_modules_reused" })
+      expect.objectContaining({ code: "drv_no_modules_reused" }),
     );
   });
 

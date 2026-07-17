@@ -82,23 +82,12 @@ describe("DRV create form model", () => {
     expect(blocked).toBe(idChanged);
   });
 
-  it("复用证据不完整时阻止创建，完整后预览与服务端模板任务数一致", () => {
+  it("复用一个模块无需自由文本证据，且预览与服务端模板任务数一致", () => {
     const moduleReuse = {
       ...EMPTY_DERIVATIVE_MODULE_REUSE,
       battery: "reused" as const,
     };
     const reuseEvidence = createEmptyDerivativeReuseEvidence();
-    expect(validateDerivativeCreateBaseline({
-      moduleReuse,
-      reuseEvidence,
-    }).ok).toBe(false);
-
-    reuseEvidence.battery = {
-      sourceRef: "一代电池包",
-      modelOrVersion: "BAT-V3",
-      evidenceRef: "EV-BAT-001",
-      boundaryConfirmed: true,
-    };
     expect(validateDerivativeCreateBaseline({
       moduleReuse,
       reuseEvidence,
@@ -161,29 +150,13 @@ describe("DRV create form model", () => {
     expect(Object.keys(baseline.reuseEvidence ?? {})).toEqual(["battery"]);
   });
 
-  it("任一复用证据字段缺失或六模块全复用都会阻止创建", () => {
-    const moduleReuse = {
-      ...EMPTY_DERIVATIVE_MODULE_REUSE,
-      battery: "reused" as const,
-    };
+  it("六模块零复用时阻止创建，六模块全复用允许创建", () => {
     const complete = createEmptyDerivativeReuseEvidence();
-    complete.battery = {
-      sourceRef: "一代电池包",
-      modelOrVersion: "BAT-V3",
-      evidenceRef: "EV-BAT-001",
-      boundaryConfirmed: true,
-    };
-    for (const evidence of [
-      { ...complete.battery, sourceRef: "" },
-      { ...complete.battery, modelOrVersion: "" },
-      { ...complete.battery, evidenceRef: "" },
-      { ...complete.battery, boundaryConfirmed: false },
-    ]) {
-      expect(validateDerivativeCreateBaseline({
-        moduleReuse,
-        reuseEvidence: { ...complete, battery: evidence },
-      }).ok).toBe(false);
-    }
+    expect(validateDerivativeCreateBaseline({
+      moduleReuse: EMPTY_DERIVATIVE_MODULE_REUSE,
+      reuseEvidence: complete,
+    }).ok).toBe(false);
+
     expect(validateDerivativeCreateBaseline({
       moduleReuse: Object.fromEntries(
         PRODUCT_MODULE_IDS.map(moduleId => [moduleId, "reused"]),
@@ -191,7 +164,7 @@ describe("DRV create form model", () => {
       reuseEvidence: Object.fromEntries(
         PRODUCT_MODULE_IDS.map(moduleId => [moduleId, complete.battery]),
       ) as typeof complete,
-    }).ok).toBe(false);
+    }).ok).toBe(true);
   });
 
   it("所有合法模块组合的预览任务键与 current 服务端解析完全一致", () => {
@@ -200,7 +173,7 @@ describe("DRV create form model", () => {
         moduleId,
         mask & (1 << index) ? "reused" : "not_reused",
       ])) as Record<ProductModuleId, ModuleReuseState>;
-      if (PRODUCT_MODULE_IDS.every(moduleId => moduleReuse[moduleId] === "reused")) continue;
+      if (PRODUCT_MODULE_IDS.every(moduleId => moduleReuse[moduleId] === "not_reused")) continue;
       if (moduleReuse.id_cmf === "not_reused" && moduleReuse.structure_mold === "reused") continue;
       const reuseEvidence = createEmptyDerivativeReuseEvidence();
       for (const moduleId of PRODUCT_MODULE_IDS) {

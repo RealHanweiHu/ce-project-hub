@@ -55,6 +55,7 @@ export interface ProjectExecutionBaseline {
   status: "draft" | "frozen";
   productDefinitionRef?: string;
   moduleReuse?: Record<ProductModuleId, ModuleReuseState>;
+  /** JDM definition-convergence evidence. DRV no longer requires free-text evidence. */
   reuseEvidence?: Partial<Record<ProductModuleId, ModuleReuseEvidence>>;
   customerConceptRef?: string;
   customerInputVersion?: string;
@@ -74,7 +75,7 @@ export type BaselineValidationCode =
   | "invalid_module_state"
   | "missing_reuse_evidence"
   | "invalid_id_cmf_structure_combination"
-  | "drv_all_modules_reused"
+  | "drv_no_modules_reused"
   | "missing_freeze_metadata";
 
 export interface BaselineValidationIssue {
@@ -202,7 +203,10 @@ export function validateProjectExecutionBaseline(
 
   if (moduleReuse) {
     for (const moduleId of PRODUCT_MODULE_IDS) {
-      if (moduleReuse[moduleId] === "reused") {
+      if (
+        options.track === "jdm" &&
+        moduleReuse[moduleId] === "reused"
+      ) {
         issues.push(
           ...validateReuseEvidence(moduleId, baseline.reuseEvidence?.[moduleId])
         );
@@ -211,11 +215,11 @@ export function validateProjectExecutionBaseline(
 
     if (
       options.track === "drv" &&
-      PRODUCT_MODULE_IDS.every(moduleId => moduleReuse[moduleId] === "reused")
+      PRODUCT_MODULE_IDS.every(moduleId => moduleReuse[moduleId] === "not_reused")
     ) {
       issues.push({
-        code: "drv_all_modules_reused",
-        message: "六个模块全部复用时不应创建 DRV 项目",
+        code: "drv_no_modules_reused",
+        message: "DRV 至少需要复用一个现有模块",
       });
     }
   }
