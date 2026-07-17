@@ -140,6 +140,7 @@ export function MyTasksView({ onSelectProject }: { onSelectProject: (id: string,
   const [view, setView] = useState<ViewMode>('list');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [search, setSearch] = useState('');
+  const [sortBy, setSortBy] = useState<'due' | 'priority' | 'project'>('due');
 
   // Map API tasks → display model (preserve all source fields). The query already
   // excludes done/skipped, so 已完成 group only renders if/when data has them.
@@ -169,11 +170,22 @@ export function MyTasksView({ onSelectProject }: { onSelectProject: (id: string,
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return tasks.filter((t) =>
+    const filtered = tasks.filter((t) =>
       passStatus(t) &&
       (!q || `${t.name} ${t.projectName} ${t.projectNumber}`.toLowerCase().includes(q)),
     );
-  }, [tasks, statusFilter, search]);
+    const prioRank = (p: TaskPriority) => (p === 'high' ? 0 : p === 'medium' ? 1 : 2);
+    return [...filtered].sort((a, b) => {
+      if (sortBy === 'due') {
+        if (!a.dueDate && !b.dueDate) return 0;
+        if (!a.dueDate) return 1;
+        if (!b.dueDate) return -1;
+        return a.dueDate < b.dueDate ? -1 : 1;
+      }
+      if (sortBy === 'priority') return prioRank(a.priority) - prioRank(b.priority);
+      return a.projectName.localeCompare(b.projectName, 'zh');
+    });
+  }, [tasks, statusFilter, search, sortBy]);
 
   const groups = GROUPS
     .map((g) => ({ ...g, items: visible.filter(g.test) }))
@@ -181,6 +193,9 @@ export function MyTasksView({ onSelectProject }: { onSelectProject: (id: string,
 
   const openCount = tasks.filter((t) => !t.completed).length;
   const overCount = tasks.filter(isOverdue).length;
+  const nextDue = tasks
+    .filter((t) => !t.completed && t.dueDate)
+    .reduce<string | null>((min, t) => (min === null || (t.dueDate as string) < min ? (t.dueDate as string) : min), null);
 
   const statusOptions: { value: StatusFilter; label: string }[] = [
     { value: 'all', label: '全部' },
@@ -218,8 +233,23 @@ export function MyTasksView({ onSelectProject }: { onSelectProject: (id: string,
             className="w-full bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground"
           />
         </div>
+        <label className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
+          排序
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as 'due' | 'priority' | 'project')}
+            className="h-8 cursor-pointer rounded-[7px] border border-border bg-card px-2 text-[12px] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          >
+            <option value="due">截止日期</option>
+            <option value="priority">优先级</option>
+            <option value="project">项目</option>
+          </select>
+        </label>
         <div className="ml-auto text-[12px] text-muted-foreground">
           我 · <span className="num">{openCount}</span> 项进行中 · <span className="num">{overCount}</span> 项逾期
+          {nextDue && (
+            <> · 最近截止 <span className="num text-foreground">{nextDue}</span></>
+          )}
         </div>
       </div>
 
@@ -280,8 +310,16 @@ function ListMode({ groups, onToggle, onOpen }: {
           {g.items.map((t) => (
             <div
               key={t.id}
+              role="button"
+              tabIndex={0}
               onClick={() => onOpen(t.projectId, { tab: 'tasks', phaseId: t.phaseId, taskId: t.taskId })}
-              className="flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-4 py-2.5 transition-colors last:border-none hover:bg-secondary lg:grid lg:grid-cols-[18px_16px_1fr_auto_auto_24px] lg:gap-3"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onOpen(t.projectId, { tab: 'tasks', phaseId: t.phaseId, taskId: t.taskId });
+                }
+              }}
+              className="flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-4 py-2.5 transition-colors last:border-none hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset lg:grid lg:grid-cols-[18px_16px_1fr_auto_auto_24px] lg:gap-3"
             >
               <Checkbox checked={t.completed} onToggle={() => onToggle(t)} />
               <PriorityFlag priority={t.priority} />

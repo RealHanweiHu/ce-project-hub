@@ -648,6 +648,16 @@ export default function Home() {
     mql.addEventListener('change', onChange);
     return () => mql.removeEventListener('change', onChange);
   }, []);
+  // 视图切换后把焦点移到主内容区（跳过首次渲染，避免抢登录/输入焦点）
+  const mainRef = useRef<HTMLElement>(null);
+  const viewMountedRef = useRef(false);
+  useEffect(() => {
+    if (!viewMountedRef.current) {
+      viewMountedRef.current = true;
+      return;
+    }
+    mainRef.current?.focus({ preventScroll: true });
+  }, [view]);
 
   // ── tRPC queries & mutations ─────────────────────────────────────────────
   const { data: projectRows = [], isLoading: projectsLoading } = trpc.projects.list.useQuery(
@@ -1063,8 +1073,8 @@ export default function Home() {
           </div>
         </header>
 
-        {/* Page Content */}
-        <main className="flex-1 overflow-auto p-4 lg:p-7">
+        {/* Page Content：视图切换后将焦点移到主内容区（读屏/键盘用户可感知切换） */}
+        <main ref={mainRef} tabIndex={-1} className="flex-1 overflow-auto p-4 outline-none lg:p-7">
           {projectsLoading && view !== 'overview' ? (
             <div className="flex items-center justify-center h-64">
               <div className="flex flex-col items-center gap-3">

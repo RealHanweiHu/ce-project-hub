@@ -456,6 +456,8 @@ export function ProductLibraryView() {
   // ── Filter + search presentation state (local only) ──
   const [catFilter, setCatFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
+  // 卡片/列表切换（P1-产品库）：无真实图片时列表模式信息密度更高
+  const [layout, setLayout] = useState<'card' | 'list'>('card');
 
   const definitionStatusByProduct = useMemo(() => {
     const map = new Map<string, DefinitionStatus>();
@@ -557,6 +559,14 @@ export function ProductLibraryView() {
             className="w-full bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground"
           />
         </div>
+        <SegToggle<'card' | 'list'>
+          value={layout}
+          onChange={setLayout}
+          options={[
+            { value: 'card', label: '卡片' },
+            { value: 'list', label: '列表' },
+          ]}
+        />
         <div className="ml-auto text-[12px] text-muted-foreground num">共 {filtered.length} 款产品</div>
       </div>
 
@@ -574,14 +584,13 @@ export function ProductLibraryView() {
           <Package size={26} className="text-muted-foreground/50" />
           <p className="text-sm font-medium text-muted-foreground">无匹配的产品</p>
         </LinearCard>
-      ) : (
+      ) : layout === 'card' ? (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {filtered.map((p) => {
             const linked = linkedByProduct.get(p.id);
             const defConfirmed = definitionStatusByProduct.get(p.id)?.status === 'confirmed';
             const isMp = p.lifecycleState === 'mass_production';
             const stage = linked?.stage ?? (LIFECYCLE_LABELS[p.lifecycleState] || p.lifecycleState);
-            const codeLabel = p.productNumber ? p.productNumber : '未填型号';
             return (
               <LinearCard
                 key={p.id}
@@ -589,36 +598,32 @@ export function ProductLibraryView() {
                 onClick={() => setRevProduct(p)}
                 className="cursor-pointer overflow-hidden"
               >
-                {/* Placeholder thumbnail — striped indigo-on-zinc block */}
-                <div
-                  className="relative flex h-[130px] items-center justify-center border-b border-border bg-secondary"
-                  style={{
-                    backgroundImage:
-                      'repeating-linear-gradient(135deg, var(--acc-soft) 0 10px, transparent 10px 20px)',
-                  }}
-                >
-                  <span className="absolute left-2.5 top-2.5 inline-flex h-[22px] items-center gap-1.5 rounded-[6px] border border-[color:var(--acc-border)] bg-[color:var(--acc-soft)] px-2 text-[11px] font-semibold text-primary">
-                    {p.type === 'component' ? <Cpu size={12} /> : <Package size={12} />}
-                    {p.category || '未分类'}
-                  </span>
+                {/* 紧凑图标封面（P1-产品库）：无真实图片时不再用大面积占位图 */}
+                <div className="flex items-start gap-3 px-3.5 pt-3.5">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[9px] bg-[color:var(--acc-soft)] text-primary">
+                    {p.type === 'component' ? <Cpu size={18} /> : <Package size={18} />}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[14.5px] font-bold tracking-[-0.2px]">{p.name}</div>
+                    <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">
+                      {p.category || '未分类'} · {p.type === 'component' ? '零部件' : '整机'}
+                      {p.productNumber ? <> · <span className="num">{p.productNumber}</span></> : null}
+                    </div>
+                  </div>
                   {defConfirmed && (
-                    <span className="absolute right-2.5 top-2.5 inline-flex h-[20px] items-center rounded-[6px] border border-[color:var(--acc-border)] bg-card/80 px-2 text-[10px] font-semibold text-primary">
+                    <span className="inline-flex h-[20px] shrink-0 items-center rounded-[6px] border border-[color:var(--acc-border)] bg-[color:var(--acc-soft)] px-2 text-[10px] font-semibold text-primary">
                       定义已确认
                     </span>
                   )}
-                  <span className="rounded-[5px] bg-card/70 px-2 py-[3px] text-[10.5px] tracking-wide text-muted-foreground num">
-                    产品照片 · {codeLabel}
-                  </span>
                 </div>
                 {/* Body */}
-                <div className="px-3.5 py-3.5">
-                  <div className="text-[14.5px] font-bold tracking-[-0.2px] truncate">{p.name}</div>
-                  <div className="mt-1 text-[11.5px] leading-snug text-muted-foreground">
-                    {p.type === 'component' ? '零部件' : '整机'}
-                    {p.productNumber ? <> · 型号 <span className="num">{p.productNumber}</span></> : null}
-                    {(p.targetMarkets || []).length > 0 ? ` · ${(p.targetMarkets || []).slice(0, 4).join(' / ')}` : ''}
-                  </div>
-                  <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
+                <div className="px-3.5 pb-3.5 pt-2.5">
+                  {(p.targetMarkets || []).length > 0 && (
+                    <div className="truncate text-[11.5px] leading-snug text-muted-foreground">
+                      目标市场 · {(p.targetMarkets || []).slice(0, 4).join(' / ')}
+                    </div>
+                  )}
+                  <div className="mt-2.5 flex items-center justify-between border-t border-border pt-2.5">
                     <span className="flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
                       在研 <b className="text-foreground num">{linked?.count ?? 0}</b> 个项目
                     </span>
@@ -638,6 +643,56 @@ export function ProductLibraryView() {
             );
           })}
         </div>
+      ) : (
+        /* 列表模式（P1-产品库）：高密度行 */
+        <LinearCard className="overflow-hidden">
+          {filtered.map((p) => {
+            const linked = linkedByProduct.get(p.id);
+            const defConfirmed = definitionStatusByProduct.get(p.id)?.status === 'confirmed';
+            const isMp = p.lifecycleState === 'mass_production';
+            const stage = linked?.stage ?? (LIFECYCLE_LABELS[p.lifecycleState] || p.lifecycleState);
+            return (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => setRevProduct(p)}
+                className="flex w-full items-center gap-3 border-b border-border px-4 py-2.5 text-left transition-colors last:border-none hover:bg-secondary"
+              >
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[7px] bg-[color:var(--acc-soft)] text-primary">
+                  {p.type === 'component' ? <Cpu size={15} /> : <Package size={15} />}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-2">
+                    <span className="truncate text-[13.5px] font-medium text-foreground">{p.name}</span>
+                    {defConfirmed && (
+                      <span className="hidden shrink-0 rounded-[5px] border border-[color:var(--acc-border)] bg-[color:var(--acc-soft)] px-1.5 py-0.5 text-[9.5px] font-semibold text-primary sm:inline">
+                        定义已确认
+                      </span>
+                    )}
+                  </span>
+                  <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+                    {p.category || '未分类'} · {p.type === 'component' ? '零部件' : '整机'}
+                    {p.productNumber ? <> · <span className="num">{p.productNumber}</span></> : null}
+                    {(p.targetMarkets || []).length > 0 ? ` · ${(p.targetMarkets || []).slice(0, 3).join(' / ')}` : ''}
+                  </span>
+                </span>
+                <span className="num hidden shrink-0 text-[11.5px] text-muted-foreground sm:inline">
+                  在研 {linked?.count ?? 0}
+                </span>
+                <span
+                  className={cn(
+                    'shrink-0 rounded-[6px] px-2 py-0.5 text-[10.5px] font-semibold',
+                    isMp
+                      ? 'bg-[color:var(--success-soft)] text-[color:var(--success)]'
+                      : 'bg-[color:var(--acc-soft)] text-primary',
+                  )}
+                >
+                  {stage}
+                </span>
+              </button>
+            );
+          })}
+        </LinearCard>
       )}
 
       {/* Revision timeline dialog */}

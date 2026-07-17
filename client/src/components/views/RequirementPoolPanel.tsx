@@ -23,6 +23,7 @@ import {
   X,
   XCircle,
   ArrowUpRight,
+  ChevronDown,
 } from 'lucide-react';
 
 type RequirementStatus = 'new' | 'triaged' | 'planned' | 'in_progress' | 'accepted' | 'deferred' | 'rejected';
@@ -344,6 +345,8 @@ export function RequirementPoolPanel({ scope, canEdit = false, canCreate, canMan
   const [sourceFilter, setSourceFilter] = useState<'all' | RequirementSource>('all');
   const [search, setSearch] = useState('');
   const [viewMode, setViewMode] = useState<'list' | 'board'>('list');
+  // 桌面端高密度列表（P1-需求池）：展开行查看完整详情
+  const [expandedId, setExpandedId] = useState<number | null>(null);
 
   const selectedPhase = phases.find((p) => p.id === form.targetPhaseId);
   const linkedTaskOptions = selectedPhase?.tasks || [];
@@ -517,6 +520,73 @@ export function RequirementPoolPanel({ scope, canEdit = false, canCreate, canMan
     );
   }
 
+  // ── 桌面端高密度行（P1-需求池）：优先级/标题/来源/负责人/状态/下一动作，点击展开完整卡片 ──
+  function DenseRow({ row }: { row: Requirement }) {
+    const expanded = expandedId === row.id;
+    const toggle = () => setExpandedId(expanded ? null : row.id);
+    return (
+      <div className="border-b border-border last:border-none">
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={toggle}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+          }}
+          aria-expanded={expanded}
+          className="flex w-full cursor-pointer items-center gap-3 px-4 py-2.5 transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset"
+        >
+          <PriorityFlag priority={row.priority} />
+          <span className="flex min-w-0 flex-1 items-center gap-2">
+            <span className="truncate text-[13px] font-medium text-foreground">{row.title}</span>
+            {row.convertedType && (
+              <span className="inline-flex shrink-0 items-center gap-1 rounded-[5px] border border-[color:var(--success)]/30 bg-[color:var(--success-soft,#e7f6ee)] px-1.5 py-0.5 text-[9.5px] font-semibold text-[color:var(--success)]">
+                <ArrowUpRight size={9} />已转{CONVERT_LABELS[row.convertedType]}
+              </span>
+            )}
+          </span>
+          <span className="num w-[74px] shrink-0 text-[10.5px] text-muted-foreground">REQ-{String(row.id).padStart(4, '0')}</span>
+          <SourceBadge source={row.source} />
+          <span className="w-[88px] shrink-0 truncate text-[11.5px] text-muted-foreground">{row.owner || '—'}</span>
+          {canManage(row) ? (
+            <select
+              value={row.status}
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => handleQuickStatus(row, e.target.value as RequirementStatus)}
+              aria-label="需求状态"
+              className="shrink-0 cursor-pointer rounded-[7px] border border-border bg-card px-2 py-1 text-[11.5px] text-foreground outline-none transition-colors focus:border-[color:var(--acc-border)]"
+            >
+              {STATUS_OPTIONS.map((status) => (
+                <option key={status.value} value={status.value}>{status.label}</option>
+              ))}
+            </select>
+          ) : (
+            <StatusBadge status={row.status} />
+          )}
+          {scope.kind === 'project' && canManage(row) && !row.convertedType && (
+            <button
+              onClick={(e) => { e.stopPropagation(); openConvert(row); }}
+              className="inline-flex shrink-0 items-center gap-1 rounded-[7px] border border-[color:var(--success)]/30 bg-[color:var(--success-soft,#e7f6ee)] px-2 py-1 text-[11.5px] font-medium text-[color:var(--success)] transition-colors hover:opacity-90"
+              title="采纳并转为任务/问题/变更"
+            >
+              <ArrowUpRight size={12} />采纳
+            </button>
+          )}
+          <ChevronDown
+            size={14}
+            className={cn('shrink-0 text-muted-foreground transition-transform', expanded && 'rotate-180')}
+            aria-hidden="true"
+          />
+        </div>
+        {expanded && (
+          <div className="px-4 pb-3">
+            <ListCard row={row} />
+          </div>
+        )}
+      </div>
+    );
+  }
+
   // ── Full list card (rich detail preserved) ──
   function ListCard({ row }: { row: Requirement }) {
     const phase = phases.find((p) => p.id === row.targetPhaseId);
@@ -658,11 +728,11 @@ export function RequirementPoolPanel({ scope, canEdit = false, canCreate, canMan
         </LinearCard>
         <LinearCard className="px-4 py-3">
           <Kicker className="text-primary">待澄清</Kicker>
-          <p className="num mt-0.5 text-2xl font-bold text-primary">{stats.open}</p>
+          <p className="num mt-0.5 text-2xl font-bold text-foreground">{stats.open}</p>
         </LinearCard>
         <LinearCard className="px-4 py-3">
           <Kicker className="text-[color:var(--success)]">已纳入</Kicker>
-          <p className="num mt-0.5 text-2xl font-bold text-[color:var(--success)]">{stats.planned}</p>
+          <p className="num mt-0.5 text-2xl font-bold text-foreground">{stats.planned}</p>
         </LinearCard>
         <LinearCard className="px-4 py-3">
           <Kicker>暂缓/拒绝</Kicker>
@@ -917,7 +987,11 @@ export function RequirementPoolPanel({ scope, canEdit = false, canCreate, canMan
                   <span className="text-[12.5px] font-semibold text-foreground">{g.label}</span>
                   <span className="num text-[12px] text-muted-foreground">{items.length}</span>
                 </div>
-                <div className="space-y-2">
+                {/* 桌面端：高密度列表；移动端：纵向卡片 */}
+                <LinearCard className="hidden overflow-hidden lg:block">
+                  {items.map((row) => <DenseRow key={row.id} row={row} />)}
+                </LinearCard>
+                <div className="space-y-2 lg:hidden">
                   {items.map((row) => <ListCard key={row.id} row={row} />)}
                 </div>
               </div>

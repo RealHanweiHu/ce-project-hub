@@ -17,7 +17,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import {
   Project, PHASE_MAP, HEALTH_CONFIG,
   computePhaseProgress, computeOverallProgress, getProjectPhases,
@@ -634,7 +634,7 @@ export function ProjectListView({
                     <TypeBadge type={detailRow.catBadge} />
                   </div>
                   <DialogTitle className="text-[21px] font-bold leading-tight tracking-[-0.3px]">{p.name}</DialogTitle>
-                  <p className="mt-1 text-[12px] text-muted-foreground">{p.type}</p>
+                  <DialogDescription className="mt-1 text-[12px] text-muted-foreground">{p.type || '项目快速预览'}</DialogDescription>
                 </div>
 
                 <div className="flex-1 overflow-y-auto px-5 py-4">

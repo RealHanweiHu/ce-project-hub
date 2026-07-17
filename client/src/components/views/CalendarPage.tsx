@@ -318,13 +318,16 @@ export function CalendarPage({ projects, onSelectProject }: { projects: ProjectO
         )}
       />
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-        <Stat label="任务截止" value={counts.task} tone="task" />
-        <Stat label="项目日程" value={counts.schedule} tone="schedule" />
-        <Stat label="Gate 评审" value={counts.gate} tone="gate" />
-        <Stat label="阶段截止" value={counts.phase} tone="phase" />
-        <Stat label="目标交付" value={counts.target} tone="target" />
-      </div>
+      {/* 统计卡：只展示有数据的类型；本月完全无事件时整行不占位（P1-日历） */}
+      {counts.task + counts.schedule + counts.gate + counts.phase + counts.target > 0 && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+          {counts.task > 0 && <Stat label="任务截止" value={counts.task} tone="task" />}
+          {counts.schedule > 0 && <Stat label="项目日程" value={counts.schedule} tone="schedule" />}
+          {counts.gate > 0 && <Stat label="Gate 评审" value={counts.gate} tone="gate" />}
+          {counts.phase > 0 && <Stat label="阶段截止" value={counts.phase} tone="phase" />}
+          {counts.target > 0 && <Stat label="目标交付" value={counts.target} tone="target" />}
+        </div>
+      )}
 
       <LinearCard className="mt-3 p-4">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
@@ -380,7 +383,12 @@ export function CalendarPage({ projects, onSelectProject }: { projects: ProjectO
         ) : tab === "calendar" ? (
           <MonthGrid first={first} daysInMonth={daysInMonth} ym={ym} byDay={byDay} onSelectProject={onSelectProject} />
         ) : (
-          <MilestoneList events={filteredEvents} onSelectProject={onSelectProject} />
+          <MilestoneList
+            events={filteredEvents}
+            onSelectProject={onSelectProject}
+            onNextMonth={() => shift(1)}
+            onCreate={creatableProjects.length > 0 ? () => setCreateOpen(true) : undefined}
+          />
         )}
       </LinearCard>
 
@@ -419,8 +427,11 @@ function Stat({ label, value, tone }: { label: string; value: number; tone: Cale
           : "text-[color:var(--destructive)]";
   return (
     <LinearCard className="p-4">
-      <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">{label}</div>
-      <div className={`num mt-1 text-2xl font-bold ${cls}`}>{value}</div>
+      <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+        <span className={`h-1.5 w-1.5 rounded-full bg-current ${cls}`} aria-hidden="true" />
+        {label}
+      </div>
+      <div className="num mt-1 text-2xl font-bold text-foreground">{value}</div>
     </LinearCard>
   );
 }
@@ -501,11 +512,36 @@ function EventPill({ event, onSelectProject }: { event: CalendarEvent; onSelectP
   );
 }
 
-function MilestoneList({ events, onSelectProject }: { events: CalendarEvent[]; onSelectProject: (id: string) => void }) {
+function MilestoneList({ events, onSelectProject, onNextMonth, onCreate }: {
+  events: CalendarEvent[];
+  onSelectProject: (id: string) => void;
+  onNextMonth?: () => void;
+  onCreate?: () => void;
+}) {
   if (events.length === 0) {
     return (
-      <div className="mt-4 rounded-[11px] border border-dashed border-border bg-secondary p-10 text-center text-sm text-muted-foreground">
-        当前月份没有匹配的任务、日程或里程碑。
+      <div className="mt-4 rounded-[11px] border border-dashed border-border bg-secondary p-10 text-center">
+        <p className="text-sm text-muted-foreground">当前月份没有匹配的任务、日程或里程碑。</p>
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+          {onCreate && (
+            <button
+              onClick={onCreate}
+              className="inline-flex h-9 items-center gap-1.5 rounded-[7px] bg-primary px-3 text-[12.5px] font-semibold text-primary-foreground transition-colors hover:opacity-90"
+            >
+              <Plus size={13} />
+              创建日程
+            </button>
+          )}
+          {onNextMonth && (
+            <button
+              onClick={onNextMonth}
+              className="inline-flex h-9 items-center gap-1.5 rounded-[7px] border border-border bg-card px-3 text-[12.5px] font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+            >
+              查看下月
+              <ChevronRight size={13} />
+            </button>
+          )}
+        </div>
       </div>
     );
   }

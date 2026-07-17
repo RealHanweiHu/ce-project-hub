@@ -7,6 +7,7 @@ import { useLocation } from 'wouter';
 import {
   Shield, Users, CheckCircle2, XCircle, ChevronDown,
   Crown, User, AlertTriangle, RefreshCw, Search, UserPlus, KeyRound, Trash2, FileCheck2, Bot,
+  Home as HomeIcon,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -122,10 +123,26 @@ export default function AdminPanel() {
   const [resetUserName, setResetUserName] = useState('');
   const [newPwd, setNewPwd] = useState('');
 
-  // Redirect non-admins
+  // 无权限：路由层先验证（管理接口均有 enabled 门控，不会先请求再跳转），
+  // 显示明确页面并提供返回工作台入口（P1-管理后台）
   if (!loading && (!isAuthenticated || !isSystemAdminRole(user?.role))) {
-    navigate('/');
-    return null;
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background px-6">
+        <div className="max-w-sm text-center">
+          <div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center rounded-xl bg-accent text-accent-foreground">
+            <Shield className="h-7 w-7" aria-hidden="true" />
+          </div>
+          <h1 className="mb-2 text-xl font-semibold text-foreground">没有访问权限</h1>
+          <p className="mb-8 text-sm leading-relaxed text-muted-foreground">
+            管理后台仅系统管理员可用。如需相关权限，请联系管理员开通。
+          </p>
+          <Button size="lg" className="min-h-11" onClick={() => navigate('/')}>
+            <HomeIcon className="h-4 w-4" aria-hidden="true" />
+            回到工作台
+          </Button>
+        </div>
+      </div>
+    );
   }
 
   const { data: users, isLoading, refetch } = trpc.admin.listUsers.useQuery(undefined, {

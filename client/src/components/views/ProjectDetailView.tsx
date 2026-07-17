@@ -1867,6 +1867,19 @@ const GATE_DECISION_LABEL: Record<string, string> = {
   rejected: '未通过',
 };
 
+// 任务详情三步主路径（P1）：执行 → 提交证据 → 确认完成
+function StepKicker({ n, label }: { n: number; label: string }) {
+  return (
+    <div className="flex items-center gap-2 pt-1">
+      <span className="num flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-[color:var(--acc-soft)] text-[10px] font-bold text-primary">
+        {n}
+      </span>
+      <span className="text-[10px] uppercase tracking-widest text-muted-foreground">{label}</span>
+      <span className="h-px flex-1 bg-border" aria-hidden="true" />
+    </div>
+  );
+}
+
 function ActivePhaseSelect({
   label, phases, value, onChange, allLabel, optionInfo, children,
 }: {
@@ -1901,6 +1914,19 @@ function ActivePhaseSelect({
 
 export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, initialTaskId, initialTab, initialTaskTab }: ProjectDetailViewProps) {
   const [activePhaseId, setActivePhaseId] = useState(initialPhaseId ?? project.currentPhase);
+  // 滚动后 sticky 精简头部（P0-4）：观察头部卡片是否仍在视野内
+  const headerCardRef = useRef<HTMLDivElement>(null);
+  const [headerVisible, setHeaderVisible] = useState(true);
+  useEffect(() => {
+    const el = headerCardRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver(
+      ([entry]) => setHeaderVisible(entry.isIntersecting),
+      { rootMargin: '-52px 0px 0px 0px' }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(initialTaskId ?? null);
   // 任务详情子窗口：Esc 关闭
   useEffect(() => {
@@ -2338,7 +2364,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
   return (
     <div className="flex flex-col gap-5">
       {/* Header */}
-      <LinearCard className="p-5 lg:p-6">
+      <LinearCard ref={headerCardRef} className="p-5 lg:p-6">
         <div className="flex items-center justify-between mb-4">
           <button
             onClick={onBack}
@@ -2566,8 +2592,17 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         onRelease={() => setReleaseOpen(true)}
       />
 
-      {/* Main Tab Bar (collapsed to 5): 总览 / 任务 / 评审与风险 / 物料与文件 / 动态 */}
-      <div className="flex flex-nowrap items-center gap-1 px-1 overflow-x-auto border-b border-border">
+      {/* Main Tab Bar (collapsed to 5): 总览 / 任务 / 评审与风险 / 物料与文件 / 动态
+          滚动后 sticky（P0-4）：头部滚出视野时在标签栏左侧补显项目名与当前阶段 */}
+      <div className="sticky top-[52px] z-20 flex flex-nowrap items-center gap-1 overflow-x-auto border-b border-border bg-background px-1">
+        {!headerVisible && (
+          <div className="mr-2 flex min-w-0 shrink items-center gap-2 pl-1">
+            <span className="max-w-[180px] truncate text-[13px] font-semibold text-foreground">{project.name}</span>
+            <span className="shrink-0 whitespace-nowrap rounded-[6px] border border-border bg-secondary px-1.5 py-0.5 text-[10px] text-[color:var(--secondary-foreground)]">
+              {projectPhases.find((p) => p.id === project.currentPhase)?.name ?? project.currentPhase}
+            </span>
+          </div>
+        )}
         <button
           onClick={() => setMainTab('overview')}
           className={`flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium border-b-2 -mb-px transition-colors shrink-0 whitespace-nowrap ${
@@ -3188,8 +3223,9 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                     {/* ── Body: two columns ─────────────────────────────────── */}
                     <div className="mt-4 grid gap-6 lg:grid-cols-[1fr_300px]">
 
-                      {/* ── Left main column ────────────────────────────────── */}
+                      {/* ── Left main column：三步主路径 执行 → 提交证据 → 确认完成 ── */}
                       <div className="min-w-0 space-y-4">
+                        <StepKicker n={1} label="执行任务" />
                         {selectedTask.guide && (
                           <div className="p-3 rounded-md border-l-2 border-primary bg-[color:var(--acc-soft)]">
                             <div className="text-[10px] uppercase tracking-widest text-primary mb-1.5">操作指南</div>
@@ -3197,6 +3233,19 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                           </div>
                         )}
 
+                        {/* 执行说明 */}
+                        <TaskDetail
+                          taskId={selectedTask.id}
+                          taskDetails={selectedTaskDetails || { instructions: '', files: [] }}
+                          onUpdate={(details) => updateTaskDetails(selectedTask.id, details)}
+                          canEdit={canActOnSelectedTask && isCurrentPhaseUnlocked}
+                          compact={compactTaskDetail}
+                          projectId={project.id}
+                          phaseId={activePhaseId}
+                          layout="main"
+                        />
+
+                        <StepKicker n={2} label="提交证据" />
                         <div>
                           <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-muted-foreground mb-2">
                             <Target size={11} />
@@ -3246,6 +3295,19 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                             />
                           )}
                         </div>
+
+                        <StepKicker n={3} label="确认完成" />
+
+                        {/* 普通任务：完成路径提示 */}
+                        {!selectedTaskIsGate && (
+                          <div className="rounded-md bg-secondary/40 p-3 text-xs leading-relaxed text-muted-foreground">
+                            {selectedTaskChecked
+                              ? '任务已完成。'
+                              : selectedTaskDetails?.approvalStatus && selectedTaskDetails.approvalStatus !== 'none'
+                                ? '本任务完成需审批：证据齐全后在下方「状态审批」提交，由审批人确认。'
+                                : '证据齐全后，在右侧「属性」中把状态更新为已完成。'}
+                          </div>
+                        )}
 
                         {/* ── Gate-only sections (under 交付物) ──────────────── */}
                         {selectedTaskIsGate && (() => {
@@ -3383,40 +3445,32 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                           return null;
                         })()}
 
-                        {/* ── 执行说明 (left main) ──────────────────────────── */}
-                        <TaskDetail
-                          taskId={selectedTask.id}
-                          taskDetails={selectedTaskDetails || { instructions: '', files: [] }}
-                          onUpdate={(details) => updateTaskDetails(selectedTask.id, details)}
-                          canEdit={canActOnSelectedTask && isCurrentPhaseUnlocked}
-                          compact={compactTaskDetail}
-                          projectId={project.id}
-                          phaseId={activePhaseId}
-                          layout="main"
-                        />
-
-                        {/* ── Tab bar (评论 / 活动 / 流转 / 状态审批) ─────────── */}
+                        {/* ── 协作区（P1）：评论+活动合并，流转折叠，审批按需展示 ── */}
                         <div className="border-t border-border pt-3">
                           <div className="flex items-center gap-4 border-b border-border -mb-px">
                             {([
-                              ['comments', '评论'],
-                              ['activity', '活动'],
-                              ['flow', '流转'],
-                              ['approval', '状态审批'],
-                            ] as const).map(([key, label]) => (
+                              ['comments', '协作'],
+                              ['activity', '动态'],
+                              ...((selectedTaskDetails?.approvalStatus && selectedTaskDetails.approvalStatus !== 'none') || taskTab === 'approval'
+                                ? ([['approval', '状态审批']] as const)
+                                : []),
+                            ] as const).map(([key, label]) => {
+                              const active = taskTab === key || (key === 'activity' && taskTab === 'flow');
+                              return (
                               <button
                                 key={key}
                                 type="button"
                                 onClick={() => setTaskTab(key)}
                                 className={`relative pb-2 text-xs transition-colors ${
-                                  taskTab === key
+                                  active
                                     ? 'text-foreground font-medium border-b-2 border-primary'
                                     : 'text-muted-foreground hover:text-foreground border-b-2 border-transparent'
                                 }`}
                               >
                                 {label}
                               </button>
-                            ))}
+                              );
+                            })}
                           </div>
                           <div className="pt-3">
                             {taskTab === 'comments' && (
@@ -3426,21 +3480,30 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                                 projectId={project.id}
                               />
                             )}
-                            {taskTab === 'activity' && (
-                              <TaskActivityTab
-                                projectId={project.id}
-                                phaseId={activePhaseId}
-                                taskId={selectedTask.id}
-                                users={detailUsers}
-                              />
-                            )}
-                            {taskTab === 'flow' && (
-                              <TaskFlowTab
-                                projectId={project.id}
-                                phaseId={activePhaseId}
-                                taskId={selectedTask.id}
-                                users={detailUsers}
-                              />
+                            {(taskTab === 'activity' || taskTab === 'flow') && (
+                              <div className="space-y-3">
+                                <TaskActivityTab
+                                  projectId={project.id}
+                                  phaseId={activePhaseId}
+                                  taskId={selectedTask.id}
+                                  users={detailUsers}
+                                />
+                                {/* 历史流转默认折叠 */}
+                                <details className="group border-t border-border pt-2">
+                                  <summary className="flex cursor-pointer list-none items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
+                                    <ChevronRight size={11} className="shrink-0 transition-transform group-open:rotate-90" />
+                                    历史流转
+                                  </summary>
+                                  <div className="mt-2">
+                                    <TaskFlowTab
+                                      projectId={project.id}
+                                      phaseId={activePhaseId}
+                                      taskId={selectedTask.id}
+                                      users={detailUsers}
+                                    />
+                                  </div>
+                                </details>
+                              </div>
                             )}
                             {taskTab === 'approval' && (
                               <TaskApprovalTab

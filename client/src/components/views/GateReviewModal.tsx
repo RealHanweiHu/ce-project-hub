@@ -1,7 +1,7 @@
 // GateReviewModal: gate review history list + new review form
 import { useState } from 'react';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog';
 import {
   Flag, CheckCircle2, AlertCircle, XCircle, Users, Calendar,
@@ -379,7 +379,9 @@ export function GateReviewModal({
             </div>
             <div>
               <DialogTitle className="text-xl text-foreground">Gate 评审记录</DialogTitle>
-              <p className="text-[10px] uppercase tracking-widest text-muted-foreground mt-0.5">GATE REVIEW HISTORY</p>
+              <DialogDescription className="text-[10px] uppercase tracking-widest text-muted-foreground mt-0.5">
+                查看就绪度、补齐证据并记录评审结论
+              </DialogDescription>
             </div>
           </div>
         </DialogHeader>
