@@ -7,17 +7,38 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { MODULE_TYPE_OPTIONS, type KeyModuleBundle, type KeyModuleType } from './types';
 
-type ItemDraft = { partNumber: string; name: string; spec: string; quantity: string; refDesignator: string };
+type ItemDraft = {
+  partNumber: string;
+  name: string;
+  spec: string;
+  quantity: string;
+  refDesignator: string;
+  componentProductId: string | null;
+};
 export type KeyModuleEditorValue = {
   moduleNumber: string;
   moduleType: KeyModuleType;
   name: string;
   category: string;
   model: string | null;
-  items: Array<{ partNumber: string; name: string; spec: string; quantity: number; refDesignator: string }>;
+  items: Array<{
+    partNumber: string;
+    name: string;
+    spec: string;
+    quantity: number;
+    refDesignator: string;
+    componentProductId: string | null;
+  }>;
 };
 
-const emptyItem = (): ItemDraft => ({ partNumber: '', name: '', spec: '', quantity: '1', refDesignator: '' });
+const emptyItem = (): ItemDraft => ({
+  partNumber: '',
+  name: '',
+  spec: '',
+  quantity: '1',
+  refDesignator: '',
+  componentProductId: null,
+});
 
 export function KeyModuleEditorDialog({ open, onOpenChange, detail, pending, onSubmit }: {
   open: boolean;
@@ -46,6 +67,7 @@ export function KeyModuleEditorDialog({ open, onOpenChange, detail, pending, onS
       spec: item.spec,
       quantity: String(item.quantity),
       refDesignator: item.refDesignator,
+      componentProductId: item.componentProductId,
     })) : [emptyItem()]);
   }, [detail, open]);
 
@@ -120,11 +142,17 @@ export function KeyModuleEditorDialog({ open, onOpenChange, detail, pending, onS
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>取消</Button>
           <Button disabled={!ready || pending} onClick={() => onSubmit({
             moduleNumber: moduleNumber.trim(), moduleType, name: name.trim(), category: category.trim(), model: model.trim() || null,
-            items: items.map(item => ({ ...item, partNumber: item.partNumber.trim(), name: item.name.trim(), spec: item.spec.trim(), quantity: Number(item.quantity), refDesignator: item.refDesignator.trim() })),
+            items: items.map(item => ({
+              partNumber: item.partNumber.trim(),
+              name: item.name.trim(),
+              spec: item.spec.trim(),
+              quantity: Number(item.quantity),
+              refDesignator: item.refDesignator.trim(),
+              componentProductId: item.componentProductId,
+            })),
           })}>{pending ? '保存中…' : '保存草稿'}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
 }
-

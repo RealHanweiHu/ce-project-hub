@@ -65,7 +65,7 @@ ALTER TABLE "bom_items"
 ALTER TABLE "product_technical_baselines"
   ADD CONSTRAINT "product_technical_baselines_productId_products_id_fk"
   FOREIGN KEY ("productId") REFERENCES "public"."products"("id")
-  ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+  ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "product_technical_baselines"
   ADD CONSTRAINT "product_technical_baselines_sourceProjectId_projects_id_fk"
   FOREIGN KEY ("sourceProjectId") REFERENCES "public"."projects"("id")

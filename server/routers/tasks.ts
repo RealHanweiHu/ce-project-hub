@@ -17,6 +17,7 @@ import {
   setTaskDeliverable,
   getProjectById,
   getDb,
+  acquireProjectReleaseStateLock,
   refreshProjectTaskStatuses,
 } from "../db";
 import {
@@ -179,6 +180,7 @@ export const tasksRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "数据库不可用" });
       const result = await db.transaction(async (tx) => {
+        await acquireProjectReleaseStateLock(tx, input.projectId);
         const completionResult = await setTaskCompletion(
           input.projectId,
           input.phaseId,

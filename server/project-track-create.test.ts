@@ -7,6 +7,7 @@ import {
   projectChangeScopeDeclarations,
   projectDeliverableOverrides,
   projectModuleBaselines,
+  projectProductModuleBindings,
   projectPhases,
   projectTailoring,
   projectTasks,
@@ -22,6 +23,10 @@ import {
   setDeliverableOverride,
 } from "./db";
 import { projectsRouter } from "./routers/projects";
+import {
+  listProjectDeliveryModuleBindings,
+  unbindProjectDeliveryModule,
+} from "./services/project-delivery-module-service";
 import {
   DERIVATIVE_MODULE_TASK_IDS,
   getDerivativePhasesForExecutionBaseline,
@@ -270,6 +275,24 @@ describe("DRV project-track-v1 creation", () => {
         internalBomHash: expect.any(String),
       },
     });
+    const deliveryModules = await db!.select().from(projectProductModuleBindings)
+      .where(eq(projectProductModuleBindings.projectId, VALID_PROJECT));
+    expect(deliveryModules).toHaveLength(1);
+    expect(deliveryModules[0]).toMatchObject({
+      moduleType: "battery_energy",
+      moduleId: MODULE_IDS.battery,
+      boundBy: OWNER,
+      moduleSnapshot: {
+        moduleNumber: `BAT-${SUFFIX}`,
+        internalBomHash: expect.any(String),
+      },
+    });
+    const deliveryState = await listProjectDeliveryModuleBindings(VALID_PROJECT);
+    expect(deliveryState.requiredModuleTypes).toEqual(["battery_energy"]);
+    await expect(unbindProjectDeliveryModule({
+      projectId: VALID_PROJECT,
+      moduleType: "battery_energy",
+    })).rejects.toMatchObject({ code: "REQUIRED_BASELINE" });
     const workingBom = await db!.select().from(bomItems)
       .where(eq(bomItems.projectId, VALID_PROJECT));
     expect(workingBom).toHaveLength(1);

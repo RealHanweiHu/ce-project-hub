@@ -1,15 +1,40 @@
-import { GitBranch, Pencil, ShieldCheck } from 'lucide-react';
+import { GitBranch, History, Pencil, ShieldCheck } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { MODULE_STATUS_LABEL, MODULE_TYPE_LABEL, type KeyModuleBundle } from './types';
+import { MODULE_STATUS_LABEL, MODULE_TYPE_LABEL, type KeyModuleBundle, type KeyModuleStatus } from './types';
 
-export function KeyModuleDetailDialog({ open, onOpenChange, detail, loading, canApprove, pending, onEdit, onConfirm, onApprove, onReturn, onDerive, onRestrict, onObsolete }: {
+type KeyModuleHistoryRow = {
+  id: number;
+  action: string;
+  fromStatus: KeyModuleStatus | null;
+  toStatus: KeyModuleStatus | null;
+  actorId: number;
+  actorName: string | null;
+  actorUsername: string | null;
+  reason: string | null;
+  createdAt: Date | string;
+};
+
+const AUDIT_ACTION_LABEL: Record<string, string> = {
+  create: '创建模块',
+  update_draft: '更新草稿',
+  technical_confirm: '完成技术确认',
+  return_to_draft: '退回草稿',
+  approve: '批准项目选用',
+  restrict: '限制新项目选用',
+  obsolete: '停用模块',
+  derive: '派生新模块编号',
+};
+
+export function KeyModuleDetailDialog({ open, onOpenChange, detail, loading, history, historyLoading, canApprove, pending, onEdit, onConfirm, onApprove, onReturn, onDerive, onRestrict, onObsolete }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   detail?: KeyModuleBundle | null;
   loading: boolean;
+  history: KeyModuleHistoryRow[];
+  historyLoading: boolean;
   canApprove: boolean;
   pending: boolean;
   onEdit: () => void;
@@ -48,6 +73,42 @@ export function KeyModuleDetailDialog({ open, onOpenChange, detail, loading, can
                 </Table>
               </div>
             </section>
+            <section aria-labelledby="module-history-title">
+              <h3 id="module-history-title" className="mb-2 flex items-center gap-2 text-sm font-semibold">
+                <History size={14} className="text-muted-foreground" /> 审批与变更记录
+              </h3>
+              <div className="rounded-lg border border-border bg-secondary/20">
+                {historyLoading ? (
+                  <div className="px-4 py-5 text-center text-xs text-muted-foreground">读取审计记录…</div>
+                ) : history.length === 0 ? (
+                  <div className="px-4 py-5 text-center text-xs text-muted-foreground">暂无审计记录</div>
+                ) : (
+                  <ol className="divide-y divide-border">
+                    {history.map(event => (
+                      <li key={event.id} className="grid gap-1 px-4 py-3 text-xs sm:grid-cols-[minmax(0,1fr)_auto]">
+                        <div className="min-w-0">
+                          <div className="font-medium text-foreground">
+                            {AUDIT_ACTION_LABEL[event.action] ?? event.action}
+                            {event.fromStatus && event.toStatus && event.fromStatus !== event.toStatus ? (
+                              <span className="ml-2 font-normal text-muted-foreground">
+                                {MODULE_STATUS_LABEL[event.fromStatus]} → {MODULE_STATUS_LABEL[event.toStatus]}
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="mt-1 text-muted-foreground">
+                            操作人：{event.actorName || event.actorUsername || `用户 ${event.actorId}`}
+                            {event.reason ? ` · ${event.reason}` : ''}
+                          </div>
+                        </div>
+                        <time className="text-[10px] text-muted-foreground" dateTime={new Date(event.createdAt).toISOString()}>
+                          {new Date(event.createdAt).toLocaleString('zh-CN')}
+                        </time>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </div>
+            </section>
           </div>
         )}
         {module && <DialogFooter className="flex-wrap sm:justify-between">
@@ -62,4 +123,3 @@ export function KeyModuleDetailDialog({ open, onOpenChange, detail, loading, can
     </Dialog>
   );
 }
-

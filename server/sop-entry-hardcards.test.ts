@@ -11,6 +11,8 @@ import {
   projectPhases,
   projectTasks,
   projects,
+  productTechnicalBaselines,
+  users,
 } from "../drizzle/schema";
 
 const OWNER = 991001;
@@ -18,6 +20,8 @@ const PRODUCT = `hardcard-product-${Date.now()}`;
 const LEGACY_PRODUCT = `hc-legacy-p-${Date.now()}`;
 const ECO = `hardcard-eco-${Date.now()}`;
 const LEGACY_ECO = `hc-legacy-e-${Date.now()}`;
+const LEGACY_BASE_PROJECT = `hc-legacy-base-${Date.now()}`;
+const LEGACY_BASELINE = `hc-legacy-tb-${Date.now()}`;
 const RETIRED_IDR = `hc-idr-${Date.now()}`;
 const JDM = `hardcard-jdm-${Date.now()}`;
 const OBT = `hardcard-obt-${Date.now()}`;
@@ -60,6 +64,31 @@ beforeAll(async () => {
     releasedAt: new Date(),
   });
   const db = await getDb();
+  const [releaseUser] = await db!.select({ id: users.id }).from(users).limit(1);
+  if (!releaseUser) throw new Error("test database requires one user");
+  await db!.insert(projects).values({
+    id: LEGACY_BASE_PROJECT,
+    name: "Legacy baseline source",
+    projectNumber: LEGACY_BASE_PROJECT,
+    category: "npd",
+    risk: "low",
+    currentPhase: "mp",
+    progress: 100,
+    createdBy: OWNER,
+  });
+  await db!.insert(productTechnicalBaselines).values({
+    id: LEGACY_BASELINE,
+    productId: LEGACY_PRODUCT,
+    baselineLabel: "TB-001",
+    sourceProjectId: LEGACY_BASE_PROJECT,
+    keyModulesSnapshot: {},
+    bomSnapshot: [{ partNumber: "BASE-001", name: "Legacy baseline part", quantity: 1 }],
+    specSnapshot: { productDefinitionSnapshot: { productName: "Legacy Product" } },
+    releasedBy: releaseUser.id,
+    releasedAt: new Date(),
+  });
+  await db!.update(products).set({ currentTechnicalBaselineId: LEGACY_BASELINE })
+    .where(eq(products.id, LEGACY_PRODUCT));
   await db!.update(products).set({ currentRevisionId: revisionId }).where(eq(products.id, PRODUCT));
 });
 
@@ -73,6 +102,10 @@ afterAll(async () => {
     await db.delete(projectPhases).where(eq(projectPhases.projectId, id));
     await db.delete(projects).where(eq(projects.id, id));
   }
+  await db.update(products).set({ currentTechnicalBaselineId: null })
+    .where(eq(products.id, LEGACY_PRODUCT));
+  await db.delete(productTechnicalBaselines).where(eq(productTechnicalBaselines.id, LEGACY_BASELINE));
+  await db.delete(projects).where(eq(projects.id, LEGACY_BASE_PROJECT));
   await db.delete(productRevisions).where(eq(productRevisions.productId, PRODUCT));
   await db.delete(products).where(eq(products.id, LEGACY_PRODUCT));
   await db.delete(products).where(eq(products.id, PRODUCT));
@@ -89,12 +122,11 @@ describe("SOP entry hard cards", () => {
     });
   });
 
-  it("creates ECO/DRV independently from Product and Revision", async () => {
-    await expect(caller.create(baseInput(ECO, "eco"))).resolves.toEqual({ success: true });
-    const project = await getProjectById(ECO);
-    expect(project?.productId).toBeNull();
-    expect(project?.baseRevisionId).toBeNull();
-
+  it("requires ECO to target an existing product without requiring a Revision", async () => {
+    await expect(caller.create(baseInput(ECO, "eco"))).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringContaining("ECO 必须关联"),
+    });
     await expect(caller.create({
       ...baseInput(LEGACY_ECO, "eco"),
       productId: LEGACY_PRODUCT,

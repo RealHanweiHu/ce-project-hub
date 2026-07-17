@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { projectFiles, projects, projectTasks, type ProjectMemberRole, type ProjectRow, type ProjectTask } from "../drizzle/schema";
-import { decideTaskApproval, getDb } from "./db";
+import { acquireProjectReleaseStateLock, decideTaskApproval, getDb } from "./db";
 import { assertTaskApprovalFinalizeAllowed } from "./task-completion-guard";
 import { assertFourEyes, redlineKindForTask } from "../shared/redline-four-eyes";
 
@@ -28,6 +28,7 @@ export async function finalizeTaskApproval(
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, input.projectId);
     const [project] = await tx.select().from(projects).where(eq(projects.id, input.projectId)).limit(1);
     if (!project) throw new Error("项目不存在");
     const allTasks = await tx.select().from(projectTasks).where(eq(projectTasks.projectId, input.projectId));

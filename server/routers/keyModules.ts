@@ -16,6 +16,7 @@ import {
   createKeyModule,
   deriveKeyModule,
   getKeyModuleDetail,
+  getKeyModuleHistory,
   getKeyModuleWhereUsed,
   listKeyModules,
   obsoleteKeyModule,
@@ -135,6 +136,13 @@ export const keyModulesRouter = router({
       return callService(() => getKeyModuleWhereUsed(input.id));
     }),
 
+  history: protectedProcedure
+    .input(z.object({ id: z.string().trim().min(1).max(32) }).strict())
+    .query(({ ctx, input }) => {
+      assertInternalRead(ctx.user);
+      return callService(() => getKeyModuleHistory(input.id));
+    }),
+
   compare: protectedProcedure
     .input(z.object({ leftId: z.string().trim().min(1), rightId: z.string().trim().min(1) }).strict())
     .query(({ ctx, input }) => {
@@ -165,10 +173,13 @@ export const keyModulesRouter = router({
     }),
 
   returnToDraft: protectedProcedure
-    .input(z.object({ id: z.string().trim().min(1).max(32) }).strict())
+    .input(z.object({
+      id: z.string().trim().min(1).max(32),
+      reason: z.string().trim().min(1).max(2000),
+    }).strict())
     .mutation(({ ctx, input }) => {
       assertModuleApprover(ctx.user);
-      return callService(() => reopenKeyModuleDraft(input.id));
+      return callService(() => reopenKeyModuleDraft(input.id, ctx.user.id, input.reason));
     }),
 
   approve: protectedProcedure

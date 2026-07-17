@@ -7,6 +7,7 @@ import {
   getOpenP0P1Count,
   getPendingExternalApproval,
   getProductById,
+  getProjectReleaseStateFingerprint,
   getProjectById,
   getReleaseGateStatus,
   getUserById,
@@ -29,6 +30,7 @@ import {
 import { buildProjectActionPath } from "../../shared/action-links";
 import { applyActionExternalApproval } from "./action-approval-apply";
 import { isActionExternalApprovalType } from "./action-approval-submit";
+import { canApproveProductTechnicalChange } from "../product-control";
 
 export const MP_RELEASE_APPROVAL = "mp_release";
 
@@ -52,6 +54,9 @@ async function getReleaseApprovalSnapshot(input: {
   if (!canReleaseActor) throw new Error("无权限发起量产发布审批");
 
   const product = project.productId ? await getProductById(project.productId) : undefined;
+  if (product && !canApproveProductTechnicalChange(input.actor, product)) {
+    throw new Error("发起现有产品的发布审批必须由该产品负责人执行");
+  }
   const openP0P1 = await getOpenP0P1Count(input.projectId);
   const gate = await getReleaseGateStatus(project);
   const failedHardDimensions = gate.dimensions.filter((d) => !d.ok && d.dimension !== "review_conditions");
@@ -70,10 +75,17 @@ async function getReleaseApprovalSnapshot(input: {
     }
   }
 
+  const releaseStateFingerprint = await getProjectReleaseStateFingerprint(input.projectId);
+  const verifiedFingerprint = await getProjectReleaseStateFingerprint(input.projectId);
+  if (releaseStateFingerprint !== verifiedFingerprint) {
+    throw new Error("发布配置正在变化，请刷新并重新发起审批");
+  }
+
   return {
     project,
     product,
     gate,
+    releaseStateFingerprint,
     snapshot: {
       "业务类型": "MP Release",
       "项目名称": project.name,
@@ -112,7 +124,7 @@ export async function submitReleaseApproval(input: {
   const dingtalkOriginatorUserId = await resolveDingtalkCorpUserId(originator, setUserDingtalkCorpId);
   if (!dingtalkOriginatorUserId) throw new Error("发起人未配置可匹配钉钉的手机号");
 
-  const { project, snapshot } = await getReleaseApprovalSnapshot(input);
+  const { project, snapshot, releaseStateFingerprint } = await getReleaseApprovalSnapshot(input);
   const formComponentValues = buildApprovalForm(MP_RELEASE_APPROVAL, snapshot);
   const instance = await createExternalApprovalInstance({
     businessType: MP_RELEASE_APPROVAL,
@@ -125,7 +137,13 @@ export async function submitReleaseApproval(input: {
     originatorUserId: input.actor.id,
     dingtalkOriginatorUserId,
     formSnapshot: snapshot,
-    requestSnapshot: { formComponentValues, product: input.product ?? null, override: input.override ?? null },
+    requestSnapshot: {
+      formComponentValues,
+      product: input.product ?? null,
+      override: input.override ?? null,
+      productId: project.productId ?? null,
+      releaseStateFingerprint,
+    },
   });
 
   const created = await createApprovalInstance({
@@ -206,6 +224,19 @@ export async function confirmApprovedRelease(input: {
   const actor = await getUserById(input.actorId);
   if (!actor) throw new Error("发布确认人不存在");
   const request = toRecord(instance.requestSnapshot);
+  const project = await getProjectById(instance.entityId);
+  if (!project) throw new Error("项目不存在");
+  const approvedProductId = typeof request.productId === "string" ? request.productId : null;
+  if ((project.productId ?? null) !== approvedProductId) {
+    throw new Error("审批后关联产品已变化，本次审批已失效，请重新发起");
+  }
+  const approvedFingerprint = typeof request.releaseStateFingerprint === "string"
+    ? request.releaseStateFingerprint
+    : "";
+  const currentFingerprint = await getProjectReleaseStateFingerprint(instance.entityId);
+  if (!approvedFingerprint || approvedFingerprint !== currentFingerprint) {
+    throw new Error("审批后的 BOM、关键模块、规格或 Gate 状态已变化，本次审批已失效，请重新发起");
+  }
   const override = request.override as ReleaseOverrideInput | null | undefined;
   const product = request.product as ReleaseProductInput | null | undefined;
   const result = await releaseProject({
@@ -214,6 +245,7 @@ export async function confirmApprovedRelease(input: {
     product: product ?? undefined,
     override: override ?? undefined,
     externalApprovalInstanceId: instance.id,
+    expectedReleaseStateFingerprint: approvedFingerprint,
   });
   await closeActionItems({
     kind: "mp_release_confirm",
@@ -234,6 +266,8 @@ export async function confirmApprovedRelease(input: {
         productName: result.productName,
         revisionId: result.revisionId,
         revisionLabel: result.revisionLabel,
+        technicalBaselineId: result.technicalBaselineId,
+        technicalBaselineLabel: result.technicalBaselineLabel,
       },
       externalApprovalInstanceId: instance.id,
     },
@@ -250,6 +284,8 @@ export async function confirmApprovedRelease(input: {
       productName: result.productName,
       revisionId: result.revisionId,
       revisionLabel: result.revisionLabel,
+      technicalBaselineId: result.technicalBaselineId,
+      technicalBaselineLabel: result.technicalBaselineLabel,
     },
   });
   return result;

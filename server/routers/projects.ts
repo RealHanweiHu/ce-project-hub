@@ -8,6 +8,7 @@ import {
   getMpReleaseByProjectId,
   setProjectLifecycle,
   getProductById,
+  getProductTechnicalBaseline,
   createProjectWithSeed,
   saveJdmDefinitionDraftBaseline,
   updateProject,
@@ -83,9 +84,55 @@ import {
   KeyModuleServiceError,
   resolveApprovedKeyModuleForReuse,
 } from "../services/key-module-service";
+import { canApproveProductTechnicalChange } from "../product-control";
 
 const DEFAULT_MEETING = { enabled: true, weekday: 3, time: "15:00", durationMin: 60, title: "项目周会" };
 const isoDateInput = z.string().refine(isISODate, "日期必须是有效的 YYYY-MM-DD");
+
+function assertCanLinkControlledProduct(
+  actor: { id: number; role: string },
+  product: { createdBy: number; productManagerUserId?: number | null },
+) {
+  if (!canApproveProductTechnicalChange(actor, product)) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "关联或变更现有产品必须由该产品负责人批准",
+    });
+  }
+}
+
+function ecoSeedFromTechnicalBaseline(
+  baseline: NonNullable<Awaited<ReturnType<typeof getProductTechnicalBaseline>>>,
+  actorId: number,
+) {
+  return {
+    bomItems: baseline.bomSnapshot.map((row, index) => ({
+      partNumber: typeof row.partNumber === "string" ? row.partNumber : "",
+      name: typeof row.name === "string" && row.name.trim() ? row.name : `继承物料 ${index + 1}`,
+      spec: typeof row.spec === "string" ? row.spec : "",
+      quantity: typeof row.quantity === "number" && Number.isInteger(row.quantity) && row.quantity > 0
+        ? row.quantity
+        : 1,
+      refDesignator: typeof row.refDesignator === "string" ? row.refDesignator : "",
+      componentProductId: typeof row.componentProductId === "string" ? row.componentProductId : null,
+      componentRevisionId: typeof row.componentRevisionId === "number" ? row.componentRevisionId : null,
+      keyModuleId: typeof row.keyModuleId === "string" ? row.keyModuleId : null,
+      keyModuleSnapshot: row.keyModuleSnapshot && typeof row.keyModuleSnapshot === "object"
+        ? row.keyModuleSnapshot as Record<string, unknown>
+        : null,
+      supplierName: typeof row.supplierName === "string" ? row.supplierName : "",
+      unitCost: typeof row.unitCost === "string" ? row.unitCost : "",
+      sortOrder: typeof row.sortOrder === "number" ? row.sortOrder : (index + 1) * 10,
+    })),
+    deliveryModules: baseline.assignments.map((assignment) => ({
+      moduleType: assignment.moduleType,
+      moduleId: assignment.moduleId,
+      moduleSnapshot: assignment.moduleSnapshot,
+      boundBy: actorId,
+      boundAt: new Date(),
+    })),
+  };
+}
 
 function getStoredMeetingConfig(project: { meetingConfig?: unknown }): typeof DEFAULT_MEETING | null {
   const cfg = project.meetingConfig;
@@ -891,6 +938,31 @@ export const projectsRouter = router({
       if (input.productId && !linkedProduct) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "关联产品不存在" });
       }
+      if (linkedProduct) {
+        assertCanLinkControlledProduct(ctx.user, linkedProduct);
+      }
+      let ecoBaseTechnicalBaseline: Awaited<ReturnType<typeof getProductTechnicalBaseline>> | undefined;
+      if (input.category === "eco" && !linkedProduct) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "ECO 必须关联要变更的现有产品；发布后将在该产品下生成新的受控技术基线",
+        });
+      }
+      if (input.category === "eco" && linkedProduct) {
+        if (!linkedProduct.currentTechnicalBaselineId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "该产品尚无受控技术基线，不能创建 ECO；请先完成首次产品发布",
+          });
+        }
+        ecoBaseTechnicalBaseline = await getProductTechnicalBaseline(linkedProduct.currentTechnicalBaselineId);
+        if (!ecoBaseTechnicalBaseline || ecoBaseTechnicalBaseline.productId !== linkedProduct.id) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "产品当前技术基线不可用，请刷新产品数据后重试",
+          });
+        }
+      }
       if (input.category === "jdm") {
         const missing = [
           !input.commercialBoundary?.trim() && "商务边界",
@@ -963,8 +1035,11 @@ export const projectsRouter = router({
         projectNumber: input.projectNumber,
         category: input.category,
         pmUserId: input.pmUserId ?? null,
-        productOwnerUserId: input.productOwnerUserId ?? ctx.user.id,
+        productOwnerUserId: linkedProduct
+          ? (linkedProduct.productManagerUserId ?? linkedProduct.createdBy)
+          : (input.productOwnerUserId ?? ctx.user.id),
         productId: input.productId ?? null,
+        baseTechnicalBaselineId: ecoBaseTechnicalBaseline?.id ?? null,
         baseRevisionId: null,
         productDefinitionSnapshotId: handoffSnapshot?.id ?? null,
         sopTemplateVersion,
@@ -988,7 +1063,10 @@ export const projectsRouter = router({
         targetDate: input.targetDate ?? null,
         createdBy: ctx.user.id,
         archived: false,
-      }, input.category, ctx.user.id, riskDeclarationSeed, drvControlledSeed);
+      }, input.category, ctx.user.id, riskDeclarationSeed,
+      drvControlledSeed ?? (ecoBaseTechnicalBaseline
+        ? ecoSeedFromTechnicalBaseline(ecoBaseTechnicalBaseline, ctx.user.id)
+        : undefined));
       // 选了项目经理且不是创建者本人 → 自动加入项目成员并赋 project_manager 角色（否则对方看不到项目）
       if (input.pmUserId && input.pmUserId !== ctx.user.id) {
         try { await ensureProjectMember(input.id, input.pmUserId, "project_manager", ctx.user.id); }
@@ -1113,6 +1191,22 @@ export const projectsRouter = router({
       const linkedProduct = input.productId ? await getProductById(input.productId) : undefined;
       if (input.productId && !linkedProduct) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "关联产品不存在" });
+      }
+      const productLinkChanged = (input.productId ?? null) !== (existing.productId ?? null);
+      if (productLinkChanged) {
+        if (await getMpReleaseByProjectId(existing.id)) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "项目已发布，产品关联属于受控追溯信息，不能再修改",
+          });
+        }
+        if (existing.category === "eco") {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "ECO 已冻结来源产品与技术基线，不能改绑或解绑产品",
+          });
+        }
+        if (linkedProduct) assertCanLinkControlledProduct(ctx.user, linkedProduct);
       }
       if (["jdm", "obt"].includes(input.category) && existing.inputBaselineFrozenAt) {
         const baselineChanged =
@@ -1356,9 +1450,26 @@ export const projectsRouter = router({
       if (input.pmUserId !== undefined) patch.pmUserId = input.pmUserId;
       if (input.productId !== undefined) patch.productId = input.productId;
       if (input.productId !== undefined) {
+        if ((input.productId ?? null) !== (existing.productId ?? null)) {
+          if (await getMpReleaseByProjectId(existing.id)) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: "项目已发布，产品关联属于受控追溯信息，不能再修改",
+            });
+          }
+          if (existing.category === "eco") {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: "ECO 已冻结来源产品与技术基线，不能改绑或解绑产品",
+            });
+          }
+        }
         if (input.productId) {
           const product = await getProductById(input.productId);
           if (!product) throw new TRPCError({ code: "BAD_REQUEST", message: "关联产品不存在" });
+          if (input.productId !== existing.productId) {
+            assertCanLinkControlledProduct(ctx.user, product);
+          }
         }
         if (input.productId !== existing.productId) patch.baseRevisionId = null;
       }

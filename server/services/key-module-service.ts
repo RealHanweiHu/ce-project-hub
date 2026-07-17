@@ -3,13 +3,17 @@ import { and, asc, count, desc, eq, ilike, inArray, or, sql } from "drizzle-orm"
 import { nanoid } from "nanoid";
 import {
   bomItems,
+  keyModuleAuditEvents,
   keyModuleItems,
   keyModules,
   productModuleAssignments,
   productTechnicalBaselines,
   products,
   projectModuleBaselines,
+  projectProductModuleBindings,
   projects,
+  users,
+  type KeyModuleAuditAction,
   type KeyModule,
   type KeyModuleEvidenceRef,
   type KeyModuleItem,
@@ -115,6 +119,40 @@ async function requireModule(id: string, executor?: Awaited<ReturnType<typeof ge
   return module;
 }
 
+// Drizzle's transaction executor is structurally compatible with the main DB,
+// but its inferred generic is intentionally kept behind this service boundary.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Executor = any;
+
+async function lockModule(id: string, executor: Executor): Promise<KeyModule> {
+  const [module] = await executor.select().from(keyModules)
+    .where(eq(keyModules.id, id))
+    .limit(1)
+    .for("update");
+  if (!module) throw new KeyModuleServiceError("NOT_FOUND", "关键模块不存在");
+  return module;
+}
+
+async function appendAuditEvent(executor: Executor, input: {
+  moduleId: string;
+  action: KeyModuleAuditAction;
+  fromStatus: KeyModuleStatus | null;
+  toStatus: KeyModuleStatus | null;
+  actorId: number;
+  reason?: string | null;
+  meta?: Record<string, unknown>;
+}) {
+  await executor.insert(keyModuleAuditEvents).values({
+    moduleId: input.moduleId,
+    action: input.action,
+    fromStatus: input.fromStatus,
+    toStatus: input.toStatus,
+    actorId: input.actorId,
+    reason: input.reason?.trim() || null,
+    meta: input.meta ?? {},
+  });
+}
+
 async function readBundle(id: string, executor?: Awaited<ReturnType<typeof getDb>>): Promise<KeyModuleBundle> {
   const db = executor ?? await getDb();
   if (!db) throw new Error("Database not available");
@@ -139,10 +177,11 @@ export async function createKeyModule(input: CreateKeyModuleInput, actorId: numb
   if (!db) throw new Error("Database not available");
   const items = normalizeItems(input.items);
   const id = input.id?.trim() || `km_${nanoid(16)}`;
+  const moduleNumber = normalizeModuleNumber(input.moduleNumber);
   return db.transaction(async tx => {
     await tx.insert(keyModules).values({
       id,
-      moduleNumber: normalizeModuleNumber(input.moduleNumber),
+      moduleNumber,
       moduleType: input.moduleType,
       name: normalizeRequired(input.name, "模块名称"),
       category: input.category?.trim() ?? "",
@@ -152,6 +191,14 @@ export async function createKeyModule(input: CreateKeyModuleInput, actorId: numb
       createdBy: actorId,
     });
     await tx.insert(keyModuleItems).values(items.map(item => ({ moduleId: id, ...item })));
+    await appendAuditEvent(tx, {
+      moduleId: id,
+      action: "create",
+      fromStatus: null,
+      toStatus: "draft",
+      actorId,
+      meta: { moduleNumber, moduleType: input.moduleType },
+    });
     return readBundle(id, tx as never);
   });
 }
@@ -159,12 +206,12 @@ export async function createKeyModule(input: CreateKeyModuleInput, actorId: numb
 export async function updateKeyModuleDraft(
   id: string,
   patch: UpdateKeyModuleDraftInput,
-  _actorId: number,
+  actorId: number,
 ): Promise<KeyModuleBundle> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   return db.transaction(async tx => {
-    const current = await requireModule(id, tx as never);
+    const current = await lockModule(id, tx);
     if (current.status !== "draft") {
       throw new KeyModuleServiceError(
         "IMMUTABLE_MODULE",
@@ -173,6 +220,12 @@ export async function updateKeyModuleDraft(
           : "技术确认后的模块需先退回草稿再修改",
       );
     }
+    const beforeItems = await tx.select().from(keyModuleItems)
+      .where(eq(keyModuleItems.moduleId, id))
+      .orderBy(asc(keyModuleItems.sortOrder), asc(keyModuleItems.id));
+    const beforeSnapshotHash = hashKeyModuleSnapshot(
+      buildKeyModuleSnapshotFromBundle({ module: current, items: beforeItems }),
+    );
     const update: Partial<typeof keyModules.$inferInsert> = { updatedAt: new Date() };
     if (patch.moduleNumber !== undefined) update.moduleNumber = normalizeModuleNumber(patch.moduleNumber);
     if (patch.name !== undefined) update.name = normalizeRequired(patch.name, "模块名称");
@@ -186,7 +239,27 @@ export async function updateKeyModuleDraft(
       await tx.delete(keyModuleItems).where(eq(keyModuleItems.moduleId, id));
       await tx.insert(keyModuleItems).values(items.map(item => ({ moduleId: id, ...item })));
     }
-    return readBundle(id, tx as never);
+    const updatedBundle = await readBundle(id, tx as never);
+    const afterSnapshotHash = hashKeyModuleSnapshot(buildKeyModuleSnapshotFromBundle(updatedBundle));
+    await appendAuditEvent(tx, {
+      moduleId: id,
+      action: "update_draft",
+      fromStatus: "draft",
+      toStatus: "draft",
+      actorId,
+      meta: {
+        snapshotSchemaVersion: 1,
+        snapshotHashAlgorithm: "sha256",
+        snapshotHashScope: "controlled_module_definition_and_internal_bom",
+        beforeSnapshotHash,
+        afterSnapshotHash,
+        changedFields: Object.entries(patch)
+          .filter(([, value]) => value !== undefined)
+          .map(([field]) => field)
+          .sort(),
+      },
+    });
+    return updatedBundle;
   });
 }
 
@@ -194,7 +267,7 @@ export async function confirmKeyModuleTechnical(id: string, actorId: number): Pr
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   return db.transaction(async tx => {
-    const current = await requireModule(id, tx as never);
+    const current = await lockModule(id, tx);
     if (current.status !== "draft") {
       throw new KeyModuleServiceError("INVALID_STATE", "只有草稿模块可以完成技术确认");
     }
@@ -214,71 +287,124 @@ export async function confirmKeyModuleTechnical(id: string, actorId: number): Pr
       technicalConfirmedAt: new Date(),
       updatedAt: new Date(),
     }).where(eq(keyModules.id, id));
+    await appendAuditEvent(tx, {
+      moduleId: id,
+      action: "technical_confirm",
+      fromStatus: "draft",
+      toStatus: "technical_confirmed",
+      actorId,
+    });
     return readBundle(id, tx as never);
   });
 }
 
-export async function reopenKeyModuleDraft(id: string): Promise<KeyModuleBundle> {
+export async function reopenKeyModuleDraft(
+  id: string,
+  actorId: number,
+  reason: string,
+): Promise<KeyModuleBundle> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const current = await requireModule(id, db);
-  if (current.status !== "technical_confirmed") {
-    throw new KeyModuleServiceError("INVALID_STATE", "只有待批准的模块可以退回草稿");
-  }
-  await db.update(keyModules).set({
-    status: "draft",
-    technicalConfirmedBy: null,
-    technicalConfirmedAt: null,
-    updatedAt: new Date(),
-  }).where(eq(keyModules.id, id));
-  return readBundle(id, db);
+  const normalizedReason = normalizeRequired(reason, "退回原因");
+  return db.transaction(async tx => {
+    const current = await lockModule(id, tx);
+    if (current.status !== "technical_confirmed") {
+      throw new KeyModuleServiceError("INVALID_STATE", "只有待批准的模块可以退回草稿");
+    }
+    await tx.update(keyModules).set({
+      status: "draft",
+      technicalConfirmedBy: null,
+      technicalConfirmedAt: null,
+      updatedAt: new Date(),
+    }).where(eq(keyModules.id, id));
+    await appendAuditEvent(tx, {
+      moduleId: id,
+      action: "return_to_draft",
+      fromStatus: "technical_confirmed",
+      toStatus: "draft",
+      actorId,
+      reason: normalizedReason,
+    });
+    return readBundle(id, tx as never);
+  });
 }
 
 export async function approveKeyModule(id: string, actorId: number): Promise<KeyModuleBundle> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const current = await requireModule(id, db);
-  if (current.status !== "technical_confirmed") {
-    throw new KeyModuleServiceError("INVALID_STATE", "只有已完成技术确认的模块可以批准");
-  }
-  await db.update(keyModules).set({
-    status: "approved",
-    approvedBy: actorId,
-    approvedAt: new Date(),
-    restrictionReason: null,
-    updatedAt: new Date(),
-  }).where(eq(keyModules.id, id));
-  return readBundle(id, db);
+  return db.transaction(async tx => {
+    const current = await lockModule(id, tx);
+    if (current.status !== "technical_confirmed") {
+      throw new KeyModuleServiceError("INVALID_STATE", "只有已完成技术确认的模块可以批准");
+    }
+    await tx.update(keyModules).set({
+      status: "approved",
+      approvedBy: actorId,
+      approvedAt: new Date(),
+      restrictionReason: null,
+      updatedAt: new Date(),
+    }).where(eq(keyModules.id, id));
+    await appendAuditEvent(tx, {
+      moduleId: id,
+      action: "approve",
+      fromStatus: "technical_confirmed",
+      toStatus: "approved",
+      actorId,
+    });
+    return readBundle(id, tx as never);
+  });
 }
 
-export async function restrictKeyModule(id: string, reason: string, _actorId: number): Promise<KeyModuleBundle> {
+export async function restrictKeyModule(id: string, reason: string, actorId: number): Promise<KeyModuleBundle> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const current = await requireModule(id, db);
-  if (current.status !== "approved") {
-    throw new KeyModuleServiceError("INVALID_STATE", "只有已批准模块可以限制新项目选用");
-  }
-  await db.update(keyModules).set({
-    status: "restricted",
-    restrictionReason: normalizeRequired(reason, "限制原因"),
-    updatedAt: new Date(),
-  }).where(eq(keyModules.id, id));
-  return readBundle(id, db);
+  const normalizedReason = normalizeRequired(reason, "限制原因");
+  return db.transaction(async tx => {
+    const current = await lockModule(id, tx);
+    if (current.status !== "approved") {
+      throw new KeyModuleServiceError("INVALID_STATE", "只有已批准模块可以限制新项目选用");
+    }
+    await tx.update(keyModules).set({
+      status: "restricted",
+      restrictionReason: normalizedReason,
+      updatedAt: new Date(),
+    }).where(eq(keyModules.id, id));
+    await appendAuditEvent(tx, {
+      moduleId: id,
+      action: "restrict",
+      fromStatus: "approved",
+      toStatus: "restricted",
+      actorId,
+      reason: normalizedReason,
+    });
+    return readBundle(id, tx as never);
+  });
 }
 
-export async function obsoleteKeyModule(id: string, reason: string, _actorId: number): Promise<KeyModuleBundle> {
+export async function obsoleteKeyModule(id: string, reason: string, actorId: number): Promise<KeyModuleBundle> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const current = await requireModule(id, db);
-  if (current.status !== "approved" && current.status !== "restricted") {
-    throw new KeyModuleServiceError("INVALID_STATE", "只有已批准或受限模块可以停用");
-  }
-  await db.update(keyModules).set({
-    status: "obsolete",
-    restrictionReason: normalizeRequired(reason, "停用原因"),
-    updatedAt: new Date(),
-  }).where(eq(keyModules.id, id));
-  return readBundle(id, db);
+  const normalizedReason = normalizeRequired(reason, "停用原因");
+  return db.transaction(async tx => {
+    const current = await lockModule(id, tx);
+    if (current.status !== "approved" && current.status !== "restricted") {
+      throw new KeyModuleServiceError("INVALID_STATE", "只有已批准或受限模块可以停用");
+    }
+    await tx.update(keyModules).set({
+      status: "obsolete",
+      restrictionReason: normalizedReason,
+      updatedAt: new Date(),
+    }).where(eq(keyModules.id, id));
+    await appendAuditEvent(tx, {
+      moduleId: id,
+      action: "obsolete",
+      fromStatus: current.status,
+      toStatus: "obsolete",
+      actorId,
+      reason: normalizedReason,
+    });
+    return readBundle(id, tx as never);
+  });
 }
 
 export async function deriveKeyModule(
@@ -286,20 +412,19 @@ export async function deriveKeyModule(
   input: { id?: string; moduleNumber: string; name?: string; model?: string | null },
   actorId: number,
 ): Promise<KeyModuleBundle> {
-  const source = await readBundle(sourceId);
-  if (source.module.status === "draft" || source.module.status === "technical_confirmed") {
-    throw new KeyModuleServiceError("INVALID_STATE", "只有已发布的模块可以派生新编号");
-  }
-  return createKeyModule({
-    id: input.id,
-    moduleNumber: input.moduleNumber,
-    moduleType: source.module.moduleType,
-    name: input.name?.trim() || `${source.module.name}（派生）`,
-    category: source.module.category,
-    model: input.model === undefined ? source.module.model : input.model,
-    attributes: source.module.attributes,
-    evidenceRefs: source.module.evidenceRefs,
-    items: source.items.map(item => ({
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const id = input.id?.trim() || `km_${nanoid(16)}`;
+  const moduleNumber = normalizeModuleNumber(input.moduleNumber);
+  return db.transaction(async tx => {
+    const sourceModule = await lockModule(sourceId, tx);
+    if (sourceModule.status === "draft" || sourceModule.status === "technical_confirmed") {
+      throw new KeyModuleServiceError("INVALID_STATE", "只有已发布的模块可以派生新编号");
+    }
+    const sourceItems = await tx.select().from(keyModuleItems)
+      .where(eq(keyModuleItems.moduleId, sourceId))
+      .orderBy(asc(keyModuleItems.sortOrder), asc(keyModuleItems.id));
+    const items = normalizeItems(sourceItems.map(item => ({
       partNumber: item.partNumber,
       name: item.name,
       spec: item.spec,
@@ -307,16 +432,56 @@ export async function deriveKeyModule(
       refDesignator: item.refDesignator,
       componentProductId: item.componentProductId,
       sortOrder: item.sortOrder,
-    })),
-  }, actorId).then(async bundle => {
-    const db = await getDb();
-    if (!db) throw new Error("Database not available");
-    const [module] = await db.update(keyModules)
-      .set({ derivedFromModuleId: sourceId })
-      .where(eq(keyModules.id, bundle.module.id))
-      .returning();
-    return { ...bundle, module };
+    })));
+    await tx.insert(keyModules).values({
+      id,
+      moduleNumber,
+      moduleType: sourceModule.moduleType,
+      name: input.name?.trim() || `${sourceModule.name}（派生）`,
+      category: sourceModule.category,
+      model: input.model === undefined ? sourceModule.model : input.model?.trim() || null,
+      attributes: sourceModule.attributes,
+      evidenceRefs: sourceModule.evidenceRefs,
+      derivedFromModuleId: sourceId,
+      createdBy: actorId,
+    });
+    await tx.insert(keyModuleItems).values(items.map(item => ({ moduleId: id, ...item })));
+    await appendAuditEvent(tx, {
+      moduleId: id,
+      action: "derive",
+      fromStatus: null,
+      toStatus: "draft",
+      actorId,
+      meta: {
+        moduleNumber,
+        moduleType: sourceModule.moduleType,
+        sourceModuleId: sourceId,
+        sourceModuleNumber: sourceModule.moduleNumber,
+      },
+    });
+    return readBundle(id, tx as never);
   });
+}
+
+export async function getKeyModuleHistory(id: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.select({
+    id: keyModuleAuditEvents.id,
+    moduleId: keyModuleAuditEvents.moduleId,
+    action: keyModuleAuditEvents.action,
+    fromStatus: keyModuleAuditEvents.fromStatus,
+    toStatus: keyModuleAuditEvents.toStatus,
+    actorId: keyModuleAuditEvents.actorId,
+    actorName: users.name,
+    actorUsername: users.username,
+    reason: keyModuleAuditEvents.reason,
+    meta: keyModuleAuditEvents.meta,
+    createdAt: keyModuleAuditEvents.createdAt,
+  }).from(keyModuleAuditEvents)
+    .leftJoin(users, eq(users.id, keyModuleAuditEvents.actorId))
+    .where(eq(keyModuleAuditEvents.moduleId, id))
+    .orderBy(asc(keyModuleAuditEvents.createdAt), asc(keyModuleAuditEvents.id));
 }
 
 export async function listKeyModules(input: {
@@ -380,6 +545,15 @@ export function buildKeyModuleSnapshotFromBundle(bundle: KeyModuleBundle) {
     category: bundle.module.category,
     model: bundle.module.model,
     attributes: bundle.module.attributes,
+    status: bundle.module.status,
+    derivedFromModuleId: bundle.module.derivedFromModuleId,
+    evidenceRefs: bundle.module.evidenceRefs.map(reference => ({ ...reference })),
+    createdBy: bundle.module.createdBy,
+    technicalConfirmedBy: bundle.module.technicalConfirmedBy,
+    technicalConfirmedAt: snapshotTimestamp(bundle.module.technicalConfirmedAt),
+    approvedBy: bundle.module.approvedBy,
+    approvedAt: snapshotTimestamp(bundle.module.approvedAt),
+    restrictionReason: bundle.module.restrictionReason,
     items: bundle.items.map(item => ({
       partNumber: item.partNumber,
       name: item.name,
@@ -387,12 +561,37 @@ export function buildKeyModuleSnapshotFromBundle(bundle: KeyModuleBundle) {
       quantity: item.quantity,
       refDesignator: item.refDesignator,
       componentProductId: item.componentProductId,
+      sortOrder: item.sortOrder,
     })),
   };
   return {
     ...definition,
-    internalBomHash: createHash("sha256").update(JSON.stringify(definition.items)).digest("hex"),
+    internalBomHash: hashKeyModuleSnapshot(definition.items),
   };
+}
+
+function snapshotTimestamp(value: Date | null) {
+  return value ? value.toISOString() : null;
+}
+
+function canonicalizeForHash(value: unknown): unknown {
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map(canonicalizeForHash);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, nested]) => [key, canonicalizeForHash(nested)]),
+    );
+  }
+  return value;
+}
+
+/** Deterministic digest used by append-only audit records and frozen module baselines. */
+export function hashKeyModuleSnapshot(snapshot: unknown) {
+  return createHash("sha256")
+    .update(JSON.stringify(canonicalizeForHash(snapshot)))
+    .digest("hex");
 }
 
 export async function resolveApprovedKeyModuleForReuse(id: string, expectedType: KeyModuleType) {
@@ -412,7 +611,7 @@ export async function resolveApprovedKeyModuleForReuse(id: string, expectedType:
 export async function getKeyModuleWhereUsed(id: string) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const [productUses, projectUses, bomUses] = await Promise.all([
+  const [productUses, reuseProjectUses, deliveryProjectUses, bomUses] = await Promise.all([
     db.select({
       technicalBaselineId: productModuleAssignments.technicalBaselineId,
       productId: productTechnicalBaselines.productId,
@@ -430,10 +629,36 @@ export async function getKeyModuleWhereUsed(id: string) {
     }).from(projectModuleBaselines)
       .innerJoin(projects, eq(projects.id, projectModuleBaselines.projectId))
       .where(eq(projectModuleBaselines.keyModuleId, id)),
+    db.select({
+      projectId: projectProductModuleBindings.projectId,
+      projectName: projects.name,
+      moduleType: projectProductModuleBindings.moduleType,
+      boundAt: projectProductModuleBindings.boundAt,
+      customerConfirmationRef: projectProductModuleBindings.customerConfirmationRef,
+    }).from(projectProductModuleBindings)
+      .innerJoin(projects, eq(projects.id, projectProductModuleBindings.projectId))
+      .where(eq(projectProductModuleBindings.moduleId, id)),
     db.select({ projectId: bomItems.projectId, partNumber: bomItems.partNumber, name: bomItems.name })
       .from(bomItems)
       .where(eq(bomItems.keyModuleId, id)),
   ]);
+  const projectUses = [
+    ...deliveryProjectUses.map((use) => ({
+      ...use,
+      usageKind: "final_delivery_selection" as const,
+      isFinalDeliverySelection: true,
+      drvModuleKey: null,
+      confirmedAt: use.boundAt,
+    })),
+    ...reuseProjectUses.map((use) => ({
+      ...use,
+      usageKind: "drv_reuse_baseline" as const,
+      isFinalDeliverySelection: false,
+      moduleType: null,
+      boundAt: null,
+      customerConfirmationRef: null,
+    })),
+  ];
   return { products: productUses, projects: projectUses, bomItems: bomUses };
 }
 

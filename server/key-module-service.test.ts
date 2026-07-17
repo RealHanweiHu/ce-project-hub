@@ -4,6 +4,7 @@ import { keyModuleItems, keyModules, users } from "../drizzle/schema";
 import { getDb } from "./db";
 import {
   approveKeyModule,
+  buildKeyModuleSnapshotFromBundle,
   confirmKeyModuleTechnical,
   createKeyModule,
   deriveKeyModule,
@@ -49,6 +50,7 @@ describe.sequential("key module service", () => {
       name: "测试电池包",
       category: "充气泵",
       model: "BP-01",
+      evidenceRefs: [{ type: "test_report", label: "电芯循环测试", ref: "TR-2026-001" }],
       items: [{ partNumber: "CELL-01", name: "电芯组", quantity: 4 }],
     }, userId);
 
@@ -81,6 +83,24 @@ describe.sequential("key module service", () => {
   it("makes approved module definitions immutable", async () => {
     const approved = await approveKeyModule(MODULE_ID, userId);
     expect(approved.module).toMatchObject({ status: "approved", approvedBy: userId });
+
+    const snapshot = buildKeyModuleSnapshotFromBundle(approved);
+    expect(snapshot).toMatchObject({
+      status: "approved",
+      createdBy: userId,
+      technicalConfirmedBy: userId,
+      technicalConfirmedAt: approved.module.technicalConfirmedAt?.toISOString(),
+      approvedBy: userId,
+      approvedAt: approved.module.approvedAt?.toISOString(),
+      evidenceRefs: [{ type: "test_report", label: "电芯循环测试", ref: "TR-2026-001" }],
+      restrictionReason: null,
+      items: [{
+        partNumber: "CELL-02",
+        componentProductId: null,
+        sortOrder: 0,
+      }],
+      internalBomHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
 
     await expect(updateKeyModuleDraft(MODULE_ID, { model: "BP-02" }, userId)).rejects.toMatchObject({
       code: "IMMUTABLE_MODULE",

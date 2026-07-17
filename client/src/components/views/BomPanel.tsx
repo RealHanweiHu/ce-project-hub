@@ -1,13 +1,16 @@
 // 项目工作态 BOM 面板：增/删/改行，可引用零部件产品。
 import { useState } from 'react';
-import { Plus, Trash2, Loader2, Boxes } from 'lucide-react';
+import { Plus, Trash2, Loader2, Boxes, FileSpreadsheet, LockKeyhole } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { toast } from 'sonner';
+import { Button } from '@/components/ui/button';
+import { BomImportDialog } from './BomImportDialog';
 
 type BomRow = {
   id: number; partNumber: string; name: string; spec: string; quantity: number;
   refDesignator: string; supplierName: string; unitCost: string;
   componentProductId: string | null;
+  keyModuleId: number | null;
 };
 
 const EMPTY = { partNumber: '', name: '', spec: '', quantity: 1, refDesignator: '', supplierName: '', unitCost: '', componentProductId: '' };
@@ -46,6 +49,7 @@ export function BomPanel({ projectId, canEdit, canEditCommercials = canEdit }: {
   const delM = trpc.bom.delete.useMutation({ onSuccess: inval, onError: (e) => toast.error(e.message) });
 
   const [draft, setDraft] = useState({ ...EMPTY });
+  const [importOpen, setImportOpen] = useState(false);
 
   const totalCost = (rows as BomRow[]).reduce((s, r) => s + (parseFloat(r.unitCost) || 0) * r.quantity, 0);
 
@@ -61,6 +65,11 @@ export function BomPanel({ projectId, canEdit, canEditCommercials = canEdit }: {
           {!canEdit && <div className="text-[11px] text-muted-foreground mt-1">当前角色仅可查看 BOM，编辑请联系 PM / Manager / SCM。</div>}
           {canEdit && !canEditCommercials && <div className="text-[11px] text-muted-foreground mt-1">你可维护结构字段（料号/规格/用量/位号）；供应商与单价由 SCM / PM 维护。</div>}
         </div>
+        {canEdit && (
+          <Button type="button" variant="outline" size="sm" onClick={() => setImportOpen(true)}>
+            <FileSpreadsheet />批量导入
+          </Button>
+        )}
       </div>
       {rows.length === 0 && (
         <div className="border border-dashed border-border bg-secondary rounded-[11px] p-5 flex items-start gap-3">
@@ -85,11 +94,11 @@ export function BomPanel({ projectId, canEdit, canEditCommercials = canEdit }: {
           <tbody>
             {(rows as BomRow[]).map((r) => (
               <tr key={r.id} className="border-t border-border">
-                <td><BomCell r={r} field="partNumber" w="w-24" disabled={!canEdit} onCommit={commitCell} /></td>
-                <td><BomCell r={r} field="name" w="w-40" disabled={!canEdit} onCommit={commitCell} /></td>
-                <td><BomCell r={r} field="spec" w="w-32" disabled={!canEdit} onCommit={commitCell} /></td>
-                <td><BomCell r={r} field="quantity" type="number" w="w-14" disabled={!canEdit} onCommit={commitCell} /></td>
-                <td><BomCell r={r} field="refDesignator" w="w-20" disabled={!canEdit} onCommit={commitCell} /></td>
+                <td><BomCell r={r} field="partNumber" w="w-24" disabled={!canEdit || !!r.keyModuleId} onCommit={commitCell} /></td>
+                <td><BomCell r={r} field="name" w="w-40" disabled={!canEdit || !!r.keyModuleId} onCommit={commitCell} /></td>
+                <td><BomCell r={r} field="spec" w="w-32" disabled={!canEdit || !!r.keyModuleId} onCommit={commitCell} /></td>
+                <td><BomCell r={r} field="quantity" type="number" w="w-14" disabled={!canEdit || !!r.keyModuleId} onCommit={commitCell} /></td>
+                <td><BomCell r={r} field="refDesignator" w="w-20" disabled={!canEdit || !!r.keyModuleId} onCommit={commitCell} /></td>
                 <td><BomCell r={r} field="supplierName" w="w-24" disabled={!canEditCommercials} onCommit={commitCell} /></td>
                 <td><BomCell r={r} field="unitCost" w="w-16" disabled={!canEditCommercials} onCommit={commitCell} /></td>
                 <td className="px-2">
@@ -98,7 +107,11 @@ export function BomPanel({ projectId, canEdit, canEditCommercials = canEdit }: {
                     : <span className="text-muted-foreground text-xs">—</span>}
                 </td>
                 <td className="px-2">
-                  {canEdit && (
+                  {r.keyModuleId ? (
+                    <span title="受控关键模块只能通过模块库变更" className="inline-flex items-center gap-1 text-[11px] text-primary">
+                      <LockKeyhole size={12} />受控
+                    </span>
+                  ) : canEdit && (
                     <button onClick={() => { if (confirm('删除此行？')) delM.mutate({ id: r.id }); }} className="text-muted-foreground hover:text-destructive">
                       <Trash2 size={13} />
                     </button>
@@ -136,6 +149,12 @@ export function BomPanel({ projectId, canEdit, canEditCommercials = canEdit }: {
           </tbody>
         </table>
       </div>
+      <BomImportDialog
+        projectId={projectId}
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        canEditCommercials={canEditCommercials}
+      />
     </div>
   );
 }

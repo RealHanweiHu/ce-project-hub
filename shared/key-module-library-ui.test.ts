@@ -31,4 +31,10 @@ describe("PLM key module library UI", () => {
     expect(editor).not.toMatch(/<Label[^>]*>供应商/);
     expect(editor).not.toMatch(/placeholder=["']二供/);
   });
+
+  it("preserves an existing component product reference when a module draft is edited", () => {
+    const editor = source("../client/src/components/views/key-modules/KeyModuleEditorDialog.tsx");
+    expect(editor.match(/componentProductId: item\.componentProductId/g)).toHaveLength(2);
+    expect(editor).toContain("componentProductId: null");
+  });
 });

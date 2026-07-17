@@ -35,6 +35,7 @@ import { GateReadinessChecklist } from './GateReadinessChecklist';
 import { JdmDefinitionBaselinePanel } from './JdmDefinitionBaselinePanel';
 import { ReleaseDialog } from './ReleaseDialog';
 import { BomPanel } from './BomPanel';
+import { ProjectDeliveryModulesPanel } from './ProjectDeliveryModulesPanel';
 import { OverviewPanel } from './OverviewPanel';
 import { ProjectDashboard } from './project-overview/ProjectDashboard';
 import { ProjectSettingsDrawer } from './project-overview/ProjectSettingsDrawer';
@@ -3019,7 +3020,13 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
       )}
 
       {mainTab === 'materials' && materialsView === 'bom' && (
-        <div className="p-6">
+        <div className="space-y-5 p-6">
+          {['npd', 'jdm', 'obt', 'derivative', 'eco'].includes(project.category ?? '') && perms.canViewInternalWorkspace ? (
+            <ProjectDeliveryModulesPanel
+              projectId={project.id}
+              canEdit={perms.canEditProjectInfo}
+            />
+          ) : null}
           <BomPanel
             projectId={project.id}
             canEdit={perms.canEditProjectInfo || perms.canEditChangelog || !!perms.canEditBomStructure}

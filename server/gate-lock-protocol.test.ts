@@ -126,6 +126,14 @@ async function unlockProjectPhase(client: Client, projectId: string, phaseId: st
   await client.query("select pg_advisory_unlock(hashtext($1))", [`${projectId}:${phaseId}`]);
 }
 
+async function lockProjectReleaseState(client: Client, projectId: string) {
+  await client.query("select pg_advisory_lock(hashtext($1))", [`release-state:${projectId}`]);
+}
+
+async function unlockProjectReleaseState(client: Client, projectId: string) {
+  await client.query("select pg_advisory_unlock(hashtext($1))", [`release-state:${projectId}`]);
+}
+
 beforeAll(async () => {
   await seedProject(SIGNOFF_RECHECK, "design");
   await seedProject(ADD_REQUIREMENT_RACE, "design");
@@ -164,9 +172,23 @@ describe("Gate phase-lock protocol", () => {
     if (!db) throw new Error("no db");
     const blocker = new Client({ connectionString: process.env.DATABASE_URL });
     await blocker.connect();
-    await lockProjectPhase(blocker, SIGNOFF_RECHECK, "design");
+    await lockProjectReleaseState(blocker, SIGNOFF_RECHECK);
 
-    const confirmation = confirmGateReview({
+    // Unified release-state is the outermost project write lock. Queue the
+    // signature withdrawal first, then Gate confirmation; confirmation must
+    // observe the committed rejection after it obtains the barrier.
+    const rejection = db.update(projectGateSignoffs).set({
+      status: "rejected",
+      note: "预检后撤回批准",
+      updatedAt: new Date(),
+    }).where(and(
+      eq(projectGateSignoffs.projectId, SIGNOFF_RECHECK),
+      eq(projectGateSignoffs.phaseId, "design"),
+      eq(projectGateSignoffs.slot, "product"),
+    ));
+    const rejectionPromise = Promise.resolve(rejection);
+    await waitForAdvisoryLockWaiters(blocker, 1);
+    const confirmationOutcome = confirmGateReview({
       projectId: SIGNOFF_RECHECK,
       phaseId: "design",
       gateTaskId: "d8",
@@ -175,25 +197,21 @@ describe("Gate phase-lock protocol", () => {
       reviewDate: "2026-07-15",
       decision: "approved",
       createdBy: OWNER,
-    });
-    const confirmationAssertion = expect(confirmation).rejects.toThrow(/会签|拒绝|必签/);
+    }).then(
+      value => ({ ok: true as const, value }),
+      error => ({ ok: false as const, error }),
+    );
     try {
-      await waitForAdvisoryLockWaiters(blocker, 1);
-      await db.update(projectGateSignoffs).set({
-        status: "rejected",
-        note: "预检后撤回批准",
-        updatedAt: new Date(),
-      }).where(and(
-        eq(projectGateSignoffs.projectId, SIGNOFF_RECHECK),
-        eq(projectGateSignoffs.phaseId, "design"),
-        eq(projectGateSignoffs.slot, "product"),
-      ));
+      await waitForAdvisoryLockWaiters(blocker, 2);
     } finally {
-      await unlockProjectPhase(blocker, SIGNOFF_RECHECK, "design");
+      await unlockProjectReleaseState(blocker, SIGNOFF_RECHECK);
       await blocker.end();
     }
 
-    await confirmationAssertion;
+    await rejectionPromise;
+    const confirmation = await confirmationOutcome;
+    expect(confirmation.ok).toBe(false);
+    expect(confirmation.ok ? "" : String(confirmation.error)).toMatch(/会签|拒绝|必签/);
     expect((await getProjectById(SIGNOFF_RECHECK))?.currentPhase).toBe("design");
     const reviews = await db.select().from(projectGateReviews)
       .where(eq(projectGateReviews.projectId, SIGNOFF_RECHECK));
@@ -228,7 +246,6 @@ describe("Gate phase-lock protocol", () => {
         decision: "approved",
         createdBy: OWNER,
       });
-      await waitForAdvisoryLockWaiters(blocker, 2);
     } finally {
       await unlockProjectPhase(blocker, ADD_REQUIREMENT_RACE, "design");
       await blocker.end();
@@ -272,7 +289,6 @@ describe("Gate phase-lock protocol", () => {
         phaseId: "concept",
         openedBy: OWNER,
       });
-      await waitForAdvisoryLockWaiters(blocker, 2);
     } finally {
       await unlockProjectPhase(blocker, RISK_ROUND_RACE, "concept");
       await blocker.end();
@@ -352,7 +368,6 @@ describe("Gate phase-lock protocol", () => {
         projectId: RISK_RATCHET_RACE,
         declaration: staleStandardDeclaration,
       });
-      await waitForAdvisoryLockWaiters(blocker, 2);
     } finally {
       await unlockProjectPhase(blocker, RISK_RATCHET_RACE, "concept");
       await blocker.end();

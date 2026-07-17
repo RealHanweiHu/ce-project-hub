@@ -25,6 +25,7 @@ function configured(value: string | number | null | undefined): boolean {
 }
 import {
   createUserWithPassword,
+  acquireProjectReleaseStateLock,
   getDb,
   getUserByEmail,
   getUserByUsername,
@@ -55,7 +56,11 @@ import {
   productDefinitionSnapshots,
   productDefinitionChanges,
   productRevisions,
+  productTechnicalBaselines,
   mpReleases,
+  keyModules,
+  projectModuleBaselines,
+  projectProductModuleBindings,
   customerVariants,
   comments,
   notifications,
@@ -277,6 +282,13 @@ export const adminRouter = router({
 
       const replacementUserId = ctx.user.id;
       await db.transaction(async (tx) => {
+        // Account deletion touches ownership, membership and evidence across projects.
+        // Take every project barrier in stable order before the first project write so
+        // it cannot race an in-flight release or deadlock on row-trigger lock order.
+        const projectIds = await tx.select({ id: projects.id }).from(projects).orderBy(projects.id);
+        for (const project of projectIds) {
+          await acquireProjectReleaseStateLock(tx, project.id);
+        }
         // User-owned collaboration rows can be removed; business records keep their history
         // while references to the deleted account are cleared or transferred to this admin.
         await tx.execute(drizzleSql`
@@ -301,6 +313,12 @@ export const adminRouter = router({
         await tx.update(projects)
           .set({ pmUserId: null })
           .where(eq(projects.pmUserId, input.userId));
+        await tx.update(projects)
+          .set({ productOwnerUserId: replacementUserId })
+          .where(eq(projects.productOwnerUserId, input.userId));
+        await tx.update(projects)
+          .set({ customerSignoffOwnerUserId: replacementUserId })
+          .where(eq(projects.customerSignoffOwnerUserId, input.userId));
         await tx.update(projects)
           .set({ riskOverrideUpdatedBy: null })
           .where(eq(projects.riskOverrideUpdatedBy, input.userId));
@@ -384,6 +402,15 @@ export const adminRouter = router({
         await tx.update(products)
           .set({ createdBy: replacementUserId })
           .where(eq(products.createdBy, input.userId));
+        await tx.update(products)
+          .set({ productManagerUserId: replacementUserId })
+          .where(eq(products.productManagerUserId, input.userId));
+        await tx.update(products)
+          .set({ maintenanceOwnerUserId: replacementUserId })
+          .where(eq(products.maintenanceOwnerUserId, input.userId));
+        await tx.update(products)
+          .set({ afterSalesOwnerUserId: replacementUserId })
+          .where(eq(products.afterSalesOwnerUserId, input.userId));
         await tx.update(productDefinitions)
           .set({ confirmedBy: null })
           .where(eq(productDefinitions.confirmedBy, input.userId));
@@ -402,6 +429,24 @@ export const adminRouter = router({
         await tx.update(productRevisions)
           .set({ releasedBy: null })
           .where(eq(productRevisions.releasedBy, input.userId));
+        await tx.update(keyModules)
+          .set({ createdBy: replacementUserId })
+          .where(eq(keyModules.createdBy, input.userId));
+        await tx.update(keyModules)
+          .set({ technicalConfirmedBy: replacementUserId })
+          .where(eq(keyModules.technicalConfirmedBy, input.userId));
+        await tx.update(keyModules)
+          .set({ approvedBy: replacementUserId })
+          .where(eq(keyModules.approvedBy, input.userId));
+        await tx.update(projectModuleBaselines)
+          .set({ confirmedBy: replacementUserId })
+          .where(eq(projectModuleBaselines.confirmedBy, input.userId));
+        await tx.update(projectProductModuleBindings)
+          .set({ boundBy: replacementUserId })
+          .where(eq(projectProductModuleBindings.boundBy, input.userId));
+        await tx.update(productTechnicalBaselines)
+          .set({ releasedBy: replacementUserId })
+          .where(eq(productTechnicalBaselines.releasedBy, input.userId));
         await tx.update(mpReleases)
           .set({ acceptedBy: null })
           .where(eq(mpReleases.acceptedBy, input.userId));

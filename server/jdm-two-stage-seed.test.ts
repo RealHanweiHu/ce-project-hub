@@ -603,30 +603,35 @@ describe("JDM two-stage project persistence", () => {
     if (!db) throw new Error("no db");
     const blocker = new Client({ connectionString: process.env.DATABASE_URL });
     await blocker.connect();
-    await blocker.query("select pg_advisory_lock(hashtext($1))", [`${SIGNOFF_RACE}:input`]);
+    await blocker.query("begin");
+    // Mirror the production lock order: release-state first, then the narrow Gate
+    // lock. The router precheck can still observe the approved row; its freezing
+    // transaction then waits here and must revalidate after this transaction commits.
+    await blocker.query("select pg_advisory_xact_lock(hashtext($1))", [`release-state:${SIGNOFF_RACE}`]);
+    await blocker.query("select pg_advisory_xact_lock(hashtext($1))", [`${SIGNOFF_RACE}:input`]);
 
     const confirmation = confirmDefinitionGateThroughRouter(
       SIGNOFF_RACE,
       frozenBaseline(SIGNOFF_RACE),
     );
-    const confirmationAssertion = expect(confirmation).rejects.toThrow(/会签|产品负责人|批准/);
     try {
       await waitForAdvisoryLockWaiter(blocker);
-      await db.update(projectGateSignoffs).set({
-        status: "rejected",
-        note: "在 Gate 冻结事务前撤回批准",
-        updatedAt: new Date(),
-      }).where(and(
-        eq(projectGateSignoffs.projectId, SIGNOFF_RACE),
-        eq(projectGateSignoffs.phaseId, "input"),
-        eq(projectGateSignoffs.slot, "product"),
-      ));
+      await blocker.query(`
+        update project_gate_signoffs
+        set status = 'rejected',
+            note = '在 Gate 冻结事务前撤回批准',
+            "updatedAt" = now()
+        where "projectId" = $1
+          and "phaseId" = 'input'
+          and slot = 'product'
+      `, [SIGNOFF_RACE]);
+      await blocker.query("commit");
     } finally {
-      await blocker.query("select pg_advisory_unlock(hashtext($1))", [`${SIGNOFF_RACE}:input`]);
+      await blocker.query("rollback").catch(() => undefined);
       await blocker.end();
     }
 
-    await confirmationAssertion;
+    await expect(confirmation).rejects.toThrow(/会签|产品负责人|批准/);
     const project = await getProjectById(SIGNOFF_RACE);
     const rows = await rowsForProject(SIGNOFF_RACE);
     expect(project?.currentPhase).toBe("input");

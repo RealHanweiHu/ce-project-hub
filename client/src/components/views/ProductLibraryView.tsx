@@ -30,6 +30,7 @@ import { cn } from '@/lib/utils';
 import { ProductOperationsPanel } from './ProductOperationsPanel';
 import { ProductLifecycleGovernancePanel } from './ProductLifecycleGovernancePanel';
 import { ProductWaiverPanel } from './ProductWaiverPanel';
+import { ProductTechnicalBaselinePanel } from './ProductTechnicalBaselinePanel';
 import {
   findBestMatchingProductCategory,
   normalizeProductCategory,
@@ -49,6 +50,7 @@ type ProductRow = {
   createdBy: number;
   productManagerUserId: number | null;
   currentRevisionId: number | null;
+  currentTechnicalBaselineId: string | null;
   maintenanceOwnerUserId: number | null;
   afterSalesOwnerUserId: number | null;
 };
@@ -1040,6 +1042,8 @@ function RevisionsDialog({ product, onClose }: { product: ProductRow; onClose: (
               </div>
             </AccordionContent>
           </AccordionItem>
+
+          <ProductTechnicalBaselinePanel productId={product.id} />
 
           <AccordionItem value="revisions">
             <AccordionTrigger className="text-foreground">

@@ -206,6 +206,9 @@ export const projects = pgTable("projects", {
   orgId: integer("orgId"),
   /** 项目完成后交付到产品库的独立产品；项目执行期间可以为空。 */
   productId: varchar("productId", { length: 32 }),
+  /** ECO 创建时继承并冻结的完整产品技术基线；发布前必须仍是产品当前基线。 */
+  baseTechnicalBaselineId: varchar("baseTechnicalBaselineId", { length: 32 })
+    .references((): AnyPgColumn => productTechnicalBaselines.id, { onDelete: "restrict" }),
   /** NPD 创建时锁定的产品定义快照，用于项目交接与后续追溯 */
   productDefinitionSnapshotId: integer("productDefinitionSnapshotId"),
   /** 历史兼容：旧项目曾记录派生起点 Revision；新项目不再依赖。 */
@@ -1225,9 +1228,22 @@ export type GateReviewTraceSnapshot = {
       refDesignator: string;
       componentProductId: string | null;
       componentRevisionId: number | null;
+      keyModuleId?: string | null;
+      keyModuleSnapshot?: Record<string, unknown> | null;
+      supplierName?: string;
+      unitCost?: string;
       sortOrder: number;
     }>;
   };
+  /** Exact controlled-module selection captured by this Gate. */
+  deliveryModules?: Array<{
+    moduleType: "battery_energy" | "core_function" | "electronics_hardware";
+    moduleId: string;
+    moduleSnapshot: Record<string, unknown>;
+    customerConfirmationRef: string | null;
+  }>;
+  /** BOM/modules/spec/product fingerprint that final release must reproduce. */
+  releaseConfigurationFingerprint?: string;
   customerVariants: Array<{
     id: number;
     variantCode: string;
@@ -1657,6 +1673,8 @@ export const ACTIVITY_ACTIONS = [
   // Release / product lifecycle
   "mp.release",
   "product.definition_confirmed",
+  "delivery_module.bind",
+  "delivery_module.unbind",
   // External approvals
   "approval.submit",
   "approval.approve",
@@ -1885,6 +1903,56 @@ export type InsertKeyModule = typeof keyModules.$inferInsert;
 export type KeyModuleItem = typeof keyModuleItems.$inferSelect;
 export type InsertKeyModuleItem = typeof keyModuleItems.$inferInsert;
 
+export const KEY_MODULE_AUDIT_ACTIONS = [
+  "create",
+  "update_draft",
+  "technical_confirm",
+  "return_to_draft",
+  "approve",
+  "restrict",
+  "obsolete",
+  "derive",
+] as const;
+export type KeyModuleAuditAction = (typeof KEY_MODULE_AUDIT_ACTIONS)[number];
+
+/**
+ * Append-only lifecycle history for controlled key modules.
+ *
+ * moduleId and actorId deliberately remain durable scalar identifiers instead
+ * of cascading foreign keys: audit history must survive later master-data or
+ * account cleanup. Migration 0072 also rejects UPDATE/DELETE at the database
+ * boundary so application code cannot rewrite this history.
+ */
+export const keyModuleAuditEvents = pgTable(
+  "key_module_audit_events",
+  {
+    id: serial("id").primaryKey(),
+    moduleId: varchar("moduleId", { length: 32 }).notNull(),
+    action: varchar("action", { length: 32 }).$type<KeyModuleAuditAction>().notNull(),
+    fromStatus: keyModuleStatusEnum("fromStatus"),
+    toStatus: keyModuleStatusEnum("toStatus"),
+    actorId: integer("actorId").notNull(),
+    reason: text("reason"),
+    meta: jsonb("meta").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    validAction: check(
+      "key_module_audit_events_valid_action",
+      sql`${table.action} IN ('create', 'update_draft', 'technical_confirm', 'return_to_draft', 'approve', 'restrict', 'obsolete', 'derive')`,
+    ),
+    idxModuleTimeline: index("idx_key_module_audit_module_timeline").on(
+      table.moduleId,
+      table.createdAt,
+      table.id,
+    ),
+    idxActor: index("idx_key_module_audit_actor").on(table.actorId),
+  }),
+);
+
+export type KeyModuleAuditEvent = typeof keyModuleAuditEvents.$inferSelect;
+export type InsertKeyModuleAuditEvent = typeof keyModuleAuditEvents.$inferInsert;
+
 export const PROJECT_MODULE_KEYS = PRODUCT_MODULE_IDS;
 export const MODULE_REUSE_STATES = ["reused", "not_reused"] as const;
 export const projectModuleKeyEnum = pgEnum(
@@ -1903,7 +1971,7 @@ export const productTechnicalBaselines = pgTable(
     id: varchar("id", { length: 32 }).primaryKey(),
     productId: varchar("productId", { length: 32 })
       .notNull()
-      .references(() => products.id, { onDelete: "cascade" }),
+      .references(() => products.id, { onDelete: "restrict" }),
     baselineLabel: varchar("baselineLabel", { length: 64 }).notNull(),
     sourceProjectId: varchar("sourceProjectId", { length: 32 })
       .notNull()
@@ -2017,12 +2085,50 @@ export const projectModuleBaselines = pgTable(
   }),
 );
 
+/**
+ * 项目最终要交付到产品技术基线的三类受控模块。
+ *
+ * 与 DRV 建项复用基线分开：NPD/JDM/OBT 也可在设计收敛后绑定；DRV 则可用
+ * 这里的最终选型覆盖建项时的复用模块。moduleSnapshot 在绑定时盖章，发布后
+ * 继续写入 product_module_assignments，避免主数据后续限制/停用造成历史漂移。
+ */
+export const projectProductModuleBindings = pgTable(
+  "project_product_module_bindings",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 })
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    moduleType: keyModuleTypeEnum("moduleType").notNull(),
+    moduleId: varchar("moduleId", { length: 32 })
+      .notNull()
+      .references(() => keyModules.id, { onDelete: "restrict" }),
+    moduleSnapshot: jsonb("moduleSnapshot")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    /** JDM/OBT 本次最终选型变更对应的客户书面确认（邮件、文件或批准单号）。 */
+    customerConfirmationRef: text("customerConfirmationRef"),
+    boundBy: integer("boundBy").notNull().references(() => users.id),
+    boundAt: timestamp("boundAt").notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    uniqProjectModuleType: uniqueIndex("uniq_project_product_module_type").on(
+      table.projectId,
+      table.moduleType,
+    ),
+    idxModule: index("idx_project_product_module_binding_module").on(table.moduleId),
+  }),
+);
+
 export type ProductTechnicalBaseline = typeof productTechnicalBaselines.$inferSelect;
 export type InsertProductTechnicalBaseline = typeof productTechnicalBaselines.$inferInsert;
 export type ProductModuleAssignment = typeof productModuleAssignments.$inferSelect;
 export type InsertProductModuleAssignment = typeof productModuleAssignments.$inferInsert;
 export type ProjectModuleBaseline = typeof projectModuleBaselines.$inferSelect;
 export type InsertProjectModuleBaseline = typeof projectModuleBaselines.$inferInsert;
+export type ProjectProductModuleBinding = typeof projectProductModuleBindings.$inferSelect;
+export type InsertProjectProductModuleBinding = typeof projectProductModuleBindings.$inferInsert;
 
 export const PRODUCT_DEFINITION_STATUSES = ["draft", "confirmed"] as const;
 export type ProductDefinitionStatus = (typeof PRODUCT_DEFINITION_STATUSES)[number];

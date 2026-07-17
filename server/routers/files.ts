@@ -25,7 +25,8 @@ import {
   createProjectFile,
   getProjectFiles,
   getProjectFileById,
-  deleteProjectFile,
+  deleteProjectFileWithBaselineGuard,
+  ProjectFileBaselineConflictError,
   createActivityLog,
 } from "../db";
 import { TRPCError } from "@trpc/server";
@@ -113,8 +114,15 @@ export const filesRouter = router({
       if (!role || !canDeleteFile(role, !!file.taskId)) {
         throw new TRPCError({ code: "FORBIDDEN" });
       }
-
-      const deleted = await deleteProjectFile(input.id);
+      let deleted: Awaited<ReturnType<typeof deleteProjectFileWithBaselineGuard>>;
+      try {
+        deleted = await deleteProjectFileWithBaselineGuard(input.id, input.projectId);
+      } catch (error) {
+        if (error instanceof ProjectFileBaselineConflictError) {
+          throw new TRPCError({ code: "CONFLICT", message: error.message });
+        }
+        throw error;
+      }
       if (!deleted) {
         throw new TRPCError({ code: "NOT_FOUND", message: "File not found" });
       }

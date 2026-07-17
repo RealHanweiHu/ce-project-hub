@@ -1,6 +1,7 @@
 import { eq, desc, and, or, isNull, inArray, between, lt, lte, gte, getTableColumns, sql as drizzleSql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { nanoid } from "nanoid";
+import { createHash } from "node:crypto";
 import {
   EXTERNAL_APPROVAL_STATUSES,
   InsertUser, users, projects, InsertProject, ProjectRow,
@@ -53,6 +54,9 @@ import {
   customerVariants, CustomerVariant, InsertCustomerVariant,
   bomItems, BomItem, InsertBomItem,
   keyModules, projectModuleBaselines, InsertProjectModuleBaseline,
+  projectProductModuleBindings, InsertProjectProductModuleBinding,
+  productTechnicalBaselines, ProductTechnicalBaseline,
+  productModuleAssignments, ProductModuleAssignment,
   comments, Comment,
   notifications,
   actionItems, ActionItem, InsertActionItem,
@@ -155,6 +159,12 @@ import { isSystemAdminRole } from "../shared/system-roles";
 import { normalizeExtraRoles } from "../shared/project-roles";
 import { defaultFromISO } from "./metrics-window";
 import { buildProjectActionPath } from "../shared/action-links";
+import {
+  KEY_MODULE_TYPE_BY_DRV_MODULE,
+  type KeyModuleType,
+  type PhysicalDrvModuleId,
+} from "../shared/key-modules";
+import { canApproveProductTechnicalChange } from "./product-control";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 const PROJECT_FILE_VISIBILITY_SET = new Set<string>(PROJECT_FILE_VISIBILITIES);
@@ -176,6 +186,21 @@ export async function getDb() {
     }
   }
   return _db;
+}
+
+/**
+ * Project-scoped release barrier for every mutation that can change a
+ * technical-baseline release decision. Call this before narrower advisory
+ * locks, row locks, or DML in the surrounding transaction.
+ */
+export async function acquireProjectReleaseStateLock(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec: any,
+  projectId: string,
+): Promise<void> {
+  await exec.execute(
+    drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`release-state:${projectId}`}))`,
+  );
 }
 
 // `deliverable-review-service` and this module form an import cycle (it imports
@@ -487,6 +512,7 @@ export async function saveJdmDefinitionDraftBaseline(input: {
   if (!db) throw new Error("Database not available");
 
   return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, input.projectId);
     await tx.execute(
       drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${input.projectId}:input`}))`,
     );
@@ -606,6 +632,7 @@ export async function createProjectWithSeed(
   controlledSeed?: {
     moduleBaselines?: Array<Omit<InsertProjectModuleBaseline, "id" | "projectId" | "createdAt">>;
     bomItems?: Array<Omit<InsertBomItem, "id" | "projectId" | "revisionId" | "createdAt">>;
+    deliveryModules?: Array<Omit<InsertProjectProductModuleBinding, "id" | "projectId" | "updatedAt">>;
   },
 ): Promise<void> {
   const db = await getDb();
@@ -653,6 +680,30 @@ export async function createProjectWithSeed(
     if (controlledSeed?.moduleBaselines?.length) {
       await tx.insert(projectModuleBaselines).values(
         controlledSeed.moduleBaselines.map(row => ({ ...row, projectId: project.id })),
+      );
+      const initialDeliveryModules = controlledSeed.moduleBaselines.flatMap((row) => {
+        const moduleType = KEY_MODULE_TYPE_BY_DRV_MODULE[
+          row.drvModuleKey as PhysicalDrvModuleId
+        ];
+        if (!moduleType || row.reuseState !== "reused" || !row.keyModuleId) return [];
+        return [{
+          projectId: project.id,
+          moduleType,
+          moduleId: row.keyModuleId,
+          moduleSnapshot: row.moduleSnapshot ?? {},
+          boundBy: createdBy,
+          boundAt: row.confirmedAt ?? new Date(),
+        }];
+      });
+      // DRV 复用模块就是立项时的默认交付选型。后续若开发了新编号，PM 可在
+      // 产品交付模块区用已批准模块覆盖；NPD/JDM/OBT 则在设计收敛后手动绑定。
+      if (initialDeliveryModules.length > 0) {
+        await tx.insert(projectProductModuleBindings).values(initialDeliveryModules);
+      }
+    }
+    if (controlledSeed?.deliveryModules?.length) {
+      await tx.insert(projectProductModuleBindings).values(
+        controlledSeed.deliveryModules.map(row => ({ ...row, projectId: project.id })),
       );
     }
     if (controlledSeed?.bomItems?.length) {
@@ -710,6 +761,7 @@ export async function createProjectChangeScopeDeclarationVersion(input: {
   const projectBefore = await getProjectById(input.projectId);
   if (!projectBefore) throw new Error("Project not found");
   const row = await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, input.projectId);
     // Gate progression, round creation, requirement additions and risk
     // upgrades all serialize on the current phase before taking narrower
     // locks. This makes the signoff snapshot a real point-in-time boundary.
@@ -784,6 +836,7 @@ export async function confirmProjectChangeScopeDeclaration(input: {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, input.projectId);
     await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${input.projectId}:risk-scope`}))`);
     const [lockedProject] = await tx.select({
       category: projects.category,
@@ -1843,15 +1896,69 @@ export async function cancelProductEolPlan(productId: string, cancelledBy: numbe
   return plan;
 }
 
+export class ProjectControlledStateConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProjectControlledStateConflictError";
+  }
+}
+
 export async function updateProject(
   id: string,
   patch: Partial<Omit<InsertProject, "id" | "createdBy" | "createdAt">>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   exec?: any
 ): Promise<void> {
-  const db = exec ?? (await getDb());
+  if (exec) {
+    await exec.update(projects).set(patch).where(eq(projects.id, id));
+    return;
+  }
+  const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(projects).set(patch).where(eq(projects.id, id));
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, id);
+    const [current] = await tx.select().from(projects)
+      .where(eq(projects.id, id))
+      .limit(1)
+      .for("update");
+    if (!current) throw new Error("项目不存在");
+
+    const changed = <K extends keyof typeof current>(key: K, next: unknown) =>
+      Object.prototype.hasOwnProperty.call(patch, key) && next !== current[key];
+    const executionBaseline = (value: unknown) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+      return (value as Record<string, unknown>).projectExecutionBaseline ?? null;
+    };
+    const controlledStateChanged =
+      changed("productId", patch.productId ?? null) ||
+      changed("baseRevisionId", patch.baseRevisionId ?? null) ||
+      changed("baseTechnicalBaselineId", patch.baseTechnicalBaselineId ?? null) ||
+      changed("productDefinitionSnapshotId", patch.productDefinitionSnapshotId ?? null) ||
+      changed("currentPhase", patch.currentPhase) ||
+      (Object.prototype.hasOwnProperty.call(patch, "customFields") &&
+        JSON.stringify(executionBaseline(patch.customFields)) !==
+          JSON.stringify(executionBaseline(current.customFields)));
+    if (controlledStateChanged) {
+      const [release] = await tx.select({ id: mpReleases.id }).from(mpReleases)
+        .where(eq(mpReleases.projectId, id))
+        .limit(1);
+      if (release) {
+        throw new ProjectControlledStateConflictError(
+          "项目已发布，产品关联、技术输入与发布阶段已冻结；后续设计变更请创建 ECO",
+        );
+      }
+    }
+    if (
+      current.category === "eco" &&
+      (changed("productId", patch.productId ?? null) ||
+        changed("baseTechnicalBaselineId", patch.baseTechnicalBaselineId ?? null))
+    ) {
+      throw new ProjectControlledStateConflictError(
+        "ECO 已冻结来源产品与技术基线，不能改绑或重写",
+      );
+    }
+    await tx.update(projects).set(patch).where(eq(projects.id, id));
+  });
 }
 
 /** 更新项目周会配置 */
@@ -2175,8 +2282,15 @@ async function deleteProjectRows(projectId: string, options: { allowReleased: bo
     .select({ id: productRevisions.id })
     .from(productRevisions)
     .where(eq(productRevisions.createdByProjectId, projectId));
+  const technicalBaselineRows = await db
+    .select({ id: productTechnicalBaselines.id })
+    .from(productTechnicalBaselines)
+    .where(eq(productTechnicalBaselines.sourceProjectId, projectId));
 
-  if (!options.allowReleased && (project.resultRevisionId !== null || release || projectRevisionRows.length > 0)) {
+  if (!options.allowReleased && (
+    project.resultRevisionId !== null || release ||
+    projectRevisionRows.length > 0 || technicalBaselineRows.length > 0
+  )) {
     throw new Error("Cannot hard-delete a released project; keep its PLM trace and archive it instead.");
   }
 
@@ -2185,6 +2299,7 @@ async function deleteProjectRows(projectId: string, options: { allowReleased: bo
     .from(projectFiles)
     .where(eq(projectFiles.projectId, projectId));
   const revisionIds = projectRevisionRows.map((row) => row.id);
+  const technicalBaselineIds = technicalBaselineRows.map((row) => row.id);
 
   await db.transaction(async (tx) => {
     // Product-level records may outlive the project. Remove dangling project links
@@ -2197,6 +2312,15 @@ async function deleteProjectRows(projectId: string, options: { allowReleased: bo
       .where(and(eq(customerVariants.sourceType, "project"), eq(customerVariants.sourceRefId, projectId)));
 
     if (options.allowReleased) {
+      if (technicalBaselineIds.length > 0) {
+        await tx.update(products)
+          .set({ currentTechnicalBaselineId: null })
+          .where(inArray(products.currentTechnicalBaselineId, technicalBaselineIds));
+        await tx.delete(productModuleAssignments)
+          .where(inArray(productModuleAssignments.technicalBaselineId, technicalBaselineIds));
+        await tx.delete(productTechnicalBaselines)
+          .where(inArray(productTechnicalBaselines.id, technicalBaselineIds));
+      }
       if (revisionIds.length > 0) {
         await tx.delete(bomItems).where(inArray(bomItems.revisionId, revisionIds));
       }
@@ -3111,6 +3235,7 @@ export async function removeProjectMember(projectId: string, userId: number): Pr
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, projectId);
     const [project] = await tx.select({
       createdBy: projects.createdBy,
       pmUserId: projects.pmUserId,
@@ -3270,8 +3395,16 @@ export async function upsertProjectTask(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   exec?: any
 ): Promise<void> {
-  const db = exec ?? (await getDb());
-  if (!db) throw new Error("Database not available");
+  if (!exec) {
+    const db = await getDb();
+    if (!db) throw new Error("Database not available");
+    await db.transaction(async (tx) => {
+      await upsertProjectTask(projectId, phaseId, taskId, patch, tx);
+    });
+    return;
+  }
+  const db = exec;
+  await acquireProjectReleaseStateLock(db, projectId);
   const existing = await db
     .select()
     .from(projectTasks)
@@ -3358,8 +3491,11 @@ export async function getProjectIssues(projectId: string, phaseId?: string): Pro
 export async function createProjectIssue(issue: InsertProjectIssue): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(projectIssues).values(issue).returning({ id: projectIssues.id });
-  return result[0].id;
+  return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, issue.projectId);
+    const result = await tx.insert(projectIssues).values(issue).returning({ id: projectIssues.id });
+    return result[0].id;
+  });
 }
 
 /** Update an issue */
@@ -3369,14 +3505,32 @@ export async function updateProjectIssue(
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(projectIssues).set(patch).where(eq(projectIssues.id, id));
+  const [issue] = await db.select({ projectId: projectIssues.projectId })
+    .from(projectIssues).where(eq(projectIssues.id, id)).limit(1);
+  if (!issue) return;
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, issue.projectId);
+    await tx.update(projectIssues).set(patch).where(and(
+      eq(projectIssues.id, id),
+      eq(projectIssues.projectId, issue.projectId),
+    ));
+  });
 }
 
 /** Delete an issue */
 export async function deleteProjectIssue(id: number): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.delete(projectIssues).where(eq(projectIssues.id, id));
+  const [issue] = await db.select({ projectId: projectIssues.projectId })
+    .from(projectIssues).where(eq(projectIssues.id, id)).limit(1);
+  if (!issue) return;
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, issue.projectId);
+    await tx.delete(projectIssues).where(and(
+      eq(projectIssues.id, id),
+      eq(projectIssues.projectId, issue.projectId),
+    ));
+  });
 }
 
 // ── Project Risk helpers ─────────────────────────────────────────────────────
@@ -3459,16 +3613,28 @@ export async function getProjectGateBlockerById(id: number): Promise<ProjectGate
 export async function createProjectGateBlocker(blocker: InsertProjectGateBlocker): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(projectGateBlockers).values(blocker).returning({ id: projectGateBlockers.id });
-  return result[0].id;
+  return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, blocker.projectId);
+    const result = await tx.insert(projectGateBlockers).values(blocker).returning({ id: projectGateBlockers.id });
+    return result[0].id;
+  });
 }
 
 export async function resolveProjectGateBlocker(id: number, resolvedBy: number): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(projectGateBlockers)
-    .set({ status: "resolved", resolvedBy, resolvedAt: new Date() })
-    .where(eq(projectGateBlockers.id, id));
+  const [blocker] = await db.select({ projectId: projectGateBlockers.projectId })
+    .from(projectGateBlockers).where(eq(projectGateBlockers.id, id)).limit(1);
+  if (!blocker) return;
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, blocker.projectId);
+    await tx.update(projectGateBlockers)
+      .set({ status: "resolved", resolvedBy, resolvedAt: new Date() })
+      .where(and(
+        eq(projectGateBlockers.id, id),
+        eq(projectGateBlockers.projectId, blocker.projectId),
+      ));
+  });
 }
 
 // ── Project Test Plan / Report helpers ──────────────────────────────────────
@@ -3565,8 +3731,11 @@ export async function getProjectTestCaseById(id: number): Promise<ProjectTestCas
 export async function createProjectTestPlan(plan: InsertProjectTestPlan): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(projectTestPlans).values(plan).returning({ id: projectTestPlans.id });
-  return result[0].id;
+  return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, plan.projectId);
+    const result = await tx.insert(projectTestPlans).values(plan).returning({ id: projectTestPlans.id });
+    return result[0].id;
+  });
 }
 
 export async function updateProjectTestPlan(
@@ -3575,14 +3744,26 @@ export async function updateProjectTestPlan(
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(projectTestPlans).set(patch).where(eq(projectTestPlans.id, id));
+  const [plan] = await db.select({ projectId: projectTestPlans.projectId })
+    .from(projectTestPlans).where(eq(projectTestPlans.id, id)).limit(1);
+  if (!plan) return;
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, plan.projectId);
+    await tx.update(projectTestPlans).set(patch).where(and(
+      eq(projectTestPlans.id, id),
+      eq(projectTestPlans.projectId, plan.projectId),
+    ));
+  });
 }
 
 export async function createProjectTestCase(testCase: InsertProjectTestCase): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(projectTestCases).values(testCase).returning({ id: projectTestCases.id });
-  return result[0].id;
+  return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, testCase.projectId);
+    const result = await tx.insert(projectTestCases).values(testCase).returning({ id: projectTestCases.id });
+    return result[0].id;
+  });
 }
 
 export async function updateProjectTestCase(
@@ -3591,7 +3772,16 @@ export async function updateProjectTestCase(
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(projectTestCases).set(patch).where(eq(projectTestCases.id, id));
+  const [testCase] = await db.select({ projectId: projectTestCases.projectId })
+    .from(projectTestCases).where(eq(projectTestCases.id, id)).limit(1);
+  if (!testCase) return;
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, testCase.projectId);
+    await tx.update(projectTestCases).set(patch).where(and(
+      eq(projectTestCases.id, id),
+      eq(projectTestCases.projectId, testCase.projectId),
+    ));
+  });
 }
 
 export async function linkProjectTestCaseIssue(id: number, issueId: number, updatedBy: number): Promise<void> {
@@ -3601,8 +3791,11 @@ export async function linkProjectTestCaseIssue(id: number, issueId: number, upda
 export async function createProjectTestReport(report: InsertProjectTestReport): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(projectTestReports).values(report).returning({ id: projectTestReports.id });
-  return result[0].id;
+  return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, report.projectId);
+    const result = await tx.insert(projectTestReports).values(report).returning({ id: projectTestReports.id });
+    return result[0].id;
+  });
 }
 
 export async function updateProjectTestReport(
@@ -3611,7 +3804,16 @@ export async function updateProjectTestReport(
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(projectTestReports).set(patch).where(eq(projectTestReports.id, id));
+  const [report] = await db.select({ projectId: projectTestReports.projectId })
+    .from(projectTestReports).where(eq(projectTestReports.id, id)).limit(1);
+  if (!report) return;
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, report.projectId);
+    await tx.update(projectTestReports).set(patch).where(and(
+      eq(projectTestReports.id, id),
+      eq(projectTestReports.projectId, report.projectId),
+    ));
+  });
 }
 
 export async function reviewProjectTestReport(
@@ -3621,10 +3823,19 @@ export async function reviewProjectTestReport(
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db
-    .update(projectTestReports)
-    .set({ reviewStatus, reviewedBy: reviewerId, reviewedAt: new Date() })
-    .where(eq(projectTestReports.id, id));
+  const [report] = await db.select({ projectId: projectTestReports.projectId })
+    .from(projectTestReports).where(eq(projectTestReports.id, id)).limit(1);
+  if (!report) return;
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, report.projectId);
+    await tx
+      .update(projectTestReports)
+      .set({ reviewStatus, reviewedBy: reviewerId, reviewedAt: new Date() })
+      .where(and(
+        eq(projectTestReports.id, id),
+        eq(projectTestReports.projectId, report.projectId),
+      ));
+  });
 }
 
 export async function getPhaseTestReadiness(
@@ -3784,8 +3995,11 @@ export async function getProjectNpiReadinessCheckById(id: number): Promise<Proje
 export async function createProjectNpiReadinessCheck(check: InsertProjectNpiReadinessCheck): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(projectNpiReadinessChecks).values(check).returning({ id: projectNpiReadinessChecks.id });
-  return result[0].id;
+  return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, check.projectId);
+    const result = await tx.insert(projectNpiReadinessChecks).values(check).returning({ id: projectNpiReadinessChecks.id });
+    return result[0].id;
+  });
 }
 
 export async function updateProjectNpiReadinessCheck(
@@ -3794,7 +4008,16 @@ export async function updateProjectNpiReadinessCheck(
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(projectNpiReadinessChecks).set(patch).where(eq(projectNpiReadinessChecks.id, id));
+  const [check] = await db.select({ projectId: projectNpiReadinessChecks.projectId })
+    .from(projectNpiReadinessChecks).where(eq(projectNpiReadinessChecks.id, id)).limit(1);
+  if (!check) return;
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, check.projectId);
+    await tx.update(projectNpiReadinessChecks).set(patch).where(and(
+      eq(projectNpiReadinessChecks.id, id),
+      eq(projectNpiReadinessChecks.projectId, check.projectId),
+    ));
+  });
 }
 
 export async function linkProjectNpiReadinessIssue(id: number, issueId: number, updatedBy: number): Promise<void> {
@@ -3863,8 +4086,11 @@ export async function getProjectSampleSignoffById(id: number): Promise<ProjectSa
 export async function createProjectSampleSignoff(signoff: InsertProjectSampleSignoff): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(projectSampleSignoffs).values(signoff).returning({ id: projectSampleSignoffs.id });
-  return result[0].id;
+  return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, signoff.projectId);
+    const result = await tx.insert(projectSampleSignoffs).values(signoff).returning({ id: projectSampleSignoffs.id });
+    return result[0].id;
+  });
 }
 
 export async function updateProjectSampleSignoff(
@@ -3873,7 +4099,16 @@ export async function updateProjectSampleSignoff(
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(projectSampleSignoffs).set(patch).where(eq(projectSampleSignoffs.id, id));
+  const [signoff] = await db.select({ projectId: projectSampleSignoffs.projectId })
+    .from(projectSampleSignoffs).where(eq(projectSampleSignoffs.id, id)).limit(1);
+  if (!signoff) return;
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, signoff.projectId);
+    await tx.update(projectSampleSignoffs).set(patch).where(and(
+      eq(projectSampleSignoffs.id, id),
+      eq(projectSampleSignoffs.projectId, signoff.projectId),
+    ));
+  });
 }
 
 export async function respondProjectSampleSignoff(
@@ -4335,6 +4570,10 @@ async function buildGateReviewTraceSnapshot(exec: any, input: {
     .where(eq(projects.id, input.projectId))
     .limit(1);
   const productId = project?.productId ?? null;
+  const gateTaskId = project
+    ? getEffectivePhasesForProjectLike(project)
+      .find((phase) => phase.id === input.phaseId)?.gateTaskId ?? null
+    : null;
   const revisionIds = Array.from(new Set([
     project?.baseRevisionId ?? null,
     project?.resultRevisionId ?? null,
@@ -4350,6 +4589,16 @@ async function buildGateReviewTraceSnapshot(exec: any, input: {
     testCaseRows,
     npiRows,
     sampleSignoffRows,
+    deliveryModuleRows,
+    moduleBaselineRows,
+    releaseChangelogRows,
+    definitionSnapshotRows,
+    changeScopeRows,
+    tailoringRows,
+    deliverableOverrideRows,
+    phaseTaskRows,
+    fileRows,
+    deliverableReviewRows,
   ] = await Promise.all([
     productId
       ? exec.select().from(products).where(eq(products.id, productId)).limit(1)
@@ -4394,6 +4643,91 @@ async function buildGateReviewTraceSnapshot(exec: any, input: {
       .from(projectSampleSignoffs)
       .where(and(eq(projectSampleSignoffs.projectId, input.projectId), eq(projectSampleSignoffs.phaseId, input.phaseId)))
       .orderBy(projectSampleSignoffs.createdAt),
+    exec
+      .select()
+      .from(projectProductModuleBindings)
+      .where(eq(projectProductModuleBindings.projectId, input.projectId))
+      .orderBy(projectProductModuleBindings.moduleType),
+    exec
+      .select()
+      .from(projectModuleBaselines)
+      .where(eq(projectModuleBaselines.projectId, input.projectId))
+      .orderBy(projectModuleBaselines.drvModuleKey, projectModuleBaselines.id),
+    exec
+      .select()
+      .from(projectChangelog)
+      .where(and(
+        eq(projectChangelog.projectId, input.projectId),
+        inArray(projectChangelog.status, [...REVISION_CHANGE_STATUSES]),
+      ))
+      .orderBy(projectChangelog.createdDate, projectChangelog.number, projectChangelog.id),
+    project?.productDefinitionSnapshotId
+      ? exec
+        .select({
+          id: productDefinitionSnapshots.id,
+          versionNumber: productDefinitionSnapshots.versionNumber,
+          snapshot: productDefinitionSnapshots.snapshot,
+          confirmedBy: productDefinitionSnapshots.confirmedBy,
+          confirmedAt: productDefinitionSnapshots.confirmedAt,
+        })
+        .from(productDefinitionSnapshots)
+        .where(eq(productDefinitionSnapshots.id, project.productDefinitionSnapshotId))
+        .limit(1)
+      : Promise.resolve([]),
+    exec
+      .select()
+      .from(projectChangeScopeDeclarations)
+      .where(eq(projectChangeScopeDeclarations.projectId, input.projectId))
+      .orderBy(projectChangeScopeDeclarations.version),
+    exec
+      .select()
+      .from(projectTailoring)
+      .where(eq(projectTailoring.projectId, input.projectId))
+      .orderBy(projectTailoring.id),
+    exec
+      .select()
+      .from(projectDeliverableOverrides)
+      .where(eq(projectDeliverableOverrides.projectId, input.projectId))
+      .orderBy(
+        projectDeliverableOverrides.nodePhaseId,
+        projectDeliverableOverrides.deliverableName,
+        projectDeliverableOverrides.id,
+      ),
+    exec
+      .select()
+      .from(projectTasks)
+      .where(and(
+        eq(projectTasks.projectId, input.projectId),
+        eq(projectTasks.phaseId, input.phaseId),
+      ))
+      .orderBy(projectTasks.taskId, projectTasks.id),
+    exec
+      .select({
+        id: projectFiles.id,
+        phaseId: projectFiles.phaseId,
+        taskId: projectFiles.taskId,
+        deliverableName: projectFiles.deliverableName,
+        name: projectFiles.name,
+        fileType: projectFiles.fileType,
+        fileVersion: projectFiles.fileVersion,
+        size: projectFiles.size,
+        createdAt: projectFiles.createdAt,
+      })
+      .from(projectFiles)
+      .where(eq(projectFiles.projectId, input.projectId))
+      .orderBy(projectFiles.id),
+    exec
+      .select({
+        id: projectDeliverableReviews.id,
+        phaseId: projectDeliverableReviews.phaseId,
+        deliverableName: projectDeliverableReviews.deliverableName,
+        status: projectDeliverableReviews.status,
+        reviewedBy: projectDeliverableReviews.reviewedBy,
+        reviewedAt: projectDeliverableReviews.reviewedAt,
+      })
+      .from(projectDeliverableReviews)
+      .where(eq(projectDeliverableReviews.projectId, input.projectId))
+      .orderBy(projectDeliverableReviews.id),
   ]);
   const productRow = product[0] as ProductRow | undefined;
   const testReports = testReportsRows as ProjectTestReport[];
@@ -4430,6 +4764,78 @@ async function buildGateReviewTraceSnapshot(exec: any, input: {
     ? project.customFields as Record<string, unknown>
     : {};
   const executionBaseline = projectCustomFields.projectExecutionBaseline;
+  // The stored Gate trace is visible to normal project participants, so keep
+  // supplier and cost data out of the payload. The private fingerprint below
+  // still includes those fields and therefore detects a commercial BOM change
+  // without disclosing the values in the review record.
+  const tracedBomRows = (bomRows as BomItem[]).map((row) => ({
+    partNumber: row.partNumber,
+    name: row.name,
+    spec: row.spec,
+    quantity: row.quantity,
+    refDesignator: row.refDesignator,
+    componentProductId: row.componentProductId,
+    componentRevisionId: row.componentRevisionId,
+    keyModuleId: row.keyModuleId,
+    keyModuleSnapshot: row.keyModuleSnapshot,
+    sortOrder: row.sortOrder,
+  }));
+  const fingerprintBomRows = (bomRows as BomItem[]).map((row) => ({
+    partNumber: row.partNumber,
+    name: row.name,
+    spec: row.spec,
+    quantity: row.quantity,
+    refDesignator: row.refDesignator,
+    componentProductId: row.componentProductId,
+    componentRevisionId: row.componentRevisionId,
+    keyModuleId: row.keyModuleId,
+    keyModuleSnapshot: row.keyModuleSnapshot,
+    supplierName: row.supplierName,
+    unitCost: row.unitCost,
+    sortOrder: row.sortOrder,
+  }));
+  const tracedDeliveryModules = deliveryModuleRows.map((row: typeof projectProductModuleBindings.$inferSelect) => ({
+    moduleType: row.moduleType,
+    moduleId: row.moduleId,
+    moduleSnapshot: row.moduleSnapshot,
+    customerConfirmationRef: row.customerConfirmationRef,
+  }));
+  const releaseConfigurationFingerprint = createHash("sha256").update(JSON.stringify({
+    productId,
+    baseTechnicalBaselineId: project?.baseTechnicalBaselineId ?? null,
+    productDefinitionSnapshotId: project?.productDefinitionSnapshotId ?? null,
+    productDefinitionSnapshot: definitionSnapshotRows[0] ?? null,
+    projectExecutionBaseline: executionBaseline ?? null,
+    safetyRiskLevel: project?.safetyRiskLevel ?? null,
+    regulatoryRiskLevel: project?.regulatoryRiskLevel ?? null,
+    changeScopeDeclarations: changeScopeRows,
+    tailoring: tailoringRows,
+    deliverableOverrides: deliverableOverrideRows,
+    prerequisiteTasks: phaseTaskRows
+      .filter((row: ProjectTask) => row.taskId !== gateTaskId)
+      .map((row: ProjectTask) => ({
+        taskId: row.taskId,
+        status: row.status,
+        completed: row.completed,
+        deliverables: row.deliverables,
+        requiresApproval: row.requiresApproval,
+        approvalStatus: row.approvalStatus,
+      })),
+    projectModuleBaselines: moduleBaselineRows,
+    workingBom: fingerprintBomRows,
+    deliveryModules: tracedDeliveryModules,
+    releaseChangelog: releaseChangelogRows,
+    files: fileRows,
+    deliverableReviews: deliverableReviewRows,
+    validationEvidence: {
+      testPlans: testPlansRows,
+      testReports: testReportsRows,
+      testCases: testCaseRows,
+      npiReadiness: npiRows,
+      sampleSignoffs: sampleSignoffRows,
+      failedIssueStatuses: failedIssueRows,
+    },
+  })).digest("hex");
 
   return {
     capturedAt: new Date().toISOString(),
@@ -4452,17 +4858,10 @@ async function buildGateReviewTraceSnapshot(exec: any, input: {
     resultRevision: toRevision(project?.resultRevisionId),
     workingBom: {
       lineCount: (bomRows as BomItem[]).length,
-      rows: (bomRows as BomItem[]).map((row) => ({
-        partNumber: row.partNumber,
-        name: row.name,
-        spec: row.spec,
-        quantity: row.quantity,
-        refDesignator: row.refDesignator,
-        componentProductId: row.componentProductId,
-        componentRevisionId: row.componentRevisionId,
-        sortOrder: row.sortOrder,
-      })),
+      rows: tracedBomRows,
     },
+    deliveryModules: tracedDeliveryModules,
+    releaseConfigurationFingerprint,
     customerVariants: (variantRows as CustomerVariant[]).map((variant) => ({
       id: variant.id,
       variantCode: variant.variantCode,
@@ -4639,6 +5038,7 @@ export async function openProjectGateSignoffRound(input: {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, input.projectId);
     // A signoff round belongs only to the project's current Gate. Serialize
     // opening with Gate completion so a stale screen cannot create a fresh
     // round for a phase that has already advanced.
@@ -4741,6 +5141,7 @@ export async function addProjectGateSignoffRequirement(input: {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, input.projectId);
     await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${input.projectId}:${input.phaseId}`}))`);
     const [lockedProject] = await tx.select().from(projects)
       .where(eq(projects.id, input.projectId))
@@ -4801,6 +5202,7 @@ export async function upsertProjectGateSignoff(input: {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, input.projectId);
     // Signatures and the final Gate decision share one project/phase lock. A
     // signer that arrives after the review transaction completed must never
     // be able to rewrite the now-historical round.
@@ -4916,6 +5318,7 @@ export async function createProjectGateReviewWithRound(
   const { conditionItems = [], ...storedReview } = review;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const run = async (tx: any): Promise<{ id: number; roundNumber: number }> => {
+    await acquireProjectReleaseStateLock(tx, storedReview.projectId);
     await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${storedReview.projectId}:${storedReview.phaseId}`}))`);
     if (requireCurrentPhase) {
       const [lockedProject] = await tx.select({ currentPhase: projects.currentPhase })
@@ -5177,6 +5580,70 @@ function buildFrozenJdmExecutionBaseline(
   return baseline;
 }
 
+async function freezeJdmControlledModuleBaseline(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  tx: any,
+  projectId: string,
+  baseline: ProjectExecutionBaseline,
+  actorId: number,
+): Promise<void> {
+  const moduleReuse = baseline.moduleReuse;
+  if (!moduleReuse) throw new Error("JDM 产品定义 Gate 缺少六模块复用状态");
+  const physicalModules: Array<{
+    drvModuleKey: PhysicalDrvModuleId;
+    moduleType: KeyModuleType;
+  }> = [
+    { drvModuleKey: "battery", moduleType: "battery_energy" },
+    { drvModuleKey: "core_function", moduleType: "core_function" },
+    { drvModuleKey: "electronics", moduleType: "electronics_hardware" },
+  ];
+  const bindings = await tx.select({
+    binding: projectProductModuleBindings,
+    status: keyModules.status,
+  }).from(projectProductModuleBindings)
+    .innerJoin(keyModules, eq(keyModules.id, projectProductModuleBindings.moduleId))
+    .where(eq(projectProductModuleBindings.projectId, projectId))
+    .for("update");
+  type ControlledBindingRow = {
+    binding: typeof projectProductModuleBindings.$inferSelect;
+    status: string;
+  };
+  const bindingByType = new Map<KeyModuleType, ControlledBindingRow>(
+    (bindings as ControlledBindingRow[]).map((row) => [row.binding.moduleType, row]),
+  );
+
+  const rows: Array<Omit<InsertProjectModuleBaseline, "id" | "projectId" | "createdAt">> = [];
+  for (const definition of physicalModules) {
+    const reuseState = moduleReuse[definition.drvModuleKey];
+    if (reuseState !== "reused") continue;
+    const selected = bindingByType.get(definition.moduleType);
+    if (!selected) {
+      throw new Error(`JDM 产品定义 Gate：${definition.drvModuleKey} 标记复用时必须选择精确的已批准关键模块`);
+    }
+    if (selected.status !== "approved") {
+      throw new Error("JDM 复用的关键模块已不再处于批准状态，请重新选择");
+    }
+    if (!selected.binding.customerConfirmationRef?.trim()) {
+      throw new Error("JDM 复用的关键模块缺少客户书面确认引用");
+    }
+    rows.push({
+      drvModuleKey: definition.drvModuleKey,
+      reuseState,
+      keyModuleId: selected.binding.moduleId,
+      sourceProductId: null,
+      sourceTechnicalBaselineId: null,
+      moduleSnapshot: selected.binding.moduleSnapshot,
+      confirmedBy: actorId,
+      confirmedAt: new Date(),
+    });
+  }
+  if (rows.length > 0) {
+    await tx.insert(projectModuleBaselines).values(
+      rows.map((row) => ({ ...row, projectId })),
+    );
+  }
+}
+
 async function assertJdmDefinitionGateHardcards(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   tx: any,
@@ -5355,6 +5822,7 @@ export async function confirmGateReview(input: {
   }
 
   const { reviewId, roundNumber, advancedTo, closed, generatedJdmExecution } = await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, input.projectId);
     // 锁必须先于事务内的项目读取。否则两个并发请求都可能在事务外读到
     // currentPhase=input，再各自写一轮评审和后续阶段。
     await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${input.projectId}:${input.phaseId}`}))`);
@@ -5400,6 +5868,12 @@ export async function confirmGateReview(input: {
       );
       const riskScopeVersion = await assertJdmDefinitionGateHardcards(tx, input.projectId);
       frozenBaseline.riskScopeVersion = riskScopeVersion;
+      await freezeJdmControlledModuleBaseline(
+        tx,
+        input.projectId,
+        frozenBaseline,
+        input.createdBy,
+      );
       // Product-owner/customer/professional signoffs are checked again under
       // the same lock that freezes the definition and completes the round.
       // This closes the gap between the router readiness check and commit.
@@ -5557,34 +6031,57 @@ export async function updateProjectGateReview(
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(projectGateReviews).set(patch).where(eq(projectGateReviews.id, id));
-  const [review] = await db.select().from(projectGateReviews).where(eq(projectGateReviews.id, id)).limit(1);
-  if (
-    review?.decision === "conditional" &&
-    review.conditions?.trim() &&
-    review.conditionOwnerUserId &&
-    review.conditionDueDate
-  ) {
-    await createProjectCondition({
-      projectId: review.projectId,
-      sourceType: "gate",
-      sourceId: String(review.id),
-      title: `${review.gateName || review.phaseName || review.phaseId} 条件项`,
-      description: review.conditions,
-      ownerUserId: review.conditionOwnerUserId,
-      dueDate: review.conditionDueDate,
-      linkedEcoProjectId: null,
-      resolutionNote: null,
-      createdBy: review.createdBy ?? review.conditionOwnerUserId,
-    });
-  }
+  const [existing] = await db.select({ projectId: projectGateReviews.projectId })
+    .from(projectGateReviews).where(eq(projectGateReviews.id, id)).limit(1);
+  if (!existing) return;
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, existing.projectId);
+    await tx.update(projectGateReviews).set(patch).where(and(
+      eq(projectGateReviews.id, id),
+      eq(projectGateReviews.projectId, existing.projectId),
+    ));
+    const [review] = await tx.select().from(projectGateReviews)
+      .where(and(
+        eq(projectGateReviews.id, id),
+        eq(projectGateReviews.projectId, existing.projectId),
+      ))
+      .limit(1);
+    if (
+      review?.decision === "conditional" &&
+      review.conditions?.trim() &&
+      review.conditionOwnerUserId &&
+      review.conditionDueDate
+    ) {
+      await createProjectCondition({
+        projectId: review.projectId,
+        sourceType: "gate",
+        sourceId: String(review.id),
+        title: `${review.gateName || review.phaseName || review.phaseId} 条件项`,
+        description: review.conditions,
+        ownerUserId: review.conditionOwnerUserId,
+        dueDate: review.conditionDueDate,
+        linkedEcoProjectId: null,
+        resolutionNote: null,
+        createdBy: review.createdBy ?? review.conditionOwnerUserId,
+      }, tx);
+    }
+  });
 }
 
 /** Delete a gate review */
 export async function deleteProjectGateReview(id: number): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.delete(projectGateReviews).where(eq(projectGateReviews.id, id));
+  const [review] = await db.select({ projectId: projectGateReviews.projectId })
+    .from(projectGateReviews).where(eq(projectGateReviews.id, id)).limit(1);
+  if (!review) return;
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, review.projectId);
+    await tx.delete(projectGateReviews).where(and(
+      eq(projectGateReviews.id, id),
+      eq(projectGateReviews.projectId, review.projectId),
+    ));
+  });
 }
 
 // ── Changelog helpers ─────────────────────────────────────────────────────────
@@ -5612,8 +6109,11 @@ export async function getProjectChangelog(projectId: string): Promise<ProjectCha
 export async function createProjectChangeRecord(record: InsertProjectChangeRecord): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(projectChangelog).values(record).returning({ id: projectChangelog.id });
-  return result[0].id;
+  return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, record.projectId);
+    const result = await tx.insert(projectChangelog).values(record).returning({ id: projectChangelog.id });
+    return result[0].id;
+  });
 }
 
 /** Update a changelog record */
@@ -5623,14 +6123,32 @@ export async function updateProjectChangeRecord(
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(projectChangelog).set(patch).where(eq(projectChangelog.id, id));
+  const [record] = await db.select({ projectId: projectChangelog.projectId })
+    .from(projectChangelog).where(eq(projectChangelog.id, id)).limit(1);
+  if (!record) return;
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, record.projectId);
+    await tx.update(projectChangelog).set(patch).where(and(
+      eq(projectChangelog.id, id),
+      eq(projectChangelog.projectId, record.projectId),
+    ));
+  });
 }
 
 /** Delete a changelog record */
 export async function deleteProjectChangeRecord(id: number): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.delete(projectChangelog).where(eq(projectChangelog.id, id));
+  const [record] = await db.select({ projectId: projectChangelog.projectId })
+    .from(projectChangelog).where(eq(projectChangelog.id, id)).limit(1);
+  if (!record) return;
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, record.projectId);
+    await tx.delete(projectChangelog).where(and(
+      eq(projectChangelog.id, id),
+      eq(projectChangelog.projectId, record.projectId),
+    ));
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -5648,11 +6166,57 @@ export async function createProjectFile(record: Omit<InsertProjectFile, "id" | "
     fileVersion: normalizeFileVersion(record.fileVersion),
     visibility: normalizeProjectFileVisibility(record.visibility),
   };
-  const result = await db.insert(projectFiles).values(normalized).returning({ id: projectFiles.id });
-  // 上传新版本后触发交付物重审（若已审核过则回退待审）
+  const fileId = await db.transaction(async (tx) => {
+    // File metadata and review invalidation form one release-visible unit. The
+    // same advisory lock is held while a technical baseline captures evidence.
+    await acquireProjectReleaseStateLock(tx, record.projectId);
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`project-files:${record.projectId}`}))`);
+    const result = await tx.insert(projectFiles).values(normalized).returning({ id: projectFiles.id });
+    if (record.deliverableName && record.phaseId) {
+      const [existingReview] = await tx.select().from(projectDeliverableReviews)
+        .where(and(
+          eq(projectDeliverableReviews.projectId, record.projectId),
+          eq(projectDeliverableReviews.phaseId, record.phaseId),
+          eq(projectDeliverableReviews.deliverableName, record.deliverableName),
+        ))
+        .limit(1)
+        .for("update");
+      if (existingReview && existingReview.status !== "pending") {
+        const after = {
+          ...existingReview,
+          status: "pending" as const,
+          submittedBy: record.uploadedBy,
+          reviewedBy: null,
+          reviewedAt: null,
+          reviewNote: null,
+        };
+        await tx.update(projectDeliverableReviews).set({
+          status: "pending",
+          submittedBy: record.uploadedBy,
+          submittedAt: new Date(),
+          reviewedBy: null,
+          reviewedAt: null,
+          reviewNote: null,
+        }).where(eq(projectDeliverableReviews.id, existingReview.id));
+        await createActivityLog({
+          projectId: record.projectId,
+          userId: record.uploadedBy,
+          action: "deliverable_review.reset",
+          entityType: "deliverable_review",
+          entityId: `${record.projectId}:${record.phaseId}:${record.deliverableName}`,
+          meta: {
+            phaseId: record.phaseId,
+            deliverableName: record.deliverableName,
+            before: existingReview,
+            after,
+          },
+        }, tx);
+      }
+    }
+    return result[0].id;
+  });
   if (record.deliverableName && record.phaseId) {
-    const { resetReviewOnReupload, maybeAutoSubmitDeliverableReviewOnUpload } = await loadDeliverableReviewService();
-    await resetReviewOnReupload(record.projectId, record.phaseId, record.deliverableName, record.uploadedBy);
+    const { maybeAutoSubmitDeliverableReviewOnUpload } = await loadDeliverableReviewService();
     await maybeAutoSubmitDeliverableReviewOnUpload({
       projectId: record.projectId,
       phaseId: record.phaseId,
@@ -5662,7 +6226,7 @@ export async function createProjectFile(record: Omit<InsertProjectFile, "id" | "
       console.warn("[deliverable-review] auto submit on upload failed (non-fatal):", error);
     });
   }
-  return result[0].id;
+  return fileId;
 }
 
 /** List all files for a project, optionally filtered by phase and/or taskId */
@@ -5692,6 +6256,17 @@ export async function getProjectFileById(id: number): Promise<ProjectFile | unde
     .where(eq(projectFiles.id, id))
     .limit(1);
   return row;
+}
+
+/** Released technical baselines retain their source specification evidence. */
+export async function isProjectFileReferencedByTechnicalBaseline(id: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const [row] = await db.select({ id: productTechnicalBaselines.id })
+    .from(productTechnicalBaselines)
+    .where(drizzleSql`${productTechnicalBaselines.specSnapshot}->'specificationFiles' @> ${JSON.stringify([{ sourceFileId: id }])}::jsonb`)
+    .limit(1);
+  return Boolean(row);
 }
 
 /**
@@ -5726,13 +6301,53 @@ export async function deleteProjectFile(id: number): Promise<{ storageKey: strin
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const [row] = await db
-    .select({ storageKey: projectFiles.storageKey })
+    .select({ projectId: projectFiles.projectId, storageKey: projectFiles.storageKey })
     .from(projectFiles)
     .where(eq(projectFiles.id, id))
     .limit(1);
   if (!row) return null;
-  await db.delete(projectFiles).where(eq(projectFiles.id, id));
-  return { storageKey: row.storageKey };
+  return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, row.projectId);
+    const [deleted] = await tx.delete(projectFiles).where(and(
+      eq(projectFiles.id, id),
+      eq(projectFiles.projectId, row.projectId),
+    )).returning({ storageKey: projectFiles.storageKey });
+    return deleted ?? null;
+  });
+}
+
+export class ProjectFileBaselineConflictError extends Error {}
+
+/** Atomically protect released specification evidence from deletion. */
+export async function deleteProjectFileWithBaselineGuard(
+  id: number,
+  projectId: string,
+): Promise<{ storageKey: string } | null> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, projectId);
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`project-files:${projectId}`}))`);
+    const [row] = await tx.select({
+      projectId: projectFiles.projectId,
+      storageKey: projectFiles.storageKey,
+    }).from(projectFiles)
+      .where(eq(projectFiles.id, id))
+      .limit(1)
+      .for("update");
+    if (!row || row.projectId !== projectId) return null;
+    const [baseline] = await tx.select({ id: productTechnicalBaselines.id })
+      .from(productTechnicalBaselines)
+      .where(drizzleSql`${productTechnicalBaselines.specSnapshot}->'specificationFiles' @> ${JSON.stringify([{ sourceFileId: id }])}::jsonb`)
+      .limit(1);
+    if (baseline) {
+      throw new ProjectFileBaselineConflictError(
+        "该规格文件已进入产品技术基线，不能删除；如需更正请通过新项目发布新的技术基线",
+      );
+    }
+    await tx.delete(projectFiles).where(eq(projectFiles.id, id));
+    return { storageKey: row.storageKey };
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -5981,8 +6596,13 @@ export async function refreshProjectTaskStatuses(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   exec?: any
 ): Promise<number> {
-  const db = exec ?? (await getDb());
-  if (!db) return 0;
+  if (!exec) {
+    const db = await getDb();
+    if (!db) return 0;
+    return db.transaction(async (tx) => refreshProjectTaskStatuses(projectId, todayISO, tx));
+  }
+  const db = exec;
+  await acquireProjectReleaseStateLock(db, projectId);
   const project = await getProjectById(projectId);
   if (!project) return 0;
   const rows: ProjectTask[] = await db.select().from(projectTasks).where(eq(projectTasks.projectId, projectId));
@@ -6040,10 +6660,20 @@ export async function updateTaskMeta(
   projectId: string,
   phaseId: string,
   taskId: string,
-  patch: TaskMetaPatch
+  patch: TaskMetaPatch,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec?: any,
 ): Promise<void> {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
+  if (!exec) {
+    const db = await getDb();
+    if (!db) throw new Error("Database not available");
+    await db.transaction(async (tx) => {
+      await updateTaskMeta(projectId, phaseId, taskId, patch, tx);
+    });
+    return;
+  }
+  const db = exec;
+  await acquireProjectReleaseStateLock(db, projectId);
   const existing = await db
     .select({ id: projectTasks.id, status: projectTasks.status })
     .from(projectTasks)
@@ -6071,7 +6701,7 @@ export async function updateTaskMeta(
     await db.insert(projectTasks).values({ projectId, phaseId, taskId, ...dbPatch });
   }
   if (patch.status === undefined) {
-    await refreshProjectTaskStatuses(projectId);
+    await refreshProjectTaskStatuses(projectId, undefined, db);
   }
 }
 
@@ -6090,16 +6720,27 @@ export async function setTaskCompletion(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   exec?: any
 ): Promise<{ outcome: CompletionOutcome }> {
-  const db = exec ?? (await getDb());
-  const current = db
-    ? (
-        await db
-          .select()
-          .from(projectTasks)
-          .where(and(eq(projectTasks.projectId, projectId), eq(projectTasks.phaseId, phaseId), eq(projectTasks.taskId, taskId)))
-          .limit(1)
-      )[0]
-    : null;
+  if (!exec) {
+    const db = await getDb();
+    if (!db) throw new Error("Database not available");
+    return db.transaction(async (tx) => setTaskCompletion(
+      projectId,
+      phaseId,
+      taskId,
+      completed,
+      updatedBy,
+      tx,
+    ));
+  }
+  const db = exec;
+  await acquireProjectReleaseStateLock(db, projectId);
+  const current = (
+    await db
+      .select()
+      .from(projectTasks)
+      .where(and(eq(projectTasks.projectId, projectId), eq(projectTasks.phaseId, phaseId), eq(projectTasks.taskId, taskId)))
+      .limit(1)
+  )[0] ?? null;
 
   // 需审批任务勾完成 → 进入待审批（completed 仍 false，不计入进度/看板完成/Gate）
   if (completed && current?.requiresApproval) {
@@ -6167,18 +6808,27 @@ export async function setTaskApprovalConfig(
   phaseId: string,
   taskId: string,
   cfg: { requiresApproval: boolean; approverUserId: number | null },
-  actorBy?: number | null
+  actorBy?: number | null,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec?: any,
 ): Promise<void> {
-  const db = await getDb();
-  const current = db
-    ? (
-        await db
-          .select()
-          .from(projectTasks)
-          .where(and(eq(projectTasks.projectId, projectId), eq(projectTasks.phaseId, phaseId), eq(projectTasks.taskId, taskId)))
-          .limit(1)
-      )[0]
-    : null;
+  if (!exec) {
+    const db = await getDb();
+    if (!db) throw new Error("Database not available");
+    await db.transaction(async (tx) => {
+      await setTaskApprovalConfig(projectId, phaseId, taskId, cfg, actorBy, tx);
+    });
+    return;
+  }
+  const db = exec;
+  await acquireProjectReleaseStateLock(db, projectId);
+  const current = (
+    await db
+      .select()
+      .from(projectTasks)
+      .where(and(eq(projectTasks.projectId, projectId), eq(projectTasks.phaseId, phaseId), eq(projectTasks.taskId, taskId)))
+      .limit(1)
+  )[0] ?? null;
   const patch: Parameters<typeof upsertProjectTask>[3] = {
     requiresApproval: cfg.requiresApproval,
     approverUserId: cfg.approverUserId,
@@ -6191,14 +6841,14 @@ export async function setTaskApprovalConfig(
     patch.approvalRequestedBy = null;
     patch.approvalRequestedAt = null;
   }
-  await upsertProjectTask(projectId, phaseId, taskId, patch);
-  await refreshProjectTaskStatuses(projectId);
+  await upsertProjectTask(projectId, phaseId, taskId, patch, db);
+  await refreshProjectTaskStatuses(projectId, undefined, db);
   if (actorBy != null) {
     await createActivityLog({
       projectId, userId: actorBy, action: "task.update_meta",
       entityType: "task", entityId: taskId,
       meta: { phaseId, requiresApproval: cfg.requiresApproval, approverUserId: cfg.approverUserId },
-    });
+    }, db);
   }
 }
 
@@ -6224,11 +6874,13 @@ export async function decideTaskApproval(
     const db = await getDb();
     if (!db) throw new Error("Database not available");
     await db.transaction(async (tx) => {
+      await acquireProjectReleaseStateLock(tx, projectId);
       await decideTaskApproval(projectId, phaseId, taskId, decision, actor, note, isProxy, actedAsRole, viaDelegationId, tx);
     });
     return;
   }
   const db = exec;
+  await acquireProjectReleaseStateLock(db, projectId);
   const [current] = await db
     .select()
     .from(projectTasks)
@@ -6297,10 +6949,25 @@ export async function setTaskDeliverable(
   taskId: string,
   name: string,
   done: boolean,
-  updatedBy?: number | null
+  updatedBy?: number | null,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec?: any,
 ): Promise<Record<string, boolean>> {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
+  if (!exec) {
+    const db = await getDb();
+    if (!db) throw new Error("Database not available");
+    return db.transaction(async (tx) => setTaskDeliverable(
+      projectId,
+      phaseId,
+      taskId,
+      name,
+      done,
+      updatedBy,
+      tx,
+    ));
+  }
+  const db = exec;
+  await acquireProjectReleaseStateLock(db, projectId);
   const existing = await db
     .select({ id: projectTasks.id, deliverables: projectTasks.deliverables })
     .from(projectTasks)
@@ -7458,6 +8125,84 @@ export async function listProductsByCategory(category?: string): Promise<Product
   return db.select().from(products).orderBy(desc(products.updatedAt));
 }
 
+export type ProductTechnicalBaselineSummary = Pick<
+  ProductTechnicalBaseline,
+  "id" | "productId" | "baselineLabel" | "sourceProjectId" |
+  "releasedBy" | "releasedAt" | "createdAt"
+> & {
+  sourceProjectName: string | null;
+};
+
+export type ProductTechnicalBaselineDetail = ProductTechnicalBaseline & {
+  sourceProjectName: string | null;
+  assignments: ProductModuleAssignment[];
+};
+
+/** 产品的技术交付历史；与包装、印刷等轻量 Product Revision 完全分离。 */
+export async function listProductTechnicalBaselines(
+  productId: string,
+): Promise<ProductTechnicalBaselineSummary[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({
+    id: productTechnicalBaselines.id,
+    productId: productTechnicalBaselines.productId,
+    baselineLabel: productTechnicalBaselines.baselineLabel,
+    sourceProjectId: productTechnicalBaselines.sourceProjectId,
+    releasedBy: productTechnicalBaselines.releasedBy,
+    releasedAt: productTechnicalBaselines.releasedAt,
+    createdAt: productTechnicalBaselines.createdAt,
+    sourceProjectName: projects.name,
+  })
+    .from(productTechnicalBaselines)
+    .leftJoin(projects, eq(projects.id, productTechnicalBaselines.sourceProjectId))
+    .where(eq(productTechnicalBaselines.productId, productId))
+    .orderBy(desc(productTechnicalBaselines.releasedAt));
+  return rows.map((row) => ({
+    ...row,
+    sourceProjectName: row.sourceProjectName ?? null,
+  }));
+}
+
+/** 读取一份不可变技术基线及其可查询的关键模块引用。 */
+export async function getProductTechnicalBaseline(
+  id: string,
+): Promise<ProductTechnicalBaselineDetail | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const [row] = await db.select({
+    baseline: productTechnicalBaselines,
+    sourceProjectName: projects.name,
+  })
+    .from(productTechnicalBaselines)
+    .leftJoin(projects, eq(projects.id, productTechnicalBaselines.sourceProjectId))
+    .where(eq(productTechnicalBaselines.id, id))
+    .limit(1);
+  if (!row) return undefined;
+  const assignments = await db.select()
+    .from(productModuleAssignments)
+    .where(eq(productModuleAssignments.technicalBaselineId, id))
+    .orderBy(productModuleAssignments.moduleType);
+  return {
+    ...row.baseline,
+    sourceProjectName: row.sourceProjectName ?? null,
+    assignments,
+  };
+}
+
+/** 产品详情默认展示的当前技术基线。 */
+export async function getCurrentProductTechnicalBaseline(
+  productId: string,
+): Promise<ProductTechnicalBaselineDetail | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const [product] = await db.select({
+    currentTechnicalBaselineId: products.currentTechnicalBaselineId,
+  }).from(products).where(eq(products.id, productId)).limit(1);
+  if (!product?.currentTechnicalBaselineId) return undefined;
+  return getProductTechnicalBaseline(product.currentTechnicalBaselineId);
+}
+
 type ProductDefinitionPatch = Partial<Omit<
   InsertProductDefinition,
   "id" | "productId" | "createdBy" | "createdAt" | "updatedAt" | "status" | "confirmedBy" | "confirmedAt"
@@ -7802,14 +8547,10 @@ export async function getDownstreamVariantImpact(
 
 /** 兼容旧数据的可选项目/产品关联；不再把 Product Revision 带入项目。 */
 export async function setProjectProduct(projectId: string, productId: string): Promise<void> {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
   const [product, project] = await Promise.all([getProductById(productId), getProjectById(projectId)]);
   if (!product) throw new Error("关联产品不存在");
   if (!project) throw new Error("项目不存在");
-  await db.update(projects)
-    .set({ productId, baseRevisionId: null })
-    .where(eq(projects.id, projectId));
+  await updateProject(projectId, { productId, baseRevisionId: null });
 }
 
 /** 开放的 P0/P1 问题数（未 resolved/closed/wont_fix） */
@@ -7886,6 +8627,38 @@ export async function getReleaseGateStatus(project: ProjectRow): Promise<Release
     deliverables: { done, total, missing },
     dimensions: readiness?.dimensions ?? [],
   };
+}
+
+/** Configuration and hard-card state frozen into an external MP approval. */
+export async function getProjectReleaseStateFingerprint(projectId: string): Promise<string> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const project = await getProjectById(projectId);
+  if (!project) throw new Error("项目不存在");
+  const gate = await getReleaseGateStatus(project);
+  const configuration = gate.phaseId
+    ? await buildGateReviewTraceSnapshot(db, {
+        projectId,
+        phaseId: gate.phaseId,
+        gateName: gate.gateName,
+      })
+    : null;
+  const openP0P1 = await getOpenP0P1Count(projectId);
+  return createHash("sha256").update(JSON.stringify({
+    projectId,
+    productId: project.productId,
+    baseTechnicalBaselineId: project.baseTechnicalBaselineId,
+    lifecycle: project.lifecycle,
+    gate: {
+      phaseId: gate.phaseId,
+      decision: gate.decision,
+      roundNumber: gate.roundNumber,
+      conditions: gate.conditions,
+      dimensions: gate.dimensions,
+    },
+    openP0P1,
+    releaseConfigurationFingerprint: configuration?.releaseConfigurationFingerprint ?? null,
+  })).digest("hex");
 }
 
 export async function getMpReleaseByProjectId(projectId: string) {
@@ -8051,38 +8824,42 @@ export async function setProjectLifecycle(input: {
 }): Promise<{ from: string; to: string }> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const project = await getProjectById(input.projectId);
-  if (!project) throw new Error("项目不存在");
-  const authorized = await isReleaseOverrideAuthorized(project, input.actor);
-  if (!authorized) throw new Error("无权限变更项目生命周期（需项目创建人/PM/manager 或系统管理员）");
-  if (project.lifecycle === "terminated") throw new Error("项目已终止，生命周期不可再变更");
-  const from = project.lifecycle;
-  if (from === input.lifecycle) return { from, to: input.lifecycle };
+  return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, input.projectId);
+    const [project] = await tx.select().from(projects)
+      .where(eq(projects.id, input.projectId))
+      .limit(1)
+      .for("update");
+    if (!project) throw new Error("项目不存在");
+    const authorized = await isReleaseOverrideAuthorized(project, input.actor);
+    if (!authorized) throw new Error("无权限变更项目生命周期（需项目创建人/PM/manager 或系统管理员）");
+    if (project.lifecycle === "terminated") throw new Error("项目已终止，生命周期不可再变更");
+    const from = project.lifecycle;
+    if (from === input.lifecycle) return { from, to: input.lifecycle };
 
-  const reason = (input.reason ?? "").trim();
-  if (input.lifecycle !== "active" && !reason) {
-    throw new Error(input.lifecycle === "terminated" ? "终止项目必须填写理由" : "暂停项目必须填写理由");
-  }
-  if (input.lifecycle === "terminated") {
-    const [review] = await db.select().from(projectTerminationReviews)
-      .where(and(eq(projectTerminationReviews.projectId, input.projectId), eq(projectTerminationReviews.status, "approved")))
-      .limit(1);
-    if (!review) throw new Error("项目终止前必须完成结构化终止评审并获得独立批准");
-    const items = await db.select().from(projectTerminationItems).where(eq(projectTerminationItems.reviewId, review.id));
-    const incomplete = items.filter((item) => !item.completed || !item.evidenceReference?.trim());
-    if (incomplete.length > 0) throw new Error(`终止善后仍有 ${incomplete.length} 项未完成或缺少证据`);
-  }
-  await db
-    .update(projects)
-    .set({
+    const reason = (input.reason ?? "").trim();
+    if (input.lifecycle !== "active" && !reason) {
+      throw new Error(input.lifecycle === "terminated" ? "终止项目必须填写理由" : "暂停项目必须填写理由");
+    }
+    if (input.lifecycle === "terminated") {
+      const [review] = await tx.select().from(projectTerminationReviews)
+        .where(and(eq(projectTerminationReviews.projectId, input.projectId), eq(projectTerminationReviews.status, "approved")))
+        .limit(1);
+      if (!review) throw new Error("项目终止前必须完成结构化终止评审并获得独立批准");
+      const items = await tx.select().from(projectTerminationItems)
+        .where(eq(projectTerminationItems.reviewId, review.id));
+      const incomplete = items.filter((item) => !item.completed || !item.evidenceReference?.trim());
+      if (incomplete.length > 0) throw new Error(`终止善后仍有 ${incomplete.length} 项未完成或缺少证据`);
+    }
+    await tx.update(projects).set({
       lifecycle: input.lifecycle,
       lifecycleReason: input.lifecycle === "active" ? null : reason,
       lifecycleChangedAt: new Date(),
       lifecycleChangedBy: input.actor.id,
       ...(input.lifecycle === "terminated" ? { archived: true } : {}),
-    })
-    .where(eq(projects.id, input.projectId));
-  return { from, to: input.lifecycle };
+    }).where(eq(projects.id, input.projectId));
+    return { from, to: input.lifecycle };
+  });
 }
 
 export type ReleaseProductDraft = {
@@ -8096,9 +8873,52 @@ export type ProjectReleaseResult = {
   productId: string;
   productName: string;
   createdProduct: boolean;
+  technicalBaselineId: string;
+  technicalBaselineLabel: string;
   revisionId: null;
   revisionLabel: null;
 };
+
+const PRODUCT_SPECIFICATION_DELIVERABLES = [
+  "产品规格基线确认记录",
+  "产品规格书 PSD",
+  "产品需求文档 PRD",
+  "PRD产品需求文档",
+  "PSD产品规格书",
+  "图纸/规格完整性确认",
+  "设计输入冻结确认（客户）",
+] as const;
+
+const DRV_MODULE_BY_KEY_MODULE_TYPE: Record<KeyModuleType, PhysicalDrvModuleId> = {
+  battery_energy: "battery",
+  core_function: "core_function",
+  electronics_hardware: "electronics",
+};
+
+function assertReleaseGateReady(
+  gate: ReleaseGateStatus,
+  override?: { overrideReason: string; followUpOwner: number; dueDate: string },
+): boolean {
+  if (!gate.phaseId) throw new Error("未定义 MP Release 前置 Gate，无法发布");
+  const failedHardDimensions = gate.dimensions.filter((d) => !d.ok && d.dimension !== "review_conditions");
+  const deliverableBlock = failedHardDimensions.find((d) => d.dimension === "deliverables");
+  if (deliverableBlock) {
+    throw new Error(`前置 Gate 必备交付物未审核通过（${gate.deliverables.done}/${gate.deliverables.total}）`);
+  }
+  const otherHardBlocks = failedHardDimensions.filter((d) => d.dimension !== "deliverables");
+  if (otherHardBlocks.length > 0) {
+    throw new Error(`前置 Gate 未就绪：${otherHardBlocks.map((d) => d.summary).join("；")}`);
+  }
+  if (gate.decision === null || gate.decision === "rejected") {
+    throw new Error("前置 Gate 未通过（无评审记录或已驳回），不能发布");
+  }
+  if (gate.decision !== "conditional") return false;
+  if (!override) throw new Error("前置 Gate 为有条件通过，需 owner/PM/manager 填写理由强制发布");
+  if (!override.overrideReason?.trim() || !override.followUpOwner || !override.dueDate?.trim()) {
+    throw new Error("强制发布需填写理由、跟进负责人与截止日期");
+  }
+  return true;
+}
 
 export async function releaseProject(input: {
   projectId: string;
@@ -8107,65 +8927,134 @@ export async function releaseProject(input: {
   product?: ReleaseProductDraft;
   override?: { overrideReason: string; followUpOwner: number; dueDate: string };
   externalApprovalInstanceId?: number | null;
+  expectedReleaseStateFingerprint?: string | null;
 }): Promise<ProjectReleaseResult> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const project = await getProjectById(input.projectId);
-  if (!project) throw new Error("项目不存在");
-  const canReleaseActor = await isReleaseOverrideAuthorized(project, input.actor);
+  const initialProject = await getProjectById(input.projectId);
+  if (!initialProject) throw new Error("项目不存在");
+  const canReleaseActor = await isReleaseOverrideAuthorized(initialProject, input.actor);
   if (!canReleaseActor) throw new Error("无权限量产发布（需项目创建人/PM/manager 或系统管理员）");
-  if (project.lifecycle === "terminated") throw new Error("项目已终止，不能量产发布");
-  if (project.lifecycle === "paused") throw new Error("项目已暂停，恢复后才能量产发布");
+  if (initialProject.lifecycle === "terminated") throw new Error("项目已终止，不能量产发布");
+  if (initialProject.lifecycle === "paused") throw new Error("项目已暂停，恢复后才能量产发布");
 
   // —— 绝对硬卡 1：P0/P1 全关闭 ——
   const openCount = await getOpenP0P1Count(input.projectId);
   if (openCount > 0) throw new Error(`存在 ${openCount} 个未关闭的 P0/P1 问题，不能发布`);
 
   // —— 前置 Gate ——
-  const gate = await getReleaseGateStatus(project);
-  if (!gate.phaseId) throw new Error("未定义 MP Release 前置 Gate，无法发布");
-  const failedHardDimensions = gate.dimensions.filter((d) => !d.ok && d.dimension !== "review_conditions");
-  const deliverableBlock = failedHardDimensions.find((d) => d.dimension === "deliverables");
-  // —— 绝对硬卡 2：交付物审核合格 ——
-  if (deliverableBlock) {
-    throw new Error(`前置 Gate 必备交付物未审核通过（${gate.deliverables.done}/${gate.deliverables.total}）`);
-  }
-  const otherHardBlocks = failedHardDimensions.filter((d) => d.dimension !== "deliverables");
-  if (otherHardBlocks.length > 0) {
-    throw new Error(`前置 Gate 未就绪：${otherHardBlocks.map((d) => d.summary).join("；")}`);
-  }
-  // —— 绝对硬卡 3：Gate 有记录且非 rejected ——
-  if (gate.decision === null || gate.decision === "rejected") {
-    throw new Error("前置 Gate 未通过（无评审记录或已驳回），不能发布");
-  }
-
-  // —— conditional 仅授权用户留痕强制 ——
-  let overridden = false;
-  if (gate.decision === "conditional") {
-    if (!input.override) throw new Error("前置 Gate 为有条件通过，需 owner/PM/manager 填写理由强制发布");
-    const ov = input.override;
-    if (!ov.overrideReason?.trim() || !ov.followUpOwner || !ov.dueDate?.trim()) {
-      throw new Error("强制发布需填写理由、跟进负责人与截止日期");
-    }
-    overridden = true;
-  }
+  let gate = await getReleaseGateStatus(initialProject);
+  let overridden = assertReleaseGateReady(gate, input.override);
 
   return db.transaction(async (tx) => {
+    // Canonical release lock order: the project-scoped state barrier is always
+    // first, before narrower release/file/BOM/delivery locks or row locks.
+    await acquireProjectReleaseStateLock(tx, input.projectId);
     await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`release:${input.projectId}`}))`);
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`project-files:${input.projectId}`}))`);
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`bom:${input.projectId}`}))`);
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`delivery-modules:${input.projectId}`}))`);
+    // Keep the release barrier project-scoped. BOM, file and delivery-module
+    // writers use their dedicated locks; release-visible child tables acquire
+    // release-state through database triggers. A global table lock would make
+    // an unrelated project's task update deadlock with this transaction.
+    const [project] = await tx.select().from(projects)
+      .where(eq(projects.id, input.projectId))
+      .limit(1)
+      .for("update");
+    if (!project) throw new Error("项目不存在");
+    if (!(await isReleaseOverrideAuthorized(project, input.actor))) {
+      throw new Error("无权限量产发布（需项目创建人/PM/manager 或系统管理员）");
+    }
+    if (project.lifecycle === "terminated") throw new Error("项目已终止，不能量产发布");
+    if (project.lifecycle === "paused") throw new Error("项目已暂停，恢复后才能量产发布");
     const existingRelease = await tx.select({ id: mpReleases.id })
       .from(mpReleases)
       .where(eq(mpReleases.projectId, input.projectId))
       .limit(1);
     if (existingRelease.length > 0) throw new Error("项目已发布，不能重复发布");
+    const lockedOpenIssues = await tx.select({ id: projectIssues.id })
+      .from(projectIssues)
+      .where(and(
+        eq(projectIssues.projectId, input.projectId),
+        inArray(projectIssues.severity, ["P0", "P1"]),
+        drizzleSql`${projectIssues.status} NOT IN ('resolved','closed','wont_fix')`,
+      ));
+    const lockedOpenCount = lockedOpenIssues.length;
+    if (lockedOpenCount > 0) {
+      throw new Error(`存在 ${lockedOpenCount} 个未关闭的 P0/P1 问题，不能发布`);
+    }
+    gate = await getReleaseGateStatus(project);
+    overridden = assertReleaseGateReady(gate, input.override);
+    const [latestReleaseGateReview] = await tx.select({
+      traceSnapshot: projectGateReviews.traceSnapshot,
+    }).from(projectGateReviews)
+      .where(and(
+        eq(projectGateReviews.projectId, input.projectId),
+        eq(projectGateReviews.phaseId, gate.phaseId!),
+      ))
+      .orderBy(
+        desc(projectGateReviews.roundNumber),
+        desc(projectGateReviews.createdAt),
+        desc(projectGateReviews.id),
+      )
+      .limit(1);
+    const currentReleaseTrace = await buildGateReviewTraceSnapshot(tx, {
+      projectId: input.projectId,
+      phaseId: gate.phaseId!,
+      gateName: gate.gateName,
+    });
+    const approvedConfigurationFingerprint = latestReleaseGateReview?.traceSnapshot
+      ?.releaseConfigurationFingerprint;
+    if (
+      !approvedConfigurationFingerprint ||
+      approvedConfigurationFingerprint !== currentReleaseTrace.releaseConfigurationFingerprint
+    ) {
+      throw new Error("产品、BOM、关键模块或规格证据已在 Gate 后变化，请重新完成 Gate 评审后发布");
+    }
+    if (input.expectedReleaseStateFingerprint) {
+      const lockedReleaseFingerprint = await getProjectReleaseStateFingerprint(input.projectId);
+      if (lockedReleaseFingerprint !== input.expectedReleaseStateFingerprint) {
+        throw new Error("钉钉审批后的发布配置或硬卡状态已变化，本次审批已失效，请重新发起");
+      }
+    }
 
     let productId = project.productId;
     let productName = "";
     let createdProduct = false;
+    let baseTechnicalBaseline: ProductTechnicalBaseline | undefined;
     if (productId) {
-      const [existingProduct] = await tx.select().from(products).where(eq(products.id, productId)).limit(1);
+      await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`product:${productId}`}))`);
+      const [existingProduct] = await tx.select().from(products)
+        .where(eq(products.id, productId))
+        .limit(1)
+        .for("update");
       if (!existingProduct) throw new Error("项目关联的产品不存在");
+      if (!canApproveProductTechnicalChange(input.actor, existingProduct)) {
+        throw new Error("发布到现有产品必须由该产品负责人批准");
+      }
+      if (project.category === "eco") {
+        if (!project.baseTechnicalBaselineId) {
+          throw new Error("ECO 缺少冻结的来源技术基线，不能发布");
+        }
+        if (existingProduct.currentTechnicalBaselineId !== project.baseTechnicalBaselineId) {
+          throw new Error("产品当前技术基线已变化，ECO 必须先基于最新基线重新建项或 rebase");
+        }
+        [baseTechnicalBaseline] = await tx.select().from(productTechnicalBaselines)
+          .where(and(
+            eq(productTechnicalBaselines.id, project.baseTechnicalBaselineId),
+            eq(productTechnicalBaselines.productId, existingProduct.id),
+          ))
+          .limit(1);
+        if (!baseTechnicalBaseline) {
+          throw new Error("ECO 来源技术基线不存在或不属于关联产品，不能发布");
+        }
+      }
       productName = existingProduct.name;
     } else {
+      if (project.category === "eco") {
+        throw new Error("ECO 必须关联要变更的现有产品");
+      }
       productId = `prd_${nanoid(12)}`;
       productName = input.product?.name?.trim() || project.name;
       const productType = typeof project.customFields?.productType === "string"
@@ -8179,20 +9068,320 @@ export async function releaseProject(input: {
         category: input.product?.category?.trim() || productType,
         targetMarkets: input.product?.targetMarkets ?? [],
         lifecycleState: "mass_production",
-        productManagerUserId: project.pmUserId ?? null,
+        productManagerUserId: project.productOwnerUserId ?? project.createdBy,
         createdBy: input.actor.id,
       });
       createdProduct = true;
+      await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`product:${productId}`}))`);
     }
-    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`product:${productId}`}))`);
 
     const open = await tx.select().from(projectIssues)
       .where(and(eq(projectIssues.projectId, input.projectId),
         drizzleSql`${projectIssues.status} NOT IN ('resolved','closed','wont_fix')`));
 
-    const frozenBom = await tx.select().from(bomItems)
+    // All working-BOM mutation paths share this lock. Once acquired, the BOM
+    // snapshot below cannot race with add/update/delete/bulk import.
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`bom:${input.projectId}`}))`);
+    const workingBom = await tx.select().from(bomItems)
       .where(eq(bomItems.projectId, input.projectId))
       .orderBy(bomItems.sortOrder, bomItems.id);
+
+    const moduleBaselines = await tx.select().from(projectModuleBaselines)
+      .where(eq(projectModuleBaselines.projectId, input.projectId))
+      .orderBy(projectModuleBaselines.drvModuleKey);
+    // bind/unbind 使用同一把锁。发布取得锁并锁定 binding + module 行后，最终
+    // 选型在本事务内不可再被最后一刻替换或解绑。
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`delivery-modules:${input.projectId}`}))`);
+    const deliveryModuleBindings = await tx.select().from(projectProductModuleBindings)
+      .where(eq(projectProductModuleBindings.projectId, input.projectId))
+      .orderBy(projectProductModuleBindings.moduleType)
+      .for("update");
+    const inheritedAssignments = baseTechnicalBaseline
+      ? await tx.select().from(productModuleAssignments)
+          .where(eq(productModuleAssignments.technicalBaselineId, baseTechnicalBaseline.id))
+          .orderBy(productModuleAssignments.moduleType)
+      : [];
+    if (baseTechnicalBaseline) {
+      const boundTypes = new Set(deliveryModuleBindings.map((binding) => binding.moduleType));
+      const missingInheritedTypes = inheritedAssignments
+        .filter((assignment) => !boundTypes.has(assignment.moduleType))
+        .map((assignment) => assignment.moduleType);
+      if (missingInheritedTypes.length > 0) {
+        throw new Error(`ECO 必须保留完整的产品关键模块基线；缺少：${missingInheritedTypes.join("、")}`);
+      }
+    }
+    const controlledBomModuleIds = workingBom.flatMap((row) =>
+      row.keyModuleId ? [row.keyModuleId] : []
+    );
+    const controlledModuleIds = Array.from(new Set([
+      ...deliveryModuleBindings.map((binding) => binding.moduleId),
+      ...controlledBomModuleIds,
+    ]));
+    const lockedControlledModules = controlledModuleIds.length > 0
+      ? await tx.select({
+        id: keyModules.id,
+        moduleType: keyModules.moduleType,
+        status: keyModules.status,
+      }).from(keyModules)
+        .where(inArray(keyModules.id, controlledModuleIds))
+        .for("update")
+      : [];
+    const obsoleteControlledModule = lockedControlledModules.find((module) => module.status === "obsolete");
+    if (obsoleteControlledModule) {
+      throw new Error("产品交付配置包含已停用关键模块，必须先更换为已批准模块后再发布");
+    }
+    const deliveryTypeById = new Map(lockedControlledModules.map((module) => [
+      module.id,
+      module.moduleType,
+    ]));
+    if (deliveryModuleBindings.length > 0) {
+      const invalidDeliveryBinding = deliveryModuleBindings.find((binding) =>
+        deliveryTypeById.get(binding.moduleId) !== binding.moduleType
+      );
+      if (invalidDeliveryBinding) {
+        throw new Error("产品交付模块绑定与模块主数据类型不一致，请重新绑定后再发布");
+      }
+    }
+
+    // 最终交付绑定也覆盖技术基线中的顶层受控 BOM 行，避免 assignment 已换型、
+    // BOM 快照仍指向 DRV 建项复用模块。没有对应行（典型 NPD/JDM/OBT）时补一行。
+    let frozenBom: Record<string, unknown>[] = workingBom.map((row) => ({ ...row }));
+    for (const binding of deliveryModuleBindings) {
+      const snapshot = binding.moduleSnapshot;
+      const moduleNumber = typeof snapshot.moduleNumber === "string" ? snapshot.moduleNumber : "";
+      const moduleName = typeof snapshot.name === "string" ? snapshot.name : moduleNumber;
+      const model = typeof snapshot.model === "string" ? snapshot.model : "";
+      let replaced = false;
+      frozenBom = frozenBom.flatMap((row) => {
+        const currentModuleId = typeof row.keyModuleId === "string" ? row.keyModuleId : null;
+        if (!currentModuleId || deliveryTypeById.get(currentModuleId) !== binding.moduleType) {
+          return [row];
+        }
+        if (replaced) return [];
+        replaced = true;
+        return [{
+          ...row,
+          keyModuleId: binding.moduleId,
+          keyModuleSnapshot: binding.moduleSnapshot,
+          partNumber: moduleNumber,
+          name: moduleName,
+          spec: model,
+          quantity: 1,
+          componentProductId: null,
+          componentRevisionId: null,
+          supplierName: "",
+          unitCost: "",
+        }];
+      });
+      if (!replaced) {
+        const maxSortOrder = frozenBom.reduce((max, row) => {
+          const value = typeof row.sortOrder === "number" ? row.sortOrder : 0;
+          return Math.max(max, value);
+        }, 0);
+        frozenBom.push({
+          revisionId: null,
+          projectId: input.projectId,
+          partNumber: moduleNumber,
+          name: moduleName,
+          spec: model,
+          quantity: 1,
+          refDesignator: "",
+          componentProductId: null,
+          componentRevisionId: null,
+          keyModuleId: binding.moduleId,
+          keyModuleSnapshot: binding.moduleSnapshot,
+          supplierName: "",
+          unitCost: "",
+          sortOrder: maxSortOrder + 10,
+        });
+      }
+    }
+
+    const definitionSnapshot = project.productDefinitionSnapshotId
+      ? (await tx.select().from(productDefinitionSnapshots)
+          .where(eq(productDefinitionSnapshots.id, project.productDefinitionSnapshotId))
+          .limit(1))[0]
+      : undefined;
+
+    // DRV intentionally does not ask for a specification reference at project
+    // creation. Capture the specification submitted later by its task (and the
+    // equivalent JDM/NPD artifacts) so the product baseline still has a durable
+    // pointer to the released design input.
+    const specificationCandidates = await tx.select({
+      id: projectFiles.id,
+      phaseId: projectFiles.phaseId,
+      taskId: projectFiles.taskId,
+      deliverableName: projectFiles.deliverableName,
+      fileType: projectFiles.fileType,
+      fileVersion: projectFiles.fileVersion,
+      name: projectFiles.name,
+      size: projectFiles.size,
+      visibility: projectFiles.visibility,
+      createdAt: projectFiles.createdAt,
+    }).from(projectFiles)
+      .where(and(
+        eq(projectFiles.projectId, input.projectId),
+        inArray(projectFiles.deliverableName, [...PRODUCT_SPECIFICATION_DELIVERABLES]),
+      ))
+      .orderBy(desc(projectFiles.createdAt), desc(projectFiles.id));
+    const specificationReviews = await tx.select({
+      phaseId: projectDeliverableReviews.phaseId,
+      deliverableName: projectDeliverableReviews.deliverableName,
+      status: projectDeliverableReviews.status,
+      reviewedBy: projectDeliverableReviews.reviewedBy,
+      reviewedAt: projectDeliverableReviews.reviewedAt,
+    }).from(projectDeliverableReviews)
+      .where(and(
+        eq(projectDeliverableReviews.projectId, input.projectId),
+        inArray(projectDeliverableReviews.deliverableName, [...PRODUCT_SPECIFICATION_DELIVERABLES]),
+      ));
+    const reviewByDeliverable = new Map(specificationReviews.map((review) => [
+      `${review.phaseId}\u0000${review.deliverableName}`,
+      review,
+    ]));
+    const seenSpecificationDeliverables = new Set<string>();
+    const specificationFiles = specificationCandidates.filter((file) => {
+      if (!file.phaseId || !file.deliverableName) return false;
+      const key = `${file.phaseId}\u0000${file.deliverableName}`;
+      if (seenSpecificationDeliverables.has(key)) return false;
+      seenSpecificationDeliverables.add(key);
+      const review = reviewByDeliverable.get(key);
+      return review?.status === "approved"
+        && !!review.reviewedAt
+        && review.reviewedAt >= file.createdAt;
+    }).map((file) => ({
+      sourceFileId: file.id,
+      phaseId: file.phaseId,
+      taskId: file.taskId,
+      deliverableName: file.deliverableName,
+      fileType: file.fileType,
+      fileVersion: file.fileVersion,
+      name: file.name,
+      size: file.size,
+      visibility: file.visibility,
+      approvedBy: reviewByDeliverable.get(`${file.phaseId}\u0000${file.deliverableName}`)?.reviewedBy ?? null,
+      approvedAt: reviewByDeliverable.get(`${file.phaseId}\u0000${file.deliverableName}`)?.reviewedAt ?? null,
+    }));
+    const inheritedSpecSnapshot = baseTechnicalBaseline?.specSnapshot ?? null;
+    const inheritedSpecificationFiles = inheritedSpecSnapshot && Array.isArray(inheritedSpecSnapshot.specificationFiles)
+      ? inheritedSpecSnapshot.specificationFiles
+      : [];
+    const inheritedProductDefinitionSnapshot = inheritedSpecSnapshot
+      && inheritedSpecSnapshot.productDefinitionSnapshot
+      && typeof inheritedSpecSnapshot.productDefinitionSnapshot === "object"
+      ? inheritedSpecSnapshot.productDefinitionSnapshot
+      : null;
+    if (
+      !definitionSnapshot &&
+      specificationFiles.length === 0 &&
+      !inheritedProductDefinitionSnapshot &&
+      inheritedSpecificationFiles.length === 0
+    ) {
+      throw new Error("缺少已审核的产品规格或设计输入文件，不能生成产品技术基线");
+    }
+
+    const existingTechnicalBaselines = await tx.select({
+      baselineLabel: productTechnicalBaselines.baselineLabel,
+    }).from(productTechnicalBaselines)
+      .where(eq(productTechnicalBaselines.productId, productId));
+    const nextTechnicalBaselineNumber = existingTechnicalBaselines.reduce((max, row) => {
+      const match = /^TB-(\d+)$/.exec(row.baselineLabel);
+      return match ? Math.max(max, Number(match[1])) : max;
+    }, 0) + 1;
+    const technicalBaselineId = `ptb_${nanoid(12)}`;
+    const technicalBaselineLabel = `TB-${String(nextTechnicalBaselineNumber).padStart(3, "0")}`;
+    const releasedAt = new Date();
+
+    const keyModulesSnapshot: Record<string, unknown> = {
+      ...(baseTechnicalBaseline?.keyModulesSnapshot ?? {}),
+      ...Object.fromEntries(moduleBaselines.map((baseline) => [
+        baseline.drvModuleKey,
+        {
+          reuseState: baseline.reuseState,
+          keyModuleId: baseline.keyModuleId,
+          sourceProductId: baseline.sourceProductId,
+          sourceTechnicalBaselineId: baseline.sourceTechnicalBaselineId,
+          moduleSnapshot: baseline.moduleSnapshot,
+          confirmedBy: baseline.confirmedBy,
+          confirmedAt: baseline.confirmedAt,
+        },
+      ])),
+    };
+    const baselineByDrvModule = new Map(moduleBaselines.map((baseline) => [
+      baseline.drvModuleKey,
+      baseline,
+    ]));
+    for (const binding of deliveryModuleBindings) {
+      const drvModuleKey = DRV_MODULE_BY_KEY_MODULE_TYPE[binding.moduleType];
+      const initialBaseline = baselineByDrvModule.get(drvModuleKey);
+      keyModulesSnapshot[drvModuleKey] = {
+        selectionSource: "project_product_delivery",
+        initialReuseState: initialBaseline?.reuseState ?? null,
+        keyModuleId: binding.moduleId,
+        moduleSnapshot: binding.moduleSnapshot,
+        boundBy: binding.boundBy,
+        boundAt: binding.boundAt,
+      };
+    }
+    const projectExecutionBaseline = project.customFields && typeof project.customFields === "object"
+      ? (project.customFields as Record<string, unknown>).projectExecutionBaseline ?? null
+      : null;
+    const specSnapshot: Record<string, unknown> = {
+      ...(inheritedSpecSnapshot ?? {}),
+      productDefinitionSnapshot: definitionSnapshot?.snapshot ?? inheritedProductDefinitionSnapshot,
+      projectExecutionBaseline: projectExecutionBaseline
+        ?? inheritedSpecSnapshot?.projectExecutionBaseline
+        ?? null,
+      specificationFiles: specificationFiles.length > 0
+        ? specificationFiles
+        : inheritedSpecificationFiles,
+      ...(baseTechnicalBaseline ? { inheritedFromTechnicalBaselineId: baseTechnicalBaseline.id } : {}),
+    };
+
+    await tx.insert(productTechnicalBaselines).values({
+      id: technicalBaselineId,
+      productId,
+      baselineLabel: technicalBaselineLabel,
+      sourceProjectId: input.projectId,
+      keyModulesSnapshot,
+      bomSnapshot: frozenBom as unknown as Record<string, unknown>[],
+      specSnapshot,
+      releasedBy: input.actor.id,
+      releasedAt,
+    });
+
+    const controlledAssignmentsByType = new Map<KeyModuleType, {
+      technicalBaselineId: string;
+      moduleType: KeyModuleType;
+      moduleId: string;
+      moduleSnapshot: Record<string, unknown>;
+    }>();
+    for (const baseline of moduleBaselines) {
+      const moduleType = KEY_MODULE_TYPE_BY_DRV_MODULE[
+        baseline.drvModuleKey as PhysicalDrvModuleId
+      ];
+      if (!moduleType || baseline.reuseState !== "reused" || !baseline.keyModuleId) continue;
+      controlledAssignmentsByType.set(moduleType, {
+        technicalBaselineId,
+        moduleType,
+        moduleId: baseline.keyModuleId,
+        moduleSnapshot: baseline.moduleSnapshot,
+      });
+    }
+    // 最终交付绑定优先于 DRV 建项复用基线；NPD/JDM/OBT 没有建项复用基线时
+    // 则直接补齐产品技术基线的关键模块 assignment。
+    for (const binding of deliveryModuleBindings) {
+      controlledAssignmentsByType.set(binding.moduleType, {
+        technicalBaselineId,
+        moduleType: binding.moduleType,
+        moduleId: binding.moduleId,
+        moduleSnapshot: binding.moduleSnapshot,
+      });
+    }
+    const controlledAssignments = Array.from(controlledAssignmentsByType.values());
+    if (controlledAssignments.length > 0) {
+      await tx.insert(productModuleAssignments).values(controlledAssignments);
+    }
 
     // 项目交付快照独立保存，不再把项目变更盖章到 Product Revision。
     const stampedChanges = await tx.select().from(projectChangelog)
@@ -8236,7 +9425,11 @@ export async function releaseProject(input: {
     }
 
     await tx.update(products)
-      .set({ lifecycleState: "mass_production" })
+      .set({
+        lifecycleState: "mass_production",
+        currentTechnicalBaselineId: technicalBaselineId,
+        updatedAt: releasedAt,
+      })
       .where(eq(products.id, productId));
 
     const releasePhases = getEffectivePhasesForProjectLike(project);
@@ -8251,29 +9444,55 @@ export async function releaseProject(input: {
       })
       .where(eq(projects.id, input.projectId));
 
-    return { productId, productName, createdProduct, revisionId: null, revisionLabel: null };
+    return {
+      productId,
+      productName,
+      createdProduct,
+      technicalBaselineId,
+      technicalBaselineLabel,
+      revisionId: null,
+      revisionLabel: null,
+    };
   });
 }
 
 
 // ── BOM ───────────────────────────────────────────────────────────────────────
 
-export async function addBomLine(projectId: string, line: Partial<InsertBomItem> & { name: string }): Promise<number> {
-  const db = await getDb(); if (!db) throw new Error("Database not available");
+export async function addBomLine(
+  projectId: string,
+  line: Partial<InsertBomItem> & { name: string },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec?: any,
+): Promise<number> {
+  const db = exec ?? await getDb(); if (!db) throw new Error("Database not available");
   const r = await db.insert(bomItems).values({ ...line, projectId, revisionId: null }).returning({ id: bomItems.id });
   return r[0].id;
 }
-export async function getBomLineById(id: number): Promise<BomItem | undefined> {
-  const db = await getDb(); if (!db) return undefined;
+export async function getBomLineById(
+  id: number,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec?: any,
+): Promise<BomItem | undefined> {
+  const db = exec ?? await getDb(); if (!db) return undefined;
   const [row] = await db.select().from(bomItems).where(eq(bomItems.id, id)).limit(1);
   return row;
 }
-export async function updateBomLine(id: number, patch: Partial<InsertBomItem>): Promise<void> {
-  const db = await getDb(); if (!db) throw new Error("Database not available");
+export async function updateBomLine(
+  id: number,
+  patch: Partial<InsertBomItem>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec?: any,
+): Promise<void> {
+  const db = exec ?? await getDb(); if (!db) throw new Error("Database not available");
   await db.update(bomItems).set(patch).where(eq(bomItems.id, id));
 }
-export async function deleteBomLine(id: number): Promise<void> {
-  const db = await getDb(); if (!db) throw new Error("Database not available");
+export async function deleteBomLine(
+  id: number,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec?: any,
+): Promise<void> {
+  const db = exec ?? await getDb(); if (!db) throw new Error("Database not available");
   await db.delete(bomItems).where(eq(bomItems.id, id));
 }
 export async function listWorkingBom(projectId: string): Promise<BomItem[]> {

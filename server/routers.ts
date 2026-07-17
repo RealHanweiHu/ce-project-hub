@@ -29,6 +29,7 @@ import { requirementsRouter } from "./routers/requirements";
 import { productsRouter } from "./routers/products";
 import { bomRouter } from "./routers/bom";
 import { keyModulesRouter } from "./routers/keyModules";
+import { projectDeliveryModulesRouter } from "./routers/projectDeliveryModules";
 import { commentsRouter, notificationsRouter } from "./routers/collab";
 import { customFieldsRouter } from "./routers/customFields";
 import { automationRouter } from "./routers/automation";
@@ -359,6 +360,7 @@ export const appRouter = router({
   products: productsRouter,
   bom: bomRouter,
   keyModules: keyModulesRouter,
+  projectDeliveryModules: projectDeliveryModulesRouter,
   comments: commentsRouter,
   notifications: notificationsRouter,
 });

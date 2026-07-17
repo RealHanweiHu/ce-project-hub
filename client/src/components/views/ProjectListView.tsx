@@ -358,6 +358,7 @@ export function ProjectListView({
     useState<ProjectCategory>("npd");
   const [zeroReuseWarningOpen, setZeroReuseWarningOpen] = useState(false);
   const isDerivative = selectedCategory === "derivative";
+  const isEco = selectedCategory === "eco";
   const capturesEcoChangeScope = selectedCategory === "eco";
   const isJdm = selectedCategory === "jdm";
   const isObt = selectedCategory === "obt";
@@ -578,6 +579,7 @@ export function ProjectListView({
     code: "",
     name: "",
     type: "汽车充气泵",
+    productId: null as string | null,
     pmUserId: null as number | null,
     startDate: "",
     targetDate: "",
@@ -617,6 +619,7 @@ export function ProjectListView({
     setForm(current => ({
       ...current,
       customerConceptRef: "",
+      productId: null,
       customerInputVersion: "",
       customerPartNumber: "",
       commercialBoundary: "",
@@ -640,6 +643,10 @@ export function ProjectListView({
     }
     if (isObt && !obtCreateValidation.ok) {
       toast.error(`请补充：${obtCreateValidation.issues.join("、")}`);
+      return;
+    }
+    if (isEco && !form.productId) {
+      toast.error("ECO 必须选择要变更的现有产品");
       return;
     }
     const jdmDraftExecutionBaseline = isJdm
@@ -685,7 +692,7 @@ export function ProjectListView({
         startDate: form.startDate,
         targetDate: form.targetDate,
         risk: form.risk,
-        productId: null,
+        productId: isEco ? form.productId : null,
         safetyRiskLevel: form.safetyRiskLevel,
         regulatoryRiskLevel: form.regulatoryRiskLevel,
         customerInputVersion: isObt ? form.customerInputVersion.trim() : null,
@@ -813,6 +820,7 @@ export function ProjectListView({
   );
   const isCreateBlocked = !form.name.trim() ||
     (selectedCategory === "derivative" && Boolean(derivativeBlockingIssue)) ||
+    (isEco && !form.productId) ||
     (isJdm && !jdmCreateValidation.ok) ||
     (isObt && !obtCreateValidation.ok);
 
@@ -1705,6 +1713,31 @@ export function ProjectListView({
                       </select>
                     </div>
                   </div>
+                  {isEco && (
+                    <div className="rounded-[8px] border border-[color:var(--acc-border)] bg-[color:var(--acc-soft)] p-3">
+                      <Kicker className="mb-1.5">要变更的现有产品 *</Kicker>
+                      <select
+                        value={form.productId ?? ""}
+                        onChange={event => setForm({
+                          ...form,
+                          productId: event.target.value || null,
+                        })}
+                        required
+                        aria-label="ECO 关联产品"
+                        className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none focus:border-[color:var(--acc-border)]"
+                      >
+                        <option value="">选择产品库中的现有产品…</option>
+                        {products.map(product => (
+                          <option key={product.id} value={product.id}>
+                            {product.productNumber} · {product.name}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+                        ECO 完成后会在该产品下生成新的受控技术基线；不会创建另一条产品，也不会生成包装类 Revision。
+                      </p>
+                    </div>
+                  )}
                   {isJdm && (
                     <div className="space-y-3 rounded-[8px] border border-[color:var(--acc-border)] bg-[color:var(--acc-soft)] p-3">
                       <div>

@@ -20,6 +20,8 @@ import {
   projectTerminationItems,
   projectTerminationReviews,
   projectTransitions,
+  mpReleases,
+  productTechnicalBaselines,
   sopChangeEvents,
   sopChangeRequests,
   PRODUCT_WAIVER_SCOPE_TYPES,
@@ -30,7 +32,7 @@ import {
   type SopChangeRequest,
 } from "../../drizzle/schema";
 import { getPhasesForCategory, SOP_TEMPLATE_VERSION_CURRENT, type ProjectCategory } from "../../shared/sop-templates";
-import { getDb, refreshProjectTaskStatuses } from "../db";
+import { acquireProjectReleaseStateLock, getDb, refreshProjectTaskStatuses } from "../db";
 
 const ACTIVE_ACTION_STATUSES = ["open", "sent", "read", "escalated", "snoozed"] as const;
 const OPEN_ISSUE_STATUSES = ["open", "in_progress"] as const;
@@ -262,23 +264,39 @@ export async function executeProjectTransition(input: {
 }): Promise<{ targetProjectId: string; issues: number; files: number; members: number }> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const [source] = await db.select().from(projects).where(eq(projects.id, input.sourceProjectId)).limit(1);
-  if (!source || source.archived || source.lifecycle !== "active") throw new Error("只有活跃项目可以转轨");
-  if (source.category === input.toCategory) throw new Error("目标轨道必须与当前轨道不同");
-  const [existingTransition] = await db.select().from(projectTransitions).where(eq(projectTransitions.sourceProjectId, source.id)).limit(1);
-  if (existingTransition) throw new Error("该项目已经完成过受控转轨");
-  const declaration = await db.select().from(projectChangeScopeDeclarations)
-    .where(eq(projectChangeScopeDeclarations.projectId, source.id))
-    .orderBy(desc(projectChangeScopeDeclarations.version))
-    .limit(1)
-    .then((rows) => rows[0] ?? null);
-  if (["jdm", "obt"].includes(input.toCategory)) {
-    const missing = [!source.customerInputVersion, !source.customerPartNumber, !source.commercialBoundary, !source.customerSignoffOwnerUserId].some(Boolean);
-    if (missing) throw new Error("转入 JDM/OBT 前必须先补齐客户输入、客户料号、商务边界和签核责任人");
-  }
   const phases = getPhasesForCategory(input.toCategory, SOP_TEMPLATE_VERSION_CURRENT);
   const firstPhaseId = phases[0]?.id ?? "concept";
   const summary = await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, input.sourceProjectId);
+    const [source] = await tx.select().from(projects)
+      .where(eq(projects.id, input.sourceProjectId))
+      .for("update")
+      .limit(1);
+    if (!source || source.archived || source.lifecycle !== "active") throw new Error("只有活跃项目可以转轨");
+    if (source.category === input.toCategory) throw new Error("目标轨道必须与当前轨道不同");
+    const [existingTransition] = await tx.select({ id: projectTransitions.id })
+      .from(projectTransitions)
+      .where(eq(projectTransitions.sourceProjectId, source.id))
+      .limit(1);
+    if (existingTransition) throw new Error("该项目已经完成过受控转轨");
+    const [mpRelease] = await tx.select({ id: mpReleases.id })
+      .from(mpReleases)
+      .where(eq(mpReleases.projectId, source.id))
+      .limit(1);
+    const [technicalBaseline] = await tx.select({ id: productTechnicalBaselines.id })
+      .from(productTechnicalBaselines)
+      .where(eq(productTechnicalBaselines.sourceProjectId, source.id))
+      .limit(1);
+    if (mpRelease || technicalBaseline) throw new Error("已发布项目不能转轨");
+    if (["jdm", "obt"].includes(input.toCategory)) {
+      const missing = [!source.customerInputVersion, !source.customerPartNumber, !source.commercialBoundary, !source.customerSignoffOwnerUserId].some(Boolean);
+      if (missing) throw new Error("转入 JDM/OBT 前必须先补齐客户输入、客户料号、商务边界和签核责任人");
+    }
+    const declaration = await tx.select().from(projectChangeScopeDeclarations)
+      .where(eq(projectChangeScopeDeclarations.projectId, source.id))
+      .orderBy(desc(projectChangeScopeDeclarations.version))
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
     await tx.insert(projects).values({
       id: input.targetProjectId,
       name: input.targetName.trim(),
@@ -434,15 +452,19 @@ export async function handoffAndRemoveProjectMember(input: {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   if (input.userId === input.replacementUserId) throw new Error("接收人不能是被移除成员本人");
-  const [project, replacement] = await Promise.all([
-    db.select().from(projects).where(eq(projects.id, input.projectId)).limit(1).then((rows) => rows[0]),
-    db.select().from(projectMembers).where(and(eq(projectMembers.projectId, input.projectId), eq(projectMembers.userId, input.replacementUserId))).limit(1).then((rows) => rows[0]),
-  ]);
-  if (!project) throw new Error("项目不存在");
-  if (project.createdBy === input.userId) throw new Error("不能移除项目创建者");
-  if (!replacement) throw new Error("接收人必须已经是项目成员");
   const summary = await getMemberHandoffPreview(input.projectId, input.userId);
   await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, input.projectId);
+    const [project] = await tx.select().from(projects)
+      .where(eq(projects.id, input.projectId))
+      .for("update")
+      .limit(1);
+    const [replacement] = await tx.select({ id: projectMembers.id }).from(projectMembers)
+      .where(and(eq(projectMembers.projectId, input.projectId), eq(projectMembers.userId, input.replacementUserId)))
+      .limit(1);
+    if (!project) throw new Error("项目不存在");
+    if (project.createdBy === input.userId) throw new Error("不能移除项目创建者");
+    if (!replacement) throw new Error("接收人必须已经是项目成员");
     await tx.update(projectTasks).set({ assigneeUserId: input.replacementUserId, updatedAt: new Date() })
       .where(and(eq(projectTasks.projectId, input.projectId), eq(projectTasks.assigneeUserId, input.userId), inArray(projectTasks.status, ["todo", "in_progress", "blocked", "pending_approval"])));
     await tx.update(projectTasks).set({ approverUserId: input.replacementUserId, updatedAt: new Date() })
