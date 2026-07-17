@@ -21,7 +21,10 @@ import { SYSTEM_ROLES, type SystemRole } from "../shared/system-roles";
 import type { GateSignoffRequirement, GateSignoffRoundStatus, GateSignoffSlot, GateSignoffStatus } from "../shared/gate-signoffs";
 import type { ProjectChangeScopeDeclaration, ProjectSopRiskLevel, SopRiskAssessment } from "../shared/sop-risk";
 import type { CertificateScopeType, CertificateStatus, CertificateType } from "../shared/certification";
-import type { ProjectExecutionBaseline } from "../shared/project-track-tailoring";
+import {
+  PRODUCT_MODULE_IDS,
+  type ProjectExecutionBaseline,
+} from "../shared/project-track-tailoring";
 import { PROJECT_MEMBER_ROLES, type ProjectMemberRole } from "../shared/project-roles";
 import {
   KEY_MODULE_STATUSES,
@@ -1780,6 +1783,9 @@ export const products = pgTable("products", {
   afterSalesOwnerUserId: integer("afterSalesOwnerUserId"),
   /** 当前生产版本（FK product_revisions.id，可空） */
   currentRevisionId: integer("currentRevisionId"),
+  /** 当前产品技术基线；技术配置与轻量 Product Revision 分离。 */
+  currentTechnicalBaselineId: varchar("currentTechnicalBaselineId", { length: 32 })
+    .references((): AnyPgColumn => productTechnicalBaselines.id, { onDelete: "set null" }),
   createdBy: integer("createdBy").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
@@ -1878,6 +1884,145 @@ export type KeyModule = typeof keyModules.$inferSelect;
 export type InsertKeyModule = typeof keyModules.$inferInsert;
 export type KeyModuleItem = typeof keyModuleItems.$inferSelect;
 export type InsertKeyModuleItem = typeof keyModuleItems.$inferInsert;
+
+export const PROJECT_MODULE_KEYS = PRODUCT_MODULE_IDS;
+export const MODULE_REUSE_STATES = ["reused", "not_reused"] as const;
+export const projectModuleKeyEnum = pgEnum(
+  "project_module_key",
+  PROJECT_MODULE_KEYS,
+);
+export const moduleReuseStateEnum = pgEnum(
+  "module_reuse_state",
+  MODULE_REUSE_STATES,
+);
+
+/** 项目完成后发布的不可变产品技术配置，不复用轻量 Product Revision。 */
+export const productTechnicalBaselines = pgTable(
+  "product_technical_baselines",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    productId: varchar("productId", { length: 32 })
+      .notNull()
+      .references(() => products.id, { onDelete: "cascade" }),
+    baselineLabel: varchar("baselineLabel", { length: 64 }).notNull(),
+    sourceProjectId: varchar("sourceProjectId", { length: 32 })
+      .notNull()
+      .references(() => projects.id, { onDelete: "restrict" }),
+    keyModulesSnapshot: jsonb("keyModulesSnapshot")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    bomSnapshot: jsonb("bomSnapshot")
+      .$type<Record<string, unknown>[]>()
+      .notNull()
+      .default([]),
+    specSnapshot: jsonb("specSnapshot")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    releasedBy: integer("releasedBy").notNull().references(() => users.id),
+    releasedAt: timestamp("releasedAt").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    uniqProductBaselineLabel: uniqueIndex("uniq_product_technical_baseline_label").on(
+      table.productId,
+      table.baselineLabel,
+    ),
+    uniqSourceProject: uniqueIndex("uniq_product_technical_baseline_source_project").on(
+      table.sourceProjectId,
+    ),
+    idxProductReleased: index("idx_product_technical_baselines_product_released").on(
+      table.productId,
+      table.releasedAt,
+    ),
+  }),
+);
+
+/** 技术基线中每类关键模块的可查询引用；snapshot 保证历史不随主数据状态漂移。 */
+export const productModuleAssignments = pgTable(
+  "product_module_assignments",
+  {
+    id: serial("id").primaryKey(),
+    technicalBaselineId: varchar("technicalBaselineId", { length: 32 })
+      .notNull()
+      .references(() => productTechnicalBaselines.id, { onDelete: "cascade" }),
+    moduleType: keyModuleTypeEnum("moduleType").notNull(),
+    moduleId: varchar("moduleId", { length: 32 })
+      .notNull()
+      .references(() => keyModules.id, { onDelete: "restrict" }),
+    moduleSnapshot: jsonb("moduleSnapshot")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    uniqBaselineModuleType: uniqueIndex("uniq_product_module_assignment_type").on(
+      table.technicalBaselineId,
+      table.moduleType,
+    ),
+    idxModule: index("idx_product_module_assignments_module").on(table.moduleId),
+  }),
+);
+
+/** 项目创建时锁定的六模块复用状态；物理模块复用时同时锁定精确关键模块。 */
+export const projectModuleBaselines = pgTable(
+  "project_module_baselines",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 })
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    drvModuleKey: projectModuleKeyEnum("drvModuleKey").notNull(),
+    reuseState: moduleReuseStateEnum("reuseState").notNull(),
+    keyModuleId: varchar("keyModuleId", { length: 32 })
+      .references(() => keyModules.id, { onDelete: "restrict" }),
+    sourceProductId: varchar("sourceProductId", { length: 32 })
+      .references(() => products.id, { onDelete: "set null" }),
+    sourceTechnicalBaselineId: varchar("sourceTechnicalBaselineId", { length: 32 })
+      .references(() => productTechnicalBaselines.id, { onDelete: "set null" }),
+    moduleSnapshot: jsonb("moduleSnapshot")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    confirmedBy: integer("confirmedBy").notNull().references(() => users.id),
+    confirmedAt: timestamp("confirmedAt").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    uniqProjectModule: uniqueIndex("uniq_project_module_baseline_key").on(
+      table.projectId,
+      table.drvModuleKey,
+    ),
+    idxKeyModule: index("idx_project_module_baselines_key_module").on(table.keyModuleId),
+    idxSourceProduct: index("idx_project_module_baselines_source_product").on(
+      table.sourceProductId,
+    ),
+    referenceConsistency: check(
+      "project_module_baselines_reference_consistency",
+      sql`(
+        (
+          ${table.drvModuleKey} IN ('battery', 'core_function', 'electronics')
+          AND (
+            (${table.reuseState} = 'reused' AND ${table.keyModuleId} IS NOT NULL)
+            OR (${table.reuseState} = 'not_reused' AND ${table.keyModuleId} IS NULL)
+          )
+        )
+        OR (
+          ${table.drvModuleKey} IN ('software_connectivity', 'structure_mold', 'id_cmf')
+          AND ${table.keyModuleId} IS NULL
+        )
+      )`,
+    ),
+  }),
+);
+
+export type ProductTechnicalBaseline = typeof productTechnicalBaselines.$inferSelect;
+export type InsertProductTechnicalBaseline = typeof productTechnicalBaselines.$inferInsert;
+export type ProductModuleAssignment = typeof productModuleAssignments.$inferSelect;
+export type InsertProductModuleAssignment = typeof productModuleAssignments.$inferInsert;
+export type ProjectModuleBaseline = typeof projectModuleBaselines.$inferSelect;
+export type InsertProjectModuleBaseline = typeof projectModuleBaselines.$inferInsert;
 
 export const PRODUCT_DEFINITION_STATUSES = ["draft", "confirmed"] as const;
 export type ProductDefinitionStatus = (typeof PRODUCT_DEFINITION_STATUSES)[number];
@@ -2758,6 +2903,11 @@ export const bomItems = pgTable(
     refDesignator: varchar("refDesignator", { length: 128 }).notNull().default(""),
     componentProductId: varchar("componentProductId", { length: 32 }),
     componentRevisionId: integer("componentRevisionId"),
+    /** 受控关键模块引用；普通物料行为空。 */
+    keyModuleId: varchar("keyModuleId", { length: 32 })
+      .references(() => keyModules.id, { onDelete: "restrict" }),
+    /** 项目创建/发布时的模块快照，避免主数据后续限制或停用导致历史漂移。 */
+    keyModuleSnapshot: jsonb("keyModuleSnapshot").$type<Record<string, unknown>>(),
     supplierName: varchar("supplierName", { length: 128 }).notNull().default(""),
     unitCost: varchar("unitCost", { length: 64 }).notNull().default(""),
     sortOrder: integer("sortOrder").notNull().default(0),
@@ -2767,6 +2917,7 @@ export const bomItems = pgTable(
     idxRevision: index("idx_bom_revision").on(t.revisionId),
     idxProject: index("idx_bom_project").on(t.projectId),
     idxComponent: index("idx_bom_component").on(t.componentProductId),
+    idxKeyModule: index("idx_bom_key_module").on(t.keyModuleId),
   })
 );
 export type BomItem = typeof bomItems.$inferSelect;

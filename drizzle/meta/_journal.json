@@ -491,6 +491,13 @@
       "when": 1784261711663,
       "tag": "0069_key_module_master_data",
       "breakpoints": true
+    },
+    {
+      "idx": 70,
+      "version": "7",
+      "when": 1784269200000,
+      "tag": "0070_key_module_technical_baselines",
+      "breakpoints": true
     }
   ]
 }

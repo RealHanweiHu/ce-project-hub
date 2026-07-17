@@ -33,9 +33,14 @@ export const PRODUCT_MODULES = [
 
 export type ProductModuleId = (typeof PRODUCT_MODULES)[number]["id"];
 
-export const PRODUCT_MODULE_IDS = PRODUCT_MODULES.map(
-  ({ id }) => id
-) as ProductModuleId[];
+export const PRODUCT_MODULE_IDS = [
+  "battery",
+  "core_function",
+  "electronics",
+  "software_connectivity",
+  "structure_mold",
+  "id_cmf",
+] as const satisfies readonly ProductModuleId[];
 
 const PRODUCT_MODULE_LABELS = Object.fromEntries(
   PRODUCT_MODULES.map(({ id, label }) => [id, label]),
