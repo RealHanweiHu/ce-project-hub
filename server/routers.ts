@@ -28,6 +28,7 @@ import { filesRouter } from "./routers/files";
 import { requirementsRouter } from "./routers/requirements";
 import { productsRouter } from "./routers/products";
 import { bomRouter } from "./routers/bom";
+import { keyModulesRouter } from "./routers/keyModules";
 import { commentsRouter, notificationsRouter } from "./routers/collab";
 import { customFieldsRouter } from "./routers/customFields";
 import { automationRouter } from "./routers/automation";
@@ -357,6 +358,7 @@ export const appRouter = router({
   sopGovernance: sopGovernanceRouter,
   products: productsRouter,
   bom: bomRouter,
+  keyModules: keyModulesRouter,
   comments: commentsRouter,
   notifications: notificationsRouter,
 });
