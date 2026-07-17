@@ -1,4 +1,8 @@
 import {
+  validateDrvModuleSelection,
+  type DrvKeyModuleReferences,
+} from "@shared/key-modules";
+import {
   DERIVATIVE_MODULE_TASK_IDS,
   SOP_TEMPLATE_VERSION_CURRENT,
   getDerivativePhasesForModuleReuse,
@@ -91,8 +95,9 @@ export function buildDerivativeExecutionBaseline(input: {
 export function validateDerivativeCreateBaseline(input: {
   moduleReuse: Record<ProductModuleId, ModuleReuseState>;
   reuseEvidence: Record<ProductModuleId, ModuleReuseEvidence>;
+  keyModuleRefs: DrvKeyModuleReferences;
 }): BaselineValidationResult {
-  return validateProjectExecutionBaseline(
+  const baseline = validateProjectExecutionBaseline(
     buildDerivativeExecutionBaseline({
       ...input,
       frozenAt: "preview",
@@ -100,6 +105,12 @@ export function validateDerivativeCreateBaseline(input: {
     }),
     { track: "drv" },
   );
+  const moduleSelection = validateDrvModuleSelection({
+    moduleReuse: input.moduleReuse,
+    keyModuleRefs: input.keyModuleRefs,
+  });
+  const issues = [...baseline.issues, ...moduleSelection.issues];
+  return { ok: issues.length === 0, issues } as BaselineValidationResult;
 }
 
 export function getDerivativeTaskPreview(

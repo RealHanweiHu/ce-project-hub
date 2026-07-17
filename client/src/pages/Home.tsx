@@ -180,6 +180,7 @@ function projectToApiInput(p: Project) {
     startDate: startDate || null,
     targetDate: targetDate || null,
     customFields: p.customFields ?? {},
+    drvKeyModuleRefs: (p as ProjectCreateDraft).drvKeyModuleRefs,
   };
 }
 

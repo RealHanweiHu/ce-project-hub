@@ -69,9 +69,20 @@ import {
 import { todayShanghai as todayInShanghaiISO } from "../../shared/shanghai-date";
 import { redlineKindForTask } from "../../shared/redline-four-eyes";
 import {
+  KEY_MODULE_TYPE_BY_DRV_MODULE,
+  PHYSICAL_DRV_MODULE_IDS,
+  type PhysicalDrvModuleId,
+} from "../../shared/key-modules";
+import {
   validateProjectExecutionBaseline,
+  PRODUCT_MODULE_IDS,
+  type ModuleReuseState,
   type ProjectExecutionBaseline,
 } from "../../shared/project-track-tailoring";
+import {
+  KeyModuleServiceError,
+  resolveApprovedKeyModuleForReuse,
+} from "../services/key-module-service";
 
 const DEFAULT_MEETING = { enabled: true, weekday: 3, time: "15:00", durationMin: 60, title: "项目周会" };
 const isoDateInput = z.string().refine(isISODate, "日期必须是有效的 YYYY-MM-DD");
@@ -213,6 +224,11 @@ const projectCreateInputSchema = projectInputSchema.extend({
   }).optional(),
   npdAttributes: npdAttributesSchema.optional(),
   npdTemplateDowngradeReason: z.string().trim().min(4).max(1000).optional(),
+  drvKeyModuleRefs: z.object({
+    battery: z.object({ keyModuleId: z.string().trim().min(1).max(32) }).strict().optional(),
+    core_function: z.object({ keyModuleId: z.string().trim().min(1).max(32) }).strict().optional(),
+    electronics: z.object({ keyModuleId: z.string().trim().min(1).max(32) }).strict().optional(),
+  }).strict().optional(),
 });
 
 const moduleReuseStateSchema = z.enum(["reused", "not_reused"]);
@@ -273,6 +289,99 @@ function requireValidDrvExecutionBaseline(
     });
   }
   return baseline;
+}
+
+async function resolveDrvControlledSeed(input: {
+  moduleReuse: Record<string, ModuleReuseState>;
+  keyModuleRefs?: Partial<Record<PhysicalDrvModuleId, { keyModuleId: string }>>;
+  actorId: number;
+}) {
+  const moduleBaselines: Array<{
+    drvModuleKey: (typeof PRODUCT_MODULE_IDS)[number];
+    reuseState: ModuleReuseState;
+    keyModuleId: string | null;
+    moduleSnapshot: Record<string, unknown>;
+    confirmedBy: number;
+    confirmedAt: Date;
+  }> = [];
+  const bomRows: Array<{
+    partNumber: string;
+    name: string;
+    spec: string;
+    quantity: number;
+    refDesignator: string;
+    componentProductId: null;
+    componentRevisionId: null;
+    keyModuleId: string;
+    keyModuleSnapshot: Record<string, unknown>;
+    supplierName: string;
+    unitCost: string;
+    sortOrder: number;
+  }> = [];
+  const physicalSet = new Set<string>(PHYSICAL_DRV_MODULE_IDS);
+  let bomSortOrder = 0;
+
+  for (const moduleId of PRODUCT_MODULE_IDS) {
+    const reuseState = input.moduleReuse[moduleId];
+    const isPhysical = physicalSet.has(moduleId);
+    const reference = isPhysical
+      ? input.keyModuleRefs?.[moduleId as PhysicalDrvModuleId]
+      : undefined;
+    if (!isPhysical || reuseState === "not_reused") {
+      if (reference) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `${moduleId} 未复用时不能提交关键模块引用` });
+      }
+      moduleBaselines.push({
+        drvModuleKey: moduleId,
+        reuseState,
+        keyModuleId: null,
+        moduleSnapshot: {},
+        confirmedBy: input.actorId,
+        confirmedAt: new Date(),
+      });
+      continue;
+    }
+    if (!reference) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: `${moduleId} 复用时必须选择已批准的关键模块` });
+    }
+    try {
+      const resolved = await resolveApprovedKeyModuleForReuse(
+        reference.keyModuleId,
+        KEY_MODULE_TYPE_BY_DRV_MODULE[moduleId as PhysicalDrvModuleId],
+      );
+      moduleBaselines.push({
+        drvModuleKey: moduleId,
+        reuseState,
+        keyModuleId: resolved.bundle.module.id,
+        moduleSnapshot: resolved.snapshot,
+        confirmedBy: input.actorId,
+        confirmedAt: new Date(),
+      });
+      bomRows.push({
+        partNumber: resolved.bundle.module.moduleNumber,
+        name: resolved.bundle.module.name,
+        spec: "受控关键模块",
+        quantity: 1,
+        refDesignator: "",
+        componentProductId: null,
+        componentRevisionId: null,
+        keyModuleId: resolved.bundle.module.id,
+        keyModuleSnapshot: resolved.snapshot,
+        supplierName: "",
+        unitCost: "",
+        sortOrder: bomSortOrder++,
+      });
+    } catch (error) {
+      if (error instanceof KeyModuleServiceError) {
+        throw new TRPCError({
+          code: error.code === "NOT_FOUND" ? "BAD_REQUEST" : error.code === "INVALID_STATE" ? "CONFLICT" : "BAD_REQUEST",
+          message: error.message,
+        });
+      }
+      throw error;
+    }
+  }
+  return { moduleBaselines, bomItems: bomRows };
 }
 
 function requireValidJdmDraftExecutionBaseline(
@@ -768,6 +877,13 @@ export const projectsRouter = router({
       const drvExecutionBaseline = input.category === "derivative"
         ? requireValidDrvExecutionBaseline(input.customFields, ctx.user.id)
         : null;
+      const drvControlledSeed = drvExecutionBaseline
+        ? await resolveDrvControlledSeed({
+            moduleReuse: drvExecutionBaseline.moduleReuse as Record<string, ModuleReuseState>,
+            keyModuleRefs: input.drvKeyModuleRefs,
+            actorId: ctx.user.id,
+          })
+        : undefined;
       const jdmDraftExecutionBaseline = input.category === "jdm"
         ? requireValidJdmDraftExecutionBaseline(input.customFields)
         : null;
@@ -872,7 +988,7 @@ export const projectsRouter = router({
         targetDate: input.targetDate ?? null,
         createdBy: ctx.user.id,
         archived: false,
-      }, input.category, ctx.user.id, riskDeclarationSeed);
+      }, input.category, ctx.user.id, riskDeclarationSeed, drvControlledSeed);
       // 选了项目经理且不是创建者本人 → 自动加入项目成员并赋 project_manager 角色（否则对方看不到项目）
       if (input.pmUserId && input.pmUserId !== ctx.user.id) {
         try { await ensureProjectMember(input.id, input.pmUserId, "project_manager", ctx.user.id); }

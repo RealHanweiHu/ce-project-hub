@@ -9,6 +9,7 @@ import {
   type ModuleReuseState,
   type ProductModuleId,
 } from "./project-track-tailoring";
+import type { DrvKeyModuleReferences } from "./key-modules";
 import {
   EMPTY_DERIVATIVE_MODULE_REUSE,
   buildDerivativeExecutionBaseline,
@@ -19,6 +20,11 @@ import {
 } from "../client/src/lib/derivative-create";
 
 describe("DRV create form model", () => {
+  const physicalRefs: DrvKeyModuleReferences = {
+    battery: { keyModuleId: "battery-1", moduleNumber: "BAT-001" },
+    core_function: { keyModuleId: "core-1", moduleNumber: "CORE-001" },
+    electronics: { keyModuleId: "electronics-1", moduleNumber: "ELE-001" },
+  };
   it("默认六模块均不复用，并预览完整任务", () => {
     const preview = getDerivativeTaskPreview(EMPTY_DERIVATIVE_MODULE_REUSE);
 
@@ -91,6 +97,7 @@ describe("DRV create form model", () => {
     expect(validateDerivativeCreateBaseline({
       moduleReuse,
       reuseEvidence,
+      keyModuleRefs: { battery: physicalRefs.battery },
     })).toEqual({ ok: true, issues: [] });
 
     const baseline = buildDerivativeExecutionBaseline({
@@ -108,7 +115,7 @@ describe("DRV create form model", () => {
       .toBe(preview.totalTaskCount);
   });
 
-  it("冻结 payload 只保存复用模块证据并清理字符串空格", () => {
+  it("冻结 payload 不依赖自由文本证据，物理模块引用由独立受控基线保存", () => {
     const reuseEvidence = createEmptyDerivativeReuseEvidence();
     reuseEvidence.battery = {
       sourceRef: "  一代电池包  ",
@@ -137,14 +144,6 @@ describe("DRV create form model", () => {
       status: "frozen",
       frozenAt: "2026-07-15T12:00:00.000Z",
       frozenBy: 7,
-      reuseEvidence: {
-        battery: {
-          sourceRef: "一代电池包",
-          modelOrVersion: "BAT-V3",
-          evidenceRef: "EV-BAT-001",
-          boundaryConfirmed: true,
-        },
-      },
     });
     expect(baseline).not.toHaveProperty("productDefinitionRef");
     expect(Object.keys(baseline.reuseEvidence ?? {})).toEqual(["battery"]);
@@ -155,6 +154,7 @@ describe("DRV create form model", () => {
     expect(validateDerivativeCreateBaseline({
       moduleReuse: EMPTY_DERIVATIVE_MODULE_REUSE,
       reuseEvidence: complete,
+      keyModuleRefs: {},
     }).ok).toBe(false);
 
     expect(validateDerivativeCreateBaseline({
@@ -164,6 +164,7 @@ describe("DRV create form model", () => {
       reuseEvidence: Object.fromEntries(
         PRODUCT_MODULE_IDS.map(moduleId => [moduleId, complete.battery]),
       ) as typeof complete,
+      keyModuleRefs: physicalRefs,
     }).ok).toBe(true);
   });
 

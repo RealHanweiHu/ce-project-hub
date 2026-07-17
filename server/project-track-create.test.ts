@@ -2,12 +2,16 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq, inArray } from "drizzle-orm";
 import {
   activityLogs,
+  bomItems,
+  keyModules,
   projectChangeScopeDeclarations,
   projectDeliverableOverrides,
+  projectModuleBaselines,
   projectPhases,
   projectTailoring,
   projectTasks,
   projects,
+  users,
 } from "../drizzle/schema";
 import {
   createProjectTailoringRequest,
@@ -34,11 +38,18 @@ const OWNER = 996401;
 const SUFFIX = Date.now().toString(36);
 const VALID_PROJECT = `drv-create-${SUFFIX}`;
 const ALL_REUSED_PROJECT = `drv-all-reused-${SUFFIX}`;
+const ATOMIC_REJECT_PROJECT = `drv-atomic-reject-${SUFFIX}`;
 const INVALID_PROJECTS = Array.from(
   { length: 6 },
   (_, index) => `drv-bad${index}-${SUFFIX}`,
 );
-const ALL_PROJECTS = [VALID_PROJECT, ALL_REUSED_PROJECT, ...INVALID_PROJECTS];
+const ALL_PROJECTS = [VALID_PROJECT, ALL_REUSED_PROJECT, ATOMIC_REJECT_PROJECT, ...INVALID_PROJECTS];
+const MODULE_IDS = {
+  battery: `drv-battery-${SUFFIX}`,
+  core_function: `drv-core-${SUFFIX}`,
+  electronics: `drv-electronics-${SUFFIX}`,
+} as const;
+const USER_OPEN_ID = `drv-project-track-${SUFFIX}`;
 
 const caller = projectsRouter.createCaller({
   user: {
@@ -95,6 +106,14 @@ function createInput(
   id: string,
   baseline: unknown,
 ) {
+  const reuse = baseline && typeof baseline === "object" && !Array.isArray(baseline)
+    ? (baseline as { moduleReuse?: Partial<Record<ProductModuleId, ModuleReuseState>> }).moduleReuse
+    : undefined;
+  const drvKeyModuleRefs = reuse ? Object.fromEntries(
+    (["battery", "core_function", "electronics"] as const)
+      .filter(moduleId => reuse[moduleId] === "reused")
+      .map(moduleId => [moduleId, { keyModuleId: MODULE_IDS[moduleId] }]),
+  ) : undefined;
   return {
     id,
     name: id,
@@ -107,6 +126,7 @@ function createInput(
       source: "project-track-create-test",
       ...(baseline === undefined ? {} : { projectExecutionBaseline: baseline }),
     },
+    drvKeyModuleRefs,
     changeScopeDeclaration: {
       batteryPackOrBmsChange: true,
       notes: "验证结构化风险声明仍独立生效",
@@ -118,16 +138,28 @@ async function cleanup() {
   const db = await getDb();
   if (!db) return;
   await db.delete(activityLogs).where(inArray(activityLogs.projectId, ALL_PROJECTS));
+  await db.delete(bomItems).where(inArray(bomItems.projectId, ALL_PROJECTS));
+  await db.delete(projectModuleBaselines).where(inArray(projectModuleBaselines.projectId, ALL_PROJECTS));
   await db.delete(projectDeliverableOverrides).where(inArray(projectDeliverableOverrides.projectId, ALL_PROJECTS));
   await db.delete(projectTailoring).where(inArray(projectTailoring.projectId, ALL_PROJECTS));
   await db.delete(projectChangeScopeDeclarations).where(inArray(projectChangeScopeDeclarations.projectId, ALL_PROJECTS));
   await db.delete(projectTasks).where(inArray(projectTasks.projectId, ALL_PROJECTS));
   await db.delete(projectPhases).where(inArray(projectPhases.projectId, ALL_PROJECTS));
   await db.delete(projects).where(inArray(projects.id, ALL_PROJECTS));
+  await db.delete(keyModules).where(inArray(keyModules.id, Object.values(MODULE_IDS)));
+  await db.delete(users).where(eq(users.openId, USER_OPEN_ID));
 }
 
 beforeAll(async () => {
   await cleanup();
+  const db = await getDb();
+  if (!db) throw new Error("no db");
+  await db.insert(users).values({ id: OWNER, openId: USER_OPEN_ID, username: USER_OPEN_ID, name: "DRV Creator" });
+  await db.insert(keyModules).values([
+    { id: MODULE_IDS.battery, moduleNumber: `BAT-${SUFFIX}`, moduleType: "battery_energy", name: "DRV battery", category: "test", status: "approved", createdBy: OWNER, technicalConfirmedBy: OWNER, technicalConfirmedAt: new Date(), approvedBy: OWNER, approvedAt: new Date() },
+    { id: MODULE_IDS.core_function, moduleNumber: `CORE-${SUFFIX}`, moduleType: "core_function", name: "DRV core", category: "test", status: "approved", createdBy: OWNER, technicalConfirmedBy: OWNER, technicalConfirmedAt: new Date(), approvedBy: OWNER, approvedAt: new Date() },
+    { id: MODULE_IDS.electronics, moduleNumber: `ELE-${SUFFIX}`, moduleType: "electronics_hardware", name: "DRV electronics", category: "test", status: "approved", createdBy: OWNER, technicalConfirmedBy: OWNER, technicalConfirmedAt: new Date(), approvedBy: OWNER, approvedAt: new Date() },
+  ]);
   await caller.create(createInput(VALID_PROJECT, validBaseline));
 });
 
@@ -225,6 +257,28 @@ describe("DRV project-track-v1 creation", () => {
       },
     });
 
+    const moduleBaselines = await db!.select().from(projectModuleBaselines)
+      .where(eq(projectModuleBaselines.projectId, VALID_PROJECT));
+    expect(moduleBaselines).toHaveLength(6);
+    expect(moduleBaselines.find(row => row.drvModuleKey === "battery")).toMatchObject({
+      reuseState: "reused",
+      keyModuleId: MODULE_IDS.battery,
+      confirmedBy: OWNER,
+      moduleSnapshot: {
+        moduleNumber: `BAT-${SUFFIX}`,
+        moduleType: "battery_energy",
+        internalBomHash: expect.any(String),
+      },
+    });
+    const workingBom = await db!.select().from(bomItems)
+      .where(eq(bomItems.projectId, VALID_PROJECT));
+    expect(workingBom).toHaveLength(1);
+    expect(workingBom[0]).toMatchObject({
+      partNumber: `BAT-${SUFFIX}`,
+      keyModuleId: MODULE_IDS.battery,
+      keyModuleSnapshot: { internalBomHash: expect.any(String) },
+    });
+
     const [riskScope] = await db!.select()
       .from(projectChangeScopeDeclarations)
       .where(eq(projectChangeScopeDeclarations.projectId, VALID_PROJECT));
@@ -239,6 +293,21 @@ describe("DRV project-track-v1 creation", () => {
         regulatoryRiskLevel: "high",
       },
     });
+  });
+
+  it("模块引用无效时，项目、任务与模块基线全部不落库", async () => {
+    const db = await getDb();
+    if (!db) throw new Error("no db");
+    const invalidInput = createInput(ATOMIC_REJECT_PROJECT, validBaseline);
+    invalidInput.drvKeyModuleRefs = { battery: { keyModuleId: MODULE_IDS.core_function } };
+
+    await expect(caller.create(invalidInput)).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringContaining("类型"),
+    });
+    expect(await db.select().from(projects).where(eq(projects.id, ATOMIC_REJECT_PROJECT))).toEqual([]);
+    expect(await db.select().from(projectTasks).where(eq(projectTasks.projectId, ATOMIC_REJECT_PROJECT))).toEqual([]);
+    expect(await db.select().from(projectModuleBaselines).where(eq(projectModuleBaselines.projectId, ATOMIC_REJECT_PROJECT))).toEqual([]);
   });
 
   it("冻结基线是唯一减负入口，旧裁剪和交付物豁免不能绕过公共 Gate", async () => {

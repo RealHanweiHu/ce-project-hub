@@ -287,6 +287,7 @@ export type ProjectCreateDraft = Omit<Project, 'id' | 'phases'> & {
   npdTemplate?: import('@shared/npd-v3').NpdTemplateConfig;
   npdAttributes?: import('@shared/npd-v3').NpdProjectAttributes;
   npdTemplateDowngradeReason?: string;
+  drvKeyModuleRefs?: import('@shared/key-modules').DrvKeyModuleSelectionRefs;
 };
 
 import { NPD_PHASES } from '@shared/sop-templates';

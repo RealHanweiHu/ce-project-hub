@@ -58,6 +58,11 @@ export type DrvKeyModuleReferences = Partial<
   Record<PhysicalDrvModuleId, KeyModuleReference>
 >;
 
+/** API create input only trusts the id; server hydrates number/status/snapshot. */
+export type DrvKeyModuleSelectionRefs = Partial<
+  Record<PhysicalDrvModuleId, Pick<KeyModuleReference, "keyModuleId">>
+>;
+
 export type DrvModuleSelectionValidationCode =
   | "drv_no_modules_reused"
   | "invalid_id_cmf_structure_combination"

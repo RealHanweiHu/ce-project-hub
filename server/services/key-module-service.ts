@@ -368,6 +368,10 @@ export async function listKeyModules(input: {
 
 export async function buildKeyModuleSnapshot(id: string) {
   const bundle = await readBundle(id);
+  return buildKeyModuleSnapshotFromBundle(bundle);
+}
+
+export function buildKeyModuleSnapshotFromBundle(bundle: KeyModuleBundle) {
   const definition = {
     id: bundle.module.id,
     moduleNumber: bundle.module.moduleNumber,
@@ -389,6 +393,20 @@ export async function buildKeyModuleSnapshot(id: string) {
     ...definition,
     internalBomHash: createHash("sha256").update(JSON.stringify(definition.items)).digest("hex"),
   };
+}
+
+export async function resolveApprovedKeyModuleForReuse(id: string, expectedType: KeyModuleType) {
+  const bundle = await readBundle(id);
+  if (bundle.module.status !== "approved") {
+    throw new KeyModuleServiceError("INVALID_STATE", `关键模块 ${bundle.module.moduleNumber} 尚未批准，不能用于项目复用`);
+  }
+  if (bundle.module.moduleType !== expectedType) {
+    throw new KeyModuleServiceError(
+      "INVALID_INPUT",
+      `关键模块 ${bundle.module.moduleNumber} 的类型与所选 DRV 模块不匹配`,
+    );
+  }
+  return { bundle, snapshot: buildKeyModuleSnapshotFromBundle(bundle) };
 }
 
 export async function getKeyModuleWhereUsed(id: string) {

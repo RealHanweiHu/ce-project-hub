@@ -52,6 +52,7 @@ import {
   dingtalkInteractiveCards, DingtalkInteractiveCard, InsertDingtalkInteractiveCard,
   customerVariants, CustomerVariant, InsertCustomerVariant,
   bomItems, BomItem, InsertBomItem,
+  keyModules, projectModuleBaselines, InsertProjectModuleBaseline,
   comments, Comment,
   notifications,
   actionItems, ActionItem, InsertActionItem,
@@ -602,6 +603,10 @@ export async function createProjectWithSeed(
   category: string,
   createdBy: number,
   riskDeclaration?: { declaration: ProjectChangeScopeDeclaration; assessment: SopRiskAssessment },
+  controlledSeed?: {
+    moduleBaselines?: Array<Omit<InsertProjectModuleBaseline, "id" | "projectId" | "createdAt">>;
+    bomItems?: Array<Omit<InsertBomItem, "id" | "projectId" | "revisionId" | "createdAt">>;
+  },
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -620,6 +625,20 @@ export async function createProjectWithSeed(
     ? projectWithOwner
     : { ...projectWithOwner, currentPhase: phases[0]?.id ?? project.currentPhase };
   await db.transaction(async (tx) => {
+    const controlledModuleIds = Array.from(new Set(
+      (controlledSeed?.moduleBaselines ?? [])
+        .map(row => row.keyModuleId)
+        .filter((id): id is string => Boolean(id)),
+    ));
+    if (controlledModuleIds.length > 0) {
+      const lockedModules = await tx.select({ id: keyModules.id, status: keyModules.status })
+        .from(keyModules)
+        .where(inArray(keyModules.id, controlledModuleIds))
+        .for("update");
+      if (lockedModules.length !== controlledModuleIds.length || lockedModules.some(row => row.status !== "approved")) {
+        throw new Error("所选关键模块已不再处于已批准状态，请重新选择");
+      }
+    }
     await tx.insert(projects).values(seeded);
     if (riskDeclaration) {
       await tx.insert(projectChangeScopeDeclarations).values({
@@ -630,6 +649,16 @@ export async function createProjectWithSeed(
         ruleVersion: riskDeclaration.assessment.ruleVersion,
         declaredBy: createdBy,
       });
+    }
+    if (controlledSeed?.moduleBaselines?.length) {
+      await tx.insert(projectModuleBaselines).values(
+        controlledSeed.moduleBaselines.map(row => ({ ...row, projectId: project.id })),
+      );
+    }
+    if (controlledSeed?.bomItems?.length) {
+      await tx.insert(bomItems).values(
+        controlledSeed.bomItems.map(row => ({ ...row, projectId: project.id, revisionId: null })),
+      );
     }
     for (const phase of phases) {
       await tx.insert(projectPhases).values({ projectId: project.id, phaseId: phase.id });

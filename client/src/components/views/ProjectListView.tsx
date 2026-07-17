@@ -92,6 +92,17 @@ import {
   PRODUCT_MODULES,
 } from "@shared/project-track-tailoring";
 import {
+  KEY_MODULE_TYPE_BY_DRV_MODULE,
+  PHYSICAL_DRV_MODULE_IDS,
+  type DrvKeyModuleReferences,
+  type DrvKeyModuleSelectionRefs,
+  type PhysicalDrvModuleId,
+} from "@shared/key-modules";
+import {
+  KeyModulePicker,
+  type DrvKeyModuleChoice,
+} from "./key-modules/KeyModulePicker";
+import {
   EMPTY_DERIVATIVE_MODULE_REUSE,
   buildDerivativeExecutionBaseline,
   createEmptyDerivativeReuseEvidence,
@@ -345,6 +356,7 @@ export function ProjectListView({
   const [step, setStep] = useState<WizardStep>(1);
   const [selectedCategory, setSelectedCategory] =
     useState<ProjectCategory>("npd");
+  const [zeroReuseWarningOpen, setZeroReuseWarningOpen] = useState(false);
   const isDerivative = selectedCategory === "derivative";
   const capturesEcoChangeScope = selectedCategory === "eco";
   const isJdm = selectedCategory === "jdm";
@@ -579,6 +591,7 @@ export function ProjectListView({
     customerSignoffOwnerUserId: null as number | null,
     moduleReuse: { ...EMPTY_DERIVATIVE_MODULE_REUSE },
     reuseEvidence: createEmptyDerivativeReuseEvidence(),
+    keyModuleRefs: {} as Partial<Record<PhysicalDrvModuleId, DrvKeyModuleChoice>>,
     changeScopeDeclaration: { ...EMPTY_CHANGE_SCOPE_DECLARATION },
     targetMarketsText: "",
   };
@@ -592,12 +605,14 @@ export function ProjectListView({
 
   const handleClose = () => {
     setShowAdd(false);
+    setZeroReuseWarningOpen(false);
     resetWizard();
   };
 
   const handleCategoryChange = (category: ProjectCategory) => {
     if (category === selectedCategory) return;
     setSelectedCategory(category);
+    setZeroReuseWarningOpen(false);
     // 类型专属输入不能跨项目轨道继承，尤其不能把折叠区里的旧风险勾选静默带入。
     setForm(current => ({
       ...current,
@@ -608,6 +623,7 @@ export function ProjectListView({
       customerSignoffOwnerUserId: null,
       moduleReuse: { ...EMPTY_DERIVATIVE_MODULE_REUSE },
       reuseEvidence: createEmptyDerivativeReuseEvidence(),
+      keyModuleRefs: {},
       changeScopeDeclaration: { ...EMPTY_CHANGE_SCOPE_DECLARATION },
       targetMarketsText: "",
       safetyRiskLevel: "standard",
@@ -634,8 +650,13 @@ export function ProjectListView({
       const validation = validateDerivativeCreateBaseline({
         moduleReuse: form.moduleReuse,
         reuseEvidence: form.reuseEvidence,
+        keyModuleRefs: derivativeKeyModuleRefs,
       });
       if (!validation.ok) {
+        if (validation.issues.some(issue => issue.code === "drv_no_modules_reused")) {
+          setZeroReuseWarningOpen(true);
+          return;
+        }
         toast.error(validation.issues[0]?.message || "请完整确认 DRV 六模块执行基线");
         return;
       }
@@ -698,6 +719,12 @@ export function ProjectListView({
             }
           : { ...EMPTY_CHANGE_SCOPE_DECLARATION },
         pm: "",
+        drvKeyModuleRefs: isDerivative
+          ? Object.fromEntries(Object.entries(form.keyModuleRefs).map(([moduleId, reference]) => [
+              moduleId,
+              { keyModuleId: reference.keyModuleId },
+            ])) as DrvKeyModuleSelectionRefs
+          : undefined,
         currentPhase: firstPhaseId,
         category: selectedCategory,
         npdTemplate:
@@ -726,12 +753,22 @@ export function ProjectListView({
     () => getDerivativeTaskPreview(form.moduleReuse),
     [form.moduleReuse],
   );
+  const derivativeKeyModuleRefs = useMemo(() => Object.fromEntries(
+    Object.entries(form.keyModuleRefs).map(([moduleId, reference]) => [
+      moduleId,
+      { keyModuleId: reference.keyModuleId, moduleNumber: reference.moduleNumber },
+    ]),
+  ) as DrvKeyModuleReferences, [form.keyModuleRefs]);
   const derivativeBaselineValidation = useMemo(
     () => validateDerivativeCreateBaseline({
       moduleReuse: form.moduleReuse,
       reuseEvidence: form.reuseEvidence,
+      keyModuleRefs: derivativeKeyModuleRefs,
     }),
-    [form.moduleReuse, form.reuseEvidence],
+    [derivativeKeyModuleRefs, form.moduleReuse, form.reuseEvidence],
+  );
+  const derivativeBlockingIssue = derivativeBaselineValidation.issues.find(
+    issue => issue.code !== "drv_no_modules_reused",
   );
   const jdmCreateValidation = useMemo(
     () => validateJdmCreateInput({
@@ -775,7 +812,7 @@ export function ProjectListView({
     [derivativePreview.phases, jdmCreatePreview.phases, selectedCategory]
   );
   const isCreateBlocked = !form.name.trim() ||
-    (selectedCategory === "derivative" && !derivativeBaselineValidation.ok) ||
+    (selectedCategory === "derivative" && Boolean(derivativeBlockingIssue)) ||
     (isJdm && !jdmCreateValidation.ok) ||
     (isObt && !obtCreateValidation.ok);
 
@@ -1837,28 +1874,28 @@ export function ProjectListView({
                       <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-2">
                         {DERIVATIVE_MODULES_FOR_CREATE.map(module => {
                           const state = form.moduleReuse[module.id];
-                          const moduleEvidence = form.reuseEvidence[module.id];
                           const structureReuseBlocked =
                             module.id === "structure_mold" &&
                             form.moduleReuse.id_cmf === "not_reused";
-                          const updateEvidence = (
-                            patch: Partial<typeof moduleEvidence>,
-                          ) => setForm({
-                            ...form,
-                            reuseEvidence: {
-                              ...form.reuseEvidence,
-                              [module.id]: { ...moduleEvidence, ...patch },
-                            },
-                          });
+                          const physicalModuleId = PHYSICAL_DRV_MODULE_IDS.includes(module.id as PhysicalDrvModuleId)
+                            ? module.id as PhysicalDrvModuleId
+                            : null;
                           const selectState = (
                             nextState: "reused" | "not_reused",
-                          ) => setForm({
-                            ...form,
-                            moduleReuse: updateDerivativeModuleReuse(
-                              form.moduleReuse,
-                              module.id,
-                              nextState,
-                            ),
+                          ) => setForm(current => {
+                            const keyModuleRefs = { ...current.keyModuleRefs };
+                            if (nextState === "not_reused" && physicalModuleId) {
+                              delete keyModuleRefs[physicalModuleId];
+                            }
+                            return {
+                              ...current,
+                              keyModuleRefs,
+                              moduleReuse: updateDerivativeModuleReuse(
+                                current.moduleReuse,
+                                module.id,
+                                nextState,
+                              ),
+                            };
                           });
                           return (
                             <div
@@ -1932,43 +1969,22 @@ export function ProjectListView({
                               )}
                               {state === "reused" && (
                                 <div className="mt-3 space-y-2 border-t border-border pt-3">
-                                  <input
-                                    value={moduleEvidence.sourceRef}
-                                    onChange={event => updateEvidence({ sourceRef: event.target.value })}
-                                    aria-label={`${module.label}复用来源产品或模块`}
-                                    aria-required="true"
-                                    placeholder="来源产品或模块 *"
-                                    className="w-full rounded-[6px] border border-border bg-secondary/30 px-2.5 py-2 text-xs outline-none focus:border-[color:var(--acc-border)]"
-                                  />
-                                  <div className="grid grid-cols-2 gap-2">
-                                    <input
-                                      value={moduleEvidence.modelOrVersion}
-                                      onChange={event => updateEvidence({ modelOrVersion: event.target.value })}
-                                      aria-label={`${module.label}复用型号或版本`}
-                                      aria-required="true"
-                                      placeholder="型号 / 版本 *"
-                                      className="rounded-[6px] border border-border bg-secondary/30 px-2.5 py-2 text-xs outline-none focus:border-[color:var(--acc-border)]"
+                                  {physicalModuleId ? (
+                                    <KeyModulePicker
+                                      moduleType={KEY_MODULE_TYPE_BY_DRV_MODULE[physicalModuleId]}
+                                      category={form.type}
+                                      value={form.keyModuleRefs[physicalModuleId]}
+                                      onChange={reference => setForm(current => ({
+                                        ...current,
+                                        keyModuleRefs: { ...current.keyModuleRefs, [physicalModuleId]: reference },
+                                      }))}
+                                      label={module.label}
                                     />
-                                    <input
-                                      value={moduleEvidence.evidenceRef}
-                                      onChange={event => updateEvidence({ evidenceRef: event.target.value })}
-                                      aria-label={`${module.label}复用证据编号或链接`}
-                                      aria-required="true"
-                                      placeholder="证据编号 / 链接 *"
-                                      className="rounded-[6px] border border-border bg-secondary/30 px-2.5 py-2 text-xs outline-none focus:border-[color:var(--acc-border)]"
-                                    />
-                                  </div>
-                                  <label className="flex cursor-pointer items-start gap-2 rounded-[6px] bg-secondary/40 px-2.5 py-2 text-[10px] leading-relaxed text-foreground">
-                                    <input
-                                      type="checkbox"
-                                      checked={moduleEvidence.boundaryConfirmed}
-                                      onChange={event => updateEvidence({ boundaryConfirmed: event.target.checked })}
-                                      aria-label={`${module.label}适用边界已确认`}
-                                      aria-required="true"
-                                      className="mt-0.5 h-3.5 w-3.5 accent-primary"
-                                    />
-                                    已确认型号、接口、参数和适用边界均不发生变化
-                                  </label>
+                                  ) : (
+                                    <p className="rounded-[6px] bg-secondary/40 px-2.5 py-2 text-[10px] leading-relaxed text-muted-foreground">
+                                      选择复用表示该模块沿用现有方案，系统不生成对应设计开发任务包；后续仍在公共验证任务中确认整机表现。
+                                    </p>
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -1976,13 +1992,13 @@ export function ProjectListView({
                         })}
                       </div>
 
-                      {!derivativeBaselineValidation.ok && (
+                      {derivativeBlockingIssue && (
                         <div
                           className="flex items-start gap-2 rounded-[8px] border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-900"
                           role="alert"
                         >
                           <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-                          <span>{derivativeBaselineValidation.issues[0]?.message}</span>
+                          <span>{derivativeBlockingIssue.message}</span>
                         </div>
                       )}
                     </div>
@@ -2198,6 +2214,25 @@ export function ProjectListView({
             </div>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={zeroReuseWarningOpen} onOpenChange={setZeroReuseWarningOpen}>
+        <AlertDialogContent className="max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle>当前没有复用任何模块</AlertDialogTitle>
+            <AlertDialogDescription>
+              DRV 至少需要复用一个现有模块；如果全部模块重新开发，更符合 NPD。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setZeroReuseWarningOpen(false)}>返回修改</AlertDialogCancel>
+            <AlertDialogAction onClick={() => {
+              setZeroReuseWarningOpen(false);
+              handleCategoryChange("npd");
+              setStep(2);
+            }}>切换为 NPD</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* ── Drag Move Confirmation Dialog ── */}
       <AlertDialog
