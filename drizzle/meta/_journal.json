@@ -484,6 +484,13 @@
       "when": 1784109600000,
       "tag": "0068_project_product_owner",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1784261711663,
+      "tag": "0069_key_module_master_data",
+      "breakpoints": true
     }
   ]
 }

@@ -3,6 +3,23 @@ import type {
   ProductModuleId,
 } from "./project-track-tailoring";
 
+export const KEY_MODULE_TYPE_IDS = [
+  "battery_energy",
+  "core_function",
+  "electronics_hardware",
+] as const;
+
+export const KEY_MODULE_STATUSES = [
+  "draft",
+  "technical_confirmed",
+  "approved",
+  "restricted",
+  "obsolete",
+] as const;
+
+export type KeyModuleType = (typeof KEY_MODULE_TYPE_IDS)[number];
+export type KeyModuleStatus = (typeof KEY_MODULE_STATUSES)[number];
+
 export const KEY_MODULE_TYPES = [
   {
     id: "battery_energy",
@@ -21,7 +38,6 @@ export const KEY_MODULE_TYPES = [
   },
 ] as const;
 
-export type KeyModuleType = (typeof KEY_MODULE_TYPES)[number]["id"];
 export type PhysicalDrvModuleId =
   (typeof KEY_MODULE_TYPES)[number]["drvModuleId"];
 

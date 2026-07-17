@@ -1,6 +1,7 @@
 import {
   integer,
   serial,
+  type AnyPgColumn,
   pgEnum,
   pgTable,
   text,
@@ -9,6 +10,7 @@ import {
   jsonb,
   boolean,
   bigint,
+  check,
   uniqueIndex,
   index,
   date,
@@ -21,6 +23,10 @@ import type { ProjectChangeScopeDeclaration, ProjectSopRiskLevel, SopRiskAssessm
 import type { CertificateScopeType, CertificateStatus, CertificateType } from "../shared/certification";
 import type { ProjectExecutionBaseline } from "../shared/project-track-tailoring";
 import { PROJECT_MEMBER_ROLES, type ProjectMemberRole } from "../shared/project-roles";
+import {
+  KEY_MODULE_STATUSES,
+  KEY_MODULE_TYPE_IDS,
+} from "../shared/key-modules";
 
 export { PROJECT_MEMBER_ROLES } from "../shared/project-roles";
 export type { ProjectMemberRole } from "../shared/project-roles";
@@ -1780,6 +1786,98 @@ export const products = pgTable("products", {
 });
 export type ProductRow = typeof products.$inferSelect;
 export type InsertProduct = typeof products.$inferInsert;
+
+export type KeyModuleEvidenceRef = {
+  type: string;
+  label: string;
+  ref: string;
+};
+
+export const keyModuleTypeEnum = pgEnum(
+  "key_module_type",
+  KEY_MODULE_TYPE_IDS,
+);
+export const keyModuleStatusEnum = pgEnum(
+  "key_module_status",
+  KEY_MODULE_STATUSES,
+);
+
+/**
+ * 受控关键模块：第一阶段只包含电池/能源、核心功能和电子硬件。
+ * approved 后定义字段和内部 BOM 由服务层保持不可变；变更通过 derivedFrom 新建编号。
+ */
+export const keyModules = pgTable(
+  "key_modules",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    moduleNumber: varchar("moduleNumber", { length: 64 }).notNull(),
+    moduleType: keyModuleTypeEnum("moduleType").notNull(),
+    name: varchar("name", { length: 256 }).notNull(),
+    category: varchar("category", { length: 64 }).notNull().default(""),
+    model: varchar("model", { length: 128 }),
+    attributes: jsonb("attributes").$type<Record<string, unknown>>().notNull().default({}),
+    status: keyModuleStatusEnum("status").notNull().default("draft"),
+    derivedFromModuleId: varchar("derivedFromModuleId", { length: 32 })
+      .references((): AnyPgColumn => keyModules.id),
+    evidenceRefs: jsonb("evidenceRefs").$type<KeyModuleEvidenceRef[]>().notNull().default([]),
+    createdBy: integer("createdBy").notNull().references(() => users.id),
+    technicalConfirmedBy: integer("technicalConfirmedBy").references(() => users.id),
+    technicalConfirmedAt: timestamp("technicalConfirmedAt"),
+    approvedBy: integer("approvedBy").references(() => users.id),
+    approvedAt: timestamp("approvedAt"),
+    restrictionReason: text("restrictionReason"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    uniqModuleNumber: uniqueIndex("uniq_key_modules_number").on(table.moduleNumber),
+    idxTypeStatusCategory: index("idx_key_modules_type_status_category").on(
+      table.moduleType,
+      table.status,
+      table.category,
+    ),
+    idxDerivedFrom: index("idx_key_modules_derived_from").on(table.derivedFromModuleId),
+  }),
+);
+
+export const keyModuleItems = pgTable(
+  "key_module_items",
+  {
+    id: serial("id").primaryKey(),
+    moduleId: varchar("moduleId", { length: 32 })
+      .notNull()
+      .references(() => keyModules.id, { onDelete: "cascade" }),
+    partNumber: varchar("partNumber", { length: 64 }).notNull(),
+    name: varchar("name", { length: 256 }).notNull(),
+    spec: text("spec").notNull().default(""),
+    quantity: integer("quantity").notNull().default(1),
+    refDesignator: varchar("refDesignator", { length: 128 }).notNull().default(""),
+    componentProductId: varchar("componentProductId", { length: 32 })
+      .references(() => products.id, { onDelete: "set null" }),
+    sortOrder: integer("sortOrder").notNull().default(0),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    quantityPositive: check(
+      "key_module_items_quantity_positive",
+      sql`${table.quantity} > 0`,
+    ),
+    uniqModulePartPosition: uniqueIndex("uniq_key_module_item_position").on(
+      table.moduleId,
+      table.partNumber,
+      table.refDesignator,
+    ),
+    idxModule: index("idx_key_module_items_module").on(table.moduleId),
+    idxComponentProduct: index("idx_key_module_items_component_product").on(
+      table.componentProductId,
+    ),
+  }),
+);
+
+export type KeyModule = typeof keyModules.$inferSelect;
+export type InsertKeyModule = typeof keyModules.$inferInsert;
+export type KeyModuleItem = typeof keyModuleItems.$inferSelect;
+export type InsertKeyModuleItem = typeof keyModuleItems.$inferInsert;
 
 export const PRODUCT_DEFINITION_STATUSES = ["draft", "confirmed"] as const;
 export type ProductDefinitionStatus = (typeof PRODUCT_DEFINITION_STATUSES)[number];
