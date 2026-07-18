@@ -16,4 +16,3 @@ export function PlmWorkspaceView() {
     {section === 'products' ? <ProductLibraryView /> : <KeyModuleLibraryView />}
   </div>;
 }
-

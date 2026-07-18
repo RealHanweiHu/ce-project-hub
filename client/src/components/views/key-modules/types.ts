@@ -46,4 +46,3 @@ export const MODULE_STATUS_LABEL: Record<KeyModuleStatus, string> = {
   restricted: '限制选用',
   obsolete: '已停用',
 };
-
