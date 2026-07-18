@@ -8,7 +8,7 @@ import { useLocation } from 'wouter';
 import {
   LayoutDashboard, FolderKanban,
   ChevronRight, Menu, X, Cpu, Search, LogIn, Loader2,
-  Package, Inbox, CalendarDays, ListChecks,
+  Package, Inbox, CalendarDays, ListChecks, Boxes,
 } from 'lucide-react';
 import type { TaskFocus } from '@/components/views/TaskListView';
 import { nanoid } from 'nanoid';
@@ -23,16 +23,16 @@ import { useAuth } from '@/_core/hooks/useAuth';
 import { getLoginUrl } from '@/const';
 import { useQueryClient } from '@tanstack/react-query';
 import { getQueryKey } from '@trpc/react-query';
-import { isSystemAdminRole } from '@shared/system-roles';
+import { isSystemAdminRole, isSystemExternalRole } from '@shared/system-roles';
 import { NPD_FULL_TEMPLATE_CONFIG } from '@shared/npd-v3';
 import { useProjectData } from '@/hooks/useProjectData';
 import { NotificationBell } from '@/components/NotificationBell';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
 
-type View = 'overview' | 'mytasks' | 'projects' | 'calendar' | 'products' | 'requirements' | 'sop' | 'account';
+type View = 'overview' | 'mytasks' | 'projects' | 'calendar' | 'products' | 'collections' | 'requirements' | 'sop' | 'account';
 
-const VIEW_IDS = new Set<View>(['overview', 'mytasks', 'projects', 'calendar', 'products', 'requirements', 'sop', 'account']);
+const VIEW_IDS = new Set<View>(['overview', 'mytasks', 'projects', 'calendar', 'products', 'collections', 'requirements', 'sop', 'account']);
 const PROJECT_DETAIL_TABS = new Set<NonNullable<TaskFocus['tab']>>([
   'overview', 'tasks', 'reviews', 'materials', 'activity', 'metrics', 'kanban', 'requirements', 'gantt', 'issues', 'changelog', 'bom', 'files',
 ]);
@@ -127,6 +127,9 @@ const RequirementsView = lazy(() =>
 );
 const ProductLibraryView = lazy(() =>
   import('@/components/views/PlmWorkspaceView').then((module) => ({ default: module.PlmWorkspaceView }))
+);
+const ProjectCollectionsView = lazy(() =>
+  import('@/components/views/ProjectCollectionsView').then((module) => ({ default: module.ProjectCollectionsView }))
 );
 const CalendarPage = lazy(() =>
   import('@/components/views/CalendarPage').then((module) => ({ default: module.CalendarPage }))
@@ -861,8 +864,10 @@ export default function Home() {
     { id: 'projects' as View, label: '项目管理', labelEn: 'Projects', icon: FolderKanban },
     { id: 'calendar' as View, label: '日历', labelEn: 'Calendar', icon: CalendarDays },
     { id: 'products' as View, label: '产品库', labelEn: 'Products', icon: Package },
+    { id: 'collections' as View, label: '项目集', labelEn: 'Collections', icon: Boxes },
     { id: 'requirements' as View, label: '需求池', labelEn: 'Requirements', icon: Inbox },
-  ];
+    // 外部协作账号不展示项目集（集合名可能含客户/商业信息，服务端同样拦截）
+  ].filter((item) => item.id !== 'collections' || !isSystemExternalRole(user?.role));
 
   const handleNavClick = (v: View) => {
     setView(v);
@@ -884,6 +889,7 @@ export default function Home() {
     projects: 'Projects',
     calendar: 'Calendar',
     products: 'Products',
+    collections: 'Collections',
     requirements: 'Requirements',
     sop: 'SOP Library',
     account: '账户设置',
@@ -1122,6 +1128,7 @@ export default function Home() {
               )}
               {view === 'calendar' && <CalendarPage projects={projects} onSelectProject={handleSelectProject} />}
               {view === 'products' && <ProductLibraryView />}
+              {view === 'collections' && <ProjectCollectionsView onSelectProject={handleSelectProject} />}
               {view === 'requirements' && <RequirementsView />}
               {view === 'sop' && <SOPLibraryView />}
               {view === 'account' && (

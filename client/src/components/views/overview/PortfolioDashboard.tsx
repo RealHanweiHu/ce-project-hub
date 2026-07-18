@@ -102,15 +102,18 @@ export function PortfolioDashboard({
   scopeLabel,
   onSelectProject,
   onDrill,
+  showManagementKpis = true,
 }: {
   rows: PortfolioTableRow[];
   scopeLabel: string;
   onSelectProject: (id: string) => void;
-  onDrill: (kind: DrillKind) => void;
+  onDrill?: (kind: DrillKind) => void;
+  showManagementKpis?: boolean;
 }) {
   const data = useMemo(() => buildDashboard(rows), [rows]);
   const managementKpis = trpc.analytics.managementKpis.useQuery(undefined, {
     staleTime: 60_000,
+    enabled: showManagementKpis,
   });
 
   if (rows.length === 0) {
@@ -158,7 +161,7 @@ export function PortfolioDashboard({
       value: data.overdueTasks,
       sub: `阻塞 ${data.blockedTasks}`,
       tone: data.overdueTasks > 0 ? "red" : "neutral",
-      onClick: () => onDrill("overdue"),
+      onClick: onDrill ? () => onDrill("overdue") : undefined,
     },
   ];
 
@@ -175,11 +178,13 @@ export function PortfolioDashboard({
 
       <section className="space-y-3">
         <SectionLabel title="管理决策" sub="成本、质量与交付趋势" />
-        <ManagementKpiBoard
-          data={managementKpis.data}
-          isLoading={managementKpis.isLoading}
-          onSelectProject={onSelectProject}
-        />
+        {showManagementKpis && (
+          <ManagementKpiBoard
+            data={managementKpis.data}
+            isLoading={managementKpis.isLoading}
+            onSelectProject={onSelectProject}
+          />
+        )}
         <ExpenseVarianceBoard rows={rows} onSelectProject={onSelectProject} />
       </section>
 

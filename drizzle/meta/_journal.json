@@ -540,6 +540,13 @@
       "when": 1784322000000,
       "tag": "0076_project_release_state_barrier",
       "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1784325600000,
+      "tag": "0077_project_collections",
+      "breakpoints": true
     }
   ]
 }
