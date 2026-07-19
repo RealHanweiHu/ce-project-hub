@@ -7,7 +7,8 @@ import {
 } from "../drizzle/schema";
 import { getDb } from "./db";
 
-const SUFFIX = Date.now().toString(36);
+// 后缀含随机成分，避免与其他同用 `BAT-${SUFFIX}` 格式的测试文件同毫秒加载时撞唯一索引
+const SUFFIX = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 const USER_OPEN_ID = `key-module-schema-${SUFFIX}`;
 const MODULE_ID = `km-schema-${SUFFIX}`;
 const MODULE_NUMBER = `BAT-${SUFFIX}`;

@@ -60,7 +60,24 @@ async function cleanup() {
   await db.execute(sql`DELETE FROM projects WHERE id = ${PRJ}`);
   await db.execute(sql`DELETE FROM products WHERE id = ${PID}`);
 }
-beforeAll(cleanup);
+/**
+ * 本文件通篇以字面量 userId 1/2 作为 createdBy/pmUserId/releasedBy。
+ * 在开发库上恰好存在这两个账号，但在隔离测试库（TEST_DATABASE_URL）上会触发
+ * users FK 违例——测试须自包含：这里幂等补齐两个 fixture 用户并抬高序列。
+ */
+async function ensureFixtureUsers() {
+  const db = await getDb(); if (!db) return;
+  const { sql } = await import("drizzle-orm");
+  await db.execute(sql`
+    INSERT INTO users (id, "openId", name, role)
+    VALUES (1, 'fixture_user_1', 'Fixture 用户1', 'admin'),
+           (2, 'fixture_user_2', 'Fixture 用户2', 'member')
+    ON CONFLICT (id) DO NOTHING
+  `);
+  await db.execute(sql`SELECT setval(pg_get_serial_sequence('users', 'id'), GREATEST((SELECT MAX(id) FROM users), 100))`);
+}
+
+beforeAll(async () => { await ensureFixtureUsers(); await cleanup(); });
 afterAll(cleanup);
 
 async function addGate(decision: "approved" | "conditional" | "rejected", roundNumber: number, conditions?: string, projectId: string = PRJ) {

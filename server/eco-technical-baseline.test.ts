@@ -37,7 +37,9 @@ import {
 import { getReleaseGatePhase } from "../shared/sop-templates";
 import type { KeyModuleType } from "../shared/key-modules";
 
-const SUFFIX = Date.now().toString(36);
+// 后缀必须含随机成分：多个测试文件用同一 `BAT-${SUFFIX}` 格式生成模块号，
+// 并行 worker 同毫秒加载时纯时间戳后缀会撞 uniq_key_modules_number（偶发 flake）。
+const SUFFIX = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 // Use a per-process high integer range so an interrupted prior run cannot make
 // the next run collide with a user still referenced by its abandoned fixtures.
 const OWNER = 1_500_000_000 + (Date.now() % 100_000_000);
