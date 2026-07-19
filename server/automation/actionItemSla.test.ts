@@ -68,6 +68,7 @@ function makeDeps(rows: ActionItemSlaRow[]) {
         userId,
         { userId, prefs: {}, immediateSent24h: 0 },
       ])),
+      isProjectActive: async () => true,
       patchItem: async (id: number, patch: Record<string, unknown>, status?: "escalated") => {
         calls.patched.push({ id, patch, status });
       },

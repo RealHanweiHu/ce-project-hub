@@ -3,8 +3,8 @@ import { eq } from "drizzle-orm";
 import { projects, activityLogs } from "../drizzle/schema";
 
 /**
- * 钉钉降级：删除项目时解散钉钉群失败，不应把删除挡住——
- * 群解散是 best-effort，失败记录在返回值里让前端提示手动清理。
+ * 已知钉钉群是项目删除的必须清理项：远端解散失败时，
+ * 项目保持 paused 且保留 chatId，以便后续重试。
  */
 
 vi.mock("./_core/dingtalkGroup", async (importOriginal) => {
@@ -44,14 +44,19 @@ afterAll(async () => {
 });
 
 describe("projects.delete dingtalk degradation", () => {
-  it("解散钉钉群失败 → 项目仍被删除，返回 dingtalkGroupDeleted=false", async () => {
+  it("解散钉钉群失败 → 项目保持 paused 并保留群句柄", async () => {
     const caller = projectsRouter.createCaller(ctx(ADMIN));
-    const res = await caller.delete({ id: PROJ });
-    expect(res.success).toBe(true);
-    expect(res.dingtalkGroupDeleted).toBe(false);
+    await expect(caller.delete({ id: PROJ })).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
 
     const db = await getDb();
     const [row] = await db!.select().from(projects).where(eq(projects.id, PROJ));
-    expect(row).toBeUndefined(); // 项目确实删掉了
+    expect(row).toMatchObject({
+      lifecycle: "paused",
+      dingtalkChatId: "chat-123",
+      dingtalkGroupOperationStatus: "disband_failed",
+      dingtalkGroupLastError: "钉钉不可用",
+    });
   });
 });

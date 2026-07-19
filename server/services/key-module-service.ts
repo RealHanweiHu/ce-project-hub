@@ -512,14 +512,17 @@ export async function listKeyModules(input: {
   }
   const where = and(...conditions);
   const sameCategory = input.category?.trim();
+  const orderBy = sameCategory
+    ? [
+        sql`CASE WHEN ${keyModules.category} = ${sameCategory} THEN 0 ELSE 1 END`,
+        desc(keyModules.approvedAt),
+        asc(keyModules.moduleNumber),
+      ]
+    : [desc(keyModules.approvedAt), asc(keyModules.moduleNumber)];
   const [rows, totals] = await Promise.all([
     db.select().from(keyModules)
       .where(where)
-      .orderBy(
-        sameCategory ? sql`CASE WHEN ${keyModules.category} = ${sameCategory} THEN 0 ELSE 1 END` : sql`0`,
-        desc(keyModules.approvedAt),
-        asc(keyModules.moduleNumber),
-      )
+      .orderBy(...orderBy)
       .limit(pageSize)
       .offset((page - 1) * pageSize),
     db.select({ total: count() }).from(keyModules).where(where),

@@ -79,6 +79,8 @@ export interface FileAttachment {
   storageUrl?: string;
   /** S3 storage key. Present for server-uploaded files. */
   storageKey?: string;
+  /** Logical deliverable represented by this latest file. */
+  deliverableName?: string | null;
   /** 文件格式类别（见 shared/file-types.ts），可空 */
   fileType?: string | null;
   /** 版本标签，可空 */

@@ -48,6 +48,7 @@ function makeDeps(over: Partial<Parameters<typeof runPersonalDailyDigestScan>[1]
       item(),
       item({ recipientUserId: 8, kind: "deliverable_review", entityType: "deliverable_review", entityId: "review-1", title: "EVT 测试报告", dueDate: null }),
     ],
+    getActiveProjectIds: async (projectIds: string[]) => new Set(projectIds),
     getProjectLikes: async () => new Map(),
     hasRun: async () => false,
     now: new Date("2026-06-16T01:30:00Z"),

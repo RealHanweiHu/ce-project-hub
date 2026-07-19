@@ -18,6 +18,10 @@ const databaseUrl = normalizeDatabaseUrl(
 );
 
 process.env.DATABASE_URL = databaseUrl;
+// Never let the test runner inherit live DingTalk delivery credentials from
+// the developer shell or root .env. Transport unit tests explicitly opt into
+// mocked delivery inside their own process.
+process.env.DINGTALK_DELIVERY_MODE = "disabled";
 
 function localBin(name) {
   const binName = process.platform === "win32" ? `${name}.cmd` : name;

@@ -11,6 +11,7 @@ type FileRow = {
   id: number; name: string; size: number; mimeType: string;
   storageUrl: string | null; storageKey: string | null;
   fileType: string | null; fileVersion: string | null;
+  deliverableName: string | null;
   visibility: 'internal' | 'customer' | 'supplier' | 'public' | null;
   phaseId: string | null; taskId: string | null; createdAt: string | Date | null;
 };
@@ -42,6 +43,7 @@ export function FilesPanel({ project, role }: { project: Project; role: string }
     id: String(f.id), name: f.name, size: f.size, type: f.mimeType,
     uploadDate: f.createdAt ? new Date(f.createdAt).toISOString() : '',
     dataUrl: '', storageUrl: f.storageUrl ?? undefined, storageKey: f.storageKey ?? undefined,
+    deliverableName: f.deliverableName,
     fileType: f.fileType, fileVersion: f.fileVersion, visibility: f.visibility ?? 'internal',
   });
 

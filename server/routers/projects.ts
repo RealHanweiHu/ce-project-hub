@@ -85,6 +85,44 @@ import {
   resolveApprovedKeyModuleForReuse,
 } from "../services/key-module-service";
 import { canApproveProductTechnicalChange } from "../product-control";
+import {
+  collectProjectPushCleanupPlan,
+  purgeProjectPushArtifacts,
+  settleProjectInteractiveCards,
+} from "../project-delete-push-cleanup";
+import {
+  markProjectDeletionCleanupStarted,
+  ProjectDeleteInProgressError,
+  ProjectDeletionLeaseLostError,
+  quiesceProjectPushes,
+  restoreProjectPushes,
+  startProjectDeletionLeaseHeartbeat,
+} from "../project-delete-quiesce";
+import {
+  ProjectExternalOperationBlockedError,
+  hasUncertainProjectExternalOperations,
+  waitForProjectExternalOperations,
+  withProjectExternalOperation,
+} from "../project-external-operation";
+import { hasPendingProjectExternalApproval } from "../project-delete-approval-guard";
+import { canHardDeleteProject } from "../project-delete-preflight";
+import { cancelFutureProjectDingtalkEvents } from "../project-delete-calendar-cleanup";
+import {
+  beginProjectDingtalkGroupCreation,
+  checkpointProjectDingtalkGroupBound,
+  checkpointProjectDingtalkGroupCreateRolledBack,
+  disbandAndCheckpointProjectDingtalkGroup,
+  hasUnresolvedProjectDingtalkGroupCreation,
+  ProjectDingtalkGroupReconciliationError,
+  reconcileProjectDingtalkGroupCreation,
+  recordProjectDingtalkGroupCreateFailure,
+} from "../project-dingtalk-group-lifecycle";
+import {
+  listProjectDingtalkUncertainCreations,
+  ProjectDingtalkUncertainReconciliationError,
+  reconcileProjectDingtalkUncertainCreation,
+} from "../project-dingtalk-uncertain-reconciliation";
+import { syncExternalApprovalByProcessInstanceId } from "../services/external-approval-service";
 
 const DEFAULT_MEETING = { enabled: true, weekday: 3, time: "15:00", durationMin: 60, title: "项目周会" };
 const isoDateInput = z.string().refine(isISODate, "日期必须是有效的 YYYY-MM-DD");
@@ -180,6 +218,7 @@ async function assignAndNotify(
       try {
         const result = await notifyPersonal({
           eventKey: "task_assignment",
+          projectId: project.id,
           userIds: [userId],
           title: "项目任务分配",
           body: `你被指派 ${items.length} 项任务。`,
@@ -195,9 +234,19 @@ async function assignAndNotify(
       catch (e) { console.warn("[assign] dingtalk notify failed (non-fatal):", e); }
     }
     // 同步发一份汇总到项目群(若已建群)
-    if (project.dingtalkChatId && assignments.length > 0) {
+    const currentProject = await getProjectById(project.id);
+    if (assignments.length > 0 && currentProject?.dingtalkChatId &&
+        !currentProject.archived && currentProject.lifecycle === "active") {
       const summary = `### 项目「${project.name}」任务已分配\n共 ${assignments.length} 项任务分给 ${byUser.size} 位负责人,详情见各自钉钉工作通知。`;
-      try { await sendToGroupChat(project.dingtalkChatId, "任务分配", summary); } catch { /* 非阻断 */ }
+      try {
+        await withProjectExternalOperation([project.id], "task_assignment_group", async () => {
+          const latestProject = await getProjectById(project.id);
+          if (!latestProject || latestProject.archived || latestProject.lifecycle !== "active" || !latestProject.dingtalkChatId) {
+            throw new ProjectExternalOperationBlockedError();
+          }
+          await sendToGroupChat(latestProject.dingtalkChatId, "任务分配", summary);
+        });
+      } catch { /* 非阻断 */ }
     }
   }
   return { assigned: assignments.length, recipients: byUser.size, notified };
@@ -1664,35 +1713,272 @@ export const projectsRouter = router({
       if (project.dingtalkChatId) {
         return { success: true, chatId: project.dingtalkChatId, already: true };
       }
-
-      const ownerUserId = project.pmUserId ?? project.createdBy;
-      const [ownerCorp] = await resolveCorpIdsForUsers([ownerUserId]);
-      if (!ownerCorp) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "群主(PM/创建者)需先在「成员/系统管理」里配置手机号" });
+      if (hasUnresolvedProjectDingtalkGroupCreation(project)) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "上一次建群结果未知，请先在钉钉确认并完成对账",
+        });
       }
-      const members = await getProjectMembers(input.projectId);
-      const memberCorps = await resolveCorpIdsForUsers(
-        members.map((m) => m.userId).filter((id) => id !== ownerUserId)
-      );
 
-      const res = await createGroupChat(`【${project.name}】项目群`, ownerCorp, memberCorps);
-      if (!res.ok) throw new TRPCError({ code: "BAD_REQUEST", message: res.error });
+      try {
+        return await withProjectExternalOperation([input.projectId], "create_dingtalk_group", async () => {
+          const current = await getProjectById(input.projectId);
+          if (!current || current.archived || current.lifecycle !== "active") {
+            throw new ProjectExternalOperationBlockedError();
+          }
+          if (current.dingtalkChatId) {
+            return { success: true, chatId: current.dingtalkChatId, already: true };
+          }
+          if (hasUnresolvedProjectDingtalkGroupCreation(current)) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: "上一次建群结果未知，请先在钉钉确认并完成对账",
+            });
+          }
+          const ownerUserId = current.pmUserId ?? current.createdBy;
+          const [ownerCorp] = await resolveCorpIdsForUsers([ownerUserId]);
+          if (!ownerCorp) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "群主(PM/创建者)需先在「成员/系统管理」里配置手机号" });
+          }
+          const members = await getProjectMembers(input.projectId);
+          const memberCorps = await resolveCorpIdsForUsers(
+            members.map((m) => m.userId).filter((id) => id !== ownerUserId)
+          );
+          const groupName = `【${current.name}】项目群`;
+          const intent = await beginProjectDingtalkGroupCreation({
+            projectId: input.projectId,
+            name: groupName,
+            ownerUserId: ownerCorp,
+            memberUserIds: memberCorps,
+          });
+          const res = await createGroupChat(groupName, ownerCorp, memberCorps);
+          if (!res.ok) {
+            await recordProjectDingtalkGroupCreateFailure({
+              projectId: input.projectId,
+              intent,
+              result: res,
+            });
+            throw new TRPCError({
+              code: res.outcome === "unknown" ? "CONFLICT" : "BAD_REQUEST",
+              message: res.outcome === "unknown"
+                ? `${res.error}；已保留建群意图并暂停项目删除，请先对账`
+                : res.error,
+            });
+          }
+          try {
+            await checkpointProjectDingtalkGroupBound({
+              projectId: input.projectId,
+              chatId: res.chatId,
+            });
+          } catch (error) {
+            // Do not lose the only handle to a remotely-created group.
+            const rollback = await disbandGroupChat(res.chatId).catch(
+              (cleanupError) => ({
+                ok: false as const,
+                error:
+                  cleanupError instanceof Error
+                    ? cleanupError.message
+                    : String(cleanupError),
+              })
+            );
+            if (rollback.ok) {
+              await checkpointProjectDingtalkGroupCreateRolledBack(
+                input.projectId,
+                error instanceof Error ? error.message : String(error)
+              ).catch(checkpointError => {
+                console.warn(
+                  "[project.group] failed to checkpoint successful create rollback:",
+                  checkpointError
+                );
+              });
+            } else {
+              let handlePreserved = false;
+              try {
+                await checkpointProjectDingtalkGroupBound({
+                  projectId: input.projectId,
+                  chatId: res.chatId,
+                });
+                handlePreserved = true;
+              } catch (persistError) {
+                console.warn(
+                  "[project.group] failed to preserve uncompensated group handle:",
+                  res.chatId,
+                  persistError
+                );
+              }
+              console.warn(
+                "[project.group] rollback newly-created group failed:",
+                res.chatId,
+                rollback.error
+              );
+              if (handlePreserved) {
+                throw new TRPCError({
+                  code: "CONFLICT",
+                  message: "钉钉群已创建并保留绑定，请刷新项目后重试",
+                });
+              }
+            }
+            throw error;
+          }
+          await sendToGroupChat(
+            res.chatId,
+            "项目群已创建",
+            `### 【${current.name}】项目对接群\n本群用于该项目对接,逾期/Gate/任务/周会等提醒会自动发到这里。`,
+          );
+          await createActivityLog({
+            projectId: input.projectId,
+            userId: ctx.user.id,
+            action: "project.create_group",
+            entityType: "project",
+            entityId: input.projectId,
+            meta: { chatId: res.chatId, members: memberCorps.length + 1 },
+          });
+          return { success: true, chatId: res.chatId, already: false };
+        });
+      } catch (error) {
+        if (error instanceof ProjectExternalOperationBlockedError) {
+          throw new TRPCError({ code: "CONFLICT", message: error.message });
+        }
+        throw error;
+      }
+    }),
 
-      await updateProject(input.projectId, { dingtalkChatId: res.chatId });
-      await sendToGroupChat(
-        res.chatId,
-        "项目群已创建",
-        `### 【${project.name}】项目对接群\n本群用于该项目对接,逾期/Gate/任务/周会等提醒会自动发到这里。`
-      );
-      await createActivityLog({
-        projectId: input.projectId,
-        userId: ctx.user.id,
-        action: "project.create_group",
-        entityType: "project",
-        entityId: input.projectId,
-        meta: { chatId: res.chatId, members: memberCorps.length + 1 },
-      });
-      return { success: true, chatId: res.chatId, already: false };
+  /**
+   * 人工对账一次结果未知的建群请求。只有有权永久删除项目的 Owner/系统管理员
+   * 可以确认“未建群”或录入钉钉中实际存在的 chatId；服务端保留原意图与结论审计。
+   */
+  reconcileDingtalkGroupCreation: protectedProcedure
+    .input(z.object({
+      projectId: z.string(),
+      resolution: z.discriminatedUnion("type", [
+        z.object({
+          type: z.literal("not_created"),
+          note: z.string().trim().min(2).max(1000),
+        }).strict(),
+        z.object({
+          type: z.literal("bind"),
+          chatId: z.string().trim().min(1).max(128),
+          note: z.string().trim().min(2).max(1000),
+        }).strict(),
+      ]),
+    }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const isSystemAdmin = isSystemAdminRole(ctx.user.role);
+      if (!isSystemAdmin) {
+        const role = await getEffectiveRole(input.projectId, ctx.user.id);
+        if (!role || !ROLE_PERMISSIONS[role].canDeleteProject) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "只有项目 Owner 或系统管理员可以处理建群对账",
+          });
+        }
+      }
+      if (!hasUnresolvedProjectDingtalkGroupCreation(project)) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "项目当前没有待对账的建群请求",
+        });
+      }
+
+      try {
+        const result = await reconcileProjectDingtalkGroupCreation({
+          projectId: input.projectId,
+          actorUserId: ctx.user.id,
+          resolution: input.resolution,
+        });
+        return { success: true, ...result };
+      } catch (error) {
+        if (error instanceof ProjectDingtalkGroupReconciliationError) {
+          throw new TRPCError({ code: "CONFLICT", message: error.message });
+        }
+        throw error;
+      }
+    }),
+
+  /** Response-lost approval/calendar creates require an explicit, audited verdict. */
+  listDingtalkUncertainCreations: protectedProcedure
+    .input(z.object({ projectId: z.string() }).strict())
+    .query(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+      const isSystemAdmin = isSystemAdminRole(ctx.user.role);
+      if (!isSystemAdmin) {
+        const role = await getEffectiveRole(input.projectId, ctx.user.id);
+        if (!role || !ROLE_PERMISSIONS[role].canDeleteProject) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "只有项目 Owner 或系统管理员可以查看钉钉对账项",
+          });
+        }
+      }
+      return listProjectDingtalkUncertainCreations(input.projectId);
+    }),
+
+  reconcileDingtalkUncertainCreation: protectedProcedure
+    .input(z.object({
+      projectId: z.string(),
+      resolution: z.discriminatedUnion("resource", [
+        z.object({
+          resource: z.literal("approval"),
+          localId: z.number().int().positive(),
+          outcome: z.enum(["not_created", "bind"]),
+          remoteId: z.string().trim().min(1).max(128).optional(),
+          note: z.string().trim().min(2).max(1000),
+        }).strict(),
+        z.object({
+          resource: z.literal("calendar_event"),
+          localId: z.number().int().positive(),
+          outcome: z.enum(["not_created", "bind"]),
+          remoteId: z.string().trim().min(1).max(128).optional(),
+          note: z.string().trim().min(2).max(1000),
+        }).strict(),
+        z.object({
+          resource: z.literal("weekly_meeting"),
+          outcome: z.enum(["not_created", "bind"]),
+          remoteId: z.string().trim().min(1).max(128).optional(),
+          note: z.string().trim().min(2).max(1000),
+        }).strict(),
+      ]),
+    }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+      const isSystemAdmin = isSystemAdminRole(ctx.user.role);
+      if (!isSystemAdmin) {
+        const role = await getEffectiveRole(input.projectId, ctx.user.id);
+        if (!role || !ROLE_PERMISSIONS[role].canDeleteProject) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "只有项目 Owner 或系统管理员可以处理钉钉对账",
+          });
+        }
+      }
+      try {
+        const result = await reconcileProjectDingtalkUncertainCreation({
+          projectId: input.projectId,
+          actorUserId: ctx.user.id,
+          resolution: input.resolution,
+        });
+        const syncedApproval =
+          input.resolution.resource === "approval" &&
+          input.resolution.outcome === "bind" &&
+          result.remoteId
+            ? await syncExternalApprovalByProcessInstanceId(result.remoteId)
+            : undefined;
+        return {
+          success: true,
+          ...result,
+          approvalStatus: syncedApproval?.status ?? null,
+        };
+      } catch (error) {
+        if (error instanceof ProjectDingtalkUncertainReconciliationError) {
+          throw new TRPCError({ code: "CONFLICT", message: error.message });
+        }
+        throw error;
+      }
     }),
 
   /**
@@ -1721,26 +2007,161 @@ export const projectsRouter = router({
           });
         }
       }
+      if (!(await canHardDeleteProject(input.id))) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "已形成产品交付、修订或技术基线的项目需要保留追溯，不能永久删除",
+        });
+      }
+      if (await hasPendingProjectExternalApproval(input.id)) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "项目仍有进行中的钉钉审批，请先在钉钉终止审批后再删除",
+        });
+      }
+      if (hasUnresolvedProjectDingtalkGroupCreation(existing)) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "项目建群结果未知，请先在钉钉确认并完成对账",
+        });
+      }
       let result: Awaited<ReturnType<typeof deleteProject>>;
-      let dingtalkGroupDeleted = false;
+      let cleanupProject = existing;
+      let dingtalkGroupDeleted = !existing.dingtalkChatId;
+      let pushCleanupComplete = true;
+      let pushCleanupPlan = await collectProjectPushCleanupPlan(input.id);
+      let pushQuiesceState: Awaited<ReturnType<typeof quiesceProjectPushes>>;
       try {
-        if (existing.dingtalkEventId) {
-          try { await cancelAndRecordProjectMeeting(existing); }
-          catch (e) { console.warn("[meeting] cancel before project delete failed (non-fatal):", e); }
+        pushQuiesceState = await quiesceProjectPushes(input.id);
+      } catch (error) {
+        if (error instanceof ProjectDeleteInProgressError) {
+          throw new TRPCError({ code: "CONFLICT", message: error.message });
         }
-        if (existing.dingtalkChatId) {
-          // 群解散 best-effort：钉钉不可用不能把项目删除挡住（群可事后手动清理）
+        throw error;
+      }
+      const deletionHeartbeat = startProjectDeletionLeaseHeartbeat(
+        input.id,
+        pushQuiesceState
+      );
+      let externalCleanupStarted = false;
+      try {
+        if (!(await waitForProjectExternalOperations(input.id))) {
+          if (await hasUncertainProjectExternalOperations(input.id)) {
+            // A remote POST may have succeeded even though its response was
+            // lost. Persist the paused state so no fallback or later digest is
+            // emitted while the bounded quarantine settles.
+            await markProjectDeletionCleanupStarted(
+              input.id,
+              pushQuiesceState
+            );
+            externalCleanupStarted = true;
+            throw new TRPCError({
+              code: "CONFLICT",
+              message:
+                "钉钉发送结果仍在确认中，项目已暂停且不会继续推送，请约 15 分钟后重试删除",
+            });
+          }
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "项目仍有钉钉操作正在发送，项目未删除，请稍后重试",
+          });
+        }
+        const current = await getProjectById(input.id);
+        if (!current) throw new TRPCError({ code: "NOT_FOUND" });
+        cleanupProject = current;
+        dingtalkGroupDeleted = !current.dingtalkChatId;
+        if (!(await canHardDeleteProject(input.id))) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "删除期间项目已形成产品交付、修订或技术基线，不能永久删除",
+          });
+        }
+        if (cleanupProject.dingtalkMeetingSyncStatus === "pending") {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "项目周会仍在同步钉钉，项目未删除，请稍后重试",
+          });
+        }
+        if (hasUnresolvedProjectDingtalkGroupCreation(cleanupProject)) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "删除期间检测到建群结果未知，请先在钉钉确认并完成对账",
+          });
+        }
+        const latestPlan = await collectProjectPushCleanupPlan(input.id);
+        pushCleanupPlan = {
+          notificationIds: Array.from(new Set([...pushCleanupPlan.notificationIds, ...latestPlan.notificationIds])),
+          actionItemIds: Array.from(new Set([...pushCleanupPlan.actionItemIds, ...latestPlan.actionItemIds])),
+        };
+        if (await hasPendingProjectExternalApproval(input.id)) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "项目仍有进行中的钉钉审批，请先在钉钉终止审批后再删除",
+          });
+        }
+        await markProjectDeletionCleanupStarted(input.id, pushQuiesceState);
+        externalCleanupStarted = true;
+        try {
+          await cancelFutureProjectDingtalkEvents(input.id);
+        } catch (error) {
+          console.warn("[calendar] cancel before project delete failed:", error);
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: error instanceof Error
+              ? `${error.message}，项目已暂停且未删除，请稍后重试`
+              : "钉钉日程取消失败，项目已暂停且未删除，请稍后重试",
+          });
+        }
+        if (cleanupProject.dingtalkEventId) {
+          let canceled: Awaited<ReturnType<typeof cancelAndRecordProjectMeeting>>;
           try {
-            const groupResult = await disbandGroupChat(existing.dingtalkChatId);
-            if (groupResult.ok) dingtalkGroupDeleted = true;
-            else console.warn("[project.delete] disband dingtalk group failed (non-fatal):", groupResult.error);
-          } catch (e) {
-            console.warn("[project.delete] disband dingtalk group failed (non-fatal):", e);
+            canceled = await cancelAndRecordProjectMeeting(cleanupProject);
+          } catch (error) {
+            console.warn("[meeting] cancel before project delete failed:", error);
+            throw new TRPCError({ code: "CONFLICT", message: "钉钉周会取消失败，项目已暂停且未删除，请稍后重试" });
+          }
+          if (!canceled.ok) {
+            throw new TRPCError({ code: "CONFLICT", message: canceled.error ?? "钉钉周会取消失败，项目已暂停且未删除，请稍后重试" });
           }
         }
-        result = await deleteProject(input.id);
+        if (cleanupProject.dingtalkChatId) {
+          try {
+            await disbandAndCheckpointProjectDingtalkGroup(cleanupProject);
+            dingtalkGroupDeleted = true;
+            cleanupProject = { ...cleanupProject, dingtalkChatId: null };
+          } catch (error) {
+            console.warn("[project.delete] disband dingtalk group failed:", error);
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: error instanceof Error
+                ? `${error.message}，项目已暂停且未删除，请稍后重试`
+                : "钉钉群解散失败，项目已暂停且未删除，请稍后重试",
+            });
+          }
+        }
+        if (await hasPendingProjectExternalApproval(input.id)) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "删除期间产生了新的钉钉审批，项目未删除，请先终止审批",
+          });
+        }
+        deletionHeartbeat.assertHealthy();
+        result = await deleteProject(input.id, {
+          deletionLeaseToken: pushQuiesceState.token,
+        });
       } catch (error) {
+        await deletionHeartbeat.stop();
+        try {
+          await restoreProjectPushes(input.id, pushQuiesceState, {
+            restoreLifecycle: !externalCleanupStarted,
+          });
+        } catch (restoreError) {
+          console.warn("[project.delete] failed to restore project after delete error:", restoreError);
+        }
         if (error instanceof TRPCError) throw error;
+        if (error instanceof ProjectDeletionLeaseLostError) {
+          throw new TRPCError({ code: "CONFLICT", message: error.message });
+        }
         if (error instanceof Error && /released project/i.test(error.message)) {
           throw new TRPCError({
             code: "BAD_REQUEST",
@@ -1748,6 +2169,16 @@ export const projectsRouter = router({
           });
         }
         throw error;
+      } finally {
+        await deletionHeartbeat.stop();
+      }
+
+      if (!(await settleProjectInteractiveCards(pushCleanupPlan))) pushCleanupComplete = false;
+      try {
+        await purgeProjectPushArtifacts(input.id, pushCleanupPlan);
+      } catch (error) {
+        pushCleanupComplete = false;
+        console.warn("[project.delete] push artifact cleanup failed (non-fatal):", error);
       }
 
       await Promise.allSettled(result.storageKeys.map(async (storageKey) => {
@@ -1763,6 +2194,7 @@ export const projectsRouter = router({
         projectName: existing.name,
         deletedFiles: result.storageKeys.length,
         dingtalkGroupDeleted,
+        pushCleanupComplete,
       };
     }),
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FILE_TYPES, normalizeFileType, normalizeFileVersion } from "@shared/file-types";
+import { FILE_TYPES, nextAutoFileVersion, normalizeFileType, normalizeFileVersion } from "@shared/file-types";
 
 describe("normalizeFileType", () => {
   it("白名单内的值保留", () => {
@@ -34,5 +34,23 @@ describe("normalizeFileVersion", () => {
     const long = "x".repeat(40);
     expect(normalizeFileVersion(long)).toBe("x".repeat(32));
     expect(normalizeFileVersion(long)!.length).toBe(32);
+  });
+});
+
+describe("nextAutoFileVersion", () => {
+  it("首次上传从 V1.0 开始，V 版本递增修订号", () => {
+    expect(nextAutoFileVersion(null)).toBe("V1.0");
+    expect(nextAutoFileVersion("V1.0")).toBe("V1.1");
+    expect(nextAutoFileVersion("v2.9")).toBe("V2.10");
+  });
+
+  it("兼容历史 T 与 Rev 版本", () => {
+    expect(nextAutoFileVersion("T1")).toBe("T2");
+    expect(nextAutoFileVersion("Rev.B")).toBe("Rev.C");
+    expect(nextAutoFileVersion("Rev.Z")).toBe("Rev.AA");
+  });
+
+  it("无法识别的历史标签重新从 V1.0 开始", () => {
+    expect(nextAutoFileVersion("正式版")).toBe("V1.0");
   });
 });

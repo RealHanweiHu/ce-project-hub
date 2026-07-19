@@ -12,7 +12,10 @@ import {
   buildProjectActionPath,
   buildTaskCompletionActionPath,
 } from "../../shared/action-links";
-import { notifyPersonal, type NotifyPersonalDeps } from "../notification-gateway";
+import {
+  notifyPersonal,
+  type NotifyPersonalDeps,
+} from "../notification-gateway";
 import { taskDisplayTitle } from "../task-title";
 import {
   parseDigestRuleConfig,
@@ -22,21 +25,35 @@ import { shanghaiParts } from "./healthDigest";
 import type { ProjectTemplateLike } from "../../shared/npd-v3";
 
 export type PersonalDailyDigestDeps = {
-  getConfigRow?: () => Promise<{ enabled: boolean; config: PersonalDailyDigestConfig } | null>;
+  getConfigRow?: () => Promise<{
+    enabled: boolean;
+    config: PersonalDailyDigestConfig;
+  } | null>;
   getItems?: (input: {
     todayISO: string;
     dueSoonDays: number;
     includePendingReviews: boolean;
     includeProjectExceptions: boolean;
   }) => Promise<PersonalDailyDigestItem[]>;
+  getActiveProjectIds?: (projectIds: string[]) => Promise<Set<string>>;
   hasRun?: (entityId: string) => Promise<boolean>;
-  writeRun?: (status: "fired" | "skipped", entityId: string, detail: string, recipients?: unknown) => Promise<void>;
-  getProjectLikes?: (projectIds: string[]) => Promise<Map<string, ProjectTemplateLike>>;
+  writeRun?: (
+    status: "fired" | "skipped",
+    entityId: string,
+    detail: string,
+    recipients?: unknown
+  ) => Promise<void>;
+  getProjectLikes?: (
+    projectIds: string[]
+  ) => Promise<Map<string, ProjectTemplateLike>>;
 } & NotifyPersonalDeps;
 
-async function defaultGetConfigRow(): Promise<{ enabled: boolean; config: PersonalDailyDigestConfig } | null> {
+async function defaultGetConfigRow(): Promise<{
+  enabled: boolean;
+  config: PersonalDailyDigestConfig;
+} | null> {
   const rows = await listAutomationRuleRows();
-  const row = rows.find((r) => r.ruleKey === "personal_daily_digest");
+  const row = rows.find(r => r.ruleKey === "personal_daily_digest");
   if (!row) return null;
   return {
     enabled: row.enabled,
@@ -44,16 +61,25 @@ async function defaultGetConfigRow(): Promise<{ enabled: boolean; config: Person
   };
 }
 
-export function computePersonalDailyDigestTiming(now: Date, config: PersonalDailyDigestConfig): {
+export function computePersonalDailyDigestTiming(
+  now: Date,
+  config: PersonalDailyDigestConfig
+): {
   todayISO: string;
   periodKey: string;
   reached: boolean;
 } {
   const { todayISO, hour } = shanghaiParts(now);
-  return { todayISO, periodKey: `d:${todayISO}`, reached: hour >= config.sendHour };
+  return {
+    todayISO,
+    periodKey: `d:${todayISO}`,
+    reached: hour >= config.sendHour,
+  };
 }
 
-export function groupPersonalDigestItems(items: PersonalDailyDigestItem[]): Map<number, PersonalDailyDigestItem[]> {
+export function groupPersonalDigestItems(
+  items: PersonalDailyDigestItem[]
+): Map<number, PersonalDailyDigestItem[]> {
   const grouped = new Map<number, PersonalDailyDigestItem[]>();
   for (const item of items) {
     const list = grouped.get(item.recipientUserId) ?? [];
@@ -66,27 +92,39 @@ export function groupPersonalDigestItems(items: PersonalDailyDigestItem[]): Map<
 export function buildPersonalDailyDigestMarkdown(
   items: PersonalDailyDigestItem[],
   todayISO: string,
-  projectLikes: Map<string, ProjectTemplateLike> = new Map(),
+  projectLikes: Map<string, ProjectTemplateLike> = new Map()
 ): { title: string; body: string; markdown: string } {
   const counts = {
-    critical: items.filter((item) => item.kind === "issue_critical").length,
-    blocked: items.filter((item) => item.kind === "task_blocked").length,
-    overdue: items.filter((item) => item.kind === "task_overdue" || item.kind === "issue_overdue").length,
-    reviews: items.filter((item) => item.kind === "deliverable_review").length,
-    dueSoon: items.filter((item) => item.kind === "task_due_soon" || item.kind === "issue_due_soon").length,
+    critical: items.filter(item => item.kind === "issue_critical").length,
+    blocked: items.filter(item => item.kind === "task_blocked").length,
+    overdue: items.filter(
+      item => item.kind === "task_overdue" || item.kind === "issue_overdue"
+    ).length,
+    reviews: items.filter(item => item.kind === "deliverable_review").length,
+    dueSoon: items.filter(
+      item => item.kind === "task_due_soon" || item.kind === "issue_due_soon"
+    ).length,
   };
   const title = "我的每日摘要";
-  const body = [
-    counts.critical ? `P0/P1 ${counts.critical}` : null,
-    counts.blocked ? `阻塞 ${counts.blocked}` : null,
-    counts.overdue ? `逾期 ${counts.overdue}` : null,
-    counts.reviews ? `待审核 ${counts.reviews}` : null,
-    counts.dueSoon ? `临期 ${counts.dueSoon}` : null,
-  ].filter(Boolean).join(" · ") || "暂无异常";
+  const body =
+    [
+      counts.critical ? `P0/P1 ${counts.critical}` : null,
+      counts.blocked ? `阻塞 ${counts.blocked}` : null,
+      counts.overdue ? `逾期 ${counts.overdue}` : null,
+      counts.reviews ? `待审核 ${counts.reviews}` : null,
+      counts.dueSoon ? `临期 ${counts.dueSoon}` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ") || "暂无异常";
   const visible = items.slice(0, 10);
-  const lines = visible.map((item) => `- ${itemKindLabel(item)} ${item.projectName}：${itemTitle(item, projectLikes)}${dateSuffix(item)}`);
+  const lines = visible.map(
+    item =>
+      `- ${itemKindLabel(item)} ${item.projectName}：${itemTitle(item, projectLikes)}${dateSuffix(item)}`
+  );
   if (items.length > visible.length) {
-    lines.push(`- 还有 ${items.length - visible.length} 项，请到我的工作台查看`);
+    lines.push(
+      `- 还有 ${items.length - visible.length} 项，请到我的工作台查看`
+    );
   }
   return {
     title,
@@ -95,33 +133,72 @@ export function buildPersonalDailyDigestMarkdown(
   };
 }
 
-export async function runPersonalDailyDigestScan(now: Date, deps: PersonalDailyDigestDeps = {}): Promise<void> {
+export async function runPersonalDailyDigestScan(
+  now: Date,
+  deps: PersonalDailyDigestDeps = {}
+): Promise<void> {
   const getConfigRow = deps.getConfigRow ?? defaultGetConfigRow;
   const cfgRow = await getConfigRow();
   if (!cfgRow || !cfgRow.enabled) return;
   const config = cfgRow.config;
-  const { todayISO, periodKey, reached } = computePersonalDailyDigestTiming(now, config);
+  const { todayISO, periodKey, reached } = computePersonalDailyDigestTiming(
+    now,
+    config
+  );
   if (!reached) return;
 
   const getItems = deps.getItems ?? defaultGetItems;
-  const items = await getItems({
+  const loadedItems = await getItems({
     todayISO,
     dueSoonDays: config.dueSoonDays,
     includePendingReviews: config.includePendingReviews,
     includeProjectExceptions: config.includeProjectExceptions,
   });
-  const hasRun = deps.hasRun ?? ((entityId: string) => hasAutomationRunForEntity({ ruleKey: "personal_daily_digest", entityId }));
-  const writeRun = deps.writeRun ?? ((status: "fired" | "skipped", entityId: string, detail: string, recipients: unknown = []) =>
-    createAutomationRun({
-      ruleKey: "personal_daily_digest",
-      projectId: null,
-      eventType: "scheduled",
-      entityType: "portfolio",
-      entityId,
-      status,
-      recipients,
-      detail: detail.slice(0, 1000),
-    }));
+  const getActiveProjectIds =
+    deps.getActiveProjectIds ??
+    (async (projectIds: string[]) => {
+      const wanted = new Set(projectIds);
+      return new Set(
+        (await getAutomationActiveProjects())
+          .filter(project => wanted.has(project.id))
+          .map(project => project.id)
+      );
+    });
+  const loadedProjectIds = Array.from(
+    new Set(loadedItems.map(item => item.projectId))
+  );
+  const activeProjectIds =
+    loadedProjectIds.length > 0
+      ? await getActiveProjectIds(loadedProjectIds)
+      : new Set<string>();
+  const items = loadedItems.filter(item =>
+    activeProjectIds.has(item.projectId)
+  );
+  const hasRun =
+    deps.hasRun ??
+    ((entityId: string) =>
+      hasAutomationRunForEntity({
+        ruleKey: "personal_daily_digest",
+        entityId,
+      }));
+  const writeRun =
+    deps.writeRun ??
+    ((
+      status: "fired" | "skipped",
+      entityId: string,
+      detail: string,
+      recipients: unknown = []
+    ) =>
+      createAutomationRun({
+        ruleKey: "personal_daily_digest",
+        projectId: null,
+        eventType: "scheduled",
+        entityType: "portfolio",
+        entityId,
+        status,
+        recipients,
+        detail: detail.slice(0, 1000),
+      }));
 
   const grouped = groupPersonalDigestItems(items);
   if (grouped.size === 0) {
@@ -133,9 +210,13 @@ export async function runPersonalDailyDigestScan(now: Date, deps: PersonalDailyD
   }
 
   let projectLikes = new Map<string, ProjectTemplateLike>();
-  const projectIds = Array.from(new Set(items
-    .filter((item) => item.entityType === "task")
-    .map((item) => item.projectId)));
+  const projectIds = Array.from(
+    new Set(
+      items
+        .filter(item => item.entityType === "task")
+        .map(item => item.projectId)
+    )
+  );
   if (projectIds.length > 0) {
     try {
       if (deps.getProjectLikes) {
@@ -144,52 +225,91 @@ export async function runPersonalDailyDigestScan(now: Date, deps: PersonalDailyD
         const wanted = new Set(projectIds);
         projectLikes = new Map(
           (await getAutomationActiveProjects())
-            .filter((project) => wanted.has(project.id))
-            .map((project) => [project.id, project] as const),
+            .filter(project => wanted.has(project.id))
+            .map(project => [project.id, project] as const)
         );
       }
     } catch (error) {
-      console.warn("[automation] personal digest project template context failed; using task ids:", error);
+      console.warn(
+        "[automation] personal digest project template context failed; using task ids:",
+        error
+      );
     }
   }
 
   for (const [userId, userItems] of Array.from(grouped.entries())) {
     const entityId = `${periodKey}:${userId}`;
     if (await hasRun(entityId)) continue;
-    const { title, body, markdown } = buildPersonalDailyDigestMarkdown(userItems, todayISO, projectLikes);
-    const delivery = await notifyPersonal({
-      eventKey: "personal_daily_digest",
-      userIds: [userId],
-      title,
-      body,
-      markdown,
-      entityType: "portfolio",
-      entityId,
-      actionPath: "/?view=overview",
-      bestEffortDingtalk: !config.pushDingtalk,
-      suppressDingtalk: !config.pushDingtalk,
-    }, deps);
+    const currentProjectIds = Array.from(
+      new Set(userItems.map(item => item.projectId))
+    );
+    const currentActiveProjectIds =
+      await getActiveProjectIds(currentProjectIds);
+    const deliverableItems = userItems.filter(item =>
+      currentActiveProjectIds.has(item.projectId)
+    );
+    if (deliverableItems.length === 0) continue;
+    const { title, body, markdown } = buildPersonalDailyDigestMarkdown(
+      deliverableItems,
+      todayISO,
+      projectLikes
+    );
+    const delivery = await notifyPersonal(
+      {
+        eventKey: "personal_daily_digest",
+        projectIds: Array.from(
+          new Set(deliverableItems.map(item => item.projectId))
+        ),
+        userIds: [userId],
+        title,
+        body,
+        markdown,
+        entityType: "portfolio",
+        entityId,
+        actionPath: "/?view=overview",
+        bestEffortDingtalk: !config.pushDingtalk,
+        suppressDingtalk: !config.pushDingtalk,
+      },
+      {
+        ...deps,
+        now: deps.now ?? now,
+        isProjectActive:
+          deps.isProjectActive ??
+          (async (projectId: string) =>
+            (await getActiveProjectIds([projectId])).has(projectId)),
+      }
+    );
     if (delivery.site + delivery.dingtalk === 0) {
-      throw new Error(delivery.errors.join("；") || `个人摘要 ${userId} 没有渠道实际送达`);
+      throw new Error(
+        delivery.errors.join("；") || `个人摘要 ${userId} 没有渠道实际送达`
+      );
     }
-    await writeRun("fired", entityId, `items ${userItems.length}`, [{ userId, channel: "digest" }]);
+    await writeRun("fired", entityId, `items ${deliverableItems.length}`, [
+      { userId, channel: "digest" },
+    ]);
   }
 }
 
 function itemKindLabel(item: PersonalDailyDigestItem): string {
   if (item.kind === "issue_critical") return "P0/P1";
   if (item.kind === "task_blocked") return "阻塞";
-  if (item.kind === "task_overdue" || item.kind === "issue_overdue") return "逾期";
+  if (item.kind === "task_overdue" || item.kind === "issue_overdue")
+    return "逾期";
   if (item.kind === "deliverable_review") return "待审核";
   return "临期";
 }
 
-function itemTitle(item: PersonalDailyDigestItem, projectLikes: Map<string, ProjectTemplateLike>): string {
+function itemTitle(
+  item: PersonalDailyDigestItem,
+  projectLikes: Map<string, ProjectTemplateLike>
+): string {
   if (item.entityType === "task") {
     return taskDisplayTitle({
       taskId: item.title,
       phaseId: item.phaseId,
-      projectLike: projectLikes.get(item.projectId) ?? { category: item.projectCategory },
+      projectLike: projectLikes.get(item.projectId) ?? {
+        category: item.projectCategory,
+      },
     });
   }
   return item.title;
@@ -227,14 +347,26 @@ export function actionPathForDigestItem(item: PersonalDailyDigestItem): string {
         deliverableName: item.title,
       });
     }
-    return buildProjectActionPath({ projectId: item.projectId, tab: "reviews", phaseId: item.phaseId ?? undefined });
+    return buildProjectActionPath({
+      projectId: item.projectId,
+      tab: "reviews",
+      phaseId: item.phaseId ?? undefined,
+    });
   }
-  if (item.entityType === "issue" && item.phaseId && item.status === "resolved") {
+  if (
+    item.entityType === "issue" &&
+    item.phaseId &&
+    item.status === "resolved"
+  ) {
     return buildIssueValidationActionPath({
       projectId: item.projectId,
       phaseId: item.phaseId,
       issueId: item.entityId,
     });
   }
-  return buildProjectActionPath({ projectId: item.projectId, tab: "issues", phaseId: item.phaseId ?? undefined });
+  return buildProjectActionPath({
+    projectId: item.projectId,
+    tab: "issues",
+    phaseId: item.phaseId ?? undefined,
+  });
 }

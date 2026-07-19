@@ -68,6 +68,16 @@ describe.sequential("key module service", () => {
     expect(updated.items.map(item => item.partNumber)).toEqual(["CELL-02", "BMS-01"]);
   });
 
+  it("lists created drafts when no category ranking is requested", async () => {
+    const result = await listKeyModules({
+      statuses: ["draft", "technical_confirmed", "approved", "restricted", "obsolete"],
+      page: 1,
+      pageSize: 100,
+    });
+
+    expect(result.data.map(row => row.id)).toContain(MODULE_ID);
+  });
+
   it("requires a complete internal BOM before technical confirmation", async () => {
     await expect(updateKeyModuleDraft(MODULE_ID, { items: [] }, userId)).rejects.toMatchObject({
       code: "EMPTY_INTERNAL_BOM",

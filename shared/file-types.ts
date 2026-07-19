@@ -15,3 +15,40 @@ export function normalizeFileVersion(raw: string | null | undefined): string | n
   const v = (raw ?? "").trim();
   return v ? v.slice(0, 32) : null;
 }
+
+/** 根据最近一次版本生成下一版；新交付物统一从 V1.0 起步。 */
+export function nextAutoFileVersion(rawPrevious: string | null | undefined): string {
+  const previous = normalizeFileVersion(rawPrevious);
+  if (!previous) return "V1.0";
+
+  const vMatch = /^v(\d+)\.(\d+)$/i.exec(previous);
+  if (vMatch) {
+    const major = Number(vMatch[1]);
+    const minor = Number(vMatch[2]);
+    return normalizeFileVersion(`V${major}.${minor + 1}`)!;
+  }
+
+  const tMatch = /^t(\d+)$/i.exec(previous);
+  if (tMatch) {
+    const build = Number(tMatch[1]);
+    return normalizeFileVersion(`T${build + 1}`)!;
+  }
+
+  const revMatch = /^rev\.([a-z]+)$/i.exec(previous);
+  if (revMatch) {
+    const letters = revMatch[1].toUpperCase();
+    const chars = letters.split("");
+    let index = chars.length - 1;
+    while (index >= 0) {
+      if (chars[index] !== "Z") {
+        chars[index] = String.fromCharCode(chars[index].charCodeAt(0) + 1);
+        return normalizeFileVersion(`Rev.${chars.join("")}`)!;
+      }
+      chars[index] = "A";
+      index -= 1;
+    }
+    return normalizeFileVersion(`Rev.A${chars.join("")}`)!;
+  }
+
+  return "V1.0";
+}

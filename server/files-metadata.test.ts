@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll } from "vitest";
-import { getDb, createProjectFile, getProjectFiles } from "./db";
+import { getDb, createProjectFile, deleteSupersededProjectDeliverableFiles, getProjectFiles } from "./db";
 import { projects, projectFiles } from "../drizzle/schema";
 import { eq } from "drizzle-orm";
 
@@ -52,5 +52,74 @@ describe("createProjectFile fileType/fileVersion 防脏", () => {
     expect(r2?.fileVersion?.length).toBe(32);
     expect(r3?.fileType).toBeNull();
     expect(r3?.fileVersion).toBeNull();
+  });
+});
+
+describe("createProjectFile 自动版本", () => {
+  it("同一任务和文件类型首次为 V1.0，后续并发上传连续递增", async () => {
+    const db = await seedProject();
+    if (!db) return;
+    const taskBase = {
+      ...base,
+      phaseId: "design",
+      taskId: "design-spec",
+      fileType: "规格书",
+      fileVersion: null,
+    };
+    const [firstId, secondId] = await Promise.all([
+      createProjectFile({ ...taskBase, storageKey: "auto-1", storageUrl: "/storage/auto-1" }, { autoVersion: true }),
+      createProjectFile({ ...taskBase, storageKey: "auto-2", storageUrl: "/storage/auto-2" }, { autoVersion: true }),
+    ]);
+    const rows = await getProjectFiles(PROJ, "design", "design-spec");
+    const versions = rows
+      .filter((row) => row.id === firstId || row.id === secondId)
+      .map((row) => row.fileVersion)
+      .sort();
+    expect(versions).toEqual(["V1.0", "V1.1"]);
+  });
+
+  it("不同文件类型各自从 V1.0 开始", async () => {
+    const db = await seedProject();
+    if (!db) return;
+    const id = await createProjectFile({
+      ...base,
+      phaseId: "design",
+      taskId: "design-spec",
+      fileType: "报告",
+      fileVersion: null,
+      storageKey: "auto-report",
+      storageUrl: "/storage/auto-report",
+    }, { autoVersion: true });
+    const row = (await getProjectFiles(PROJ)).find((file) => file.id === id);
+    expect(row?.fileVersion).toBe("V1.0");
+  });
+
+  it("Gate 同名交付物跨文件类型共用版本链", async () => {
+    const db = await seedProject();
+    if (!db) return;
+    const deliverableBase = {
+      ...base,
+      phaseId: "pvt",
+      taskId: "pvt-gate",
+      deliverableName: "产品规格书",
+      fileVersion: null,
+    };
+    const firstId = await createProjectFile({
+      ...deliverableBase,
+      fileType: "规格书",
+      storageKey: "gate-auto-1",
+      storageUrl: "/storage/gate-auto-1",
+    }, { autoVersion: true });
+    const secondId = await createProjectFile({
+      ...deliverableBase,
+      fileType: "报告",
+      storageKey: "gate-auto-2",
+      storageUrl: "/storage/gate-auto-2",
+    }, { autoVersion: true });
+    const supersededKeys = await deleteSupersededProjectDeliverableFiles(secondId, PROJ);
+    const rows = await getProjectFiles(PROJ, "pvt", "pvt-gate");
+    expect(rows.some((row) => row.id === firstId)).toBe(false);
+    expect(rows.find((row) => row.id === secondId)?.fileVersion).toBe("V1.1");
+    expect(supersededKeys).toEqual(["gate-auto-1"]);
   });
 });

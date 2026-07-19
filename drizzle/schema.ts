@@ -164,6 +164,26 @@ export const projectLifecycleEnum = pgEnum("project_lifecycle", PROJECT_LIFECYCL
 export const PROJECT_CATEGORIES = ["npd", "eco", "derivative", "idr", "jdm", "obt"] as const;
 export const projectCategoryEnum = pgEnum("project_category", PROJECT_CATEGORIES);
 
+export const PROJECT_DINGTALK_GROUP_OPERATION_STATUSES = [
+  "idle",
+  "creating",
+  "create_unknown",
+  "create_failed",
+  "bound",
+  "disbanding",
+  "disband_failed",
+  "disbanded",
+] as const;
+export type ProjectDingtalkGroupOperationStatus =
+  (typeof PROJECT_DINGTALK_GROUP_OPERATION_STATUSES)[number];
+export type ProjectDingtalkGroupIntent = {
+  operationId: string;
+  name: string;
+  ownerUserId: string;
+  memberUserIds: string[];
+  requestedAt: string;
+};
+
 export const projects = pgTable("projects", {
   id: varchar("id", { length: 32 }).primaryKey(),
   name: varchar("name", { length: 256 }).notNull(),
@@ -239,6 +259,15 @@ export const projects = pgTable("projects", {
   dingtalkMeetingLastSyncedAt: timestamp("dingtalkMeetingLastSyncedAt"),
   /** 项目专属钉钉群会话 id（建群后回填，项目提醒发到此群） */
   dingtalkChatId: varchar("dingtalkChatId", { length: 128 }),
+  /** 建群/解散持久化阶段；creating/create_unknown 在无 chatId 时阻止硬删除。 */
+  dingtalkGroupOperationStatus: varchar("dingtalkGroupOperationStatus", { length: 24 })
+    .$type<ProjectDingtalkGroupOperationStatus>()
+    .notNull()
+    .default("idle"),
+  /** 远端建群 POST 前持久化的请求意图，用于超时后对账。 */
+  dingtalkGroupIntent: jsonb("dingtalkGroupIntent").$type<ProjectDingtalkGroupIntent | null>(),
+  dingtalkGroupLastError: text("dingtalkGroupLastError"),
+  dingtalkGroupUpdatedAt: timestamp("dingtalkGroupUpdatedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
 });
@@ -435,7 +464,9 @@ export const projectCalendarEvents = pgTable(
   "project_calendar_events",
   {
     id: serial("id").primaryKey(),
-    projectId: varchar("projectId", { length: 32 }).notNull(),
+    projectId: varchar("projectId", { length: 32 })
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
     title: varchar("title", { length: 256 }).notNull(),
     description: text("description"),
     eventDate: date("eventDate", { mode: "string" }).notNull(),
@@ -3053,6 +3084,7 @@ export const notifications = pgTable(
   "notifications",
   {
     id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 }).references(() => projects.id, { onDelete: "cascade" }),
     userId: integer("userId").notNull(),
     type: varchar("type", { length: 24 }).notNull(),
     title: varchar("title", { length: 256 }).notNull(),
@@ -3062,10 +3094,45 @@ export const notifications = pgTable(
     read: boolean("read").notNull().default(false),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
-  (t) => ({ idxUser: index("idx_notifications_user").on(t.userId, t.read) })
+  (t) => ({
+    idxUser: index("idx_notifications_user").on(t.userId, t.read),
+    idxProject: index("idx_notifications_project").on(t.projectId),
+  })
 );
 export type Notification = typeof notifications.$inferSelect;
 export type InsertNotification = typeof notifications.$inferInsert;
+
+/** Exclusive owner record while a project hard delete is in progress. */
+export const projectDeletionLeases = pgTable("project_deletion_leases", {
+  projectId: varchar("projectId", { length: 32 })
+    .primaryKey()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  token: varchar("token", { length: 64 }).notNull(),
+  previousLifecycle: varchar("previousLifecycle", { length: 24 }).$type<ProjectLifecycle>().notNull(),
+  expiresAt: timestamp("expiresAt").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type ProjectDeletionLease = typeof projectDeletionLeases.$inferSelect;
+
+/** Short-lived reservations held across project-scoped remote side effects. */
+export const projectExternalOperations = pgTable(
+  "project_external_operations",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 })
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    token: varchar("token", { length: 64 }).notNull(),
+    kind: varchar("kind", { length: 64 }).notNull(),
+    expiresAt: timestamp("expiresAt").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    uniqTokenProject: uniqueIndex("uniq_project_external_operation_token_project").on(table.token, table.projectId),
+    idxProjectExpiry: index("idx_project_external_operations_project_expiry").on(table.projectId, table.expiresAt),
+  }),
+);
+export type ProjectExternalOperation = typeof projectExternalOperations.$inferSelect;
 
 // ── 自动化规则：内置规则配置 + 运行审计 ────────────────────────────────────────
 export const automationRules = pgTable(

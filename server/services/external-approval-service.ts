@@ -19,7 +19,11 @@ import {
 } from "../db";
 import type { ExternalApprovalInstance } from "../../drizzle/schema";
 import { emitAutomationEvent } from "../automation/events";
-import { actionDedupeKey, closeActionItems, notifyActionItem } from "../action-item-notify";
+import {
+  actionDedupeKey,
+  closeActionItems,
+  notifyActionItem,
+} from "../action-item-notify";
 import { resolveDingtalkCorpUserId } from "../_core/dingtalk";
 import {
   buildApprovalForm,
@@ -31,15 +35,31 @@ import { buildProjectActionPath } from "../../shared/action-links";
 import { applyActionExternalApproval } from "./action-approval-apply";
 import { isActionExternalApprovalType } from "./action-approval-submit";
 import { canApproveProductTechnicalChange } from "../product-control";
+import {
+  ProjectExternalOperationBlockedError,
+  withProjectExternalOperation,
+} from "../project-external-operation";
 
 export const MP_RELEASE_APPROVAL = "mp_release";
 
-type ReleaseOverrideInput = { overrideReason: string; followUpOwner: number; dueDate: string };
-type ReleaseProductInput = { name?: string; productNumber?: string; category?: string; targetMarkets?: string[] };
+type ReleaseOverrideInput = {
+  overrideReason: string;
+  followUpOwner: number;
+  dueDate: string;
+};
+type ReleaseProductInput = {
+  name?: string;
+  productNumber?: string;
+  category?: string;
+  targetMarkets?: string[];
+};
 type Actor = { id: number; role: string };
+const PROJECT_STOPPED_APPROVAL_ERROR = "项目已停止推送，不能发起审批";
 
 function toRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 async function getReleaseApprovalSnapshot(input: {
@@ -50,33 +70,54 @@ async function getReleaseApprovalSnapshot(input: {
 }) {
   const project = await getProjectById(input.projectId);
   if (!project) throw new Error("项目不存在");
-  const canReleaseActor = await isReleaseOverrideAuthorized(project, input.actor);
+  if (project.archived || project.lifecycle !== "active") {
+    throw new Error(PROJECT_STOPPED_APPROVAL_ERROR);
+  }
+  const canReleaseActor = await isReleaseOverrideAuthorized(
+    project,
+    input.actor
+  );
   if (!canReleaseActor) throw new Error("无权限发起量产发布审批");
 
-  const product = project.productId ? await getProductById(project.productId) : undefined;
+  const product = project.productId
+    ? await getProductById(project.productId)
+    : undefined;
   if (product && !canApproveProductTechnicalChange(input.actor, product)) {
     throw new Error("发起现有产品的发布审批必须由该产品负责人执行");
   }
   const openP0P1 = await getOpenP0P1Count(input.projectId);
   const gate = await getReleaseGateStatus(project);
-  const failedHardDimensions = gate.dimensions.filter((d) => !d.ok && d.dimension !== "review_conditions");
+  const failedHardDimensions = gate.dimensions.filter(
+    d => !d.ok && d.dimension !== "review_conditions"
+  );
   const blockers: string[] = [];
   if (openP0P1 > 0) blockers.push(`${openP0P1} 个未关闭的 P0/P1 问题`);
   if (!gate.phaseId) blockers.push("未定义 MP Release 前置 Gate");
   for (const dim of failedHardDimensions) blockers.push(dim.summary);
   if (gate.decision === null) blockers.push("前置 Gate 无评审记录");
   if (gate.decision === "rejected") blockers.push("前置 Gate 已驳回");
-  if (blockers.length > 0) throw new Error(`当前不可发起发布审批：${blockers.join("；")}`);
+  if (blockers.length > 0)
+    throw new Error(`当前不可发起发布审批：${blockers.join("；")}`);
 
   if (gate.decision === "conditional") {
     const override = input.override;
-    if (!override?.overrideReason?.trim() || !override.followUpOwner || !override.dueDate?.trim()) {
-      throw new Error("前置 Gate 为有条件通过，发起审批需填写理由、跟进负责人与截止日期");
+    if (
+      !override?.overrideReason?.trim() ||
+      !override.followUpOwner ||
+      !override.dueDate?.trim()
+    ) {
+      throw new Error(
+        "前置 Gate 为有条件通过，发起审批需填写理由、跟进负责人与截止日期"
+      );
     }
   }
 
-  const releaseStateFingerprint = await getProjectReleaseStateFingerprint(input.projectId);
-  const verifiedFingerprint = await getProjectReleaseStateFingerprint(input.projectId);
+  const releaseStateFingerprint = await getProjectReleaseStateFingerprint(
+    input.projectId
+  );
+  const verifiedFingerprint = await getProjectReleaseStateFingerprint(
+    input.projectId
+  );
   if (releaseStateFingerprint !== verifiedFingerprint) {
     throw new Error("发布配置正在变化，请刷新并重新发起审批");
   }
@@ -87,16 +128,16 @@ async function getReleaseApprovalSnapshot(input: {
     gate,
     releaseStateFingerprint,
     snapshot: {
-      "业务类型": "MP Release",
-      "项目名称": project.name,
-      "项目编号": project.projectNumber,
-      "输出产品": product?.name ?? input.product?.name?.trim() ?? project.name,
-      "前置Gate": gate.gateName,
-      "Gate决策": gate.decision ?? "",
-      "Gate条件": gate.conditions ?? "",
-      "强制发布理由": input.override?.overrideReason ?? "",
-      "条件跟进人": input.override?.followUpOwner ?? "",
-      "跟进截止日": input.override?.dueDate ?? "",
+      业务类型: "MP Release",
+      项目名称: project.name,
+      项目编号: project.projectNumber,
+      输出产品: product?.name ?? input.product?.name?.trim() ?? project.name,
+      前置Gate: gate.gateName,
+      Gate决策: gate.decision ?? "",
+      Gate条件: gate.conditions ?? "",
+      强制发布理由: input.override?.overrideReason ?? "",
+      条件跟进人: input.override?.followUpOwner ?? "",
+      跟进截止日: input.override?.dueDate ?? "",
     },
   };
 }
@@ -111,6 +152,7 @@ export async function submitReleaseApproval(input: {
   if (!config?.enabled || !config.processCode?.trim()) {
     throw new Error("未启用 MP Release 钉钉审批模板");
   }
+  const processCode = config.processCode.trim();
 
   const pending = await getPendingExternalApproval({
     businessType: MP_RELEASE_APPROVAL,
@@ -121,17 +163,22 @@ export async function submitReleaseApproval(input: {
 
   const originator = await getUserById(input.actor.id);
   if (!originator) throw new Error("发起人不存在");
-  const dingtalkOriginatorUserId = await resolveDingtalkCorpUserId(originator, setUserDingtalkCorpId);
-  if (!dingtalkOriginatorUserId) throw new Error("发起人未配置可匹配钉钉的手机号");
+  const dingtalkOriginatorUserId = await resolveDingtalkCorpUserId(
+    originator,
+    setUserDingtalkCorpId
+  );
+  if (!dingtalkOriginatorUserId)
+    throw new Error("发起人未配置可匹配钉钉的手机号");
 
-  const { project, snapshot, releaseStateFingerprint } = await getReleaseApprovalSnapshot(input);
+  const { project, snapshot, releaseStateFingerprint } =
+    await getReleaseApprovalSnapshot(input);
   const formComponentValues = buildApprovalForm(MP_RELEASE_APPROVAL, snapshot);
   const instance = await createExternalApprovalInstance({
     businessType: MP_RELEASE_APPROVAL,
     entityType: "project",
     entityId: input.projectId,
     projectId: input.projectId,
-    processCode: config.processCode,
+    processCode,
     title: `MP Release审批：${project.name}`,
     submittedBy: input.actor.id,
     originatorUserId: input.actor.id,
@@ -146,16 +193,64 @@ export async function submitReleaseApproval(input: {
     },
   });
 
-  const created = await createApprovalInstance({
-    processCode: config.processCode,
-    originatorUserId: dingtalkOriginatorUserId,
-    deptId: config.defaultDeptId,
-    formComponentValues,
-  });
+  const currentProject = await getProjectById(input.projectId);
+  if (
+    !currentProject ||
+    currentProject.archived ||
+    currentProject.lifecycle !== "active"
+  ) {
+    await updateExternalApprovalInstance(instance.id, {
+      status: "terminated",
+      lastError: "项目已停止推送，未发起远端审批",
+      terminatedAt: new Date(),
+      syncedAt: new Date(),
+    });
+    throw new Error(PROJECT_STOPPED_APPROVAL_ERROR);
+  }
+
+  let created: Awaited<ReturnType<typeof createApprovalInstance>>;
+  try {
+    created = await withProjectExternalOperation(
+      [input.projectId],
+      "approval:mp_release",
+      async () => {
+        const latestProject = await getProjectById(input.projectId);
+        if (
+          !latestProject ||
+          latestProject.archived ||
+          latestProject.lifecycle !== "active"
+        ) {
+          throw new ProjectExternalOperationBlockedError();
+        }
+        return createApprovalInstance({
+          processCode,
+          originatorUserId: dingtalkOriginatorUserId,
+          deptId: config.defaultDeptId,
+          formComponentValues,
+        });
+      }
+    );
+  } catch (error) {
+    if (!(error instanceof ProjectExternalOperationBlockedError)) throw error;
+    await updateExternalApprovalInstance(instance.id, {
+      status: "terminated",
+      lastError: "项目已停止推送，未发起远端审批",
+      terminatedAt: new Date(),
+      syncedAt: new Date(),
+    });
+    throw new Error(PROJECT_STOPPED_APPROVAL_ERROR);
+  }
   if (!created.ok) {
-    // 钉钉不可用不阻塞业务：实例落库为 sync_failed 返回，前端提示后可重新发起
-    // （getPendingExternalApproval 只匹配 pending，失败实例不会卡住重发）
-    const failed = await updateExternalApprovalInstance(instance.id, { status: "sync_failed", lastError: created.error });
+    // A transport-ambiguous create must remain pending: DingTalk may already
+    // have accepted it, so deletion and duplicate submissions must stay blocked.
+    const lastError = created.uncertain
+      ? `远端审批创建结果未知：${created.error}`
+      : created.error;
+    const failed = await updateExternalApprovalInstance(instance.id, {
+      status: created.uncertain ? "pending" : "sync_failed",
+      lastError,
+      syncedAt: new Date(),
+    });
     return { instance: failed ?? instance, alreadyPending: false };
   }
 
@@ -171,12 +266,17 @@ export async function submitReleaseApproval(input: {
     action: "approval.submit",
     entityType: "external_approval",
     entityId: String(instance.id),
-    meta: { businessType: MP_RELEASE_APPROVAL, processInstanceId: created.data.processInstanceId },
+    meta: {
+      businessType: MP_RELEASE_APPROVAL,
+      processInstanceId: created.data.processInstanceId,
+    },
   });
   return { instance: updated ?? instance, alreadyPending: false };
 }
 
-async function enqueueReleaseConfirmation(instance: ExternalApprovalInstance): Promise<void> {
+async function enqueueReleaseConfirmation(
+  instance: ExternalApprovalInstance
+): Promise<void> {
   const project = await getProjectById(instance.entityId);
   if (!project) throw new Error("项目不存在，无法生成发布确认");
   await createActivityLog({
@@ -185,7 +285,10 @@ async function enqueueReleaseConfirmation(instance: ExternalApprovalInstance): P
     action: "approval.approve",
     entityType: "external_approval",
     entityId: String(instance.id),
-    meta: { businessType: instance.businessType, processInstanceId: instance.processInstanceId },
+    meta: {
+      businessType: instance.businessType,
+      processInstanceId: instance.processInstanceId,
+    },
   });
   await notifyActionItem({
     kind: "mp_release_confirm",
@@ -201,7 +304,10 @@ async function enqueueReleaseConfirmation(instance: ExternalApprovalInstance): P
     recipientUserId: instance.submittedBy,
     title: "MP Release 待确认发布",
     body: `钉钉审批已通过，系统已备齐「${project.name}」发布链，请确认发布。`,
-    actionPath: buildProjectActionPath({ projectId: instance.entityId, tab: "approval" }),
+    actionPath: buildProjectActionPath({
+      projectId: instance.entityId,
+      tab: "approval",
+    }),
     priority: "critical",
     metadata: {
       approvalInstanceId: instance.id,
@@ -217,25 +323,33 @@ export async function confirmApprovedRelease(input: {
 }): Promise<Awaited<ReturnType<typeof releaseProject>>> {
   const instance = await getExternalApprovalById(input.approvalInstanceId);
   if (!instance) throw new Error("审批实例不存在");
-  if (instance.businessType !== MP_RELEASE_APPROVAL) throw new Error("不是 MP Release 审批实例");
+  if (instance.businessType !== MP_RELEASE_APPROVAL)
+    throw new Error("不是 MP Release 审批实例");
   if (instance.status !== "approved") throw new Error("审批尚未通过，不能发布");
-  if (instance.submittedBy !== input.actorId) throw new Error("仅审批发起人可确认发布");
+  if (instance.submittedBy !== input.actorId)
+    throw new Error("仅审批发起人可确认发布");
 
   const actor = await getUserById(input.actorId);
   if (!actor) throw new Error("发布确认人不存在");
   const request = toRecord(instance.requestSnapshot);
   const project = await getProjectById(instance.entityId);
   if (!project) throw new Error("项目不存在");
-  const approvedProductId = typeof request.productId === "string" ? request.productId : null;
+  const approvedProductId =
+    typeof request.productId === "string" ? request.productId : null;
   if ((project.productId ?? null) !== approvedProductId) {
     throw new Error("审批后关联产品已变化，本次审批已失效，请重新发起");
   }
-  const approvedFingerprint = typeof request.releaseStateFingerprint === "string"
-    ? request.releaseStateFingerprint
-    : "";
-  const currentFingerprint = await getProjectReleaseStateFingerprint(instance.entityId);
+  const approvedFingerprint =
+    typeof request.releaseStateFingerprint === "string"
+      ? request.releaseStateFingerprint
+      : "";
+  const currentFingerprint = await getProjectReleaseStateFingerprint(
+    instance.entityId
+  );
   if (!approvedFingerprint || approvedFingerprint !== currentFingerprint) {
-    throw new Error("审批后的 BOM、关键模块、规格或 Gate 状态已变化，本次审批已失效，请重新发起");
+    throw new Error(
+      "审批后的 BOM、关键模块、规格或 Gate 状态已变化，本次审批已失效，请重新发起"
+    );
   }
   const override = request.override as ReleaseOverrideInput | null | undefined;
   const product = request.product as ReleaseProductInput | null | undefined;
@@ -291,7 +405,11 @@ export async function confirmApprovedRelease(input: {
   return result;
 }
 
-async function markTerminal(instance: ExternalApprovalInstance, status: NormalizedApprovalStatus, detail: Record<string, unknown>) {
+async function markTerminal(
+  instance: ExternalApprovalInstance,
+  status: NormalizedApprovalStatus,
+  detail: Record<string, unknown>
+) {
   const now = new Date();
   await updateExternalApprovalInstance(instance.id, {
     status,
@@ -309,17 +427,23 @@ async function markTerminal(instance: ExternalApprovalInstance, status: Normaliz
       action: status === "rejected" ? "approval.reject" : "approval.terminate",
       entityType: "external_approval",
       entityId: String(instance.id),
-      meta: { businessType: instance.businessType, processInstanceId: instance.processInstanceId },
+      meta: {
+        businessType: instance.businessType,
+        processInstanceId: instance.processInstanceId,
+      },
     });
   }
 }
 
 async function applyTerminalBusiness(
   instance: ExternalApprovalInstance,
-  status: Extract<NormalizedApprovalStatus, "approved" | "rejected">,
+  status: Extract<NormalizedApprovalStatus, "approved" | "rejected">
 ): Promise<void> {
   try {
-    if (instance.businessType === MP_RELEASE_APPROVAL && status === "approved") {
+    if (
+      instance.businessType === MP_RELEASE_APPROVAL &&
+      status === "approved"
+    ) {
       await enqueueReleaseConfirmation(instance);
       return;
     }
@@ -328,7 +452,11 @@ async function applyTerminalBusiness(
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await updateExternalApprovalInstance(instance.id, { status: "business_blocked", lastError: message, syncedAt: new Date() });
+    await updateExternalApprovalInstance(instance.id, {
+      status: "business_blocked",
+      lastError: message,
+      syncedAt: new Date(),
+    });
     await createActivityLog({
       projectId: instance.projectId ?? instance.entityId,
       userId: instance.submittedBy,
@@ -341,15 +469,20 @@ async function applyTerminalBusiness(
 }
 
 export async function syncExternalApprovalByProcessInstanceId(
-  processInstanceId: string,
+  processInstanceId: string
 ): Promise<ExternalApprovalInstance | undefined> {
-  const instance = await getExternalApprovalByProcessInstanceId(processInstanceId);
+  const instance =
+    await getExternalApprovalByProcessInstanceId(processInstanceId);
   if (!instance) return undefined;
   if (!["pending", "sync_failed"].includes(instance.status)) return instance;
 
   const detail = await getApprovalInstance(processInstanceId);
   if (!detail.ok) {
-    return updateExternalApprovalInstance(instance.id, { status: "sync_failed", lastError: detail.error, syncedAt: new Date() });
+    return updateExternalApprovalInstance(instance.id, {
+      status: "sync_failed",
+      lastError: detail.error,
+      syncedAt: new Date(),
+    });
   }
 
   const status = detail.data.status;
@@ -367,12 +500,17 @@ export async function syncExternalApprovalByProcessInstanceId(
     await applyTerminalBusiness(instance, "approved");
   } else {
     await markTerminal(instance, status, detail.data.detail);
-    if (status === "rejected") await applyTerminalBusiness(instance, "rejected");
+    if (status === "rejected")
+      await applyTerminalBusiness(instance, "rejected");
   }
 
   return getExternalApprovalByProcessInstanceId(processInstanceId);
 }
 
 export function listReleaseApprovals(projectId: string) {
-  return listExternalApprovalsForEntity({ businessType: MP_RELEASE_APPROVAL, entityType: "project", entityId: projectId });
+  return listExternalApprovalsForEntity({
+    businessType: MP_RELEASE_APPROVAL,
+    entityType: "project",
+    entityId: projectId,
+  });
 }

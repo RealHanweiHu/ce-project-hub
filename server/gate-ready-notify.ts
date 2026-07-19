@@ -38,6 +38,7 @@ export async function notifyGateReadyIfReady(input: {
   try {
     const delivery = await notifyPersonal({
       eventKey: RULE_KEY,
+      projectId: input.projectId,
       userIds: [project.pmUserId],
       title: "Gate 已就绪",
       body: `${project.name} · ${input.phaseId} 已满足 Gate 前置条件，可发起评审。`,

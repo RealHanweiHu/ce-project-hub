@@ -547,6 +547,41 @@
       "when": 1784325600000,
       "tag": "0077_project_collections",
       "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1784329200000,
+      "tag": "0078_notifications_project_scope",
+      "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1784332800000,
+      "tag": "0079_project_external_operation_barrier",
+      "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1784336400000,
+      "tag": "0080_project_calendar_project_fk",
+      "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1784340000000,
+      "tag": "0081_project_deletion_lease_expiry",
+      "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1784343600000,
+      "tag": "0082_project_dingtalk_group_lifecycle",
+      "breakpoints": true
     }
   ]
 }

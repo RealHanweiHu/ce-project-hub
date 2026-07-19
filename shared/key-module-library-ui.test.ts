@@ -7,34 +7,54 @@ function source(path: string) {
 
 describe("PLM key module library UI", () => {
   it("provides one PLM entry with product and key-module workspaces", () => {
-    const workspace = source("../client/src/components/views/PlmWorkspaceView.tsx");
+    const workspace = source(
+      "../client/src/components/views/PlmWorkspaceView.tsx"
+    );
+    expect(workspace).toContain("产品生命轴");
     expect(workspace).toContain("产品主数据");
     expect(workspace).toContain("关键模块");
     expect(workspace).toContain("KeyModuleLibraryView");
     expect(workspace).toContain("ProductLibraryView");
+    expect(workspace).toContain("新建关键模块");
+    expect(workspace).toMatch(/url\.searchParams\.set\(["']plm["'], section\)/);
   });
 
   it("supports search, create, technical confirmation, approval and derivation", () => {
-    const library = source("../client/src/components/views/KeyModuleLibraryView.tsx");
+    const library = source(
+      "../client/src/components/views/KeyModuleLibraryView.tsx"
+    );
     expect(library).toContain("trpc.keyModules.list.useQuery");
     expect(library).toContain("搜索编号、名称、型号或品类");
     expect(library).toContain("trpc.keyModules.confirmTechnical.useMutation");
     expect(library).toContain("trpc.keyModules.approve.useMutation");
     expect(library).toContain("trpc.keyModules.derive.useMutation");
+    expect(library).toContain("createRequest");
+    expect(library).toContain("创建第一个模块");
+    expect(library).toContain("当前账号没有模块维护权限");
+    expect(library).toContain("关键模块加载失败");
+    expect(library).toContain("list.refetch()");
   });
 
   it("edits the controlled internal BOM without supplier fields", () => {
-    const editor = source("../client/src/components/views/key-modules/KeyModuleEditorDialog.tsx");
+    const editor = source(
+      "../client/src/components/views/key-modules/KeyModuleEditorDialog.tsx"
+    );
     expect(editor).toContain("内部 BOM");
+    expect(editor).toContain("模块身份");
     expect(editor).toContain("部件编号");
     expect(editor).toContain("位号");
+    expect(editor).toContain('type="submit"');
     expect(editor).not.toMatch(/<Label[^>]*>供应商/);
     expect(editor).not.toMatch(/placeholder=["']二供/);
   });
 
   it("preserves an existing component product reference when a module draft is edited", () => {
-    const editor = source("../client/src/components/views/key-modules/KeyModuleEditorDialog.tsx");
-    expect(editor.match(/componentProductId: item\.componentProductId/g)).toHaveLength(2);
+    const editor = source(
+      "../client/src/components/views/key-modules/KeyModuleEditorDialog.tsx"
+    );
+    expect(
+      editor.match(/componentProductId: item\.componentProductId/g)
+    ).toHaveLength(2);
     expect(editor).toContain("componentProductId: null");
   });
 });
