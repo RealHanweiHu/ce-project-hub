@@ -73,6 +73,7 @@ function makeDeps(over: Record<string, unknown> = {}) {
       calls.loads += 1;
       return [project()];
     },
+    isProjectActive: async () => true,
     claim: async (claimKey: string) => {
       if (claimed.has(claimKey)) return null;
       claimed.add(claimKey);
@@ -95,6 +96,22 @@ function makeDeps(over: Record<string, unknown> = {}) {
 }
 
 describe("项目群周摘要", () => {
+  it("测试库关闭钉钉外发时不加载、不抢占也不发送", async () => {
+    const { calls, deps } = makeDeps({
+      isDingtalkDeliveryEnabled: () => false,
+    });
+
+    await runGroupWeeklyDigestScan(
+      new Date("2026-07-13T01:30:00Z"),
+      deps
+    );
+
+    expect(calls.loads).toBe(0);
+    expect(calls.sentGroup).toEqual([]);
+    expect(calls.finished).toEqual([]);
+    expect(calls.runs).toEqual([]);
+  });
+
   it("按上海时间仅在配置周几 09:00 后触发", () => {
     expect(computeGroupWeeklyDigestTiming(new Date("2026-07-13T01:30:00Z"), config)).toEqual({
       todayISO: "2026-07-13",

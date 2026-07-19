@@ -1,5 +1,8 @@
 import { getAccessToken, isDingtalkConfigured } from "./dingtalk";
+import { fetchWithTimeout } from "./fetchWithTimeout";
 import { addDays } from "../../shared/shanghai-date";
+import { isDingtalkDeliveryEnabled } from "./dingtalk-delivery-policy";
+import { resolveDingtalkCleanupMode } from "./dingtalk-cleanup-policy";
 
 export type WeeklyEventInput = {
   title: string; weekday: number; time: string; durationMin: number;
@@ -72,26 +75,69 @@ export function buildSingleEvent(input: {
 
 const CAL_BASE = "https://api.dingtalk.com/v1.0/calendar/users";
 
+export class DingtalkCalendarCreationUncertainError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DingtalkCalendarCreationUncertainError";
+  }
+}
+
+function isAmbiguousCreateHttpStatus(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+function hasCalendarApiError(body: Record<string, unknown>): boolean {
+  const errcode = body.errcode;
+  const code = body.code;
+  return body.success === false
+    || (errcode !== undefined && errcode !== 0 && errcode !== "0")
+    || (code !== undefined && code !== 0 && code !== "0" && code !== "OK");
+}
+
 async function upsertCalendarEvent(params: {
   organizerUserId: string;
   existingEventId: string | null;
   event: DingtalkEvent;
 }): Promise<string | null> {
+  if (!isDingtalkDeliveryEnabled()) return params.existingEventId;
   if (!isDingtalkConfigured()) return null;
+  const isCreate = !params.existingEventId;
+  let requestStarted = false;
   try {
     const token = await getAccessToken();
     if (!token) return null;
     const base = `${CAL_BASE}/${encodeURIComponent(params.organizerUserId)}/calendars/primary/events`;
     const url = params.existingEventId ? `${base}/${encodeURIComponent(params.existingEventId)}` : base;
-    const resp = await fetch(url, {
+    requestStarted = true;
+    const resp = await fetchWithTimeout(url, {
       method: params.existingEventId ? "PUT" : "POST",
       headers: { "Content-Type": "application/json", "x-acs-dingtalk-access-token": token },
       body: JSON.stringify(params.event),
     });
-    if (!resp.ok) { console.warn("[dingtalk] upsert event http", resp.status); return null; }
-    const j = (await resp.json()) as { id?: string };
-    return j.id ?? params.existingEventId ?? null;
+    const body = (await resp.json()) as Record<string, unknown>;
+    if (!resp.ok) {
+      if (isCreate && isAmbiguousCreateHttpStatus(resp.status)) {
+        throw new DingtalkCalendarCreationUncertainError(
+          `钉钉日程创建返回 HTTP ${resp.status}，远端结果未知`
+        );
+      }
+      console.warn("[dingtalk] upsert event http", resp.status);
+      return null;
+    }
+    if (hasCalendarApiError(body)) return null;
+    const eventId = typeof body.id === "string" && body.id ? body.id : null;
+    if (eventId) return eventId;
+    if (params.existingEventId) return params.existingEventId;
+    throw new DingtalkCalendarCreationUncertainError(
+      "钉钉日程创建响应未返回日程 ID，远端结果未知"
+    );
   } catch (e) {
+    if (e instanceof DingtalkCalendarCreationUncertainError) throw e;
+    if (isCreate && requestStarted) {
+      throw new DingtalkCalendarCreationUncertainError(
+        `钉钉日程创建响应丢失，远端结果未知：${e instanceof Error ? e.message : String(e)}`
+      );
+    }
     console.warn("[dingtalk] upsert event failed (degrade):", e);
     return null;
   }
@@ -116,14 +162,20 @@ export async function upsertSingleMeeting(params: {
 }
 
 export async function cancelMeeting(organizerUserId: string, eventId: string): Promise<boolean> {
+  const cleanupMode = resolveDingtalkCleanupMode();
+  if (cleanupMode === "local_only") return true;
+  if (cleanupMode === "deferred") return false;
   if (!isDingtalkConfigured()) return false;
   try {
     const token = await getAccessToken();
     if (!token) return false;
-    const resp = await fetch(`${CAL_BASE}/${encodeURIComponent(organizerUserId)}/calendars/primary/events/${encodeURIComponent(eventId)}`, {
+    const resp = await fetchWithTimeout(`${CAL_BASE}/${encodeURIComponent(organizerUserId)}/calendars/primary/events/${encodeURIComponent(eventId)}`, {
       method: "DELETE",
       headers: { "x-acs-dingtalk-access-token": token },
     });
+    // Deletion is idempotent: a prior attempt may have succeeded remotely but
+    // failed before its local checkpoint was committed.
+    if (resp.status === 404 || resp.status === 410) return true;
     if (!resp.ok) return false;
     const text = await resp.text().catch(() => "");
     if (!text) return true;

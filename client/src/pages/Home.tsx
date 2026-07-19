@@ -76,6 +76,7 @@ function buildWorkbenchUrl(view: View, selectedProjectId: string | null, focus?:
   url.searchParams.delete('taskId');
   url.searchParams.delete('tab');
   url.searchParams.delete('taskTab');
+  if (view !== 'products') url.searchParams.delete('plm');
 
   if (selectedProjectId) {
     url.searchParams.set('view', 'projects');
@@ -838,7 +839,13 @@ export default function Home() {
         setView('projects');
         syncWorkbenchUrl('projects', null, null, 'replace');
       }
-      toast.success(result.dingtalkGroupDeleted ? '项目已删除，钉钉项目群已同步删除' : '项目已删除（如有钉钉项目群未同步解散，请手动清理）');
+      if (!result.pushCleanupComplete) {
+        toast.warning('项目已删除，CE Hub 不再生成新推送，但历史推送记录清理未完成，请联系管理员');
+      } else if (result.dingtalkGroupDeleted) {
+        toast.success('项目已删除，CE Hub 后续钉钉推送已停止，项目群无需额外处理（已发送消息不会撤回）');
+      } else {
+        toast.success('项目已删除，CE Hub 后续每日摘要和信息推送已停止（已发送消息不会撤回；如有项目群未解散，请手动清理）');
+      }
     } catch (error) {
       setSaveStatus('error');
       toast.error(error instanceof Error ? error.message : '删除项目失败');

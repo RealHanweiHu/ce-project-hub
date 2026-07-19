@@ -1,12 +1,17 @@
 import { getAccessToken, isDingtalkConfigured } from "./dingtalk";
 import { ENV } from "./env";
+import { fetchWithTimeout } from "./fetchWithTimeout";
+import {
+  DINGTALK_DELIVERY_DISABLED_MESSAGE,
+  isDingtalkDeliveryEnabled,
+} from "./dingtalk-delivery-policy";
 
 const OAPI_BASE = "https://oapi.dingtalk.com/topapi/processinstance";
 const WORKFLOW_PROCESS_INSTANCE_URL = "https://api.dingtalk.com/v1.0/workflow/processInstances";
 
 export type ApprovalCallResult<T> =
   | { ok: true; data: T; raw: unknown }
-  | { ok: false; error: string; raw?: unknown };
+  | { ok: false; error: string; raw?: unknown; uncertain?: boolean };
 
 export type ApprovalFormComponent = { name: string; value: string };
 
@@ -16,6 +21,18 @@ function responseError(prefix: string, body: Record<string, unknown>, status?: n
   const code = body.errcode ?? body.code ?? status ?? "unknown";
   const message = body.errmsg ?? body.message ?? "";
   return `${prefix} errcode=${code} ${message}`.trim();
+}
+
+function isAmbiguousCreateHttpStatus(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+function hasApprovalApiError(body: Record<string, unknown>): boolean {
+  const errcode = body.errcode;
+  const code = body.code;
+  return body.success === false
+    || (errcode !== undefined && errcode !== 0 && errcode !== "0")
+    || (code !== undefined && code !== 0 && code !== "0" && code !== "OK");
 }
 
 function toFormValue(value: unknown): string {
@@ -60,6 +77,9 @@ export async function createApprovalInstance(input: {
   approverUserIds?: string[] | null;
 }): Promise<ApprovalCallResult<{ processInstanceId: string }>> {
   if (!input.processCode?.trim()) return { ok: false, error: "钉钉审批模板 processCode 未配置" };
+  if (!isDingtalkDeliveryEnabled()) {
+    return { ok: false, error: DINGTALK_DELIVERY_DISABLED_MESSAGE };
+  }
   if (!isDingtalkConfigured()) return { ok: false, error: "钉钉未配置" };
   const token = await getAccessToken();
   if (!token) return { ok: false, error: "获取钉钉 access_token 失败" };
@@ -76,7 +96,7 @@ export async function createApprovalInstance(input: {
       formComponentValues: input.formComponentValues,
     };
     try {
-      const resp = await fetch(WORKFLOW_PROCESS_INSTANCE_URL, {
+      const resp = await fetchWithTimeout(WORKFLOW_PROCESS_INSTANCE_URL, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -85,15 +105,29 @@ export async function createApprovalInstance(input: {
         body: JSON.stringify(requestBody),
       });
       const body = await resp.json().catch(() => ({})) as Record<string, unknown>;
-      if (!resp.ok) return { ok: false, error: responseError("钉钉审批发起失败", body, resp.status), raw: body };
+      if (!resp.ok) {
+        return {
+          ok: false,
+          error: responseError("钉钉审批发起失败", body, resp.status),
+          raw: body,
+          uncertain: isAmbiguousCreateHttpStatus(resp.status),
+        };
+      }
+      if (hasApprovalApiError(body)) {
+        return { ok: false, error: responseError("钉钉审批发起失败", body), raw: body };
+      }
       const result = body.result as Record<string, unknown> | undefined;
       const processInstanceId = body.instanceId ?? body.processInstanceId ?? result?.instanceId ?? result?.processInstanceId;
       if (typeof processInstanceId !== "string" || !processInstanceId) {
-        return { ok: false, error: "钉钉审批发起成功但未返回实例 ID", raw: body };
+        return { ok: false, error: "钉钉审批发起成功但未返回实例 ID", raw: body, uncertain: true };
       }
       return { ok: true, data: { processInstanceId }, raw: body };
     } catch (error) {
-      return { ok: false, error: `钉钉审批发起异常: ${error instanceof Error ? error.message : String(error)}` };
+      return {
+        ok: false,
+        error: `钉钉审批发起异常: ${error instanceof Error ? error.message : String(error)}`,
+        uncertain: true,
+      };
     }
   }
 
@@ -105,22 +139,35 @@ export async function createApprovalInstance(input: {
   };
 
   try {
-    const resp = await fetch(`${OAPI_BASE}/create?access_token=${encodeURIComponent(token)}`, {
+    const resp = await fetchWithTimeout(`${OAPI_BASE}/create?access_token=${encodeURIComponent(token)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(requestBody),
     });
     const body = await resp.json().catch(() => ({})) as Record<string, unknown>;
-    if (!resp.ok) return { ok: false, error: responseError("钉钉审批发起失败", body, resp.status), raw: body };
-    if (body.errcode !== 0) return { ok: false, error: responseError("钉钉审批发起失败", body), raw: body };
+    if (!resp.ok) {
+      return {
+        ok: false,
+        error: responseError("钉钉审批发起失败", body, resp.status),
+        raw: body,
+        uncertain: isAmbiguousCreateHttpStatus(resp.status),
+      };
+    }
+    if (hasApprovalApiError(body)) {
+      return { ok: false, error: responseError("钉钉审批发起失败", body), raw: body };
+    }
     const result = body.result as Record<string, unknown> | undefined;
     const processInstanceId = result?.process_instance_id ?? result?.processInstanceId ?? body.process_instance_id;
     if (typeof processInstanceId !== "string" || !processInstanceId) {
-      return { ok: false, error: "钉钉审批发起成功但未返回实例 ID", raw: body };
+      return { ok: false, error: "钉钉审批发起成功但未返回实例 ID", raw: body, uncertain: true };
     }
     return { ok: true, data: { processInstanceId }, raw: body };
   } catch (error) {
-    return { ok: false, error: `钉钉审批发起异常: ${error instanceof Error ? error.message : String(error)}` };
+    return {
+      ok: false,
+      error: `钉钉审批发起异常: ${error instanceof Error ? error.message : String(error)}`,
+      uncertain: true,
+    };
   }
 }
 
@@ -137,7 +184,7 @@ export async function getApprovalInstance(
   if (!token) return { ok: false, error: "获取钉钉 access_token 失败" };
 
   try {
-    const v1Resp = await fetch(`${WORKFLOW_PROCESS_INSTANCE_URL}?processInstanceId=${encodeURIComponent(processInstanceId)}`, {
+    const v1Resp = await fetchWithTimeout(`${WORKFLOW_PROCESS_INSTANCE_URL}?processInstanceId=${encodeURIComponent(processInstanceId)}`, {
       method: "GET",
       headers: {
         "x-acs-dingtalk-access-token": token,
@@ -149,7 +196,7 @@ export async function getApprovalInstance(
       return { ok: true, data: { status: normalizeApprovalStatus(detail), detail }, raw: v1Body };
     }
 
-    const resp = await fetch(`${OAPI_BASE}/get?access_token=${encodeURIComponent(token)}`, {
+    const resp = await fetchWithTimeout(`${OAPI_BASE}/get?access_token=${encodeURIComponent(token)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ process_instance_id: processInstanceId }),

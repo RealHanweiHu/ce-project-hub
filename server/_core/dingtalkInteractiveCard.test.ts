@@ -18,6 +18,12 @@ const originalEnabled = ENV.dingtalkInteractiveCardEnabled;
 
 beforeEach(() => {
   vi.restoreAllMocks();
+  vi.stubEnv("NODE_ENV", "production");
+  vi.stubEnv(
+    "DATABASE_URL",
+    "postgres://app:secret@db.example.com:5432/cehub"
+  );
+  vi.stubEnv("DINGTALK_DELIVERY_MODE", "live");
   _resetTokenCacheForTest();
   __setDingtalkConfigForTest({ appKey: "k", appSecret: "s" });
   ENV.appBaseUrl = "https://hub.test";
@@ -29,6 +35,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   ENV.appBaseUrl = originalAppBaseUrl;
   ENV.dingtalkInteractiveCardTemplateId = originalTemplateId;
   ENV.dingtalkInteractiveRobotCode = originalRobotCode;
@@ -38,6 +45,23 @@ afterEach(() => {
 });
 
 describe("dingtalk interactive cards", () => {
+  it("suppresses card delivery before any DingTalk request", async () => {
+    vi.stubEnv("DINGTALK_DELIVERY_MODE", "disabled");
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("must not call DingTalk"));
+
+    const result = await createAndDeliverInteractiveCard({
+      corpUserId: "user-1",
+      outTrackId: "cehub_ai_disabled",
+      cardParamMap: buildPendingActionCardParams({ title: "测试通知" }),
+    });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(result.ok ? "" : result.error).toContain("已关闭钉钉外发");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("builds pending and handled card params as string-only maps", () => {
     expect(buildPendingActionCardParams({
       title: "任务审批",
@@ -108,6 +132,27 @@ describe("dingtalk interactive cards", () => {
     });
   });
 
+  it("marks a transport failure after createAndDeliver starts as uncertain", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async url => {
+      const u = String(url);
+      if (u.includes("oauth2/accessToken")) {
+        return new Response(
+          JSON.stringify({ accessToken: "tok", expireIn: 7200 }),
+          { status: 200 }
+        );
+      }
+      throw new DOMException("timed out", "TimeoutError");
+    });
+
+    const result = await createAndDeliverInteractiveCard({
+      corpUserId: "user-1",
+      outTrackId: "cehub_ai_1_7",
+      cardParamMap: buildPendingActionCardParams({ title: "任务审批" }),
+    });
+
+    expect(result).toMatchObject({ ok: false, uncertain: true });
+  });
+
   it("registers the card callback route with DingTalk", async () => {
     const payloads: Array<{ url: string; body: Record<string, unknown>; headers: Headers }> = [];
     vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
@@ -164,5 +209,57 @@ describe("dingtalk interactive cards", () => {
       userIdType: 1,
       cardUpdateOptions: { updateCardDataByKey: true },
     });
+  });
+
+  it("keeps a production card retryable during an explicit delivery pause", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv(
+      "DATABASE_URL",
+      "postgres://app:secret@db.example.com:5432/cehub"
+    );
+    vi.stubEnv("DINGTALK_DELIVERY_MODE", "disabled");
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("must not call DingTalk"));
+
+    const result = await updateInteractiveCard({
+      outTrackId: "cehub_ai_live_pending_cleanup",
+      cardParamMap: buildHandledActionCardParams({
+        title: "已处理",
+        message: "审批已闭环",
+      }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("远端清理已延后"),
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("settles a copied test-database card locally without touching DingTalk", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv(
+      "DATABASE_URL",
+      "postgres://app:secret@db.example.com:5432/cehub_test_cleanup"
+    );
+    vi.stubEnv("DINGTALK_DELIVERY_MODE", "disabled");
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("must not call DingTalk"));
+
+    const result = await updateInteractiveCard({
+      outTrackId: "cehub_ai_copied_test_card",
+      cardParamMap: buildHandledActionCardParams({
+        title: "已处理",
+        message: "测试库本地收敛",
+      }),
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      raw: { suppressed: true },
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

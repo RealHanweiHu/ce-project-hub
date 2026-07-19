@@ -1,13 +1,22 @@
 import { ENV } from "./env";
 import { getAccessToken, isDingtalkConfigured } from "./dingtalk";
 import type { WorkNotificationButton } from "./dingtalkMessage";
+import { fetchWithTimeout } from "./fetchWithTimeout";
+import {
+  DINGTALK_DELIVERY_DISABLED_MESSAGE,
+  isDingtalkDeliveryEnabled,
+} from "./dingtalk-delivery-policy";
+import {
+  DINGTALK_REMOTE_CLEANUP_DEFERRED_MESSAGE,
+  resolveDingtalkCleanupMode,
+} from "./dingtalk-cleanup-policy";
 
 const INTERACTIVE_CARD_BASE = "https://api.dingtalk.com/v1.0/card/instances";
 const INTERACTIVE_CARD_CALLBACK_REGISTER_URL = "https://api.dingtalk.com/v1.0/card/callbacks/register";
 
 export type InteractiveCardResult =
   | { ok: true; raw: unknown }
-  | { ok: false; error: string; raw?: unknown };
+  | { ok: false; error: string; raw?: unknown; uncertain?: boolean };
 
 export type InteractiveCardParams = Record<string, string>;
 
@@ -24,6 +33,10 @@ function responseError(prefix: string, body: Record<string, unknown>, status?: n
   const code = body.errcode ?? body.code ?? status ?? "unknown";
   const message = body.errmsg ?? body.message ?? body.errorMessage ?? "";
   return `${prefix} code=${code} ${message}`.trim();
+}
+
+function isAmbiguousCreateHttpStatus(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
 }
 
 function toCardValue(value: unknown): string {
@@ -116,6 +129,9 @@ export async function createAndDeliverInteractiveCard(input: {
   outTrackId: string;
   cardParamMap: InteractiveCardParams;
 }): Promise<InteractiveCardResult> {
+  if (!isDingtalkDeliveryEnabled()) {
+    return { ok: false, error: DINGTALK_DELIVERY_DISABLED_MESSAGE };
+  }
   if (!isDingtalkInteractiveCardConfigured()) {
     return { ok: false, error: "钉钉互动卡片未配置" };
   }
@@ -136,7 +152,7 @@ export async function createAndDeliverInteractiveCard(input: {
   };
 
   try {
-    const resp = await fetch(`${INTERACTIVE_CARD_BASE}/createAndDeliver`, {
+    const resp = await fetchWithTimeout(`${INTERACTIVE_CARD_BASE}/createAndDeliver`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -145,12 +161,24 @@ export async function createAndDeliverInteractiveCard(input: {
       body: JSON.stringify(requestBody),
     });
     const body = await resp.json().catch(() => ({})) as Record<string, unknown>;
-    if (!resp.ok || hasApiError(body)) {
+    if (!resp.ok) {
+      return {
+        ok: false,
+        error: responseError("钉钉互动卡片投放失败", body, resp.status),
+        raw: body,
+        uncertain: isAmbiguousCreateHttpStatus(resp.status),
+      };
+    }
+    if (hasApiError(body)) {
       return { ok: false, error: responseError("钉钉互动卡片投放失败", body, resp.status), raw: body };
     }
     return { ok: true, raw: body };
   } catch (error) {
-    return { ok: false, error: `钉钉互动卡片投放异常: ${error instanceof Error ? error.message : String(error)}` };
+    return {
+      ok: false,
+      error: `钉钉互动卡片投放异常: ${error instanceof Error ? error.message : String(error)}`,
+      uncertain: true,
+    };
   }
 }
 
@@ -160,6 +188,9 @@ export async function registerInteractiveCardCallback(input?: {
   apiSecret?: string;
   forceUpdate?: boolean;
 }): Promise<InteractiveCardResult> {
+  if (!isDingtalkDeliveryEnabled()) {
+    return { ok: false, error: DINGTALK_DELIVERY_DISABLED_MESSAGE };
+  }
   if (!isDingtalkConfigured()) {
     return { ok: false, error: "钉钉应用未配置" };
   }
@@ -175,7 +206,7 @@ export async function registerInteractiveCardCallback(input?: {
   if (!apiSecret) return { ok: false, error: "缺少 DINGTALK_INTERACTIVE_CARD_CALLBACK_SECRET" };
 
   try {
-    const resp = await fetch(INTERACTIVE_CARD_CALLBACK_REGISTER_URL, {
+    const resp = await fetchWithTimeout(INTERACTIVE_CARD_CALLBACK_REGISTER_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -202,6 +233,16 @@ export async function updateInteractiveCard(input: {
   outTrackId: string;
   cardParamMap: InteractiveCardParams;
 }): Promise<InteractiveCardResult> {
+  const cleanupMode = resolveDingtalkCleanupMode();
+  if (cleanupMode === "local_only") {
+    return {
+      ok: true,
+      raw: { suppressed: true, reason: DINGTALK_DELIVERY_DISABLED_MESSAGE },
+    };
+  }
+  if (cleanupMode === "deferred") {
+    return { ok: false, error: DINGTALK_REMOTE_CLEANUP_DEFERRED_MESSAGE };
+  }
   if (!isDingtalkInteractiveCardConfigured()) {
     return { ok: false, error: "钉钉互动卡片未配置" };
   }
@@ -209,7 +250,7 @@ export async function updateInteractiveCard(input: {
   if (!token) return { ok: false, error: "获取钉钉 access_token 失败" };
 
   try {
-    const resp = await fetch(INTERACTIVE_CARD_BASE, {
+    const resp = await fetchWithTimeout(INTERACTIVE_CARD_BASE, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",

@@ -3,6 +3,15 @@
 import { ENV } from "./env";
 import { getAccessToken, isDingtalkConfigured, resolveDingtalkCorpUserId } from "./dingtalk";
 import { getUserById, setUserDingtalkCorpId } from "../db";
+import { fetchWithTimeout } from "./fetchWithTimeout";
+import {
+  ProjectRemoteOutcomeUncertainError,
+  quarantineCurrentProjectExternalOperation,
+} from "../project-external-operation";
+import {
+  DINGTALK_DELIVERY_DISABLED_MESSAGE,
+  isDingtalkDeliveryEnabled,
+} from "./dingtalk-delivery-policy";
 
 export type DispatchResult = {
   channel: "work_notice";
@@ -99,18 +108,45 @@ async function postWorkMessage(token: string, corpUserIds: string[], message: Di
   ok: boolean;
   body: Record<string, unknown>;
   status: number;
+  uncertain: boolean;
 }> {
-  const resp = await fetch(`https://oapi.dingtalk.com/topapi/message/corpconversation/asyncsend_v2?access_token=${encodeURIComponent(token)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      agent_id: Number(ENV.dingtalkAgentId),
-      userid_list: corpUserIds.join(","),
-      msg: message,
-    }),
-  });
+  let resp: Response;
+  try {
+    resp = await fetchWithTimeout(`https://oapi.dingtalk.com/topapi/message/corpconversation/asyncsend_v2?access_token=${encodeURIComponent(token)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        agent_id: Number(ENV.dingtalkAgentId),
+        userid_list: corpUserIds.join(","),
+        msg: message,
+      }),
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    await quarantineCurrentProjectExternalOperation(detail);
+    throw new ProjectRemoteOutcomeUncertainError(
+      `钉钉工作通知响应丢失，远端结果未知：${detail}`
+    );
+  }
   const body = await resp.json().catch(() => ({})) as Record<string, unknown>;
-  return { ok: resp.ok && !hasErrorCode(body), body, status: resp.status };
+  const ambiguousStatus = resp.status === 408 || resp.status === 429 || resp.status >= 500;
+  const apiAccepted = resp.ok && !hasErrorCode(body);
+  const taskId = body.task_id ?? body.taskId;
+  const missingTaskId = apiAccepted && taskId == null;
+  const uncertain = ambiguousStatus || missingTaskId;
+  if (uncertain) {
+    await quarantineCurrentProjectExternalOperation(
+      missingTaskId
+        ? "钉钉工作通知响应未返回 task_id"
+        : `钉钉工作通知返回 HTTP ${resp.status}`
+    );
+  }
+  return {
+    ok: apiAccepted && !missingTaskId,
+    body,
+    status: resp.status,
+    uncertain,
+  };
 }
 
 /** 给一组钉钉通讯录 userid 发工作通知（有按钮时优先 ActionCard,失败降级 markdown） */
@@ -122,6 +158,12 @@ export async function sendWorkNotification(
 ): Promise<DispatchResult> {
   const uniqueCorpUserIds = Array.from(new Set(corpUserIds.filter(Boolean)));
   if (uniqueCorpUserIds.length === 0) return dispatchResult({});
+  if (!isDingtalkDeliveryEnabled()) {
+    return dispatchResult({
+      skipped: uniqueCorpUserIds.length,
+      error: DINGTALK_DELIVERY_DISABLED_MESSAGE,
+    });
+  }
   if (!isDingtalkConfigured() || !ENV.dingtalkAgentId) {
     return dispatchResult({ skipped: uniqueCorpUserIds.length, error: "钉钉工作通知未配置" });
   }
@@ -137,13 +179,15 @@ export async function sendWorkNotification(
     const primaryMessage = buildWorkMessage(title, markdown, options);
     let result = await postWorkMessage(token, uniqueCorpUserIds, primaryMessage);
 
-    if (!result.ok && primaryMessage.msgtype === "action_card") {
+    if (!result.ok && !result.uncertain && primaryMessage.msgtype === "action_card") {
       const fallbackMarkdown = withMarkdownButtons(markdown, normalizedButtons(options));
       result = await postWorkMessage(token, uniqueCorpUserIds, markdownMessage(title, fallbackMarkdown));
     }
 
     if (!result.ok) {
-      const error = responseError("钉钉工作通知失败", result.body, result.status);
+      const error = result.uncertain
+        ? "钉钉工作通知结果未知，已进入隔离期且不会自动补发"
+        : responseError("钉钉工作通知失败", result.body, result.status);
       console.warn("[dingtalk] work notification failed (non-fatal):", error);
       return dispatchResult({ attempted: uniqueCorpUserIds.length, failed: uniqueCorpUserIds.length, error });
     }

@@ -129,3 +129,8 @@ outputs/
 # 本地规划 / 代理草稿（临时，勿随 `git add .` 带入）
 .planning/
 docs/agents/
+
+# 本地 worktree 与编辑器重复副本
+.worktrees/
+* 2.ts
+* 2.tsx

@@ -41,7 +41,7 @@ afterAll(async () => {
 
 describe("行动项与钉钉互动卡同步闭环", () => {
   it("按业务实体关闭 DB 行，并把每个实际 actionItemId 交给卡片更新器", async () => {
-    const markHandled = vi.fn(async () => undefined);
+    const markHandled = vi.fn(async () => true);
     const result = {
       title: "任务已完成",
       message: "卡片已闭环",

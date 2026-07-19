@@ -67,6 +67,7 @@ export async function runActionItemSlaScan(now = new Date(), deps: ActionItemSla
 async function remindOwner(item: ActionItemSlaRow, now: Date, deps: ActionItemSlaDeps): Promise<void> {
   await notifyPersonal({
     eventKey: item.kind,
+    projectId: item.projectId,
     userIds: [item.recipientUserId],
     title: `SLA提醒：${item.title}`,
     body: `${item.projectName} · ${item.body ?? "行动项超时未处理"}`,

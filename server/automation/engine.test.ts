@@ -221,6 +221,55 @@ describe("automation engine integration", () => {
     expect(fired).toBeTruthy();
   });
 
+  it("test database keeps site notifications and skips every DingTalk group path", async () => {
+    const calls = makeDeps();
+
+    const result = await runAutomation(
+      {
+        action: "issue.create",
+        projectId: PROJECT_ID,
+        entityType: "issue",
+        entityId: 9005,
+        after: {
+          severity: "P0",
+          title: "测试库仅站内提醒",
+          assigneeUserId: asgId,
+        },
+      },
+      {
+        ...calls.deps,
+        isDingtalkDeliveryEnabled: () => false,
+      }
+    );
+
+    expect(calls.notes.length).toBeGreaterThan(0);
+    expect(calls.groups).toEqual([]);
+    expect(calls.pushes).toEqual([]);
+    expect(result).toMatchObject({ fired: 1, errors: 0 });
+  });
+
+  it("skips a loaded group notification when project deletion starts after personal delivery", async () => {
+    const calls = makeDeps();
+    const isProjectActive = vi.fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValue(false);
+
+    const result = await runAutomation({
+      action: "issue.create",
+      projectId: PROJECT_ID,
+      entityType: "issue",
+      entityId: 9002,
+      after: { severity: "P0", title: "删除竞态群消息", assigneeUserId: asgId },
+    }, { ...calls.deps, isProjectActive });
+
+    expect(result.fired).toBe(1);
+    expect(calls.groups).toHaveLength(0);
+    expect(calls.pushes).toHaveLength(0);
+    expect(isProjectActive).toHaveBeenCalledTimes(5);
+  });
+
   it("routes group push to the project DingTalk group when chatId is set, else falls back to webhook", async () => {
     const { updateProject } = await import("../db");
     await updateAutomationRuleRow({ ruleKey: "high_severity_issue", enabled: true, config: { severities: ["P0", "P1"], pushGroup: true } });

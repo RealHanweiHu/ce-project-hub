@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __setDingtalkConfigForTest, _resetTokenCacheForTest } from "./dingtalk";
 import { buildApprovalForm, createApprovalInstance, getApprovalInstance, normalizeApprovalStatus } from "./dingtalkApproval";
 import { ENV } from "./env";
@@ -6,10 +6,15 @@ import { ENV } from "./env";
 const originalAgentId = ENV.dingtalkAgentId;
 
 beforeEach(() => {
+  vi.stubEnv("DINGTALK_DELIVERY_MODE", "live");
   _resetTokenCacheForTest();
   vi.restoreAllMocks();
   __setDingtalkConfigForTest({ appKey: "k", appSecret: "s" });
   ENV.dingtalkAgentId = originalAgentId;
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("buildApprovalForm", () => {
@@ -32,6 +37,26 @@ describe("normalizeApprovalStatus", () => {
 });
 
 describe("createApprovalInstance", () => {
+  it("suppresses test-database approval creation as a definite non-delivery", async () => {
+    vi.stubEnv("DINGTALK_DELIVERY_MODE", "disabled");
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("must not call DingTalk"));
+
+    const result = await createApprovalInstance({
+      processCode: "PROC",
+      originatorUserId: "u1",
+      formComponentValues: [],
+    });
+
+    expect(result).toMatchObject({ ok: false });
+    if (!result.ok) {
+      expect(result.error).toContain("已关闭钉钉外发");
+      expect(result.uncertain).not.toBe(true);
+    }
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("returns readable error when processCode is missing", async () => {
     const res = await createApprovalInstance({
       processCode: "",
@@ -93,6 +118,50 @@ describe("createApprovalInstance", () => {
       approvers: [{ actionType: "AND", userIds: ["approver-1", "approver-2"] }],
       formComponentValues: [{ name: "项目", value: "P1" }],
     });
+  });
+
+  it("marks a transport failure after submission starts as uncertain", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async url => {
+      const u = String(url);
+      if (u.includes("oauth2/accessToken")) {
+        return new Response(
+          JSON.stringify({ accessToken: "tok", expireIn: 7200 }),
+          { status: 200 }
+        );
+      }
+      throw new DOMException("timed out", "TimeoutError");
+    });
+
+    const res = await createApprovalInstance({
+      processCode: "PROC",
+      originatorUserId: "u1",
+      formComponentValues: [],
+    });
+
+    expect(res).toMatchObject({ ok: false, uncertain: true });
+  });
+
+  it("marks a successful response without an instance id as uncertain", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async url => {
+      const u = String(url);
+      if (u.includes("oauth2/accessToken")) {
+        return new Response(
+          JSON.stringify({ accessToken: "tok", expireIn: 7200 }),
+          { status: 200 }
+        );
+      }
+      return new Response(JSON.stringify({ success: true, result: {} }), {
+        status: 200,
+      });
+    });
+
+    const res = await createApprovalInstance({
+      processCode: "PROC",
+      originatorUserId: "u1",
+      formComponentValues: [],
+    });
+
+    expect(res).toMatchObject({ ok: false, uncertain: true });
   });
 });
 

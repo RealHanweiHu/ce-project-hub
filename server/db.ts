@@ -1,4 +1,4 @@
-import { eq, desc, and, or, isNull, inArray, between, lt, lte, gte, getTableColumns, sql as drizzleSql } from "drizzle-orm";
+import { eq, asc, desc, and, or, isNull, inArray, between, lt, lte, gt, gte, getTableColumns, sql as drizzleSql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { nanoid } from "nanoid";
 import { createHash } from "node:crypto";
@@ -59,6 +59,8 @@ import {
   productModuleAssignments, ProductModuleAssignment,
   comments, Comment,
   notifications,
+  projectDeletionLeases,
+  projectExternalOperations,
   actionItems, ActionItem, InsertActionItem,
   automationHeartbeats, AutomationHeartbeat, InsertAutomationHeartbeat,
   automationRules, AutomationRuleRow, InsertAutomationRule,
@@ -77,7 +79,7 @@ import {
   type ProjectFileVisibility,
 } from "../drizzle/schema";
 import { buildRevisionChangelogSnapshot, REVISION_CHANGE_STATUSES, type RevisionChangeEntry } from "../shared/changelog-snapshot";
-import { normalizeFileType, normalizeFileVersion } from "../shared/file-types";
+import { nextAutoFileVersion, normalizeFileType, normalizeFileVersion } from "../shared/file-types";
 import { ENV } from './_core/env';
 import {
   getEffectivePhasesForProjectLike,
@@ -167,6 +169,10 @@ import {
   type PhysicalDrvModuleId,
 } from "../shared/key-modules";
 import { canApproveProductTechnicalChange } from "./product-control";
+import {
+  ProjectDeletionLeaseLostError,
+  projectExternalOperationLockKey,
+} from "./project-deletion-lease";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 const PROJECT_FILE_VISIBILITY_SET = new Set<string>(PROJECT_FILE_VISIBILITIES);
@@ -2227,6 +2233,10 @@ export async function upsertDingtalkInteractiveCard(input: {
         ...values,
         updatedAt: new Date(),
       },
+      // A duplicate dispatcher may only retry a delivery that is known not to
+      // exist remotely. Never reopen sent/handled (or ambiguously creating)
+      // cards with a stale `creating` intent.
+      setWhere: eq(dingtalkInteractiveCards.status, "delivery_failed"),
     })
     .returning();
   return row;
@@ -2241,16 +2251,38 @@ export async function listDingtalkInteractiveCardsForActionItem(actionItemId: nu
     .where(eq(dingtalkInteractiveCards.actionItemId, actionItemId));
 }
 
+
+export async function listDeletedProjectDingtalkInteractiveCards(limit = 100): Promise<DingtalkInteractiveCard[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({ ...getTableColumns(dingtalkInteractiveCards) })
+    .from(dingtalkInteractiveCards)
+    .leftJoin(projects, eq(dingtalkInteractiveCards.projectId, projects.id))
+    .where(and(
+      drizzleSql`${dingtalkInteractiveCards.projectId} IS NOT NULL`,
+      isNull(projects.id),
+      inArray(dingtalkInteractiveCards.status, ["creating", "sent", "update_failed", "failed"]),
+    ))
+    .orderBy(asc(dingtalkInteractiveCards.updatedAt), asc(dingtalkInteractiveCards.id))
+    .limit(limit);
+}
+
 export async function markDingtalkInteractiveCardStatus(input: {
   outTrackId: string;
   status: string;
   cardData?: Record<string, unknown>;
   lastError?: string | null;
   handledAt?: Date | null;
-}): Promise<void> {
+  expectedStatuses?: string[];
+}): Promise<boolean> {
   const db = await getDb();
-  if (!db) return;
-  await db
+  if (!db) return false;
+  const conditions = [eq(dingtalkInteractiveCards.outTrackId, input.outTrackId)];
+  if (input.expectedStatuses?.length) {
+    conditions.push(inArray(dingtalkInteractiveCards.status, input.expectedStatuses));
+  }
+  const [updated] = await db
     .update(dingtalkInteractiveCards)
     .set({
       status: input.status,
@@ -2259,12 +2291,19 @@ export async function markDingtalkInteractiveCardStatus(input: {
       handledAt: input.handledAt ?? null,
       updatedAt: new Date(),
     })
-    .where(eq(dingtalkInteractiveCards.outTrackId, input.outTrackId));
+    .where(and(...conditions))
+    .returning({ id: dingtalkInteractiveCards.id });
+  return !!updated;
 }
 
 type DeleteProjectResult = { storageKeys: string[] };
 
-async function deleteProjectRows(projectId: string, options: { allowReleased: boolean }): Promise<DeleteProjectResult> {
+type DeleteProjectRowsOptions = {
+  allowReleased: boolean;
+  deletionLeaseToken?: string;
+};
+
+async function deleteProjectRows(projectId: string, options: DeleteProjectRowsOptions): Promise<DeleteProjectResult> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
@@ -2273,7 +2312,12 @@ async function deleteProjectRows(projectId: string, options: { allowReleased: bo
     .from(projects)
     .where(eq(projects.id, projectId))
     .limit(1);
-  if (!project) return { storageKeys: [] };
+  if (!project) {
+    if (options.deletionLeaseToken !== undefined) {
+      throw new ProjectDeletionLeaseLostError();
+    }
+    return { storageKeys: [] };
+  }
 
   const [release] = await db
     .select({ id: mpReleases.id })
@@ -2304,6 +2348,41 @@ async function deleteProjectRows(projectId: string, options: { allowReleased: bo
   const technicalBaselineIds = technicalBaselineRows.map((row) => row.id);
 
   await db.transaction(async (tx) => {
+    if (options.deletionLeaseToken !== undefined) {
+      const lockKey = projectExternalOperationLockKey(projectId);
+      await tx.execute(
+        drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`
+      );
+      const now = new Date();
+      const [lease] = await tx
+        .select({ token: projectDeletionLeases.token })
+        .from(projectDeletionLeases)
+        .where(
+          and(
+            eq(projectDeletionLeases.projectId, projectId),
+            eq(projectDeletionLeases.token, options.deletionLeaseToken),
+            gt(projectDeletionLeases.expiresAt, now)
+          )
+        )
+        .limit(1);
+      if (!lease) throw new ProjectDeletionLeaseLostError();
+      const [activeExternalOperation] = await tx
+        .select({ id: projectExternalOperations.id })
+        .from(projectExternalOperations)
+        .where(
+          and(
+            eq(projectExternalOperations.projectId, projectId),
+            gt(projectExternalOperations.expiresAt, now)
+          )
+        )
+        .limit(1);
+      if (activeExternalOperation) {
+        throw new ProjectDeletionLeaseLostError(
+          "项目仍有钉钉发送正在处理，不能提交删除"
+        );
+      }
+    }
+
     // Product-level records may outlive the project. Remove dangling project links
     // instead of deleting product history.
     await tx.update(productDefinitionChanges)
@@ -2365,7 +2444,13 @@ async function deleteProjectRows(projectId: string, options: { allowReleased: bo
     await tx.delete(projectTasks).where(eq(projectTasks.projectId, projectId));
     await tx.delete(projectPhases).where(eq(projectPhases.projectId, projectId));
     await tx.delete(projectMembers).where(eq(projectMembers.projectId, projectId));
-    await tx.delete(projects).where(eq(projects.id, projectId));
+    const deleted = await tx
+      .delete(projects)
+      .where(eq(projects.id, projectId))
+      .returning({ id: projects.id });
+    if (options.deletionLeaseToken !== undefined && deleted.length !== 1) {
+      throw new ProjectDeletionLeaseLostError();
+    }
   });
 
   return { storageKeys: fileRows.map((row) => row.storageKey) };
@@ -2377,8 +2462,14 @@ export async function archiveProject(id: string): Promise<void> {
   await db.update(projects).set({ archived: true }).where(eq(projects.id, id));
 }
 
-export async function deleteProject(id: string): Promise<DeleteProjectResult> {
-  return deleteProjectRows(id, { allowReleased: false });
+export async function deleteProject(
+  id: string,
+  options: { deletionLeaseToken?: string } = {}
+): Promise<DeleteProjectResult> {
+  return deleteProjectRows(id, {
+    allowReleased: false,
+    deletionLeaseToken: options.deletionLeaseToken,
+  });
 }
 
 /** Get projects where user is an explicit member (not creator) */
@@ -3140,7 +3231,7 @@ async function ensureProjectCalendarEventsTable(): Promise<void> {
   await db.execute(drizzleSql`
     CREATE TABLE IF NOT EXISTS "project_calendar_events" (
       "id" serial PRIMARY KEY,
-      "projectId" varchar(32) NOT NULL,
+      "projectId" varchar(32) NOT NULL REFERENCES "projects"("id") ON DELETE CASCADE,
       "title" varchar(256) NOT NULL,
       "description" text,
       "eventDate" date NOT NULL,
@@ -6312,7 +6403,10 @@ export async function deleteProjectChangeRecord(id: number): Promise<void> {
 
 
 /** Insert a file metadata record after uploading to S3 */
-export async function createProjectFile(record: Omit<InsertProjectFile, "id" | "createdAt">): Promise<number> {
+export async function createProjectFile(
+  record: Omit<InsertProjectFile, "id" | "createdAt">,
+  options: { autoVersion?: boolean } = {},
+): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const normalized = {
@@ -6326,7 +6420,37 @@ export async function createProjectFile(record: Omit<InsertProjectFile, "id" | "
     // same advisory lock is held while a technical baseline captures evidence.
     await acquireProjectReleaseStateLock(tx, record.projectId);
     await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`project-files:${record.projectId}`}))`);
-    const result = await tx.insert(projectFiles).values(normalized).returning({ id: projectFiles.id });
+    let fileVersion = normalized.fileVersion;
+    if (options.autoVersion) {
+      const versionScope = [eq(projectFiles.projectId, normalized.projectId)];
+      versionScope.push(normalized.phaseId
+        ? eq(projectFiles.phaseId, normalized.phaseId)
+        : isNull(projectFiles.phaseId));
+      if (normalized.deliverableName) {
+        versionScope.push(eq(projectFiles.deliverableName, normalized.deliverableName));
+      } else if (normalized.taskId) {
+        versionScope.push(eq(projectFiles.taskId, normalized.taskId));
+        versionScope.push(isNull(projectFiles.deliverableName));
+        versionScope.push(normalized.fileType
+          ? eq(projectFiles.fileType, normalized.fileType)
+          : isNull(projectFiles.fileType));
+      } else {
+        versionScope.push(isNull(projectFiles.taskId));
+        versionScope.push(isNull(projectFiles.deliverableName));
+        versionScope.push(normalized.fileType
+          ? eq(projectFiles.fileType, normalized.fileType)
+          : isNull(projectFiles.fileType));
+      }
+      const [latest] = await tx.select({ fileVersion: projectFiles.fileVersion })
+        .from(projectFiles)
+        .where(and(...versionScope))
+        .orderBy(desc(projectFiles.createdAt), desc(projectFiles.id))
+        .limit(1);
+      fileVersion = nextAutoFileVersion(latest?.fileVersion);
+    }
+    const result = await tx.insert(projectFiles)
+      .values({ ...normalized, fileVersion })
+      .returning({ id: projectFiles.id });
     if (record.deliverableName && record.phaseId) {
       const [existingReview] = await tx.select().from(projectDeliverableReviews)
         .where(and(
@@ -6411,6 +6535,56 @@ export async function getProjectFileById(id: number): Promise<ProjectFile | unde
     .where(eq(projectFiles.id, id))
     .limit(1);
   return row;
+}
+
+/**
+ * Remove older active copies after a deliverable replacement. Files already
+ * captured by a released technical baseline remain immutable and are skipped.
+ */
+export async function deleteSupersededProjectDeliverableFiles(
+  currentFileId: number,
+  projectId: string,
+): Promise<string[]> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, projectId);
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`project-files:${projectId}`}))`);
+    const [current] = await tx.select({
+      id: projectFiles.id,
+      projectId: projectFiles.projectId,
+      phaseId: projectFiles.phaseId,
+      deliverableName: projectFiles.deliverableName,
+    }).from(projectFiles).where(eq(projectFiles.id, currentFileId)).limit(1);
+    if (!current || current.projectId !== projectId || !current.deliverableName) return [];
+
+    const scope = [
+      eq(projectFiles.projectId, projectId),
+      eq(projectFiles.deliverableName, current.deliverableName),
+      lt(projectFiles.id, currentFileId),
+      current.phaseId
+        ? eq(projectFiles.phaseId, current.phaseId)
+        : isNull(projectFiles.phaseId),
+    ];
+    const candidates = await tx.select({
+      id: projectFiles.id,
+      storageKey: projectFiles.storageKey,
+    }).from(projectFiles).where(and(...scope));
+    const deletableIds: number[] = [];
+    for (const candidate of candidates) {
+      const [baseline] = await tx.select({ id: productTechnicalBaselines.id })
+        .from(productTechnicalBaselines)
+        .where(drizzleSql`${productTechnicalBaselines.specSnapshot}->'specificationFiles' @> ${JSON.stringify([{ sourceFileId: candidate.id }])}::jsonb`)
+        .limit(1);
+      if (!baseline) deletableIds.push(candidate.id);
+    }
+    if (deletableIds.length === 0) return [];
+
+    const deleted = await tx.delete(projectFiles)
+      .where(inArray(projectFiles.id, deletableIds))
+      .returning({ storageKey: projectFiles.storageKey });
+    return deleted.map((file) => file.storageKey);
+  });
 }
 
 /** Released technical baselines retain their source specification evidence. */
@@ -8981,6 +9155,17 @@ export async function setProjectLifecycle(input: {
   if (!db) throw new Error("Database not available");
   return db.transaction(async (tx) => {
     await acquireProjectReleaseStateLock(tx, input.projectId);
+    await tx.execute(
+      drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`project-external:${input.projectId}`}))`,
+    );
+    const [deletionLease] = await tx
+      .select({ token: projectDeletionLeases.token })
+      .from(projectDeletionLeases)
+      .where(eq(projectDeletionLeases.projectId, input.projectId))
+      .limit(1);
+    if (deletionLease) {
+      throw new Error("项目正在删除，不能变更生命周期");
+    }
     const [project] = await tx.select().from(projects)
       .where(eq(projects.id, input.projectId))
       .limit(1)
@@ -9796,12 +9981,13 @@ async function getCommentMentionCandidates(projectId: string | null | undefined)
 
 export async function createNotification(n: {
   userId: number; type: string; title: string; body?: string | null;
+  projectId?: string | null;
   entityType?: string | null; entityId?: string | null;
 }): Promise<void> {
   const db = await getDb(); if (!db) return;
   await db.insert(notifications).values({
     userId: n.userId, type: n.type, title: n.title,
-    body: n.body ?? null, entityType: n.entityType ?? null, entityId: n.entityId ?? null,
+    projectId: n.projectId ?? null, body: n.body ?? null, entityType: n.entityType ?? null, entityId: n.entityId ?? null,
   });
 }
 
@@ -9835,6 +10021,7 @@ export async function addComment(input: {
       `> ${excerpt}`;
     await notifyPersonal({
       eventKey: "mention",
+      projectId: input.projectId ?? null,
       userIds: recipientIds,
       title: `${authorName} 在评论中提到了你`,
       body: excerpt,

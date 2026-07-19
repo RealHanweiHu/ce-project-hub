@@ -1,5 +1,6 @@
 import {
   createActivityLog,
+  canReceiveProjectNotification,
   createExternalApprovalInstance,
   getApprovalConfig,
   getPendingExternalApproval,
@@ -10,6 +11,10 @@ import {
 import type { ExternalApprovalInstance } from "../../drizzle/schema";
 import { resolveDingtalkCorpUserId } from "../_core/dingtalk";
 import { buildApprovalForm, createApprovalInstance } from "../_core/dingtalkApproval";
+import {
+  ProjectExternalOperationBlockedError,
+  withProjectExternalOperation,
+} from "../project-external-operation";
 
 export const ACTION_EXTERNAL_APPROVAL_TYPES = [
   "task_approval",
@@ -78,6 +83,7 @@ export async function maybeSubmitActionExternalApproval(input: {
   if (!isActionExternalApprovalType(input.kind)) return { submitted: false };
   const config = await getApprovalConfig(input.kind);
   if (!config?.enabled || !config.processCode?.trim()) return { submitted: false };
+  const processCode = config.processCode.trim();
 
   const pending = await getPendingExternalApproval({
     businessType: input.kind,
@@ -100,6 +106,10 @@ export async function maybeSubmitActionExternalApproval(input: {
   const dingtalkApproverUserId = await resolveDingtalkCorpUserId(approver, setUserDingtalkCorpId);
   if (!dingtalkApproverUserId) return { submitted: false, error: "外部审批处理人未匹配钉钉 userid" };
 
+  if (!(await canReceiveProjectNotification(input.projectId, input.recipientUserId))) {
+    return { submitted: false, error: "项目已停止推送" };
+  }
+
   const snapshot = {
     "业务类型": businessLabel(input.kind),
     "标题": input.title,
@@ -121,7 +131,7 @@ export async function maybeSubmitActionExternalApproval(input: {
     entityType: input.entityType,
     entityId: input.entityId,
     projectId: input.projectId,
-    processCode: config.processCode,
+    processCode,
     title: input.title,
     submittedBy,
     originatorUserId: submittedBy,
@@ -142,20 +152,57 @@ export async function maybeSubmitActionExternalApproval(input: {
     },
   });
 
-  const created = await createApprovalInstance({
-    processCode: config.processCode,
-    originatorUserId: dingtalkOriginatorUserId,
-    deptId: config.defaultDeptId,
-    formComponentValues,
-    approverUserIds: [dingtalkApproverUserId],
-  });
-  if (!created.ok) {
-    const failed = await updateExternalApprovalInstance(instance.id, {
-      status: "sync_failed",
-      lastError: created.error,
+  if (!(await canReceiveProjectNotification(input.projectId, input.recipientUserId))) {
+    const terminated = await updateExternalApprovalInstance(instance.id, {
+      status: "terminated",
+      lastError: "项目已停止推送，未发起远端审批",
       syncedAt: new Date(),
     });
-    return { submitted: false, instance: failed ?? instance, error: created.error };
+    return { submitted: false, instance: terminated ?? instance, error: "项目已停止推送" };
+  }
+
+  let created: Awaited<ReturnType<typeof createApprovalInstance>>;
+  try {
+    created = await withProjectExternalOperation(
+      [input.projectId],
+      `approval:${input.kind}`,
+      async () => {
+        if (!(await canReceiveProjectNotification(input.projectId, input.recipientUserId))) {
+          throw new ProjectExternalOperationBlockedError();
+        }
+        return createApprovalInstance({
+          processCode,
+          originatorUserId: dingtalkOriginatorUserId,
+          deptId: config.defaultDeptId,
+          formComponentValues,
+          approverUserIds: [dingtalkApproverUserId],
+        });
+      }
+    );
+  } catch (error) {
+    if (!(error instanceof ProjectExternalOperationBlockedError)) throw error;
+    const terminated = await updateExternalApprovalInstance(instance.id, {
+      status: "terminated",
+      lastError: "项目已停止推送，未发起远端审批",
+      terminatedAt: new Date(),
+      syncedAt: new Date(),
+    });
+    return {
+      submitted: false,
+      instance: terminated ?? instance,
+      error: "项目已停止推送",
+    };
+  }
+  if (!created.ok) {
+    const lastError = created.uncertain
+      ? `远端审批创建结果未知：${created.error}`
+      : created.error;
+    const failed = await updateExternalApprovalInstance(instance.id, {
+      status: created.uncertain ? "pending" : "sync_failed",
+      lastError,
+      syncedAt: new Date(),
+    });
+    return { submitted: false, instance: failed ?? instance, error: lastError };
   }
 
   const updated = await updateExternalApprovalInstance(instance.id, {

@@ -1,4 +1,5 @@
 import { ENV } from "./env";
+import { fetchWithTimeout } from "./fetchWithTimeout";
 
 let cfg = { appKey: ENV.dingtalkAppKey, appSecret: ENV.dingtalkAppSecret };
 let tokenCache: { token: string; expiresAt: number } | null = null;
@@ -16,7 +17,7 @@ export async function getAccessToken(now = Date.now()): Promise<string | null> {
   if (!isDingtalkConfigured()) return null;
   if (tokenCache && tokenCache.expiresAt - 5 * 60_000 > now) return tokenCache.token;
   try {
-    const resp = await fetch("https://api.dingtalk.com/v1.0/oauth2/accessToken", {
+    const resp = await fetchWithTimeout("https://api.dingtalk.com/v1.0/oauth2/accessToken", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ appKey: cfg.appKey, appSecret: cfg.appSecret }),
@@ -51,7 +52,7 @@ export async function resolveDingtalkCorpUserId(
   const token = await getAccessToken();
   if (!token) return null;
   try {
-    const resp = await fetch(`https://oapi.dingtalk.com/topapi/v2/user/getbymobile?access_token=${encodeURIComponent(token)}`, {
+    const resp = await fetchWithTimeout(`https://oapi.dingtalk.com/topapi/v2/user/getbymobile?access_token=${encodeURIComponent(token)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mobile: user.mobile }),
@@ -84,7 +85,7 @@ export async function resolveDingtalkUserId(
 
   try {
     // 1) 手机号 → 通讯录 userid
-    const mResp = await fetch(`https://oapi.dingtalk.com/topapi/v2/user/getbymobile?access_token=${encodeURIComponent(token)}`, {
+    const mResp = await fetchWithTimeout(`https://oapi.dingtalk.com/topapi/v2/user/getbymobile?access_token=${encodeURIComponent(token)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mobile: user.mobile }),
@@ -95,7 +96,7 @@ export async function resolveDingtalkUserId(
     if (mj.errcode !== 0 || !userid) return null;
 
     // 2) userid → unionId
-    const gResp = await fetch(`https://oapi.dingtalk.com/topapi/v2/user/get?access_token=${encodeURIComponent(token)}`, {
+    const gResp = await fetchWithTimeout(`https://oapi.dingtalk.com/topapi/v2/user/get?access_token=${encodeURIComponent(token)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ userid }),
@@ -121,7 +122,7 @@ export async function getDingtalkUserByAuthCode(code: string): Promise<DingtalkA
   if (!token) return null;
 
   try {
-    const infoResp = await fetch(`https://oapi.dingtalk.com/topapi/v2/user/getuserinfo?access_token=${encodeURIComponent(token)}`, {
+    const infoResp = await fetchWithTimeout(`https://oapi.dingtalk.com/topapi/v2/user/getuserinfo?access_token=${encodeURIComponent(token)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code: trimmedCode }),
@@ -143,7 +144,7 @@ export async function getDingtalkUserByAuthCode(code: string): Promise<DingtalkA
     let name = info.result?.name ?? null;
     let mobile: string | null = null;
 
-    const detailResp = await fetch(`https://oapi.dingtalk.com/topapi/v2/user/get?access_token=${encodeURIComponent(token)}`, {
+    const detailResp = await fetchWithTimeout(`https://oapi.dingtalk.com/topapi/v2/user/get?access_token=${encodeURIComponent(token)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ userid: corpUserId }),

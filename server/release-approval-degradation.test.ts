@@ -6,25 +6,52 @@ import { beforeEach, describe, it, expect, vi } from "vitest";
  * getPendingExternalApproval 只匹配 pending，不会被失败实例卡住）。
  */
 
-vi.mock("./db", async (importOriginal) => {
+vi.mock("./db", async importOriginal => {
   const actual = await importOriginal<typeof import("./db")>();
   return {
     ...actual,
-    getApprovalConfig: vi.fn(async () => ({ enabled: true, processCode: "PROC-1", defaultDeptId: null })),
+    getApprovalConfig: vi.fn(async () => ({
+      enabled: true,
+      processCode: "PROC-1",
+      defaultDeptId: null,
+    })),
     getPendingExternalApproval: vi.fn(async () => undefined),
-    getUserById: vi.fn(async () => ({ id: 1, role: "admin", name: "u", mobile: "13800000000", dingtalkCorpUserId: "corp-1" })),
+    getUserById: vi.fn(async () => ({
+      id: 1,
+      role: "admin",
+      name: "u",
+      mobile: "13800000000",
+      dingtalkCorpUserId: "corp-1",
+    })),
     getProjectById: vi.fn(async () => ({
-      id: "p1", name: "P1", projectNumber: "P1-001", productId: "prod1",
-      category: "npd", currentPhase: "pvt", createdBy: 1,
+      id: "p1",
+      name: "P1",
+      projectNumber: "P1-001",
+      productId: "prod1",
+      category: "npd",
+      currentPhase: "pvt",
+      createdBy: 1,
     })),
     isReleaseOverrideAuthorized: vi.fn(async () => true),
-    getProductById: vi.fn(async () => ({ id: "prod1", name: "Prod", productNumber: "PN-1" })),
+    getProductById: vi.fn(async () => ({
+      id: "prod1",
+      name: "Prod",
+      productNumber: "PN-1",
+    })),
     getOpenP0P1Count: vi.fn(async () => 0),
     getReleaseGateStatus: vi.fn(async () => ({
-      phaseId: "pvt", gateName: "MP Gate", decision: "approved", conditions: null,
-      roundNumber: 1, ready: true, dimensions: [], deliverables: { done: 1, total: 1, missing: [] },
+      phaseId: "pvt",
+      gateName: "MP Gate",
+      decision: "approved",
+      conditions: null,
+      roundNumber: 1,
+      ready: true,
+      dimensions: [],
+      deliverables: { done: 1, total: 1, missing: [] },
     })),
-    getProjectReleaseStateFingerprint: vi.fn(async () => "stable-release-fingerprint"),
+    getProjectReleaseStateFingerprint: vi.fn(
+      async () => "stable-release-fingerprint"
+    ),
     getExternalApprovalById: vi.fn(async () => ({
       id: 42,
       businessType: "mp_release",
@@ -64,22 +91,56 @@ vi.mock("./db", async (importOriginal) => {
       revisionId: null,
       revisionLabel: null,
     })),
-    createExternalApprovalInstance: vi.fn(async (v: Record<string, unknown>) => ({ id: 42, status: "pending", lastError: null, ...v })),
-    updateExternalApprovalInstance: vi.fn(async (_id: number, patch: Record<string, unknown>) => ({
-      id: 42, status: (patch.status as string) ?? "pending", lastError: (patch.lastError as string) ?? null,
-      processInstanceId: (patch.processInstanceId as string) ?? null,
-    })),
+    createExternalApprovalInstance: vi.fn(
+      async (v: Record<string, unknown>) => ({
+        id: 42,
+        status: "pending",
+        lastError: null,
+        ...v,
+      })
+    ),
+    updateExternalApprovalInstance: vi.fn(
+      async (_id: number, patch: Record<string, unknown>) => ({
+        id: 42,
+        status: (patch.status as string) ?? "pending",
+        lastError: (patch.lastError as string) ?? null,
+        processInstanceId: (patch.processInstanceId as string) ?? null,
+      })
+    ),
     createActivityLog: vi.fn(async () => {}),
     setUserDingtalkCorpId: vi.fn(async () => {}),
   };
 });
-vi.mock("./_core/dingtalk", () => ({ resolveDingtalkCorpUserId: vi.fn(async () => "corp-1") }));
-vi.mock("./_core/dingtalkApproval", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./_core/dingtalkApproval")>();
-  return { ...actual, createApprovalInstance: vi.fn(async () => ({ ok: false as const, error: "钉钉不可用" })) };
+vi.mock("./_core/dingtalk", () => ({
+  resolveDingtalkCorpUserId: vi.fn(async () => "corp-1"),
+}));
+vi.mock("./_core/dingtalkApproval", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("./_core/dingtalkApproval")>();
+  return {
+    ...actual,
+    createApprovalInstance: vi.fn(async () => ({
+      ok: false as const,
+      error: "钉钉不可用",
+    })),
+  };
+});
+vi.mock("./project-external-operation", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("./project-external-operation")>();
+  return {
+    ...actual,
+    withProjectExternalOperation: vi.fn(
+      async (_projectIds: readonly string[], _kind: string, operation: () => Promise<unknown>) =>
+        operation()
+    ),
+  };
 });
 
-import { confirmApprovedRelease, submitReleaseApproval } from "./services/external-approval-service";
+import {
+  confirmApprovedRelease,
+  submitReleaseApproval,
+} from "./services/external-approval-service";
 import { createApprovalInstance } from "./_core/dingtalkApproval";
 import {
   createExternalApprovalInstance,
@@ -87,6 +148,7 @@ import {
   getProjectById,
   getProjectReleaseStateFingerprint,
   releaseProject,
+  updateExternalApprovalInstance,
 } from "./db";
 
 const projectAtApproval = {
@@ -97,6 +159,8 @@ const projectAtApproval = {
   category: "npd",
   currentPhase: "pvt",
   createdBy: 1,
+  archived: false,
+  lifecycle: "active",
 };
 
 const approvedInstance = {
@@ -132,33 +196,96 @@ const approvedInstance = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(getProjectById).mockResolvedValue(projectAtApproval as Awaited<ReturnType<typeof getProjectById>>);
-  vi.mocked(getProjectReleaseStateFingerprint).mockResolvedValue("stable-release-fingerprint");
-  vi.mocked(getExternalApprovalById).mockResolvedValue(approvedInstance as Awaited<ReturnType<typeof getExternalApprovalById>>);
+  vi.mocked(getProjectById).mockResolvedValue(
+    projectAtApproval as Awaited<ReturnType<typeof getProjectById>>
+  );
+  vi.mocked(getProjectReleaseStateFingerprint).mockResolvedValue(
+    "stable-release-fingerprint"
+  );
+  vi.mocked(getExternalApprovalById).mockResolvedValue(
+    approvedInstance as Awaited<ReturnType<typeof getExternalApprovalById>>
+  );
 });
 
 describe("submitReleaseApproval dingtalk degradation", () => {
   it("钉钉发起失败 → 不抛错，返回 sync_failed 实例供前端提示重试", async () => {
-    const res = await submitReleaseApproval({ projectId: "p1", actor: { id: 1, role: "admin" } });
+    const res = await submitReleaseApproval({
+      projectId: "p1",
+      actor: { id: 1, role: "admin" },
+    });
     expect(res.instance.status).toBe("sync_failed");
     expect(res.instance.lastError).toBe("钉钉不可用");
     expect(res.alreadyPending).toBe(false);
-    expect(createExternalApprovalInstance).toHaveBeenCalledWith(expect.objectContaining({
-      entityId: "p1",
-      requestSnapshot: expect.objectContaining({
-        productId: "prod1",
-        releaseStateFingerprint: "stable-release-fingerprint",
-      }),
-    }));
+    expect(createExternalApprovalInstance).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entityId: "p1",
+        requestSnapshot: expect.objectContaining({
+          productId: "prod1",
+          releaseStateFingerprint: "stable-release-fingerprint",
+        }),
+      })
+    );
   });
 
   it("钉钉正常 → 行为不变：实例带 processInstanceId 返回", async () => {
     vi.mocked(createApprovalInstance).mockResolvedValueOnce({
-      ok: true, data: { processInstanceId: "pi-9" }, raw: {},
+      ok: true,
+      data: { processInstanceId: "pi-9" },
+      raw: {},
     } as Awaited<ReturnType<typeof createApprovalInstance>>);
-    const res = await submitReleaseApproval({ projectId: "p1", actor: { id: 1, role: "admin" } });
+    const res = await submitReleaseApproval({
+      projectId: "p1",
+      actor: { id: 1, role: "admin" },
+    });
     expect(res.instance.processInstanceId).toBe("pi-9");
     expect(res.alreadyPending).toBe(false);
+  });
+
+  it("远端创建结果不确定 → 保持 pending 阻止项目删除和重复发起", async () => {
+    vi.mocked(createApprovalInstance).mockResolvedValueOnce({
+      ok: false,
+      error: "钉钉审批请求超时，远端结果未知",
+      uncertain: true,
+    });
+
+    const res = await submitReleaseApproval({
+      projectId: "p1",
+      actor: { id: 1, role: "admin" },
+    });
+
+    expect(res.instance.status).toBe("pending");
+    expect(res.instance.lastError).toContain("结果未知");
+    expect(updateExternalApprovalInstance).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ status: "pending" })
+    );
+  });
+
+  it("本地 pending 预留后项目进入暂停 → 终止本地实例且不创建远端审批", async () => {
+    let projectLookupCount = 0;
+    vi.mocked(getProjectById).mockImplementation(async () => {
+      projectLookupCount += 1;
+      return {
+        ...projectAtApproval,
+        lifecycle: projectLookupCount === 1 ? "active" : "paused",
+      } as Awaited<ReturnType<typeof getProjectById>>;
+    });
+
+    await expect(
+      submitReleaseApproval({
+        projectId: "p1",
+        actor: { id: 1, role: "admin" },
+      })
+    ).rejects.toThrow("项目已停止推送");
+
+    expect(createExternalApprovalInstance).toHaveBeenCalledOnce();
+    expect(updateExternalApprovalInstance).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({
+        status: "terminated",
+      })
+    );
+    expect(createApprovalInstance).not.toHaveBeenCalled();
   });
 
   it("审批通过后关联产品发生变化 → 原审批失效且不会调用发布", async () => {
@@ -167,16 +294,20 @@ describe("submitReleaseApproval dingtalk degradation", () => {
       productId: "prod2",
     } as Awaited<ReturnType<typeof getProjectById>>);
 
-    await expect(confirmApprovedRelease({ approvalInstanceId: 42, actorId: 1 }))
-      .rejects.toThrow(/关联产品已变化/);
+    await expect(
+      confirmApprovedRelease({ approvalInstanceId: 42, actorId: 1 })
+    ).rejects.toThrow(/关联产品已变化/);
     expect(releaseProject).not.toHaveBeenCalled();
   });
 
   it("审批通过后发布状态指纹发生变化 → 原审批失效且不会调用发布", async () => {
-    vi.mocked(getProjectReleaseStateFingerprint).mockResolvedValueOnce("changed-after-approval");
+    vi.mocked(getProjectReleaseStateFingerprint).mockResolvedValueOnce(
+      "changed-after-approval"
+    );
 
-    await expect(confirmApprovedRelease({ approvalInstanceId: 42, actorId: 1 }))
-      .rejects.toThrow(/BOM、关键模块、规格或 Gate 状态已变化/);
+    await expect(
+      confirmApprovedRelease({ approvalInstanceId: 42, actorId: 1 })
+    ).rejects.toThrow(/BOM、关键模块、规格或 Gate 状态已变化/);
     expect(releaseProject).not.toHaveBeenCalled();
   });
 });

@@ -101,6 +101,7 @@ export const delegationsRouter = router({
       });
       await notifyPersonal({
         eventKey: "exception_escalation",
+        projectId: input.projectId,
         userIds: [row.toUserId, ...(row.fromUserId ? [row.fromUserId] : [])],
         title: "项目岗位代理已建立",
         body: `${row.role} 岗位由用户 ${row.toUserId} 代理，生效期 ${row.startDate} 至 ${row.endDate}。`,
@@ -124,6 +125,7 @@ export const delegationsRouter = router({
       });
       await notifyPersonal({
         eventKey: "exception_escalation",
+        projectId: input.projectId,
         userIds: [row.toUserId, ...(row.fromUserId ? [row.fromUserId] : [])],
         title: "项目岗位代理已撤销",
         body: `${row.role} 岗位代理已撤销。`,

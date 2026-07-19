@@ -7,17 +7,17 @@
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react';
 import {
   ArrowLeft, CheckCircle2, Circle, ChevronRight,
-  Upload, Download, Trash2, Paperclip, FileText, Image as ImageIcon,
+  Paperclip,
   Edit3, Calendar, AlertTriangle, Target, Zap, ListChecks,
   Lock, ShieldAlert, Flag, Bug, GitBranch, Filter, Rocket, LayoutDashboard,
-  FolderOpen, Eye, X, Clock, Settings,
+  FolderOpen, X, Clock, Settings,
 } from 'lucide-react';
 import { TaskActivityTab, TaskFlowTab, TaskApprovalTab } from './task/TaskTabs';
 import {
   Project, SOP_PHASES, PHASE_MAP, HEALTH_CONFIG,
   getPhaseProgress, getOverallProgress, getPhaseStatus,
   isPhaseUnlocked, getBlockingGate, getProjectPhases,
-  TaskDetails, FileAttachment, formatBytes, SOPTask, SOPPhase,
+  TaskDetails, FileAttachment, SOPTask, SOPPhase,
 } from '@/lib/data';
 import { CATEGORY_MAP } from '@/lib/sop-templates';
 import { TASK_STATUS_UI, TASK_PRIORITY_OPTIONS } from '@/lib/task-ui';
@@ -43,7 +43,7 @@ import { RequirementPoolPanel } from './RequirementPoolPanel';
 import { KanbanBoard } from './KanbanBoard';
 import { FilesPanel } from './FilesPanel';
 import { RisksPanel } from './RisksPanel';
-import { FilePreviewModal, canPreview } from './FilePreviewModal';
+import { DeliverableUploadDialog, UploadedDeliverablesList } from './TaskDeliverableFiles';
 import { MetricsView } from './MetricsView';
 import { TestPlanPanel } from './TestPlanPanel';
 import { NpiReadinessPanel } from './NpiReadinessPanel';
@@ -57,7 +57,6 @@ import { trpc } from '@/lib/trpc';
 import { toast } from 'sonner';
 import { getTaskDeliverables } from '@shared/task-deliverables';
 import { getDeliverableTemplatePath } from '@shared/deliverable-templates';
-import { FILE_TYPES } from '@shared/file-types';
 import { canRoleContributeToDeliverable, canRoleReviewDeliverables, preferredDeliverableReviewerRoles } from '@shared/deliverable-permissions';
 import { isSystemAdminRole } from '@shared/system-roles';
 import type { ProjectMemberRole } from '@shared/project-roles';
@@ -75,8 +74,6 @@ import {
   validateJdmDefinitionFreeze,
 } from '@/lib/jdm-definition';
 import { Users } from 'lucide-react';
-
-const MAX_FILE_SIZE = 16 * 1024 * 1024;
 
 function readProjectExecutionBaseline(project: Project): ProjectExecutionBaseline {
   const value = project.customFields?.projectExecutionBaseline;
@@ -317,180 +314,6 @@ function EditableSelect({
     >
       {value}
     </span>
-  );
-}
-
-function FileUploadArea({
-  files, onAdd, onRemove, projectId, phaseId, taskId, readOnly = false,
-}: {
-  files: FileAttachment[];
-  onAdd: (files: FileAttachment[]) => void;
-  onRemove: (id: string) => void;
-  projectId: string;
-  phaseId?: string;
-  taskId?: string;
-  readOnly?: boolean;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [dragOver, setDragOver] = useState(false);
-  const [error, setError] = useState('');
-  const [uploading, setUploading] = useState(false);
-  const [previewFile, setPreviewFile] = useState<FileAttachment | null>(null);
-  const [selectedType, setSelectedType] = useState('');
-  const [version, setVersion] = useState('');
-  const [visibility, setVisibility] = useState<'internal' | 'customer' | 'supplier'>('internal');
-
-  const handleFiles = async (fileList: FileList) => {
-    if (readOnly) return;
-    setError('');
-    const newFiles: FileAttachment[] = [];
-    for (const file of Array.from(fileList)) {
-      if (file.size > MAX_FILE_SIZE) {
-        setError(`文件 "${file.name}" 超出 ${formatBytes(MAX_FILE_SIZE)} 限制`);
-        continue;
-      }
-      try {
-        setUploading(true);
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('projectId', projectId);
-        if (phaseId) formData.append('phaseId', phaseId);
-        if (taskId) formData.append('taskId', taskId);
-        formData.append('fileType', selectedType);
-        formData.append('fileVersion', version);
-        formData.append('visibility', visibility);
-        const resp = await fetch('/api/files/upload', {
-          method: 'POST',
-          body: formData,
-          credentials: 'include',
-        });
-        if (!resp.ok) {
-          const err = await resp.json().catch(() => ({ error: resp.statusText }));
-          setError(`上传 "${file.name}" 失败: ${(err as any).error || resp.statusText}`);
-          continue;
-        }
-        const result = await resp.json() as {
-          id: number; name: string; mimeType: string; size: number;
-          storageKey: string; storageUrl: string;
-          fileType?: string | null; fileVersion?: string | null;
-          visibility?: 'internal' | 'customer' | 'supplier' | 'public';
-        };
-        newFiles.push({
-          id: String(result.id),
-          name: result.name,
-          size: result.size,
-          type: result.mimeType,
-          uploadDate: new Date().toISOString().slice(0, 10),
-          dataUrl: '',
-          storageUrl: result.storageUrl,
-          storageKey: result.storageKey,
-          fileType: result.fileType ?? null,
-          fileVersion: result.fileVersion ?? null,
-          visibility: result.visibility ?? visibility,
-        });
-      } catch (e: any) {
-        setError(`上传 "${file.name}" 失败: ${e.message || '网络错误'}`);
-      } finally {
-        setUploading(false);
-      }
-    }
-    if (newFiles.length > 0) onAdd(newFiles);
-  };
-
-  const downloadFile = (file: FileAttachment) => {
-    const url = file.storageUrl || file.dataUrl;
-    if (!url) return;
-    const a = document.createElement('a');
-    a.href = url; a.download = file.name; a.click();
-  };
-  const getIcon = (type: string) => type?.startsWith('image/') ? <ImageIcon size={14} /> : <FileText size={14} />;
-
-  return (
-    <div>
-      {!readOnly && (
-        <div className="flex items-center gap-2 mb-2">
-          <select
-            value={selectedType}
-            onChange={(e) => setSelectedType(e.target.value)}
-            className="text-xs rounded-md bg-transparent px-1.5 py-1 text-foreground outline-none hover:bg-secondary focus:bg-secondary transition-colors"
-          >
-            <option value="">未分类</option>
-            {FILE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
-          <input
-            type="text"
-            value={version}
-            onChange={(e) => setVersion(e.target.value)}
-            maxLength={32}
-            placeholder="版本 如 V1.0 / T1 / Rev.B"
-            className="flex-1 text-xs rounded-md bg-transparent px-1.5 py-1 text-foreground outline-none border-b border-transparent hover:border-border focus:border-[color:var(--acc-border)] transition-colors"
-          />
-          <select
-            value={visibility}
-            onChange={(e) => setVisibility(e.target.value as 'internal' | 'customer' | 'supplier')}
-            className="text-xs rounded-md bg-transparent px-1.5 py-1 text-foreground outline-none hover:bg-secondary focus:bg-secondary transition-colors"
-            title="文件可见范围"
-          >
-            <option value="internal">内部</option>
-            <option value="customer">客户可见</option>
-            <option value="supplier">供应商可见</option>
-          </select>
-        </div>
-      )}
-      <div
-        onClick={() => !readOnly && inputRef.current?.click()}
-        onDragOver={(e) => { e.preventDefault(); if (!readOnly) setDragOver(true); }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files); }}
-        className={`rounded-md border border-dashed p-3 text-center transition-colors ${
-          readOnly ? 'cursor-not-allowed border-border/60 bg-secondary/50 opacity-70' :
-          dragOver ? 'cursor-pointer border-primary bg-[color:var(--acc-soft)]' : 'cursor-pointer border-border/70 hover:border-[color:var(--acc-border)] hover:bg-secondary/50'
-        }`}
-      >
-        <input ref={inputRef} type="file" multiple onChange={(e) => handleFiles(e.target.files!)} className="hidden" disabled={uploading || readOnly} />
-        <Upload size={18} className={`mx-auto mb-2 ${uploading ? 'text-primary animate-pulse' : 'text-muted-foreground'}`} />
-        <div className="text-sm text-foreground">
-          {readOnly ? '仅可查看附件' : uploading ? '上传中...' : <><span className="font-medium">点击上传</span>或拖拽文件</>}
-        </div>
-        <div className="text-[10px] uppercase tracking-wider text-muted-foreground mt-1">
-          单个文件最大 {formatBytes(MAX_FILE_SIZE)} · 支持 PDF / 图片 / Office 文档
-        </div>
-      </div>
-      {error && <div className="mt-2 text-xs text-rose-600 bg-rose-50 border border-rose-200 px-3 py-1.5">{error}</div>}
-      {files && files.length > 0 && (
-        <div className="mt-3 space-y-1.5">
-          {files.map((file) => {
-            const previewable = canPreview(file);
-            return (
-            <div key={file.id} className="flex items-center gap-3 p-2 rounded-md hover:bg-secondary/60 transition-colors group">
-              <span className="text-muted-foreground shrink-0">{getIcon(file.type)}</span>
-              <div
-                className={`flex-1 min-w-0 ${previewable ? 'cursor-pointer' : ''}`}
-                onClick={(e) => { if (previewable) { e.stopPropagation(); setPreviewFile(file); } }}
-              >
-                <FileNameBadges name={file.name} fileType={file.fileType} fileVersion={file.fileVersion} visibility={file.visibility} nameClassName={previewable ? 'group-hover:text-primary' : ''} />
-                <div className="text-[10px] num text-muted-foreground">{formatBytes(file.size)}</div>
-              </div>
-              {previewable && (
-                <button onClick={(e) => { e.stopPropagation(); setPreviewFile(file); }} title="预览" className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
-                  <Eye size={13} />
-                </button>
-              )}
-              <button onClick={(e) => { e.stopPropagation(); downloadFile(file); }} title="下载" className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
-                <Download size={13} />
-              </button>
-              {!readOnly && (
-                <button onClick={(e) => { e.stopPropagation(); if (confirm('删除文件？')) onRemove(file.id); }} className="p-1.5 rounded text-muted-foreground hover:text-destructive hover:bg-[color:var(--destructive-soft)] transition-colors">
-                  <Trash2 size={13} />
-                </button>
-              )}
-            </div>
-            );
-          })}
-        </div>
-      )}
-      <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} />
-    </div>
   );
 }
 
@@ -771,84 +594,6 @@ function pickDeliverableReviewer(
     .find(Boolean);
 }
 
-function DeliverableEvidenceUploadButton({
-  projectId,
-  phaseId,
-  taskId,
-  deliverableName,
-  hasFile,
-  onUploaded,
-}: {
-  projectId: string;
-  phaseId: string;
-  taskId?: string;
-  deliverableName: string;
-  hasFile: boolean;
-  onUploaded: () => void;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [uploading, setUploading] = useState(false);
-
-  const handleFiles = async (fileList: FileList | null) => {
-    if (!fileList || fileList.length === 0 || uploading) return;
-    setUploading(true);
-    let uploaded = 0;
-    try {
-      for (const file of Array.from(fileList)) {
-        if (file.size > MAX_FILE_SIZE) {
-          toast.error(`文件 "${file.name}" 超出 ${formatBytes(MAX_FILE_SIZE)} 限制`);
-          continue;
-        }
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('projectId', projectId);
-        formData.append('phaseId', phaseId);
-        if (taskId) formData.append('taskId', taskId);
-        formData.append('deliverableName', deliverableName);
-        const resp = await fetch('/api/files/upload', {
-          method: 'POST',
-          body: formData,
-          credentials: 'include',
-        });
-        if (!resp.ok) {
-          const err = await resp.json().catch(() => ({ error: resp.statusText }));
-          toast.error(`上传 "${file.name}" 失败: ${(err as any).error || resp.statusText}`);
-          continue;
-        }
-        uploaded += 1;
-      }
-      if (uploaded > 0) {
-        toast.success(uploaded === 1 ? '证据已上传' : `已上传 ${uploaded} 个证据文件`);
-        onUploaded();
-      }
-    } finally {
-      setUploading(false);
-      if (inputRef.current) inputRef.current.value = '';
-    }
-  };
-
-  return (
-    <>
-      <input
-        ref={inputRef}
-        type="file"
-        multiple
-        className="hidden"
-        disabled={uploading}
-        onChange={(e) => handleFiles(e.target.files)}
-      />
-      <button
-        type="button"
-        disabled={uploading}
-        onClick={() => inputRef.current?.click()}
-        className="text-[10px] rounded px-1.5 py-0.5 bg-secondary text-muted-foreground border border-border hover:text-foreground hover:bg-secondary/80 disabled:opacity-50 transition-colors"
-      >
-        {uploading ? '上传中' : hasFile ? '补充证据' : '上传证据'}
-      </button>
-    </>
-  );
-}
-
 function DeliverableReviewControls({
   projectId, phaseId, deliverableNames, canEditTasks, canSubmitDeliverable, currentUserId, isAdmin,
   gateTaskId, pmUserId,
@@ -874,6 +619,7 @@ function DeliverableReviewControls({
   const [rejectNote, setRejectNote] = useState<Record<string, string>>({}); // deliverableName → note draft
   const [rejectOpen, setRejectOpen] = useState<Record<string, boolean>>({}); // deliverableName → note input open
   const [actedAsSelections, setActedAsSelections] = useState<Record<string, ProjectMemberRole | ''>>({});
+  const [selectedDeliverable, setSelectedDeliverable] = useState<string | null>(null);
 
   const submitMut = trpc.deliverableReviews.submit.useMutation({
     onSuccess: () => {
@@ -902,6 +648,22 @@ function DeliverableReviewControls({
 
   // file set for this phase
   const uploadedNames = new Set(files.map((f) => (f as { deliverableName?: string | null }).deliverableName).filter((n): n is string => !!n));
+  const selectedFileRow = selectedDeliverable
+    ? [...files].reverse().find((file) => file.deliverableName === selectedDeliverable)
+    : undefined;
+  const selectedFile: FileAttachment | undefined = selectedFileRow ? {
+    id: String(selectedFileRow.id),
+    name: selectedFileRow.name,
+    size: selectedFileRow.size,
+    type: selectedFileRow.mimeType,
+    uploadDate: selectedFileRow.createdAt ? new Date(selectedFileRow.createdAt).toISOString() : '',
+    dataUrl: '',
+    storageUrl: selectedFileRow.storageUrl,
+    storageKey: selectedFileRow.storageKey,
+    deliverableName: selectedFileRow.deliverableName,
+    fileVersion: selectedFileRow.fileVersion,
+    visibility: (selectedFileRow.visibility ?? 'internal') as FileAttachment['visibility'],
+  } : undefined;
 
   // Type-aware reviewer default, then PM/Owner fallback.
   const reviewableMembers = members.filter((m) =>
@@ -914,7 +676,8 @@ function DeliverableReviewControls({
     : [];
 
   return (
-    <div className="mt-3 pt-3 border-t border-border space-y-2">
+    <>
+      <div className="mt-3 pt-3 border-t border-border space-y-2">
       <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">审核状态</div>
       {deliverableNames.map((name) => {
         const record = reviewByName.get(name);
@@ -936,7 +699,13 @@ function DeliverableReviewControls({
           <div key={name} className="space-y-1">
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <span className="flex items-center gap-1.5 min-w-0">
-                <span className="text-xs text-muted-foreground min-w-0 truncate">{name}</span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedDeliverable(name)}
+                  className="min-w-0 truncate text-xs text-muted-foreground hover:text-primary"
+                >
+                  {name}
+                </button>
                 <TemplateDownloadLink name={name} />
               </span>
               <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
@@ -963,20 +732,6 @@ function DeliverableReviewControls({
                   >
                     驳回{record.reviewNote ? ' ⓘ' : ''}
                   </span>
-                )}
-
-                {canSubmitName && record?.status !== 'approved' && (
-                  <DeliverableEvidenceUploadButton
-                    projectId={projectId}
-                    phaseId={phaseId}
-                    taskId={gateTaskId}
-                    deliverableName={name}
-                    hasFile={hasFile}
-                    onUploaded={() => {
-                      utils.files.list.invalidate({ projectId, phaseId });
-                      if (gateTaskId) utils.gateReviews.readiness.invalidate({ projectId, phaseId });
-                    }}
-                  />
                 )}
 
                 {/* Submit action: deliverable evidence submitter && (no record || rejected) */}
@@ -1075,6 +830,23 @@ function DeliverableReviewControls({
         );
       })}
     </div>
+      {selectedDeliverable && (
+        <DeliverableUploadDialog
+          open
+          onOpenChange={(open) => { if (!open) setSelectedDeliverable(null); }}
+          projectId={projectId}
+          phaseId={phaseId}
+          taskId={gateTaskId}
+          deliverableName={selectedDeliverable}
+          currentFile={selectedFile}
+          canUpload={canSubmitDeliverable(selectedDeliverable)}
+          onUploaded={async () => {
+            await utils.files.list.invalidate({ projectId, phaseId });
+            if (gateTaskId) await utils.gateReviews.readiness.invalidate({ projectId, phaseId });
+          }}
+        />
+      )}
+    </>
   );
 }
 
@@ -1239,67 +1011,103 @@ function GateDeliverableOverridePanel({
   );
 }
 
-/** 任务交付物清单：模板预置交付物 + 完成勾选（持久化到 project_tasks.deliverables） */
+/** 任务交付物清单：名称打开交付物窗口，勾选仍只维护完成状态。 */
 function DeliverablesChecklist({
-  projectId, phaseId, taskId, items, status, canEdit, carried,
+  projectId, phaseId, taskId, items, status, files, canEdit, canUpload, onUploaded, carried,
 }: {
   projectId: string;
   phaseId: string;
   taskId: string;
   items: string[];
   status: Record<string, boolean>;
+  files: FileAttachment[];
   canEdit: boolean;
+  canUpload: boolean;
+  onUploaded?: () => void;
   /** 归集项映射：deliverableName → 来源阶段名 */
   carried?: Record<string, string>;
 }) {
   const utils = trpc.useUtils();
   const [pending, setPending] = useState<string | null>(null);
+  const [selectedDeliverable, setSelectedDeliverable] = useState<string | null>(null);
   const mutation = trpc.tasks.setDeliverable.useMutation({
     onSettled: () => { utils.tasks.list.invalidate({ projectId }); setPending(null); },
   });
   const doneCount = items.filter((d) => status[d]).length;
+  const currentFile = selectedDeliverable
+    ? [...files].reverse().find((file) => file.deliverableName === selectedDeliverable)
+    : undefined;
 
   if (items.length === 0) return <div className="text-sm text-muted-foreground">无预置交付物</div>;
   return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between mb-1">
-        <span className="text-[10px] num text-muted-foreground">{doneCount}/{items.length} 完成</span>
-        {doneCount === items.length && <span className="text-[10px] text-emerald-600">✓ 全部交付</span>}
-      </div>
-      {items.map((d) => {
-        const done = !!status[d];
-        const fromPhase = carried?.[d];
-        return (
-          <div key={d} className="w-full flex items-start gap-2">
-            <button
-              disabled={!canEdit || pending === d}
-              onClick={() => { setPending(d); mutation.mutate({ projectId, phaseId, taskId, name: d, done: !done }); }}
-              className={`flex-1 min-w-0 flex items-start gap-2 text-left text-sm py-0.5 ${canEdit ? 'hover:bg-secondary cursor-pointer' : 'cursor-default'} ${pending === d ? 'opacity-50' : ''}`}
-            >
-              {done
-                ? <CheckCircle2 size={15} className="shrink-0 mt-0.5 text-emerald-600" />
-                : <Circle size={15} className="shrink-0 mt-0.5 text-muted-foreground" />}
-              <span className="flex items-center gap-1.5 min-w-0">
-                <span className={done ? 'text-muted-foreground line-through' : 'text-foreground'}>{d}</span>
+    <>
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-[10px] num text-muted-foreground">{doneCount}/{items.length} 完成</span>
+          {doneCount === items.length && <span className="text-[10px] text-emerald-600">✓ 全部交付</span>}
+        </div>
+        {items.map((deliverableName) => {
+          const done = !!status[deliverableName];
+          const fromPhase = carried?.[deliverableName];
+          const uploaded = [...files].reverse().find((file) => file.deliverableName === deliverableName);
+          return (
+            <div key={deliverableName} className="flex w-full items-start gap-2">
+              <button
+                type="button"
+                aria-label={done ? `取消完成 ${deliverableName}` : `标记完成 ${deliverableName}`}
+                disabled={!canEdit || pending === deliverableName}
+                onClick={() => {
+                  setPending(deliverableName);
+                  mutation.mutate({ projectId, phaseId, taskId, name: deliverableName, done: !done });
+                }}
+                className={pending === deliverableName ? 'mt-0.5 opacity-50' : 'mt-0.5'}
+              >
+                {done
+                  ? <CheckCircle2 size={15} className="text-emerald-600" />
+                  : <Circle size={15} className="text-muted-foreground" />}
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedDeliverable(deliverableName)}
+                className="flex min-w-0 flex-1 items-center gap-1.5 py-0.5 text-left text-sm text-foreground hover:text-primary"
+              >
+                <span className={done ? 'text-muted-foreground line-through' : ''}>{deliverableName}</span>
+                {uploaded?.fileVersion && <span className="shrink-0 text-[10px] num text-primary">{uploaded.fileVersion}</span>}
                 {fromPhase && (
-                  <span className="shrink-0 text-[9px] text-primary bg-[color:var(--acc-soft)] border border-[color:var(--acc-border)] rounded px-1 py-0.5 leading-none">
+                  <span className="shrink-0 rounded border border-[color:var(--acc-border)] bg-[color:var(--acc-soft)] px-1 py-0.5 text-[9px] leading-none text-primary">
                     来自 {fromPhase}
                   </span>
                 )}
-              </span>
-            </button>
-            <TemplateDownloadLink name={d} className="mt-1" />
-          </div>
-        );
-      })}
-    </div>
+              </button>
+              <TemplateDownloadLink name={deliverableName} className="mt-1" />
+            </div>
+          );
+        })}
+      </div>
+      {selectedDeliverable && (
+        <DeliverableUploadDialog
+          open
+          onOpenChange={(open) => { if (!open) setSelectedDeliverable(null); }}
+          projectId={projectId}
+          phaseId={phaseId}
+          taskId={taskId}
+          deliverableName={selectedDeliverable}
+          currentFile={currentFile}
+          canUpload={canUpload}
+          onUploaded={async () => {
+            await utils.files.list.invalidate({ projectId });
+            onUploaded?.();
+          }}
+        />
+      )}
+    </>
   );
 }
 
 function TaskDetail({
   taskId, taskDetails, onUpdate, visibleRoles, onVisibleRolesChange, canEditRoles,
   projectId, phaseId, canEdit = true, compact = false, layout = 'full',
-  currentUserId, canEditPriority, canUploadFiles, onFilesUploaded,
+  currentUserId, canEditPriority, canUploadFiles,
 }: {
   taskId: string;
   taskDetails: TaskDetails;
@@ -1312,10 +1120,8 @@ function TaskDetail({
   currentUserId?: number;
   /** 优先级可改 = canEditProjectInfo（管理/PM）。其余只读展示。默认沿用 canEdit。 */
   canEditPriority?: boolean;
-  /** 文件上传/删除可改 = 负责人本人 || canEditProjectInfo。默认沿用 canEdit。 */
+  /** 已上传交付物可删除 = 负责人本人 || canEditProjectInfo。默认沿用 canEdit。 */
   canUploadFiles?: boolean;
-  /** 普通任务附件成功落库后的业务提示；Gate 交付物不走此入口。 */
-  onFilesUploaded?: () => void;
   projectId: string;
   phaseId?: string;
   canEdit?: boolean;
@@ -1454,22 +1260,9 @@ function TaskDetail({
   const attachmentsBlock = (
     <div>
       <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1.5 flex items-center gap-1.5">
-        <Paperclip size={10} />附件
+        <Paperclip size={10} />已上传交付物
       </div>
-      <FileUploadArea
-        files={taskDetails?.files || []}
-        onAdd={(newFiles) => {
-          onUpdate({ ...taskDetails, files: [...(taskDetails?.files || []), ...newFiles] });
-          // Invalidate files.list so useProjectData re-fetches the updated list from DB
-          utils.files.list.invalidate({ projectId });
-          onFilesUploaded?.();
-        }}
-        onRemove={handleRemoveFile}
-        projectId={projectId}
-        phaseId={phaseId}
-        taskId={taskId}
-        readOnly={!filesEditable}
-      />
+      <UploadedDeliverablesList files={taskDetails?.files || []} onRemove={handleRemoveFile} readOnly={!filesEditable} />
     </div>
   );
 
@@ -2241,6 +2034,40 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
     return effectiveRoles.length > 0 && perms.roles.some((role) => effectiveRoles.includes(role));
   };
   const canActOnSelectedTask = selectedTask ? canActOnTask(selectedTask.id) : false;
+  const canUploadSelectedTaskDeliverable = Boolean(selectedTask && isCurrentPhaseUnlocked && (
+    (selectedTaskDetails?.assigneeUserId != null
+      && selectedTaskDetails.assigneeUserId === currentUser?.id)
+    || (
+      perms.canEditProjectInfo
+      && !(
+        project.category === 'npd'
+        && project.sopTemplateVersion === SOP_TEMPLATE_VERSION_NPD_V3
+        && getTaskEvidenceLevel(project, activePhaseId, selectedTask.id) === 'heavy'
+      )
+    )
+  ));
+  const handleSelectedTaskDeliverableUploaded = () => {
+    if (!selectedTask) return;
+    const evidenceLevel = getTaskEvidenceLevel(project, activePhaseId, selectedTask.id);
+    if (!shouldOfferCompletionAfterEvidenceUpload({
+      evidenceLevel,
+      isGateTask: selectedTaskIsGate,
+      completed: selectedTaskChecked,
+      status: selectedTaskDetails?.taskStatus ?? (selectedTaskChecked ? 'done' : 'todo'),
+    })) return;
+    toast.success('交付物已上传', {
+      description: '正式交付物已归到这条任务，是否顺手标记完成？',
+      action: {
+        label: '标记完成',
+        onClick: () => completeEvidenceMut.mutate({
+          projectId: project.id,
+          phaseId: activePhaseId,
+          taskId: selectedTask.id,
+          completed: true,
+        }),
+      },
+    });
+  };
   const compactTaskDetail = isExecutionRole(perms.role) && !selectedTaskIsGate;
   // P2: 执行角色(如结构工程师)收敛项目详情标签——只保留 总览/任务/问题/BOM/文件,
   // 隐藏 PM/管理层导向的 度量/看板/需求池/甘特/变更,减少干扰(内容仍按 mainTab 渲染,不影响深链)。
@@ -3453,7 +3280,10 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                               taskId={selectedTask.id}
                               items={getTaskDeliverables(selectedTask.id)}
                               status={selectedTaskDetails?.deliverables || {}}
+                              files={selectedTaskDetails?.files || []}
                               canEdit={canActOnSelectedTask && isCurrentPhaseUnlocked}
+                              canUpload={canUploadSelectedTaskDeliverable}
+                              onUploaded={handleSelectedTaskDeliverableUploaded}
                             />
                           )}
                           {selectedTaskIsGate && (
@@ -3799,40 +3629,8 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                           canEdit={canActOnSelectedTask && isCurrentPhaseUnlocked}
                           /* 优先级仅管理/PM 可改 */
                           canEditPriority={perms.canEditProjectInfo}
-                          /* v3 重证据只认负责人本人；其它任务保留管理/PM 代维护能力。 */
-                          canUploadFiles={
-                            (selectedTaskDetails?.assigneeUserId != null
-                              && selectedTaskDetails.assigneeUserId === currentUser?.id)
-                            || (
-                              perms.canEditProjectInfo
-                              && !(
-                                project.category === 'npd'
-                                && project.sopTemplateVersion === SOP_TEMPLATE_VERSION_NPD_V3
-                                && getTaskEvidenceLevel(project, activePhaseId, selectedTask.id) === 'heavy'
-                              )
-                            )
-                          }
-                          onFilesUploaded={() => {
-                            const evidenceLevel = getTaskEvidenceLevel(project, activePhaseId, selectedTask.id);
-                            if (!shouldOfferCompletionAfterEvidenceUpload({
-                              evidenceLevel,
-                              isGateTask: selectedTaskIsGate,
-                              completed: selectedTaskChecked,
-                              status: selectedTaskDetails?.taskStatus ?? (selectedTaskChecked ? 'done' : 'todo'),
-                            })) return;
-                            toast.success('证据已上传', {
-                              description: '正式证据已归到这条任务，是否顺手标记完成？',
-                              action: {
-                                label: '标记完成',
-                                onClick: () => completeEvidenceMut.mutate({
-                                  projectId: project.id,
-                                  phaseId: activePhaseId,
-                                  taskId: selectedTask.id,
-                                  completed: true,
-                                }),
-                              },
-                            });
-                          }}
+                          /* 上传入口已移到交付物名称；此处只控制已上传交付物的删除权限。 */
+                          canUploadFiles={canUploadSelectedTaskDeliverable}
                           compact={compactTaskDetail}
                           projectId={project.id}
                           phaseId={activePhaseId}

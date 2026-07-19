@@ -99,6 +99,7 @@ describe("runHealthDigestScan（注入 deps）", () => {
     const deps = {
       getConfigRow: async () => ({ enabled: true, config: cfg }),
       getHealth: async (_today: string) => over.rows ?? [row({ id: "r", overdueTasks: 1, pmUserId: 7, ragLevel: "red", ragReasons: ["逾期×1"] })],
+      getActiveProjectIds: async (projectIds: string[]) => new Set(projectIds),
       hasRun: async () => false,
       now: NOW,
       writeRun: async (status: "fired" | "skipped", key: string) => { calls.runs.push({ status, key }); },
@@ -121,6 +122,21 @@ describe("runHealthDigestScan（注入 deps）", () => {
     expect(calls.notify).toEqual([[7]]);
     expect(calls.group).toBe(1);
     expect(calls.runs).toEqual([{ status: "fired", key: "d:2026-06-16" }]);
+  });
+
+  it("测试库只保留 PM 站内通知并跳过所有钉钉渠道", async () => {
+    const { deps, calls } = makeDeps({
+      isDingtalkDeliveryEnabled: () => false,
+    });
+
+    await runHealthDigestScan(NOW, deps);
+
+    expect(calls.notifications).toEqual([7]);
+    expect(calls.notify).toEqual([]);
+    expect(calls.group).toBe(0);
+    expect(calls.runs).toEqual([
+      { status: "fired", key: "d:2026-06-16" },
+    ]);
   });
 
   it("enabled=false 不发", async () => {

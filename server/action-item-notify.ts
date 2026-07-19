@@ -37,6 +37,10 @@ export async function notifyActionItem(
   const actionUrl = input.actionUrl ?? toAbsoluteAppUrl(input.actionPath ?? "/", ENV.appBaseUrl);
   const { actionItem, shouldNotify } = await upsertActionItem({ ...input, actionUrl });
   if (!shouldNotify) return { dispatched: false, actionItemId: actionItem?.id ?? null };
+  if (!await canReceiveProjectNotification(input.projectId, input.recipientUserId)) {
+    await closeActionItems({ dedupeKey: input.dedupeKey });
+    return { dispatched: false, actionItemId: actionItem?.id ?? null };
+  }
   const actionButtons = await buildActionItemButtons(input, actionItem?.id ?? null).catch((error) => {
     console.warn("[action-card] failed to build action buttons (non-fatal):", error);
     return [] as WorkNotificationButton[];
@@ -60,6 +64,7 @@ export async function notifyActionItem(
   try {
     const delivery = await notifyPersonal({
       eventKey: input.kind,
+      projectId: input.projectId,
       userIds: [input.recipientUserId],
       title: input.title,
       body: input.body ?? null,

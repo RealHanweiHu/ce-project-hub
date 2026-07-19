@@ -23,6 +23,7 @@ import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import {
   createProjectFile,
+  deleteSupersededProjectDeliverableFiles,
   getProjectFiles,
   getProjectFileById,
   deleteProjectFileWithBaselineGuard,
@@ -36,7 +37,7 @@ import multer from "multer";
 import type { Express, Request, Response } from "express";
 import { createContext } from "../_core/context";
 import { getEffectiveProjectRoleById as getEffectiveRole, getEffectiveProjectRolesById } from "../project-access";
-import { normalizeFileType, normalizeFileVersion } from "../../shared/file-types";
+import { normalizeFileType } from "../../shared/file-types";
 import { canMutateFileForProject } from "../deliverable-access";
 import { PROJECT_FILE_VISIBILITIES } from "../../drizzle/schema";
 import {
@@ -178,13 +179,12 @@ export function registerFileUploadRoute(app: Express) {
           return;
         }
 
-        const { projectId, phaseId, taskId, deliverableName, fileType, fileVersion, visibility } = req.body as {
+        const { projectId, phaseId, taskId, deliverableName, fileType, visibility } = req.body as {
           projectId?: string;
           phaseId?: string;
           taskId?: string;
           deliverableName?: string;
           fileType?: string;
-          fileVersion?: string;
           visibility?: string;
         };
 
@@ -252,9 +252,9 @@ export function registerFileUploadRoute(app: Express) {
         );
 
         const normFileType = normalizeFileType(fileType);
-        const normFileVersion = normalizeFileVersion(fileVersion);
 
-        // Write metadata to DB (including optional taskId)
+        // Resolve the version under the project-files transaction lock so
+        // concurrent uploads cannot receive the same revision.
         const fileId = await createProjectFile({
           projectId,
           phaseId: phaseId || null,
@@ -267,9 +267,14 @@ export function registerFileUploadRoute(app: Express) {
           storageUrl,
           uploadedBy: ctx.user.id,
           fileType: normFileType,
-          fileVersion: normFileVersion,
           visibility: requestedVisibility,
-        });
+        }, { autoVersion: true });
+        const createdFile = await getProjectFileById(fileId);
+        if (!createdFile) throw new Error("Uploaded file metadata not found");
+        const supersededStorageKeys = deliverableName
+          ? await deleteSupersededProjectDeliverableFiles(fileId, projectId)
+          : [];
+        await Promise.all(supersededStorageKeys.map(tryInvalidateS3Object));
 
         // Activity log
         await createActivityLog({
@@ -285,6 +290,8 @@ export function registerFileUploadRoute(app: Express) {
             phaseId: phaseId || null,
             taskId: taskId || null,
             visibility: requestedVisibility,
+            fileVersion: createdFile.fileVersion,
+            supersededCount: supersededStorageKeys.length,
           },
         });
 
@@ -297,7 +304,7 @@ export function registerFileUploadRoute(app: Express) {
           storageUrl,
           taskId: taskId || null,
           fileType: normFileType,
-          fileVersion: normFileVersion,
+          fileVersion: createdFile.fileVersion,
           visibility: requestedVisibility,
         });
       } catch (err: any) {
