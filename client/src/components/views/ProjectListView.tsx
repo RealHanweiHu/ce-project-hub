@@ -12,7 +12,11 @@ import {
   DndContext, PointerSensor, useSensor, useSensors, useDraggable, useDroppable,
   type DragEndEvent,
 } from '@dnd-kit/core';
-import { Plus, Minus, Trash2, ChevronRight, ChevronLeft, Check, Copy, Eye, Lock, AlertTriangle, Search, Star, LayoutGrid, List as ListIcon, GanttChartSquare, X as XIcon, CalendarDays } from 'lucide-react';
+import { Plus, Minus, Trash2, ChevronDown, ChevronRight, ChevronLeft, Check, Copy, Eye, Lock, AlertTriangle, Search, SlidersHorizontal, Star, LayoutGrid, List as ListIcon, GanttChartSquare, X as XIcon, CalendarDays } from 'lucide-react';
+import {
+  DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuLabel,
+  DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuCheckboxItem,
+} from '@/components/ui/dropdown-menu';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -157,6 +161,8 @@ export function ProjectListView({
   const [viewMode, setViewMode] = useState<ViewMode>(() =>
     typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches ? 'list' : 'kanban'
   );
+  // 看板默认隐藏空阶段（P1-项目组合）；「显示设置」里可切回全部
+  const [showEmptyStages, setShowEmptyStages] = useState(false);
   const [groupBy, setGroupBy] = useState<GroupBy>('none');
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null);
   const [search, setSearch] = useState('');
@@ -543,21 +549,39 @@ export function ProjectListView({
         </div>
       </div>
 
-      {/* Filter strip: group-by + filter chips */}
+      {/* Filter strip: 核心筛选 + 显示设置（高级分组/看板选项收进二级入口，P1-项目组合） */}
       <div className="mb-4 flex flex-wrap items-center gap-3 border-b border-border pb-4">
-        <div className="flex items-center gap-2">
-          <Kicker>分组</Kicker>
-          <select
-            value={groupBy}
-            onChange={(e) => setGroupBy(e.target.value as GroupBy)}
-            className="cursor-pointer rounded-[7px] border border-transparent bg-secondary px-2.5 py-1 text-[12.5px] font-medium text-foreground outline-none hover:bg-[color:var(--muted)] focus:border-[color:var(--acc-border)]"
-          >
-            <option value="none">无</option>
-            <option value="type">产品线</option>
-            <option value="cat">项目类型</option>
-            <option value="pm">负责人</option>
-          </select>
-        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button className="inline-flex h-[30px] items-center gap-1.5 rounded-[7px] border border-border bg-card px-2.5 text-[12px] font-medium text-muted-foreground transition-colors hover:border-[color:var(--acc-border)] hover:text-foreground">
+              <SlidersHorizontal size={12} />
+              显示设置
+              {groupBy !== 'none' && (
+                <span className="rounded bg-[color:var(--acc-soft)] px-1 py-px text-[10px] font-semibold text-primary">
+                  {groupBy === 'type' ? '产品线' : groupBy === 'cat' ? '项目类型' : '负责人'}
+                </span>
+              )}
+              <ChevronDown size={12} />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuLabel>分组方式</DropdownMenuLabel>
+            <DropdownMenuRadioGroup value={groupBy} onValueChange={(v) => setGroupBy(v as GroupBy)}>
+              <DropdownMenuRadioItem value="none">不分组</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="type">按产品线</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="cat">按项目类型</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="pm">按负责人</DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>看板</DropdownMenuLabel>
+            <DropdownMenuCheckboxItem
+              checked={showEmptyStages}
+              onCheckedChange={(v) => setShowEmptyStages(!!v)}
+            >
+              显示空阶段
+            </DropdownMenuCheckboxItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <div className="h-5 w-px bg-border" />
         <div className="flex flex-wrap items-center gap-2">
           {filterChips.map((c) => {
@@ -599,17 +623,39 @@ export function ProjectListView({
           <p className="text-sm font-medium text-muted-foreground">无匹配的项目</p>
         </LinearCard>
       ) : viewMode === 'kanban' ? (
-        <KanbanView
-          stages={STAGE_COLUMNS}
-          groupBy={groupBy}
-          lanes={lanes}
-          rows={visibleRows}
-          isLaneCollapsed={isLaneCollapsed}
-          onToggleLane={toggleLane}
-          onToggleStar={toggleStar}
-          onOpen={onSelectProject}
-          onPreview={setDetailId}
-        />
+        (() => {
+          // 默认隐藏空阶段；按全部可见项目计算，保证泳道间列对齐
+          const kanbanStages = showEmptyStages
+            ? STAGE_COLUMNS
+            : STAGE_COLUMNS.filter((s) => visibleRows.some((r) => r.stage === s.id));
+          const hiddenCount = STAGE_COLUMNS.length - kanbanStages.length;
+          return (
+            <div className="space-y-2">
+              <KanbanView
+                stages={kanbanStages}
+                groupBy={groupBy}
+                lanes={lanes}
+                rows={visibleRows}
+                isLaneCollapsed={isLaneCollapsed}
+                onToggleLane={toggleLane}
+                onToggleStar={toggleStar}
+                onOpen={onSelectProject}
+                onPreview={setDetailId}
+              />
+              {hiddenCount > 0 && (
+                <p className="text-[11px] text-muted-foreground">
+                  已隐藏 {hiddenCount} 个空阶段 ·
+                  <button
+                    onClick={() => setShowEmptyStages(true)}
+                    className="ml-1 text-primary hover:opacity-80"
+                  >
+                    显示全部阶段
+                  </button>
+                </p>
+              )}
+            </div>
+          );
+        })()
       ) : viewMode === 'list' ? (
         <ListView rows={visibleRows} groupBy={groupBy} lanes={lanes} onOpen={onSelectProject} />
       ) : (
@@ -1266,7 +1312,14 @@ export function ProjectListView({
             <Star size={14} style={row.isStarred ? { fill: 'var(--star)', color: 'var(--star)' } : { color: 'var(--muted-foreground)' }} />
           </button>
         </div>
-        <div className="mt-2 text-[13.5px] font-semibold leading-tight">{p.name}</div>
+        {/* 名称为真按钮：键盘可达且避免整卡 role=button 内嵌交互控件的违例 */}
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onOpen(p.id); }}
+          className="mt-2 block w-full rounded-[4px] text-left text-[13.5px] font-semibold leading-tight text-foreground outline-none transition-colors hover:text-primary focus-visible:ring-2 focus-visible:ring-ring/50"
+        >
+          {p.name}
+        </button>
         <div className="mt-2.5 flex items-center gap-2">
           <LinearBar value={row.overall} className="flex-1" />
           <span className="text-[11px] font-semibold text-muted-foreground num">{row.overall}%</span>
@@ -1403,7 +1456,14 @@ export function ProjectListView({
         <StatusDot tone={r.tone} />
         <div className="flex min-w-0 items-center gap-2.5">
           <span className="shrink-0 text-[11.5px] text-muted-foreground num">{r.project.code}</span>
-          <span className="truncate text-[14px] font-medium">{r.project.name}</span>
+          {/* 名称为真按钮：行内其余操作是独立按钮，键盘可逐一到达 */}
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onOpen(r.project.id); }}
+            className="min-w-0 truncate rounded-[4px] text-left text-[14px] font-medium text-foreground outline-none transition-colors hover:text-primary focus-visible:ring-2 focus-visible:ring-ring/50"
+          >
+            {r.project.name}
+          </button>
         </div>
         <span className="inline-flex w-fit items-center gap-1.5 rounded-[6px] border border-border bg-secondary px-2 py-0.5 text-[11.5px] font-medium text-[color:var(--secondary-foreground)]">
           <span className="h-1.5 w-1.5 rounded-[2px] bg-primary" />{STAGE_SHORT[r.stage]}
@@ -1536,8 +1596,13 @@ export function ProjectListView({
       return (
         <div key={r.project.id} className="flex border-b border-border">
           <div
+            role="button"
+            tabIndex={0}
             onClick={() => onOpen(r.project.id)}
-            className="sticky left-0 z-[2] flex shrink-0 cursor-pointer items-center gap-2.5 border-r border-border bg-card px-3.5 hover:bg-secondary"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(r.project.id); }
+            }}
+            className="sticky left-0 z-[2] flex shrink-0 cursor-pointer items-center gap-2.5 border-r border-border bg-card px-3.5 hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset"
             style={{ width: LABELW, height: 48 }}
           >
             <StatusDot tone={r.tone} />
