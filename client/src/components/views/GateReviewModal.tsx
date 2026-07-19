@@ -5,15 +5,28 @@ import {
 } from '@/components/ui/dialog';
 import {
   Flag, CheckCircle2, AlertCircle, XCircle, Users, Calendar,
-  FileText, ClipboardCheck, Plus, ChevronDown, ChevronRight, RotateCcw,
+  FileText, ClipboardCheck, Plus, Trash2, ChevronDown, ChevronRight, RotateCcw,
 } from 'lucide-react';
 import { GateReview } from '@/lib/data';
 import { GATE_DECISIONS } from '@shared/const';
-import { toLocalISODate } from '@/lib/utils';
+import { cn, toLocalISODate } from '@/lib/utils';
 import { GateReadinessChecklist } from './GateReadinessChecklist';
 import type { SOPGateStandard } from '@/lib/sop-templates';
 import { GateStandardPanel } from '@/components/shared/GateStandardPanel';
 import { nanoid } from 'nanoid';
+import { trpc } from '@/lib/trpc';
+import { toast } from 'sonner';
+import {
+  GATE_SIGNOFF_REQUIREMENT_LABELS,
+  GATE_SIGNOFF_STATUS_LABELS,
+  type GateSignoffSlot,
+} from '@shared/gate-signoffs';
+import { StabilityGatePanel } from './StabilityGatePanel';
+import type { ProjectMemberRole } from '@shared/project-roles';
+import {
+  PRODUCT_MODULES,
+  type ProjectExecutionBaseline,
+} from '@shared/project-track-tailoring';
 
 // ── Decision config ───────────────────────────────────────────────────────────
 export const DECISION_CONFIG: Record<GateReview['decision'], {
@@ -58,8 +71,7 @@ function ReviewTraceSummary({ review }: { review: GateReview }) {
   if (!trace) return null;
   const productLabel = trace.product
     ? `${trace.product.productNumber || trace.product.id} · ${trace.product.name}`
-    : '未关联产品';
-  const baseRevision = trace.baseRevision?.revisionLabel || '无基准版本';
+    : '项目完成后生成';
   const customerLabels = trace.customerVariants
     .slice(0, 3)
     .map((variant) => `${variant.customerName || variant.customerId || variant.variantCode}${variant.customerBomRevision ? ` ${variant.customerBomRevision}` : ''}`);
@@ -71,11 +83,13 @@ function ReviewTraceSummary({ review }: { review: GateReview }) {
       </div>
       <div className="mt-1 grid gap-1 text-muted-foreground sm:grid-cols-2">
         <div className="truncate">
-          <span className="text-foreground">产品：</span>{productLabel}
+          <span className="text-foreground">输出产品：</span>{productLabel}
         </div>
-        <div>
-          <span className="text-foreground">基准版本：</span>{baseRevision}
-        </div>
+        {trace.baseRevision && (
+          <div>
+            <span className="text-foreground">历史基准 Revision：</span>{trace.baseRevision.revisionLabel}
+          </div>
+        )}
         <div>
           <span className="text-foreground">工作 BOM：</span>{trace.workingBom.lineCount} 行
         </div>
@@ -152,6 +166,9 @@ interface ReviewFormState {
   participants: string;
   decision: GateReview['decision'];
   conditions: string;
+  conditionOwnerUserId: number | null;
+  conditionDueDate: string;
+  conditionItems: Array<{ description: string; ownerUserId: number | null; dueDate: string }>;
   notes: string;
 }
 
@@ -160,19 +177,30 @@ function NewReviewForm({
   allowedDecisions,
   onSubmit,
   onCancel,
+  signoffsReady = true,
+  projectId,
 }: {
   roundNumber: number;
   /** 可选的决议项：管理层三项全开；项目经理（仅召集权）只能记录「不通过」 */
   allowedDecisions: GateReview['decision'][];
   onSubmit: (form: ReviewFormState) => void;
   onCancel: () => void;
+  signoffsReady?: boolean;
+  projectId?: string;
 }) {
+  const { data: members = [] } = trpc.members.list.useQuery(
+    { projectId: projectId || '' },
+    { enabled: !!projectId },
+  );
   const today = toLocalISODate();
   const [form, setForm] = useState<ReviewFormState>({
     reviewDate: today,
     participants: '',
     decision: allowedDecisions.includes('approved') ? 'approved' : allowedDecisions[0],
     conditions: '',
+    conditionOwnerUserId: null,
+    conditionDueDate: '',
+    conditionItems: [{ description: '', ownerUserId: null, dueDate: '' }],
     notes: '',
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -181,8 +209,14 @@ function NewReviewForm({
     const e: Record<string, string> = {};
     if (!form.reviewDate) e.reviewDate = '请填写评审日期';
     if (!form.participants.trim()) e.participants = '请填写参与人员';
-    if (form.decision === 'conditional' && !form.conditions.trim()) {
-      e.conditions = '有条件通过需填写具体条件';
+    if (form.decision === 'conditional') {
+      if (form.conditionItems.length === 0) e.conditions = '至少需要一条通过条件';
+      form.conditionItems.forEach((item, index) => {
+        if (!item.description.trim() || !item.ownerUserId || !item.dueDate) e[`condition-${index}`] = `条件 ${index + 1} 的内容、负责人和截止日期必须完整`;
+      });
+    }
+    if (form.decision !== 'rejected' && !signoffsReady) {
+      e.decision = '必签会签未完成，管理层暂不能拍板';
     }
     setErrors(e);
     return Object.keys(e).length === 0;
@@ -227,6 +261,7 @@ function NewReviewForm({
             </button>
           ))}
         </div>
+        {errors.decision && <p className="mt-1 text-[11px] text-destructive">{errors.decision}</p>}
       </div>
 
       {/* Date */}
@@ -264,20 +299,25 @@ function NewReviewForm({
 
       {/* Conditions */}
       {form.decision === 'conditional' && (
-        <div>
-          <label className="text-[10px] uppercase tracking-widest text-[color:var(--warning)] mb-1.5 flex items-center gap-1.5">
-            <AlertCircle size={10} /> 通过条件 <span className="text-destructive">*</span>
-          </label>
-          <textarea
-            value={form.conditions}
-            onChange={(e) => setForm((f) => ({ ...f, conditions: e.target.value }))}
-            rows={3}
-            placeholder="请列明需满足的具体条件..."
-            className={`w-full text-sm rounded-[7px] border px-3 py-2 outline-none resize-none transition-colors ${
-              errors.conditions ? 'border-destructive bg-[color:var(--destructive-soft)]' : 'border-[color:var(--warning)] bg-[color:var(--warning-soft)] focus:border-[color:var(--warning)]'
-            }`}
-          />
-          {errors.conditions && <p className="text-xs text-destructive mt-1">{errors.conditions}</p>}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <label className="text-[10px] uppercase tracking-widest text-[color:var(--warning)] flex items-center gap-1.5">
+              <AlertCircle size={10} /> 逐项通过条件 <span className="text-destructive">*</span>
+            </label>
+            <button type="button" onClick={() => setForm((f) => ({ ...f, conditionItems: [...f.conditionItems, { description: '', ownerUserId: null, dueDate: '' }] }))} className="inline-flex items-center gap-1 rounded-[6px] border border-border px-2 py-1 text-[10px]"><Plus size={11} />添加条件</button>
+          </div>
+          {form.conditionItems.map((item, index) => (
+            <div key={index} className={`space-y-2 rounded-[8px] border p-3 ${errors[`condition-${index}`] ? 'border-destructive bg-[color:var(--destructive-soft)]' : 'border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)]'}`}>
+              <div className="flex items-center justify-between"><span className="text-[10px] font-semibold text-[color:var(--warning)]">条件 {index + 1}</span>{form.conditionItems.length > 1 && <button type="button" onClick={() => setForm((f) => ({ ...f, conditionItems: f.conditionItems.filter((_, itemIndex) => itemIndex !== index) }))} className="text-muted-foreground hover:text-destructive"><Trash2 size={12} /></button>}</div>
+              <textarea value={item.description} onChange={(event) => setForm((f) => ({ ...f, conditionItems: f.conditionItems.map((row, itemIndex) => itemIndex === index ? { ...row, description: event.target.value } : row) }))} rows={2} placeholder="单条、可验证的关闭条件" className="w-full rounded-[7px] border border-border bg-card px-3 py-2 text-sm outline-none" />
+              <div className="grid grid-cols-2 gap-2">
+                <select value={item.ownerUserId ?? ''} onChange={(event) => setForm((f) => ({ ...f, conditionItems: f.conditionItems.map((row, itemIndex) => itemIndex === index ? { ...row, ownerUserId: event.target.value ? Number(event.target.value) : null } : row) }))} className="rounded-[7px] border border-border bg-card px-2 py-2 text-xs"><option value="">跟进负责人</option>{members.map((member) => <option key={member.userId} value={member.userId}>{member.userName || member.mentionName || `用户 #${member.userId}`}</option>)}</select>
+                <input type="date" value={item.dueDate} onChange={(event) => setForm((f) => ({ ...f, conditionItems: f.conditionItems.map((row, itemIndex) => itemIndex === index ? { ...row, dueDate: event.target.value } : row) }))} className="rounded-[7px] border border-border bg-card px-2 py-2 text-xs" />
+              </div>
+              {errors[`condition-${index}`] && <p className="text-[10px] text-destructive">{errors[`condition-${index}`]}</p>}
+            </div>
+          ))}
+          {errors.conditions && <p className="text-xs text-destructive">{errors.conditions}</p>}
         </div>
       )}
 
@@ -295,6 +335,11 @@ function NewReviewForm({
         />
       </div>
 
+      {form.decision !== 'rejected' && !signoffsReady && (
+        <div className="text-xs text-amber-600" role="status">
+          必签会签未完成或就绪数据未加载，暂不能提交「通过/有条件通过」；可先提交「拒绝」，或完成会签/等待就绪数据后重试。
+        </div>
+      )}
       <div className="flex gap-2 pt-1">
         <button
           onClick={onCancel}
@@ -304,11 +349,14 @@ function NewReviewForm({
         </button>
         <button
           onClick={handleSubmit}
+          aria-disabled={form.decision !== 'rejected' && !signoffsReady}
+          disabled={form.decision !== 'rejected' && !signoffsReady}
           className="flex-1 px-3 py-2 text-sm font-semibold text-white rounded-[7px] transition-colors flex items-center justify-center gap-1.5"
           style={{
             background:
               form.decision === 'approved' ? 'var(--success)' :
               form.decision === 'conditional' ? 'var(--warning)' : 'var(--destructive)',
+            opacity: form.decision !== 'rejected' && !signoffsReady ? 0.5 : 1,
           }}
         >
           {selectedCfg.icon}
@@ -327,31 +375,125 @@ interface GateReviewModalProps {
   gateName: string;
   gateStandard?: SOPGateStandard;
   existingReviews?: GateReview[];
-  /** 就绪检查未通过项;非空时提示评审改走「有条件通过」并记录例外（projectId+gateTaskId 缺省时的回退展示） */
-  blockers?: string[];
-  /** 提供 projectId + gateTaskId 时，改用服务端就绪度清单，取代源错的客户端 blockers 展示 */
-  projectId?: string;
-  gateTaskId?: string;
+  projectId: string;
+  gateTaskId: string;
+  /** Close Gate 硬卡未满足时「去项目设置处理」的跳转（调用方负责关弹窗、开设置抽屉） */
+  onOpenSettings?: () => void;
   /** 是否允许在就绪清单里上传/删除交付物证据（viewer 等无权者隐藏按钮） */
   canEditDeliverables?: boolean;
   canQualityGateBlock?: boolean;
   canNpiGateBlock?: boolean;
+  onTaskClick?: (phaseId: string, taskId: string) => void;
   onConfirm: (review: GateReview) => void;
   onCancel: () => void;
   readOnly?: boolean;
   /** 决策权（approved/conditional）；false 时仅召集权——只能记录「不通过」的评审 */
   canDecide?: boolean;
+  /** JDM P1 Gate 本次将原子冻结的候选基线；仅作只读预览。 */
+  jdmDefinitionFreeze?: ProjectExecutionBaseline;
+  /** 前端完整性预检；服务端仍会在事务内重复校验。 */
+  jdmDefinitionIssues?: string[];
 }
 
 export function GateReviewModal({
-  open, phaseId, phaseName, gateName, gateStandard, existingReviews = [], blockers = [], projectId, gateTaskId, canEditDeliverables = false, canQualityGateBlock = false, canNpiGateBlock = false, onConfirm, onCancel, readOnly = false, canDecide = true,
+  open, phaseId, phaseName, gateName, gateStandard, existingReviews = [], projectId, gateTaskId, onOpenSettings, canEditDeliverables = false, canQualityGateBlock = false, canNpiGateBlock = false, onTaskClick, onConfirm, onCancel, readOnly = false, canDecide = true, jdmDefinitionFreeze, jdmDefinitionIssues = [],
 }: GateReviewModalProps) {
   // readOnly（无 canGateReview 权限）绝不能进表单：否则用户填完提交被静默丢弃
   const [showForm, setShowForm] = useState(existingReviews.length === 0 && !readOnly);
+  const [standardOpen, setStandardOpen] = useState(false);
   const latestReview = existingReviews[existingReviews.length - 1];
   const nextRound = existingReviews.length + 1;
+  const utils = trpc.useUtils();
+  const signoffsQuery = trpc.gateReviews.signoffs.useQuery(
+    { projectId: projectId || '', phaseId },
+    { enabled: !!projectId },
+  );
+  const myRoleQuery = trpc.members.myRole.useQuery(
+    { projectId: projectId || '' },
+    { enabled: !!projectId },
+  );
+  const [signoffNotes, setSignoffNotes] = useState<Partial<Record<GateSignoffSlot, string>>>({});
+  const [signoffRoles, setSignoffRoles] = useState<Partial<Record<GateSignoffSlot, ProjectMemberRole>>>({});
+  const signoffMutation = trpc.gateReviews.sign.useMutation({
+    onSuccess: async () => {
+      if (projectId) await utils.gateReviews.signoffs.invalidate({ projectId, phaseId });
+      toast.success('会签已记录');
+    },
+    onError: (error) => toast.error(error.message || '会签失败'),
+  });
+  const addRequirementMutation = trpc.gateReviews.addRequirement.useMutation({
+    onSuccess: async () => {
+      if (projectId) await utils.gateReviews.signoffs.invalidate({ projectId, phaseId });
+      toast.success('项目级加签已生效；如本轮已开启，系统已按新矩阵重开');
+    },
+    onError: (error) => toast.error(error.message || '加签失败'),
+  });
+  const signoffSlots = signoffsQuery.data?.slots ?? [];
+  const stabilityReadiness = trpc.stability.readiness.useQuery(
+    { projectId: projectId || '' },
+    { enabled: !!projectId && gateTaskId === 'project_close_review' },
+  );
+  const certificationCoverage = trpc.certificates.coverage.useQuery(
+    { projectId: projectId || '' },
+    { enabled: !!projectId && gateTaskId === 'project_close_review' },
+  );
+  const conditionsReadiness = trpc.conditions.readiness.useQuery(
+    { projectId: projectId || '' },
+    { enabled: !!projectId && gateTaskId === 'project_close_review' },
+  );
+  const handoffReadiness = trpc.handoffs.readiness.useQuery(
+    { projectId: projectId || '' },
+    { enabled: !!projectId && gateTaskId === 'project_close_review' },
+  );
+  const isJdmDefinitionGate = gateTaskId === 'jdm_product_definition_gate';
+  const jdmRiskScope = trpc.projects.riskScope.useQuery(
+    { projectId: projectId || '' },
+    { enabled: !!projectId && isJdmDefinitionGate },
+  );
+  // 查询报错/未返回时不得默认"会签就绪"——四眼 UI 的空数据必须按未就绪处理
+  const signoffsReady = !!projectId && signoffsQuery.data != null && signoffSlots.every((slot) =>
+    slot.requirement !== 'required' || slot.status === 'approved'
+  ) && !signoffSlots.some((slot) => slot.status === 'rejected');
+  const jdmRiskReady = !isJdmDefinitionGate || (
+    !!jdmRiskScope.data?.engineeringConfirmedAt &&
+    !!jdmRiskScope.data?.qaOrCertConfirmedAt
+  );
+  const jdmDefinitionReady = !isJdmDefinitionGate || (
+    !!jdmDefinitionFreeze &&
+    jdmDefinitionIssues.length === 0 &&
+    jdmRiskReady
+  );
+  const approvalReady = signoffsReady &&
+    jdmDefinitionReady &&
+    (gateTaskId !== 'project_close_review' || (
+      stabilityReadiness.data?.ready === true &&
+      certificationCoverage.data?.covered === true &&
+      conditionsReadiness.data?.ready === true &&
+      handoffReadiness.data?.ready === true
+    ));
+
+  const submitSignoff = (slot: GateSignoffSlot, status: 'approved' | 'conditional' | 'rejected') => {
+    if (!projectId) return;
+    const note = signoffNotes[slot]?.trim() || null;
+    if ((status === 'conditional' || status === 'rejected') && !note) {
+      toast.error('有条件同意或拒绝必须填写说明');
+      return;
+    }
+    signoffMutation.mutate({ projectId, phaseId, slot, status, note, actedAsRole: signoffRoles[slot] || undefined });
+  };
+
+  const addRequiredSignoff = (slot: GateSignoffSlot) => {
+    if (!projectId) return;
+    const reason = window.prompt('请输入项目级加签原因');
+    if (!reason?.trim()) return;
+    addRequirementMutation.mutate({ projectId, phaseId, slot, requirement: 'required', reason: reason.trim() });
+  };
 
   const handleSubmit = (form: ReviewFormState) => {
+    const conditionItems = form.decision === 'conditional'
+      ? form.conditionItems.map((item) => ({ description: item.description.trim(), ownerUserId: item.ownerUserId!, dueDate: item.dueDate }))
+      : [];
+    const firstCondition = conditionItems[0];
     const review: GateReview = {
       id: `gr_${nanoid(8)}`,
       phaseId,
@@ -360,7 +502,10 @@ export function GateReviewModal({
       reviewDate: form.reviewDate,
       participants: form.participants,
       decision: form.decision,
-      conditions: form.conditions,
+      conditions: conditionItems.map((item, index) => `${index + 1}. ${item.description}`).join('\n'),
+      conditionOwnerUserId: firstCondition?.ownerUserId ?? null,
+      conditionDueDate: firstCondition?.dueDate ?? null,
+      conditionItems,
       notes: form.notes,
       createdAt: new Date().toISOString(),
       roundNumber: nextRound,
@@ -396,37 +541,194 @@ export function GateReviewModal({
           <div className="text-xs text-muted-foreground num">{gateName}</div>
         </div>
 
-        {/* 就绪度：有 projectId+gateTaskId 时用服务端清单，否则回退到传入的 blockers */}
-        {projectId && gateTaskId ? (
-          <GateReadinessChecklist
-            projectId={projectId}
-            phaseId={phaseId}
-            gateTaskId={gateTaskId}
-            canEdit={canEditDeliverables}
-            canQualityGateBlock={canQualityGateBlock}
-            canNpiGateBlock={canNpiGateBlock}
-          />
-        ) : blockers.length > 0 ? (
-          <div className="border border-[color:var(--warning)] bg-[color:var(--warning-soft)] rounded-[9px] p-3 mb-4">
-            <div className="text-[11px] font-semibold text-[color:var(--warning)] mb-1">⚠ 就绪检查未通过</div>
-            <ul className="text-xs text-[color:var(--warning)] list-disc pl-4 space-y-0.5">
-              {blockers.map((b, i) => <li key={i}>{b}</li>)}
-            </ul>
-            <div className="text-[11px] text-[color:var(--warning)] mt-1.5">建议补齐后通过;如需放行,请选「有条件通过」并在条件里写明例外项的责任人与截止日期。</div>
-          </div>
-        ) : null}
+        <GateReadinessChecklist
+          projectId={projectId}
+          phaseId={phaseId}
+          gateTaskId={gateTaskId}
+          canEdit={canEditDeliverables}
+          canQualityGateBlock={canQualityGateBlock}
+          canNpiGateBlock={canNpiGateBlock}
+          onTaskClick={onTaskClick}
+        />
 
-        {/* 首屏聚焦（P0-5）：完整标准与历史记录默认折叠，首屏只留未达成项与评审操作 */}
-        {gateStandard && (
-          <details className="group border border-border rounded-[9px] mb-4">
-            <summary className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-2.5 text-[10px] uppercase tracking-widest text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
-              <ChevronRight size={12} className="shrink-0 transition-transform group-open:rotate-90" />
-              Gate 管理标准（准入 / 准出条件）
-            </summary>
-            <div className="px-3 pb-3">
-              <GateStandardPanel standard={gateStandard} compact evidenceHint />
+        {isJdmDefinitionGate && (
+          <div className={cn(
+            'mb-4 rounded-[9px] border p-3 text-xs',
+            jdmDefinitionReady
+              ? 'border-[color:var(--success)] bg-[color:var(--success-soft)]'
+              : 'border-[color:var(--warning)] bg-[color:var(--warning-soft)]',
+          )}>
+            <div className="flex items-center justify-between gap-2">
+              <div className="font-semibold text-foreground">本次将冻结的产品定义</div>
+              <span className={jdmDefinitionReady ? 'text-[color:var(--success)]' : 'text-[color:var(--warning)]'}>
+                {jdmDefinitionReady ? '可冻结' : '尚未就绪'}
+              </span>
             </div>
-          </details>
+            <div className="mt-2 grid gap-1 text-muted-foreground sm:grid-cols-2">
+              <div className="sm:col-span-2">
+                <span className="text-foreground">产品规格：</span>
+                {jdmDefinitionFreeze?.productDefinitionRef || '未填写'}
+              </div>
+              <div>
+                <span className="text-foreground">复用模块：</span>
+                {PRODUCT_MODULES
+                  .filter(module => jdmDefinitionFreeze?.moduleReuse?.[module.id] === 'reused')
+                  .map(module => module.label)
+                  .join('、') || '无'}
+              </div>
+              <div>
+                <span className="text-foreground">不复用模块：</span>
+                {PRODUCT_MODULES
+                  .filter(module => jdmDefinitionFreeze?.moduleReuse?.[module.id] === 'not_reused')
+                  .map(module => module.label)
+                  .join('、') || '未完整选择'}
+              </div>
+              <div className="sm:col-span-2">
+                <span className="text-foreground">风险声明：</span>
+                {jdmRiskScope.data
+                  ? `v${jdmRiskScope.data.version} · 研发${jdmRiskScope.data.engineeringConfirmedAt ? '已确认' : '待确认'} · QA/认证${jdmRiskScope.data.qaOrCertConfirmedAt ? '已确认' : '待确认'}`
+                  : '未建立或加载中'}
+              </div>
+            </div>
+            {!jdmDefinitionReady && (
+              <div className="mt-2 flex items-start gap-1.5 text-[color:var(--warning)]">
+                <AlertCircle size={12} className="mt-0.5 shrink-0" />
+                <span>
+                  {jdmDefinitionIssues.length > 0
+                    ? jdmDefinitionIssues.join('；')
+                    : !jdmRiskReady
+                      ? '风险声明需要研发与 QA/认证双确认'
+                      : '请先完成 JDM 产品定义与六模块基线'}
+                </span>
+              </div>
+            )}
+            <div className="mt-2 text-[10px] text-muted-foreground">
+              “通过 / 有条件通过”会在同一事务内冻结基线并生成 P2–P6；“未通过”不会冻结。
+            </div>
+          </div>
+        )}
+
+        {projectId && gateTaskId === 'project_close_review' && (
+          <>
+            <StabilityGatePanel projectId={projectId} canEdit={canEditDeliverables} />
+            {/* 增量硬卡（证书/条件项/移交）只显示计数结论；明细与编辑统一在「项目设置 → 风险 / 关闭」分区，
+                同一缺口不在弹窗里重列一遍（设计4 §4：同一证据只出现一次） */}
+            {(() => {
+              const loaded = certificationCoverage.data && conditionsReadiness.data && handoffReadiness.data;
+              const certGap = certificationCoverage.data?.missing.length ?? 0;
+              const condGap = conditionsReadiness.data?.openCount ?? 0;
+              const handoffGap = handoffReadiness.data?.blockers.length ?? 0;
+              const parts = [
+                certGap > 0 ? `证书缺口 ${certGap}` : null,
+                condGap > 0 ? `条件项未闭环 ${condGap}` : null,
+                handoffGap > 0 ? `量产移交阻塞 ${handoffGap}` : null,
+              ].filter(Boolean);
+              const ok = !!loaded && parts.length === 0;
+              return (
+                <div className={`mb-4 rounded-[9px] border p-3 text-xs ${ok ? 'border-border text-muted-foreground' : 'border-[color:var(--warning)] bg-[color:var(--warning-soft)] text-[color:var(--warning)]'}`}>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-semibold">
+                      {!loaded
+                        ? '增量硬卡状态加载中…'
+                        : ok
+                          ? '增量硬卡已满足：证书 / 条件项 / 量产移交 ✓'
+                          : `增量硬卡未满足：${parts.join(' · ')}`}
+                    </span>
+                    {onOpenSettings && loaded && !ok && (
+                      <button type="button" onClick={onOpenSettings} className="shrink-0 font-medium text-primary hover:underline">
+                        去项目设置处理 →
+                      </button>
+                    )}
+                  </div>
+                  {loaded && !ok && <div className="mt-1 font-normal">明细在「项目设置 → 风险 / 关闭」分区维护，缺口清零后可给出通过结论。</div>}
+                </div>
+              );
+            })()}
+          </>
+        )}
+
+        {projectId && (
+          <div className="mb-4 rounded-[9px] border border-border p-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div>
+                <div className="text-[10px] uppercase tracking-widest text-muted-foreground">风险会签 · 第 {signoffsQuery.data?.roundNumber ?? nextRound} 轮</div>
+                <div className="mt-0.5 text-xs text-muted-foreground">{signoffsQuery.data?.roundStatus === 'preview' ? '矩阵预览；首次签字时冻结整轮要求。' : '本轮要求已冻结。'} 必签全部同意后，管理层才能给出通过结论。</div>
+              </div>
+              <span className={`text-[10px] font-semibold ${signoffsReady ? 'text-[color:var(--success)]' : 'text-[color:var(--warning)]'}`}>
+                {signoffsReady ? '会签就绪' : '会签未完成'}
+              </span>
+            </div>
+            {signoffsQuery.isLoading ? (
+              <div className="py-3 text-center text-xs text-muted-foreground">加载会签槽位…</div>
+            ) : (
+              <div className="space-y-2">
+                {signoffSlots.map((slot) => (
+                  <div key={slot.slot} className="rounded-[7px] border border-border bg-secondary/30 p-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-foreground">{slot.label}</span>
+                        <span className={`rounded px-1.5 py-0.5 text-[9px] ${slot.requirement === 'required' ? 'bg-[color:var(--destructive-soft)] text-destructive' : 'bg-secondary text-muted-foreground'}`}>
+                          {GATE_SIGNOFF_REQUIREMENT_LABELS[slot.requirement]}
+                        </span>
+                      </div>
+                      <span className={`text-[10px] font-medium ${slot.status === 'approved' ? 'text-[color:var(--success)]' : slot.status === 'rejected' ? 'text-destructive' : 'text-muted-foreground'}`}>
+                        {GATE_SIGNOFF_STATUS_LABELS[slot.status]}
+                        {slot.signerName ? ` · ${slot.signerName}` : ''}
+                      </span>
+                    </div>
+                    {slot.note && <p className="mt-1 text-[11px] text-muted-foreground">{slot.note}</p>}
+                    {signoffsQuery.data?.canAddRequirement && slot.requirement !== 'required' && (
+                      <button type="button" onClick={() => addRequiredSignoff(slot.slot)} className="mt-1 text-[10px] text-primary hover:underline">设为本项目必签</button>
+                    )}
+                    {slot.canSign && slot.requirement !== 'not_applicable' && (
+                      <div className="mt-2 space-y-2">
+                        {(myRoleQuery.data?.roles.length ?? 0) > 1 && (
+                          <select
+                            value={signoffRoles[slot.slot] ?? ''}
+                            onChange={(event) => setSignoffRoles((roles) => ({ ...roles, [slot.slot]: event.target.value as ProjectMemberRole }))}
+                            className="w-full rounded-[6px] border border-border bg-card px-2 py-1.5 text-xs"
+                          >
+                            <option value="">选择本次签字角色</option>
+                            {myRoleQuery.data?.roles.map((role) => <option key={role} value={role}>{role}</option>)}
+                          </select>
+                        )}
+                        <input
+                          value={signoffNotes[slot.slot] ?? ''}
+                          onChange={(event) => setSignoffNotes((notes) => ({ ...notes, [slot.slot]: event.target.value }))}
+                          placeholder="会签说明（有条件/拒绝时必填）"
+                          className="w-full rounded-[6px] border border-border bg-card px-2 py-1.5 text-xs outline-none focus:border-[color:var(--acc-border)]"
+                        />
+                        <div className="flex gap-1.5">
+                          <button type="button" onClick={() => submitSignoff(slot.slot, 'approved')} className="rounded-[6px] bg-[color:var(--success-soft)] px-2 py-1 text-[10px] font-medium text-[color:var(--success)]">同意</button>
+                          <button type="button" onClick={() => submitSignoff(slot.slot, 'conditional')} className="rounded-[6px] bg-[color:var(--warning-soft)] px-2 py-1 text-[10px] font-medium text-[color:var(--warning)]">有条件</button>
+                          <button type="button" onClick={() => submitSignoff(slot.slot, 'rejected')} className="rounded-[6px] bg-[color:var(--destructive-soft)] px-2 py-1 text-[10px] font-medium text-destructive">拒绝</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Gate 标准默认折叠：任务详情已内联展示同一份标准，弹窗里按需展开（设计4 §4） */}
+        {gateStandard && (
+          <div className="border border-border rounded-[9px] mb-4">
+            <button
+              type="button"
+              onClick={() => setStandardOpen((v) => !v)}
+              className="flex w-full items-center justify-between px-3 py-2.5 text-[10px] uppercase tracking-widest text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <span>Gate 管理标准</span>
+              {standardOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            </button>
+            {standardOpen && (
+              <div className="px-3 pb-3">
+                <GateStandardPanel standard={gateStandard} compact evidenceHint />
+              </div>
+            )}
+          </div>
         )}
 
         {/* History：默认折叠，摘要行保留最近一次结论 */}
@@ -461,6 +763,8 @@ export function GateReviewModal({
               allowedDecisions={canDecide ? [...GATE_DECISIONS] : ['rejected']}
               onSubmit={handleSubmit}
               onCancel={() => existingReviews.length > 0 ? setShowForm(false) : onCancel()}
+              signoffsReady={!canDecide || approvalReady}
+              projectId={projectId}
             />
           </div>
         ) : (

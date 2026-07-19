@@ -29,6 +29,7 @@ describe("activity log tailer mapping", () => {
 
     expect(event).toMatchObject({
       action: "issue.update",
+      sourceActivityLogId: 11,
       projectId: "p1",
       entityType: "issue",
       entityId: "101",
@@ -53,6 +54,7 @@ describe("activity log tailer mapping", () => {
 
     expect(event).toMatchObject({
       action: "task.rescheduled",
+      sourceActivityLogId: 12,
       entityType: "task",
       entityId: "p1:concept:c1",
       after: { title: "概念评审" },
@@ -79,6 +81,23 @@ describe("activity log tailer mapping", () => {
       entityType: "phase",
       entityId: "design",
       after: { fromPhaseId: "concept", phaseId: "design" },
+    });
+  });
+
+  it("normalizes task workflow logs into task.update_meta transitions", () => {
+    const approved = activityLogToAutomationEvent(log({
+      id: 14,
+      action: "task.approve",
+      entityType: "task",
+      entityId: "d1",
+      meta: { phaseId: "design" },
+    }));
+    expect(approved).toMatchObject({
+      action: "task.update_meta",
+      sourceActivityLogId: 14,
+      entityId: "p1:design:d1",
+      before: { status: "pending_approval" },
+      after: { status: "done", taskId: "d1" },
     });
   });
 });
@@ -119,6 +138,7 @@ describe("activity log tailer cursor", () => {
     process.env.ACTIVITY_LOG_TAILER_REPLAY_HISTORY = "true";
     const events: unknown[] = [];
     const finishes: Array<Record<string, unknown>> = [];
+    const cursors: number[] = [];
 
     const result = await runActivityLogTailerOnce({
       tryStartAutomationHeartbeat: async () => true,
@@ -132,11 +152,36 @@ describe("activity log tailer cursor", () => {
         ];
       },
       finishAutomationHeartbeat: async (input) => { finishes.push(input); },
+      advanceAutomationHeartbeatCursor: async (_key, cursorId) => { cursors.push(cursorId); },
       runAutomation: async (event) => { events.push(event); },
     });
 
     expect(events).toHaveLength(1);
+    expect(cursors).toEqual([8, 9]);
     expect(result).toMatchObject({ cursorId: 9, processed: 1, skipped: 1, initialized: false });
     expect(finishes[0]).toMatchObject({ status: "success", lastCursorId: 9 });
+  });
+
+  it("keeps a failed activity at the cursor so only failed rules retry", async () => {
+    process.env.ACTIVITY_LOG_TAILER_REPLAY_HISTORY = "true";
+    const cursors: number[] = [];
+    const finishes: Array<Record<string, unknown>> = [];
+
+    await expect(runActivityLogTailerOnce({
+      tryStartAutomationHeartbeat: async () => true,
+      getAutomationHeartbeat: async () => ({ lastCursorId: 7, lastFinishedAt: new Date() }) as any,
+      getLatestActivityLogId: async () => 99,
+      listActivityLogsAfter: async () => [
+        log({ id: 8, action: "issue.create", meta: { title: "P0", severity: "P0" } }),
+        log({ id: 9, action: "file.upload", entityType: "file" }),
+      ],
+      finishAutomationHeartbeat: async (input) => { finishes.push(input); },
+      advanceAutomationHeartbeatCursor: async (_key, cursorId) => { cursors.push(cursorId); },
+      runAutomation: async () => ({ matched: 1, fired: 0, partial: 0, skipped: 0, errors: 1 }),
+    })).rejects.toThrow(/activity 8/);
+
+    expect(cursors).toEqual([]);
+    expect(finishes[0]).toMatchObject({ status: "error" });
+    expect(finishes[0]).not.toHaveProperty("lastCursorId");
   });
 });

@@ -11,29 +11,15 @@ import {
 import { parseDigestRuleConfig, type HealthDigestConfig } from "./digestRules";
 import { isAutomationSuppressedProject } from "./project-filter";
 import { notifyPersonal, type NotifyPersonalDeps } from "../notification-gateway";
+import {
+  addDays as addDaysISO,
+  isoWeekdayOf,
+  shanghaiParts,
+} from "../../shared/shanghai-date";
+
+export { addDaysISO, isoWeekdayOf, shanghaiParts };
 
 // ── 日期/时区（统一 Asia/Shanghai）─────────────────────────────────────────
-export function isoWeekdayOf(iso: string): number {
-  const d = new Date(`${iso}T00:00:00Z`).getUTCDay();
-  return d === 0 ? 7 : d; // ISO: 周一=1 .. 周日=7
-}
-
-export function addDaysISO(iso: string, n: number): string {
-  const t = Date.parse(`${iso}T00:00:00Z`) + n * 86400000;
-  return new Date(t).toISOString().slice(0, 10);
-}
-
-export function shanghaiParts(now: Date): { todayISO: string; hour: number; isoWeekday: number } {
-  const fmt = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hour12: false,
-  });
-  const m: Record<string, string> = {};
-  for (const p of fmt.formatToParts(now)) m[p.type] = p.value;
-  const todayISO = `${m.year}-${m.month}-${m.day}`;
-  const hour = Number(m.hour) % 24; // en-CA 在午夜可能给 "24"
-  return { todayISO, hour, isoWeekday: isoWeekdayOf(todayISO) };
-}
-
 /** 本期标识 + 是否已到计划发送时点（支持服务晚启动补发：过点且本期无 run 即发）。 */
 export function computeDigestTiming(now: Date, config: HealthDigestConfig): { periodKey: string; reached: boolean } {
   const { todayISO, hour, isoWeekday } = shanghaiParts(now);
@@ -105,8 +91,8 @@ export type HealthDigestDeps = {
   getConfigRow?: () => Promise<{ enabled: boolean; config: HealthDigestConfig } | null>;
   getHealth?: (todayISO: string) => Promise<PortfolioHealthRow[]>;
   hasRun?: (periodKey: string) => Promise<boolean>;
-  writeRun?: (status: "fired" | "skipped", periodKey: string, detail: string) => Promise<void>;
-  pushWebhook?: typeof defaultPushWebhook;
+  writeRun?: (status: "fired" | "partial" | "skipped", periodKey: string, detail: string) => Promise<void>;
+  pushWebhook?: (text: string, opts?: { title?: string; markdown?: string }) => Promise<boolean | void>;
 } & NotifyPersonalDeps;
 
 async function defaultGetConfigRow(): Promise<{ enabled: boolean; config: HealthDigestConfig } | null> {
@@ -132,7 +118,7 @@ export async function runHealthDigestScan(now: Date, deps: HealthDigestDeps = {}
   const hasRun = deps.hasRun ?? ((pk: string) => hasAutomationRunForEntity({ ruleKey: "health_digest", entityId: pk }));
   if (await hasRun(periodKey)) return;
 
-  const writeRun = deps.writeRun ?? ((status: "fired" | "skipped", pk: string, detail: string) =>
+  const writeRun = deps.writeRun ?? ((status: "fired" | "partial" | "skipped", pk: string, detail: string) =>
     createAutomationRun({
       ruleKey: "health_digest", projectId: null, eventType: "scheduled", entityType: "portfolio",
       entityId: pk, status, recipients: [], detail: detail.slice(0, 1000),
@@ -149,11 +135,13 @@ export async function runHealthDigestScan(now: Date, deps: HealthDigestDeps = {}
   }
 
   const pushWebhook = deps.pushWebhook ?? defaultPushWebhook;
+  let delivered = 0;
+  const deliveryErrors: string[] = [];
 
   if (config.pushPmPersonal) {
     for (const [pmUserId, scored] of Array.from(groupByPm(abnormal).entries())) {
       const { title, markdown } = buildPmMarkdown(scored, config.cadence);
-      await notifyPersonal({
+      const result = await notifyPersonal({
         eventKey: "health_digest",
         userIds: [pmUserId],
         title,
@@ -161,14 +149,23 @@ export async function runHealthDigestScan(now: Date, deps: HealthDigestDeps = {}
         markdown,
         actionPath: "/",
       }, deps);
+      delivered += result.site + result.dingtalk;
+      deliveryErrors.push(...result.errors);
     }
   }
 
   if (config.pushManagerGroup) {
     const { title, markdown, text } = buildGroupMarkdown(abnormal, greenCount, config.cadence);
-    await pushWebhook(text, { title, markdown });
+    const result = await pushWebhook(text, { title, markdown });
+    if (result === false) deliveryErrors.push("健康摘要群 webhook 发送失败或未配置");
+    else delivered += 1;
   }
 
+  if (delivered === 0) throw new Error(deliveryErrors.join("；") || "健康摘要没有渠道实际送达");
   const red = abnormal.filter((s) => s.level === "red").length;
-  await writeRun("fired", periodKey, `red ${red} amber ${abnormal.length - red} green ${greenCount}`);
+  await writeRun(
+    deliveryErrors.length > 0 ? "partial" : "fired",
+    periodKey,
+    `red ${red} amber ${abnormal.length - red} green ${greenCount}${deliveryErrors.length ? `; ${deliveryErrors.join("; ")}` : ""}`,
+  );
 }

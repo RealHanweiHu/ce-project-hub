@@ -28,9 +28,9 @@ export const GATE_TIGHTENING_2026_07_02: GateTighteningEntry[] = [
   { category: "npd", phaseId: "pvt", deliverableName: "电芯/电池包安全认证报告或复用确认" },
   // ── JDM ──
   { category: "jdm", phaseId: "pvt", deliverableName: "EOL 100%测试能力验收记录" },
-  { category: "jdm", phaseId: "pvt", deliverableName: "UN38.3运输测试报告或复用确认" },
-  { category: "jdm", phaseId: "pvt", deliverableName: "MSDS" },
-  { category: "jdm", phaseId: "pvt", deliverableName: "电芯/电池包安全认证报告或复用确认" },
+  { category: "jdm", phaseId: "dvt", deliverableName: "UN38.3运输测试报告或复用确认" },
+  { category: "jdm", phaseId: "dvt", deliverableName: "MSDS" },
+  { category: "jdm", phaseId: "dvt", deliverableName: "电芯/电池包安全认证报告或复用确认" },
   // ── OBT ──
   { category: "obt", phaseId: "pvt", deliverableName: "UN38.3运输测试报告或复用确认" },
   { category: "obt", phaseId: "pvt", deliverableName: "MSDS" },

@@ -5,9 +5,13 @@ dist
 .env.*
 !.env.example
 .playwright-cli
+.audit
+.worktrees
 .pnpm-store
 artifacts
 backups
 output
+outputs
+scripts/__pycache__
 task_plan.md
 *.log

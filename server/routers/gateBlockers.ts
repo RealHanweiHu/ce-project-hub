@@ -11,7 +11,7 @@ import {
 import { protectedProcedure, router } from "../_core/trpc";
 import { canRoleViewInternalWorkspace } from "../file-visibility";
 import { assertProjectAccess, type ProjectAccess } from "../project-access";
-import { getPhasesForCategory } from "../../shared/sop-templates";
+import { getEffectivePhasesForProjectLike } from "../../shared/npd-v3";
 import { notifyGateReadyIfReady } from "../gate-ready-notify";
 
 function assertBlockerAuthority(access: ProjectAccess, blockerType: GateBlockerType) {
@@ -29,7 +29,7 @@ function assertBlockerAuthority(access: ProjectAccess, blockerType: GateBlockerT
 }
 
 function assertPhaseExists(access: ProjectAccess, phaseId: string) {
-  const exists = getPhasesForCategory(access.project.category).some((phase) => phase.id === phaseId);
+  const exists = getEffectivePhasesForProjectLike(access.project).some((phase) => phase.id === phaseId);
   if (!exists) throw new TRPCError({ code: "BAD_REQUEST", message: "项目阶段不存在" });
 }
 

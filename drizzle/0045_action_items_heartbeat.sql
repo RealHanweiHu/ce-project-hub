@@ -1,4 +1,4 @@
-CREATE TYPE "public"."action_item_kind" AS ENUM('task_approval', 'task_rework', 'deliverable_review', 'deliverable_rework', 'critical_issue');--> statement-breakpoint
+CREATE TYPE "public"."action_item_kind" AS ENUM('task_approval', 'task_rework', 'deliverable_review', 'deliverable_rework', 'critical_issue', 'condition_followup');--> statement-breakpoint
 CREATE TYPE "public"."action_item_status" AS ENUM('open', 'sent', 'read', 'done', 'closed', 'escalated', 'snoozed');--> statement-breakpoint
 CREATE TYPE "public"."action_item_level" AS ENUM('owner', 'pm', 'manager');--> statement-breakpoint
 CREATE TABLE "action_items" (

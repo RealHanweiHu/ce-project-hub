@@ -13,12 +13,29 @@ import {
 import { confirmApprovedRelease } from "./services/external-approval-service";
 import { markActionItemInteractiveCardsHandled } from "./dingtalk-interactive-card-service";
 import { rescheduleProjectFromTask } from "./services/schedule-service";
+import {
+  nextShanghaiMorning,
+  shanghaiMorningAfterCalendarDays,
+  SHANGHAI_TIME_ZONE,
+} from "../shared/shanghai-date";
 
 export type ActionCardExecutionResult = {
   title: string;
   message: string;
   actionPath?: string;
 };
+
+type ActionItemSnoozeUntil = Extract<
+  ActionCardTokenPayload,
+  { kind: "action_item_snooze" }
+>["until"];
+
+/** 将卡片 snooze 语义解析为绝对时刻；延两天是上海日历后天 08:00。 */
+export function actionItemSnoozeUntil(until: ActionItemSnoozeUntil, now = new Date()): Date {
+  return until === "in_2_days"
+    ? shanghaiMorningAfterCalendarDays(now, 2)
+    : nextShanghaiMorning(now);
+}
 
 function getString(value: unknown): string | null {
   if (typeof value === "string" && value.trim()) return value.trim();
@@ -88,6 +105,13 @@ function actionPathForPayload(payload: ActionCardTokenPayload): string {
       return buildDeliverableReviewActionPath(payload);
     case "task_complete":
       return buildTaskCompletionActionPath(payload);
+    case "task_start":
+      return buildProjectActionPath({
+        projectId: payload.projectId,
+        tab: "tasks",
+        phaseId: payload.phaseId,
+        taskId: payload.taskId,
+      });
     case "issue_validation":
       return buildIssueValidationActionPath(payload);
     case "action_item_snooze":
@@ -101,24 +125,6 @@ function actionPathForPayload(payload: ActionCardTokenPayload): string {
 
 function actionItemIdForPayload(payload: ActionCardTokenPayload): number | null {
   return "actionItemId" in payload && typeof payload.actionItemId === "number" ? payload.actionItemId : null;
-}
-
-function nextShanghaiMorning(now = new Date()): Date {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    hour12: false,
-  }).formatToParts(now);
-  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  const year = Number(map.year);
-  const month = Number(map.month);
-  const day = Number(map.day);
-  const hour = Number(map.hour) % 24;
-  const targetDay = hour < 8 ? day : day + 1;
-  return new Date(Date.UTC(year, month - 1, targetDay, 0, 0, 0, 0));
 }
 
 export async function executeActionCardPayload(
@@ -175,6 +181,25 @@ export async function executeActionCardPayload(
         actionPath: actionPathForPayload(payload),
       };
 
+    case "task_start":
+      await caller.tasks.start({
+        projectId: payload.projectId,
+        phaseId: payload.phaseId,
+        taskId: payload.taskId,
+      });
+      if (payload.actionItemId) {
+        // start 本身幂等；行动项若已由首次点击闭环，重试仍返回成功。
+        await completeActionItem({
+          id: payload.actionItemId,
+          recipientUserId: payload.userId,
+        });
+      }
+      return {
+        title: "任务已开始",
+        message: "已记录实际开始时间，系统会按前置条件更新状态；原计划排期保持不变。",
+        actionPath: actionPathForPayload(payload),
+      };
+
     case "issue_validation": {
       const issueId = Number(payload.issueId);
       if (!Number.isInteger(issueId) || issueId <= 0) throw new Error("问题 ID 无效");
@@ -191,7 +216,7 @@ export async function executeActionCardPayload(
     }
 
     case "action_item_snooze": {
-      const snoozedUntil = nextShanghaiMorning();
+      const snoozedUntil = actionItemSnoozeUntil(payload.until);
       const ok = await snoozeActionItem({
         id: payload.actionItemId,
         recipientUserId: payload.userId,
@@ -199,8 +224,8 @@ export async function executeActionCardPayload(
       });
       if (!ok) throw new Error("行动项不存在、已处理，或你不是该行动项负责人");
       return {
-        title: "已推迟到明早",
-        message: `系统会在 ${snoozedUntil.toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })} 后重新把它放回待办。`,
+        title: payload.until === "in_2_days" ? "已延后两天" : "已推迟到明早",
+        message: `系统会在 ${snoozedUntil.toLocaleString("zh-CN", { timeZone: SHANGHAI_TIME_ZONE })} 后重新把它放回待办。`,
         actionPath: actionPathForPayload(payload),
       };
     }

@@ -4,6 +4,8 @@ export type ProjectActionTarget = {
   phaseId?: string | null;
   taskId?: string | null;
   taskTab?: string | null;
+  /** Optional originating action item, used to close/refresh the notification after handling. */
+  actionItemId?: number | null;
 };
 
 export type TaskApprovalActionTarget = {
@@ -22,6 +24,8 @@ export type TaskCompletionActionTarget = {
   projectId: string;
   phaseId: string;
   taskId: string;
+  /** Optional originating action item; omitted links remain backward-compatible. */
+  actionItemId?: number | null;
 };
 
 export type IssueValidationActionTarget = {
@@ -51,6 +55,9 @@ export function buildProjectActionPath(target: ProjectActionTarget): string {
   if (target.phaseId) params.set("phaseId", target.phaseId);
   if (target.taskId) params.set("taskId", target.taskId);
   if (target.taskTab) params.set("taskTab", target.taskTab);
+  if (target.actionItemId != null && Number.isInteger(target.actionItemId) && target.actionItemId > 0) {
+    params.set("actionItemId", String(target.actionItemId));
+  }
   return `/?${params.toString()}`;
 }
 
@@ -75,6 +82,9 @@ export function buildTaskCompletionActionPath(target: TaskCompletionActionTarget
   params.set("projectId", target.projectId);
   params.set("phaseId", target.phaseId);
   params.set("taskId", target.taskId);
+  if (target.actionItemId != null && Number.isInteger(target.actionItemId) && target.actionItemId > 0) {
+    params.set("actionItemId", String(target.actionItemId));
+  }
   return `/actions/task-complete?${params.toString()}`;
 }
 

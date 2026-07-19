@@ -1,5 +1,7 @@
 import {
   CATEGORY_MAP,
+  DERIVATIVE_PHASES,
+  DERIVATIVE_MODULE_TASK_IDS,
   ECO_PHASES,
   IDR_PHASES,
   NPD_PHASES,
@@ -12,16 +14,15 @@ import {
   type SOPTask,
 } from '@shared/sop-templates';
 import type { PhaseData, TaskDetails } from './data';
+import {
+  getEffectivePhasesForProjectLike,
+  type ProjectTemplateLike,
+} from '@shared/npd-v3';
 
-/**
- * Build initial phase data for a new project based on category.
- */
-export const buildPhasesDataForCategory = (
-  category: ProjectCategory,
-  currentPhaseId: string,
-  completedPhaseIds: string[] = []
+const buildPhasesData = (
+  phases: SOPPhase[],
+  completedPhaseIds: string[] = [],
 ): Record<string, PhaseData> => {
-  const phases = getPhasesForCategory(category);
   const data: Record<string, PhaseData> = {};
   phases.forEach((phase) => {
     const isCompleted = completedPhaseIds.includes(phase.id);
@@ -36,8 +37,29 @@ export const buildPhasesDataForCategory = (
   return data;
 };
 
+/**
+ * Build initial phase data for a new project based on category.
+ */
+export const buildPhasesDataForCategory = (
+  category: ProjectCategory,
+  _currentPhaseId: string,
+  completedPhaseIds: string[] = []
+): Record<string, PhaseData> => {
+  return buildPhasesData(getPhasesForCategory(category), completedPhaseIds);
+};
+
+/** Build initial phase state from a concrete project's effective process. */
+export const buildPhasesDataForProject = (
+  projectLike: ProjectTemplateLike,
+  _currentPhaseId: string,
+  completedPhaseIds: string[] = [],
+): Record<string, PhaseData> =>
+  buildPhasesData(getEffectivePhasesForProjectLike(projectLike), completedPhaseIds);
+
 export {
   CATEGORY_MAP,
+  DERIVATIVE_PHASES,
+  DERIVATIVE_MODULE_TASK_IDS,
   ECO_PHASES,
   IDR_PHASES,
   NPD_PHASES,

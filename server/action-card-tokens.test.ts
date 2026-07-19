@@ -62,6 +62,46 @@ describe("action card tokens", () => {
     });
   });
 
+  it("round-trips a task_start payload without confusing planned schedule dates", async () => {
+    ENV.cookieSecret = "test-secret-for-action-card";
+
+    const token = await createActionCardToken({
+      kind: "task_start",
+      userId: 7,
+      actionItemId: 42,
+      projectId: "p1",
+      phaseId: "concept",
+      taskId: "c1",
+    });
+
+    await expect(verifyActionCardToken(token)).resolves.toMatchObject({
+      kind: "task_start",
+      userId: 7,
+      actionItemId: 42,
+      projectId: "p1",
+      phaseId: "concept",
+      taskId: "c1",
+    });
+  });
+
+  it("action_item_snooze supports in_2_days", async () => {
+    ENV.cookieSecret = "test-secret-for-action-card";
+
+    const token = await createActionCardToken({
+      kind: "action_item_snooze",
+      userId: 7,
+      actionItemId: 99,
+      until: "in_2_days",
+    });
+
+    await expect(verifyActionCardToken(token)).resolves.toMatchObject({
+      kind: "action_item_snooze",
+      userId: 7,
+      actionItemId: 99,
+      until: "in_2_days",
+    });
+  });
+
   it("round-trips long-tail confirmation payloads", async () => {
     ENV.cookieSecret = "test-secret-for-action-card";
 

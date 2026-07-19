@@ -8,9 +8,11 @@ import {
   AlertTriangle, Calendar, ChevronRight, RefreshCw, Loader2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { getPhasesForCategory } from '@/lib/sop-templates';
 import { toLocalISODate } from '@/lib/utils';
+import { TASK_STATUS_UI, TASK_PRIORITY_UI } from '@/lib/task-ui';
 import { type TaskStatus, type TaskPriority } from '@shared/const';
+import type { ProjectTemplateLike } from '@shared/npd-v3';
+import { resolveProjectPhase, resolveTaskName } from '@shared/sop-template-resolution';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -22,6 +24,8 @@ export interface TaskRow {
   projectName: string;
   projectNumber: string;
   projectCategory: string;
+  sopTemplateVersion?: string | null;
+  customFields?: unknown;
   status: TaskStatus;
   priority: TaskPriority;
   dueDate: string | null;
@@ -45,53 +49,24 @@ interface TaskListViewProps {
   emptyDesc: string;
   onRefetch: () => void;
   onNavigateToProject?: (projectId: string, focus?: TaskFocus) => void;
-  /** Show assignee column (for overdue/blocked views where PM needs to see who owns it) */
-  showAssignee?: boolean;
   /** Show overdue indicator */
   showOverdueBadge?: boolean;
 }
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
-type Tone = { color: string; bg: string; border: string };
-const STATUS_CONFIG: Record<TaskStatus, { label: string; tone: Tone }> = {
-  todo:        { label: '待处理',  tone: { color: 'var(--secondary-foreground)', bg: 'var(--secondary)', border: 'var(--border)' } },
-  in_progress: { label: '进行中',  tone: { color: 'var(--primary)', bg: 'var(--acc-soft)', border: 'var(--acc-border)' } },
-  blocked:     { label: '已阻塞',  tone: { color: 'var(--destructive)', bg: 'color-mix(in srgb, var(--destructive) 10%, transparent)', border: 'color-mix(in srgb, var(--destructive) 30%, transparent)' } },
-  done:        { label: '已完成',  tone: { color: 'var(--success)', bg: 'color-mix(in srgb, var(--success) 12%, transparent)', border: 'color-mix(in srgb, var(--success) 30%, transparent)' } },
-  skipped:     { label: '已跳过',  tone: { color: 'var(--muted-foreground)', bg: 'var(--secondary)', border: 'var(--border)' } },
-  pending_approval: { label: '待审批', tone: { color: 'var(--warning)', bg: 'color-mix(in srgb, var(--warning) 14%, transparent)', border: 'color-mix(in srgb, var(--warning) 32%, transparent)' } },
-};
+// 状态/优先级展示口径统一从 lib/task-ui 引入（全站单一定义，B8 收敛）
+const STATUS_CONFIG = TASK_STATUS_UI;
+const PRIORITY_CONFIG = TASK_PRIORITY_UI;
 
-const PRIORITY_CONFIG: Record<TaskPriority, { label: string; tone: Tone; dot: string }> = {
-  critical: { label: '紧急', tone: { color: 'var(--destructive)', bg: 'color-mix(in srgb, var(--destructive) 10%, transparent)', border: 'color-mix(in srgb, var(--destructive) 30%, transparent)' }, dot: 'var(--destructive)' },
-  high:     { label: '高',   tone: { color: 'var(--warning)', bg: 'color-mix(in srgb, var(--warning) 12%, transparent)', border: 'color-mix(in srgb, var(--warning) 30%, transparent)' }, dot: 'var(--warning)' },
-  medium:   { label: '中',   tone: { color: 'var(--primary)', bg: 'var(--acc-soft)', border: 'var(--acc-border)' }, dot: 'var(--primary)' },
-  low:      { label: '低',   tone: { color: 'var(--muted-foreground)', bg: 'var(--secondary)', border: 'var(--border)' }, dot: 'var(--muted-foreground)' },
-};
+// ─── Project-bound template context ─────────────────────────────────────────
 
-// ─── Helper: resolve task display name from SOP template ─────────────────────
-
-export function resolveTaskName(taskId: string, phaseId: string, category: string): string {
-  try {
-    const phases = getPhasesForCategory(category);
-    const phase = phases.find((p) => p.id === phaseId);
-    if (!phase) return taskId;
-    const task = phase.tasks.find((t) => t.id === taskId);
-    return task?.name ?? taskId;
-  } catch {
-    return taskId;
-  }
-}
-
-function resolvePhaseLabel(phaseId: string, category: string): string {
-  try {
-    const phases = getPhasesForCategory(category);
-    const phase = phases.find((p) => p.id === phaseId);
-    return phase ? `${phase.code} ${phase.name}` : phaseId;
-  } catch {
-    return phaseId;
-  }
+export function taskProjectLike(task: Pick<TaskRow, 'projectCategory' | 'sopTemplateVersion' | 'customFields'>): ProjectTemplateLike {
+  return {
+    category: task.projectCategory,
+    sopTemplateVersion: task.sopTemplateVersion,
+    customFields: task.customFields,
+  };
 }
 
 function isOverdue(dueDate: string | null): boolean {
@@ -123,7 +98,6 @@ export function TaskListView({
   emptyDesc,
   onRefetch,
   onNavigateToProject,
-  showAssignee = false,
   showOverdueBadge = false,
 }: TaskListViewProps) {
   if (isLoading) {
@@ -169,8 +143,10 @@ export function TaskListView({
 
       {/* Rows */}
       {tasks.map((task) => {
-        const taskName = resolveTaskName(task.taskId, task.phaseId, task.projectCategory);
-        const phaseLabel = resolvePhaseLabel(task.phaseId, task.projectCategory);
+        const projectLike = taskProjectLike(task);
+        const taskName = resolveTaskName(projectLike, task.taskId, task.phaseId);
+        const phase = resolveProjectPhase(projectLike, task.phaseId);
+        const phaseLabel = phase ? `${phase.code} ${phase.name}` : task.phaseId;
         const overdue = showOverdueBadge && isOverdue(task.dueDate);
         const priorityCfg = PRIORITY_CONFIG[task.priority];
 

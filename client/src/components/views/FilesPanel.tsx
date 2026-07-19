@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import { Project, FileAttachment, getProjectPhases, formatBytes } from '@/lib/data';
 import { trpc } from '@/lib/trpc';
 import { FilePreviewModal, canPreview } from './FilePreviewModal';
+import { FileNameBadges } from './FileBadges';
 import { FileText, Download, Eye, Loader2, FolderOpen } from 'lucide-react';
 
 type FileRow = {
@@ -66,12 +67,7 @@ export function FilesPanel({ project, role }: { project: Project; role: string }
               <div key={f.id} className="flex items-center gap-3 px-3 py-2.5 hover:bg-secondary">
                 <FileText size={15} className="text-muted-foreground shrink-0" />
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-sm text-foreground truncate">{f.name}</span>
-                    {f.fileType && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground">{f.fileType}</span>}
-                    {f.fileVersion && <span className="shrink-0 text-[10px] num text-primary">{f.fileVersion}</span>}
-                    {f.visibility && f.visibility !== 'internal' && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-border text-muted-foreground">{f.visibility === 'customer' ? '客户可见' : f.visibility === 'supplier' ? '供应商可见' : '公开'}</span>}
-                  </div>
+                  <FileNameBadges name={f.name} fileType={f.fileType} fileVersion={f.fileVersion} visibility={f.visibility} />
                   <div className="text-[10px] num text-muted-foreground">
                     {meta ? `${meta.phaseName} · ${meta.taskName}` : '项目级'} · {formatBytes(f.size)}
                     {f.createdAt ? ` · ${new Date(f.createdAt).toLocaleDateString('zh-CN')}` : ''}

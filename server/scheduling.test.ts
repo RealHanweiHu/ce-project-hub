@@ -209,7 +209,7 @@ describe("scheduleForCategory (IPD graph)", () => {
     // 概念入口 c1 从开始日
     expect(s.c1.start).toBe(START);
     // 所有图里的 NPD 任务都有排期
-    for (const id of ["c1", "c6", "p7", "d8", "e7", "v8", "pv8", "mp6"]) {
+    for (const id of ["c1", "c6", "p7", "d8", "e7", "v8", "pv8", "project_close_review"]) {
       expect(s[id]).toBeTruthy();
       expect(s[id].due >= s[id].start).toBe(true);
     }
@@ -220,7 +220,7 @@ describe("scheduleForCategory (IPD graph)", () => {
     expect(s.d8.start >= s.d7a.due).toBe(true);
     expect(s.d8.start >= s.d7b.due).toBe(true);
     // 量产 gate 在最后、晚于概念
-    expect(s.mp6.due > s.c6.due).toBe(true);
+    expect(s.project_close_review.due > s.c6.due).toBe(true);
   });
 
   it("every graph entry has a positive duration", () => {

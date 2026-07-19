@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import {
   getDb, getProjectById, createProduct,
   upsertProductDefinition, confirmProductDefinition, listProductDefinitionSnapshots,
-  getProjectTasks,
+  getProjectMember, getProjectTasks, getProjectsByMember,
 } from "./db";
 import { appRouter } from "./routers";
 import { getEffectiveProjectRole } from "./project-access";
@@ -27,9 +27,24 @@ const HANDOFF_PRODUCT = `handoff-product-${Date.now()}`;
 const OPTIONAL_PROJECT = `optional-product-${Date.now()}`;
 const DRAFT_PRODUCT_PROJECT = `draft-product-${Date.now()}`;
 const DRAFT_PRODUCT = `draft-product-${Date.now()}`;
+const DEFAULT_PRODUCT_OWNER_PROJECT = `po-default-${Date.now()}`;
+const EXPLICIT_PRODUCT_OWNER_PROJECT = `po-explicit-${Date.now()}`;
 const OWNER = 980001;
 const MANAGER_PM = 980002;
 const VIEWER_PM = 980003;
+const EXPLICIT_PRODUCT_OWNER = 980004;
+const NPD_ATTRIBUTES = {
+  hasBattery: false,
+  needsCert: false,
+  hasFirmware: false,
+  needsNewMold: false,
+  isNewPlatform: false,
+} as const;
+const BATTERY_CERT_ATTRIBUTES = {
+  ...NPD_ATTRIBUTES,
+  hasBattery: true,
+  needsCert: true,
+} as const;
 
 function makeCtx(userId: number, canCreateProject = false): TrpcContext {
   return {
@@ -106,7 +121,12 @@ afterAll(async () => {
   await db.delete(productDefinitionSnapshots).where(eq(productDefinitionSnapshots.productId, HANDOFF_PRODUCT));
   await db.delete(productDefinitions).where(eq(productDefinitions.productId, HANDOFF_PRODUCT));
   await db.delete(products).where(eq(products.id, HANDOFF_PRODUCT));
-  for (const projectId of [OPTIONAL_PROJECT, DRAFT_PRODUCT_PROJECT]) {
+  for (const projectId of [
+    OPTIONAL_PROJECT,
+    DRAFT_PRODUCT_PROJECT,
+    DEFAULT_PRODUCT_OWNER_PROJECT,
+    EXPLICIT_PRODUCT_OWNER_PROJECT,
+  ]) {
     await db.delete(activityLogs).where(eq(activityLogs.projectId, projectId));
     await db.delete(projectTasks).where(eq(projectTasks.projectId, projectId));
     await db.delete(projectPhases).where(eq(projectPhases.projectId, projectId));
@@ -149,6 +169,56 @@ describe("project access role resolution", () => {
 });
 
 describe("project create validation", () => {
+  it("未指定产品负责人时默认创建人，且指定的项目经理仍保持独立角色", async () => {
+    const caller = appRouter.createCaller(makeCtx(OWNER, true));
+
+    await caller.projects.create({
+      id: DEFAULT_PRODUCT_OWNER_PROJECT,
+      name: "产品负责人与项目经理分工",
+      projectNumber: "NPD-OWNER-PM",
+      category: "npd",
+      pmUserId: VIEWER_PM,
+      risk: "low",
+      currentPhase: "concept",
+      progress: 0,
+      npdAttributes: NPD_ATTRIBUTES,
+    });
+
+    const project = await getProjectById(DEFAULT_PRODUCT_OWNER_PROJECT);
+    expect(project?.productOwnerUserId).toBe(OWNER);
+    expect(project?.pmUserId).toBe(VIEWER_PM);
+    await expect(getProjectMember(DEFAULT_PRODUCT_OWNER_PROJECT, VIEWER_PM))
+      .resolves.toMatchObject({ role: "project_manager" });
+  });
+
+  it("显式指定的产品负责人不会被创建人或项目经理覆盖", async () => {
+    const caller = appRouter.createCaller(makeCtx(OWNER, true));
+
+    await caller.projects.create({
+      id: EXPLICIT_PRODUCT_OWNER_PROJECT,
+      name: "显式产品负责人",
+      projectNumber: "NPD-EXPLICIT-OWNER",
+      category: "npd",
+      productOwnerUserId: EXPLICIT_PRODUCT_OWNER,
+      pmUserId: MANAGER_PM,
+      risk: "low",
+      currentPhase: "concept",
+      progress: 0,
+      npdAttributes: NPD_ATTRIBUTES,
+    });
+
+    const project = await getProjectById(EXPLICIT_PRODUCT_OWNER_PROJECT);
+    expect(project?.productOwnerUserId).toBe(EXPLICIT_PRODUCT_OWNER);
+    expect(project?.createdBy).toBe(OWNER);
+    expect(project?.pmUserId).toBe(MANAGER_PM);
+    await expect(getEffectiveProjectRole(project!, EXPLICIT_PRODUCT_OWNER)).resolves.toBe("owner");
+    await expect(getProjectsByMember(EXPLICIT_PRODUCT_OWNER)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: EXPLICIT_PRODUCT_OWNER_PROJECT }),
+      ]),
+    );
+  });
+
   it("创建 NPD 项目不要求先关联产品库产品", async () => {
     const caller = appRouter.createCaller(makeCtx(OWNER, true));
 
@@ -160,6 +230,7 @@ describe("project create validation", () => {
       risk: "low",
       currentPhase: "concept",
       progress: 0,
+      npdAttributes: NPD_ATTRIBUTES,
     });
 
     const project = await getProjectById(OPTIONAL_PROJECT);
@@ -188,6 +259,7 @@ describe("project create validation", () => {
       risk: "low",
       currentPhase: "concept",
       progress: 0,
+      npdAttributes: NPD_ATTRIBUTES,
     });
 
     const project = await getProjectById(DRAFT_PRODUCT_PROJECT);
@@ -206,6 +278,7 @@ describe("project create validation", () => {
       risk: "low",
       currentPhase: "concept",
       progress: 0,
+      npdAttributes: NPD_ATTRIBUTES,
       startDate: "2026-13-99",
     })).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
@@ -243,6 +316,8 @@ describe("project create validation", () => {
       risk: "low",
       currentPhase: "concept",
       progress: 0,
+      npdAttributes: BATTERY_CERT_ATTRIBUTES,
+      npdTemplate: { tier: "full", packs: ["battery", "cert"] },
     });
 
     const project = await getProjectById(HANDOFF_PROJECT);

@@ -6,6 +6,13 @@ patchedDependencies:
 
 overrides:
   tailwindcss>nanoid: 3.3.7
+  express>path-to-regexp: 0.1.13
+  dompurify: 3.4.11
+  lodash: 4.18.1
+  lodash-es: 4.18.1
+  mdast-util-to-hast: 13.2.1
+  mermaid: 11.16.0
+  uuid: 11.1.1
 
 onlyBuiltDependencies:
   - '@tailwindcss/oxide'

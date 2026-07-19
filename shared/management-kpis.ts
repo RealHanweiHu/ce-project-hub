@@ -1,10 +1,16 @@
 import { daysBetween, isProjectedOverdue, type RagLevel } from "./health";
+import { resolvePhaseName } from "./sop-template-resolution";
+
+export const MANAGEMENT_VALIDATION_PHASES = ["evt", "dvt", "verification", "pvt"] as const;
+export type ManagementValidationPhase = (typeof MANAGEMENT_VALIDATION_PHASES)[number];
 
 export type ManagementPortfolioInput = {
   id: string;
   name: string;
   projectNumber: string;
   category: string;
+  sopTemplateVersion?: string | null;
+  customFields?: unknown;
   customer: string | null;
   currentPhase: string;
   targetDate: string | null;
@@ -64,6 +70,7 @@ export type ManagementDelayRow = {
   projectNumber: string;
   customer: string | null;
   currentPhase: string;
+  phaseName: string;
   targetDate: string | null;
   projectedEnd: string | null;
   slipDays: number | null;
@@ -104,7 +111,7 @@ export type ManagementKpis = {
     rows: Array<ManagementIssueInput & { ageDays: number }>;
   };
   validationClosure: {
-    byPhase: Array<{ phaseId: "evt" | "dvt" | "pvt"; total: number; closed: number; open: number; closureRatePct: number | null }>;
+    byPhase: Array<{ phaseId: ManagementValidationPhase; total: number; closed: number; open: number; closureRatePct: number | null }>;
   };
   bomCostDelta: {
     trackedProjectCount: number;
@@ -116,7 +123,6 @@ export type ManagementKpis = {
   };
 };
 
-const VALIDATION_PHASES = ["evt", "dvt", "pvt"] as const;
 const OPEN_ISSUE_STATUSES = new Set(["open", "in_progress"]);
 const CLOSED_ISSUE_STATUSES = new Set(["resolved", "closed", "wont_fix"]);
 const CLOSED_TEST_STATUSES = new Set(["passed", "waived"]);
@@ -139,6 +145,7 @@ export function computeManagementKpis(input: {
         projectNumber: row.projectNumber,
         customer: row.customer,
         currentPhase: row.currentPhase,
+        phaseName: resolvePhaseName(row, row.currentPhase),
         targetDate: row.targetDate,
         projectedEnd: row.projectedEnd,
         slipDays,
@@ -233,7 +240,7 @@ function computeP0P1Aging(issues: ManagementIssueInput[], todayISO: string): Man
 
 function computeValidationClosure(items: ManagementClosureInput[]): ManagementKpis["validationClosure"] {
   return {
-    byPhase: VALIDATION_PHASES.map((phaseId) => {
+    byPhase: MANAGEMENT_VALIDATION_PHASES.map((phaseId) => {
       const phaseItems = items.filter((item) => item.phaseId === phaseId);
       const closed = phaseItems.filter((item) =>
         CLOSED_TEST_STATUSES.has(item.status)
@@ -290,6 +297,7 @@ function computeCustomerRiskRanking(rows: ManagementPortfolioInput[]): Managemen
         projectNumber: row.projectNumber,
         customer: row.customer,
         currentPhase: row.currentPhase,
+        phaseName: resolvePhaseName(row, row.currentPhase),
         targetDate: row.targetDate,
         projectedEnd: row.projectedEnd,
         slipDays,
@@ -310,7 +318,7 @@ function computeCustomerRiskRanking(rows: ManagementPortfolioInput[]): Managemen
 }
 
 function phaseOrder(phaseId: string): number {
-  const order = ["concept", "planning", "design", "evt", "dvt", "pvt", "mp"];
+  const order = ["concept", "planning", "design", "evt", "dvt", "verification", "pvt", "mp"];
   const index = order.indexOf(phaseId);
   return index >= 0 ? index : 99;
 }

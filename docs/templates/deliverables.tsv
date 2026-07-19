@@ -1,0 +1,324 @@
+TOTAL UNIQUE: 323
+BOM v0.1	npd:P2
+BOM v1.0	npd:P3,jdm:P2
+BOM v2.0	derivative:P2
+BOM v2.0 硬件差异	derivative:P2
+BOM 差异分析	eco:P1
+BOM/图纸/ECN 草案	idr:P2
+BOM差异与新物料清单	idr:P1
+BOM差异对比	eco:P1
+Build Record	npd:P4,npd:P5,derivative:P3,derivative:P4,jdm:P3,jdm:P4
+CCB 变更决策记录	eco:P1
+CIP 持续改善报告	npd:P7
+CMF 方案	npd:P3
+DFM 变更评审报告	eco:P2
+DFM/DFA 评审报告	npd:P3,jdm:P2
+DFM/DFT/DFMEA评审记录	derivative:P2
+DFM/可制造性反馈报告	obt:P1
+DFMEA/风险清单	derivative:P2
+DVT 样机	npd:P5,jdm:P4
+DVT 评审记录	npd:P5,derivative:P4,jdm:P4
+DVT样机 ≥30台	npd:P5
+DVT输入冻结记录	derivative:P3
+DVT问题关闭清单	derivative:P4
+ECN 正式发布	eco:P4
+ECN/ECR 记录	jdm:P6
+ECN/ECR记录	npd:P7
+ECN草案/变更设计包	eco:P2
+ECO 关闭评审记录	eco:P5
+ECO关闭报告	eco:P5
+ECR变更申请书	eco:P1
+EE 原理图	jdm:P2
+EE 原理图 & PCB Layout	jdm:P2
+EOL 100%测试能力验收记录	npd:P6,derivative:P5,jdm:P5
+EOL 100%测试项目清单	npd:P6
+EVT 样机	npd:P4,jdm:P3
+EVT 评审记录	npd:P4,derivative:P3,jdm:P3
+EVT 问题清单	npd:P4
+EVT可选项裁剪记录	derivative:P3
+EVT样机 ≥10台	npd:P4
+EVT问题关闭清单	derivative:P3
+FAI 首件检验报告	obt:P2
+ID 外观设计稿	npd:P3
+ID/CMF 输入包	jdm:P1
+ID/CMF设计包	idr:P2
+IDR Kickoff 记录	idr:P1
+IDR翻新 brief	idr:P1
+ID外观图	npd:P3
+Kickoff 会议纪要	npd:P2
+MD 结构图纸	jdm:P2
+MD结构图	npd:P3
+MD结构图纸	idr:P2
+MP Release 评审记录	idr:P4
+MP 准备就绪评审记录	obt:P3
+MSDS	npd:P5,npd:P6,derivative:P2,derivative:P4,derivative:P5,jdm:P5,obt:P3
+PCB Layout 文件	npd:P3,jdm:P2
+PCB v2	npd:P4
+PCB v2 改板记录	npd:P4
+PCBA/主控升级设计包	derivative:P2
+PCB原理图&Layout	npd:P3
+PFMEA/CTQ控制计划	npd:P5
+PRD产品需求文档	npd:P2
+PSD产品规格书	npd:P2
+PVT Readiness清单	derivative:P4
+PVT 评审记录	npd:P6,jdm:P5
+PVT 试产计划	derivative:P5
+PVT或首批质量报告	idr:P4
+PVT试产计划	derivative:P5
+RACI 责任矩阵	npd:P2,jdm:P1
+SOP / WI 文件	npd:P6
+SOP/WI	jdm:P5,obt:P3
+SOP/WI与检验标准更新	derivative:P5
+SOP/WI作业指导书	npd:P6
+SOP/WI更新记录	idr:P4
+SW 架构文档	jdm:P2
+SW架构文档	npd:P3
+T0/T1试模准备记录	derivative:P2
+T1试模报告	derivative:P4
+T2/修模验证报告	derivative:P4
+UN38.3运输测试报告或复用确认	npd:P5,npd:P6,derivative:P2,derivative:P4,derivative:P5,jdm:P5,obt:P3
+WBS 与里程碑计划	npd:P2
+openBOM 核对清单	obt:P1
+专利检索与规避分析	npd:P1
+产品交付/EOL 评审记录	jdm:P6,obt:P4
+产品概念书	npd:P1
+产品规格书 PSD	npd:P2
+产品需求文档 PRD	npd:P2
+客户特殊要求清单 CSR	jdm:P1
+产线切换计划	eco:P4
+产能爬坡计划	npd:P7
+供应商样件	idr:P2
+供应商评估表	npd:P2
+保护功能测试方案	npd:P3
+保护参数与热路径校核	derivative:P2
+保护电路设计评审或复用确认	npd:P3
+保护电路设计输入	npd:P3
+关键安全/性能检验标准	npd:P6
+关键技术挑战清单	npd:P1
+关键料件规格确认	npd:P3,jdm:P2
+关键模块验证报告	derivative:P3
+关键路径标注	npd:P2
+初步 BOM 与 NRE/模具方案	jdm:P1
+功能/性能测试报告	jdm:P3
+功能与性能回归测试报告	idr:P3
+功能测试报告	npd:P4
+功能测试报告 (FT)	npd:P4,jdm:P3
+包装/标签设计稿	idr:P2
+包装与物流验证	obt:P3
+包装与物流验证报告	npd:P6,derivative:P4,obt:P3
+包装设计验证报告	npd:P5
+包装验证报告	idr:P3,jdm:P4
+升级DVT样机	derivative:P4
+升级EVT样机	derivative:P3
+升级后良率报告	derivative:P6
+升级目标达成验证报告	derivative:P6
+升级设计冻结记录	derivative:P2
+升级试产报告	derivative:P5
+升级验证计划	derivative:P2
+变更后良率报告	eco:P5
+变更效果验证报告	eco:P5
+变更时程	eco:P1
+变更点专项验证报告	eco:P3
+变更点可靠性测试报告	eco:P3
+变更设计评审报告	eco:P2
+变更试产报告	eco:P4
+变更需求单 ECR	eco:P1
+变更验证报告	eco:P3
+变更验证样机	eco:P3
+变更验证评审记录	eco:P3
+可行性与初步 DFM 报告	jdm:P1
+可靠性/回归测试报告	idr:P3
+可靠性与外观耐久测试报告	idr:P3
+可靠性与安全预验证报告	derivative:P3
+可靠性测试报告	npd:P5,derivative:P4,jdm:P4
+售后影响跟踪报表	eco:P5
+售后数据分析	npd:P7,jdm:P6
+售后问题报表	npd:P7,obt:P4
+售后问题跟踪	obt:P4
+商业可行性分析	npd:P1
+回归测试报告	eco:P3
+图纸/规格完整性确认	obt:P1
+外观检验标准	idr:P3
+安全FMEA与危害分析	npd:P3
+安全件供应商资质清单	npd:P2
+安全件批准版本记录	npd:P3
+安全验证项目与判定标准	npd:P3
+安规与认证报告	npd:P5,jdm:P4
+客户 DVT 确认记录	jdm:P4
+客户 golden sample 签样记录	jdm:P5
+客户外观签核记录	jdm:P2
+客户放行记录	obt:P3
+客户样品确认记录	obt:P2
+客户样机确认记录	jdm:P3
+客户签样记录	obt:P2
+小批试产报告	obt:P3
+工程变更 ECN 记录	npd:P7
+市场上市计划	idr:P4
+市场与售后影响跟踪报表	derivative:P6
+市场调研报告	npd:P1
+库存处理方案	eco:P4
+影响分析报告	eco:P1
+影响分析矩阵	idr:P1
+性能/寿命设计边界	derivative:P2
+性能测试报告 (PT)	npd:P4,jdm:P3
+投模评审/开模批准记录	derivative:P2
+报价	obt:P1
+整机功能与兼容回归报告	derivative:P3
+文件与认证资料发布记录	idr:P4
+料件齐套与替代料策略	obt:P1
+新旧版本对比报告	derivative:P3
+更新BOM	idr:P2
+更新后的BOM	eco:P2
+更新后的SOP/WI	eco:P4
+更新后的原理图/PCB	eco:P2
+机芯/泵体升级设计包	derivative:P2
+样品与报价	npd:P2
+核心技术 POC 报告	npd:P1
+模具 T1/T2 样品	jdm:P4
+模具 T1/T2 试模报告	npd:P5
+模具/治具归属与 NRE 确认	obt:P1
+模具T1样品	npd:P5
+模具可行性评估	npd:P3
+模具开发计划	derivative:P2
+模具费用与周期确认	derivative:P2
+模具问题清单	derivative:P4
+模块复用策略与影响分析	derivative:P1,derivative:P2
+治具/EOL测试程序验收	derivative:P5
+治具与测试程序	npd:P6,jdm:P5
+测试程序与治具	obt:P2
+版本/接口/OTA回归范围	derivative:P2
+版本切换与库存处理方案	derivative:P5
+版本切换计划	idr:P4
+版本文件发布记录	derivative:P5
+现有设计基线包	idr:P1
+用户旅程地图	npd:P1
+用户痛点 Top10	npd:P1
+用户访谈纪要	npd:P1
+电子原理图	npd:P3
+电池/电源升级设计包	derivative:P2
+电芯/电池包安全认证报告或复用确认	npd:P5,npd:P6,derivative:P2,derivative:P4,derivative:P5,jdm:P5
+电芯供应商整改闭环记录	npd:P3
+电芯供应风险清单	npd:P2
+电芯厂质量审核或复用资质确认	npd:P3
+电芯复用/定点与二供策略	npd:P2
+电芯规格书与既有认证资料	npd:P2
+目标成本与定价分析	npd:P1
+硬件影响确认	idr:P2
+立项申请书	npd:P1
+立项评审记录	npd:P1
+竞品对比矩阵	npd:P1
+结构 3D 设计	npd:P3
+结构与装配验证报告	idr:P3
+结构变更设计包	eco:P2
+结构设计包	derivative:P2
+翻新需求与边界定义	idr:P1
+良率分析与改善	obt:P3
+良率分析与改善报告	npd:P6,obt:P3
+良率周报	npd:P7,jdm:P6,obt:P4
+良率报告	npd:P6,jdm:P5
+良率改善报告	derivative:P5
+良率数据	npd:P6
+良率监控报表	npd:P7
+装配/公差/材料方案	derivative:P2
+规格确认书（客户签字）	jdm:P1
+认证前置依赖与送样计划	npd:P2
+认证影响评估报告	eco:P2
+认证报告	npd:P5
+认证更新/重认证报告	idr:P3
+认证更新记录	idr:P3
+认证补测/复用确认	derivative:P2,derivative:P4,derivative:P5
+认证路径预判	idr:P1
+认证路线图	npd:P2
+认证路线图初判	npd:P1
+设计冻结评审记录	npd:P3,idr:P2,jdm:P2
+设计变更冻结记录	eco:P2
+设计输入冻结确认（客户）	obt:P1
+试产 Build Record	npd:P6
+试产/首批量产产品	idr:P4
+试产50-300台	npd:P6
+试产良率数据	derivative:P5
+试产计划	npd:P6,jdm:P5
+试产问题关闭报告	derivative:P5
+试产（50-300台）报告	jdm:P5
+资源与供应商确认清单	eco:P1
+软件/固件升级设计包	derivative:P2
+软件功能完整测试报告	npd:P5
+软件变更版本说明	eco:P2
+软件完整测试报告	derivative:P4
+软件架构文档	npd:P3
+软硬件联调报告	npd:P4
+软硬件联调记录	jdm:P3
+迭代立项评审记录	derivative:P1
+迭代量产发布评审记录	derivative:P5
+迭代需求书	derivative:P1
+迭代项目关闭报告	derivative:P6
+迭代项目关闭评审记录	derivative:P6
+迭代项目计划	derivative:P1
+量产产品	npd:P7,jdm:P6,obt:P4
+量产工艺评估报告	npd:P5
+量产测试设备清单	npd:P5
+销量预测模型	npd:P1
+长交期/单一来源料件清单	npd:P2
+问题清单	eco:P3,jdm:P3
+问题清单 (Issue List)	npd:P4
+限度样本	derivative:P4
+限度样本与检验标准	npd:P6
+项目甘特图	npd:P2
+项目计划	idr:P1,jdm:P1,obt:P1
+市场与渠道反馈清单	idr:P5
+版本资料移交清单	idr:P5
+IDR项目关闭报告	idr:P5
+首批量产稳定性报告	idr:P5
+首件样品	obt:P2
+首批量产 Build Record	npd:P7,jdm:P6,obt:P4
+验证与认证评审记录	idr:P3
+验证样机	idr:P3
+首批量产与爬坡记录	npd:P7,eco:P5,derivative:P6,jdm:P6,obt:P4
+稳定期周报与QA结论	npd:P7,eco:P5,derivative:P6,jdm:P6,obt:P4
+遗留问题关闭与受控转交记录	npd:P7,eco:P5,derivative:P6,jdm:P6,obt:P4
+项目关闭评审记录	npd:P7,eco:P5,derivative:P6,jdm:P6,obt:P4
+产品规格基线确认记录	derivative:P1
+六模块执行基线	derivative:P1
+风险声明与评估结论	derivative:P1
+项目计划与RACI	derivative:P1
+DRV Kickoff评审记录	derivative:P1
+验证计划	derivative:P2
+配件定义清单	derivative:P2
+电池/能源系统设计包	derivative:P2
+核心功能部件设计包	derivative:P2
+电子硬件设计包	derivative:P2
+软件/连接需求与设计包	derivative:P2
+产品结构设计包	derivative:P2
+投模评审与开模批准记录	derivative:P2
+ID/CMF 设计包	derivative:P2
+DRV设计冻结评审记录	derivative:P2
+EVT Build Record	derivative:P3
+整机功能与兼容性回归报告	derivative:P3
+软件功能验证报告	derivative:P3
+EVT问题关闭与DVT输入记录	derivative:P3
+电池模块样件与集成记录	derivative:P3
+电池性能与保护专项验证报告	derivative:P3
+核心功能部件样件记录	derivative:P3
+核心功能部件专项验证报告	derivative:P3
+电子硬件样件联调记录	derivative:P3
+电子硬件专项验证报告	derivative:P3
+软件开发联调记录	derivative:P3
+软件接口与异常专项验证报告	derivative:P3
+T1/T2 与结构专项验证报告	derivative:P3
+颜色/材质/工艺样件	derivative:P3
+外观标准与限度样本	derivative:P3
+DRV EVT评审记录	derivative:P3
+DVT Build Record	derivative:P4
+可靠性内部测试报告	derivative:P4
+安规与认证验证报告	derivative:P4
+配件确认记录	derivative:P4
+物流验证报告	derivative:P4
+DVT问题关闭与PVT Readiness记录	derivative:P4
+DRV DVT评审记录	derivative:P4
+治具验收记录	derivative:P5
+EOL与测试程序验收记录	derivative:P5
+PVT试产报告	derivative:P5
+试产良率与问题关闭报告	derivative:P5
+产品文件BOM与量产交付清单	derivative:P5
+认证与运输证据覆盖复核记录	derivative:P5
+DRV量产发布评审记录	derivative:P5

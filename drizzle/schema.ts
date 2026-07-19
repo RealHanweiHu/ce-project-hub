@@ -1,6 +1,7 @@
 import {
   integer,
   serial,
+  type AnyPgColumn,
   pgEnum,
   pgTable,
   text,
@@ -9,12 +10,29 @@ import {
   jsonb,
   boolean,
   bigint,
+  check,
   uniqueIndex,
   index,
   date,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import type { VariantDelta } from "../shared/oem-variant";
 import { SYSTEM_ROLES, type SystemRole } from "../shared/system-roles";
+import type { GateSignoffRequirement, GateSignoffRoundStatus, GateSignoffSlot, GateSignoffStatus } from "../shared/gate-signoffs";
+import type { ProjectChangeScopeDeclaration, ProjectSopRiskLevel, SopRiskAssessment } from "../shared/sop-risk";
+import type { CertificateScopeType, CertificateStatus, CertificateType } from "../shared/certification";
+import {
+  PRODUCT_MODULE_IDS,
+  type ProjectExecutionBaseline,
+} from "../shared/project-track-tailoring";
+import { PROJECT_MEMBER_ROLES, type ProjectMemberRole } from "../shared/project-roles";
+import {
+  KEY_MODULE_STATUSES,
+  KEY_MODULE_TYPE_IDS,
+} from "../shared/key-modules";
+
+export { PROJECT_MEMBER_ROLES } from "../shared/project-roles";
+export type { ProjectMemberRole } from "../shared/project-roles";
 
 export type ProductDefinitionCompetitor = {
   brand?: string;
@@ -133,12 +151,17 @@ export type InsertUser = typeof users.$inferInsert;
 
 export const projectRiskEnum = pgEnum("project_risk", ["low", "medium", "high"]);
 
+/** 项目生命周期：active 进行中 / paused 暂停（可恢复，退出自动化扫描）/ terminated 终止（终局，连带归档） */
+export const PROJECT_LIFECYCLES = ["active", "paused", "terminated"] as const;
+export type ProjectLifecycle = (typeof PROJECT_LIFECYCLES)[number];
+export const projectLifecycleEnum = pgEnum("project_lifecycle", PROJECT_LIFECYCLES);
+
 /**
  * Projects table - stores CE product development project metadata.
  * All phase/task/issue/gate/changelog data live in separate tables.
  */
 /** 项目类型：必须与 shared/sop-templates.ts 的 ProjectCategory / CATEGORY_MAP 保持一致 */
-export const PROJECT_CATEGORIES = ["npd", "eco", "idr", "jdm", "obt"] as const;
+export const PROJECT_CATEGORIES = ["npd", "eco", "derivative", "idr", "jdm", "obt"] as const;
 export const projectCategoryEnum = pgEnum("project_category", PROJECT_CATEGORIES);
 
 export const projects = pgTable("projects", {
@@ -147,11 +170,15 @@ export const projects = pgTable("projects", {
   projectNumber: varchar("projectNumber", { length: 64 }).notNull().default(""),
   /** Product category: maps to SOP template */
   category: projectCategoryEnum("category").notNull().default("npd"),
+  /** 建项时冻结；历史项目继续按原版本展示和执行。 */
+  sopTemplateVersion: varchar("sopTemplateVersion", { length: 32 }).notNull().default("2026-07-v2"),
   /**
    * Project manager user id (FK to users.id).
    * Use JOIN to get display name; no pmName string field.
    */
   pmUserId: integer("pmUserId"),
+  /** Product owner who approves product definition and design-scope changes. */
+  productOwnerUserId: integer("productOwnerUserId"),
   /** 项目描述 / 背景 / 客户 / 价值（立项基础信息） */
   description: text("description"),
   customer: varchar("customer", { length: 256 }),
@@ -170,16 +197,34 @@ export const projects = pgTable("projects", {
   targetDate: varchar("targetDate", { length: 32 }),
   createdBy: integer("createdBy").notNull(),
   archived: boolean("archived").notNull().default(false),
+  /** 生命周期：终止为终局（连带 archived）；暂停可恢复且退出自动化扫描 */
+  lifecycle: projectLifecycleEnum("lifecycle").notNull().default("active"),
+  lifecycleReason: text("lifecycleReason"),
+  lifecycleChangedAt: timestamp("lifecycleChangedAt"),
+  lifecycleChangedBy: integer("lifecycleChangedBy"),
   /** Reserved for future organization/workspace support */
   orgId: integer("orgId"),
-  /** 派生自哪个产品（PLM 脊梁）。现有项目为空。 */
+  /** 项目完成后交付到产品库的独立产品；项目执行期间可以为空。 */
   productId: varchar("productId", { length: 32 }),
+  /** ECO 创建时继承并冻结的完整产品技术基线；发布前必须仍是产品当前基线。 */
+  baseTechnicalBaselineId: varchar("baseTechnicalBaselineId", { length: 32 })
+    .references((): AnyPgColumn => productTechnicalBaselines.id, { onDelete: "restrict" }),
   /** NPD 创建时锁定的产品定义快照，用于项目交接与后续追溯 */
   productDefinitionSnapshotId: integer("productDefinitionSnapshotId"),
-  /** 派生起点版本（量产后项目指向当前 Rev） */
+  /** 历史兼容：旧项目曾记录派生起点 Revision；新项目不再依赖。 */
   baseRevisionId: integer("baseRevisionId"),
-  /** 发布时回填的产出版本 */
+  /** 历史兼容：旧发布曾回填产出 Revision；新发布直接生成产品。 */
   resultRevisionId: integer("resultRevisionId"),
+  /** SOP 风险分级；high 会自动恢复安全/认证验证项并升级 Gate 会签。 */
+  safetyRiskLevel: varchar("safetyRiskLevel", { length: 16 }).$type<ProjectSopRiskLevel>().notNull().default("standard"),
+  regulatoryRiskLevel: varchar("regulatoryRiskLevel", { length: 16 }).$type<ProjectSopRiskLevel>().notNull().default("standard"),
+  /** JDM/OBT 入口冻结：客户输入、料号、商务边界和签核责任人。 */
+  customerInputVersion: varchar("customerInputVersion", { length: 128 }),
+  customerPartNumber: varchar("customerPartNumber", { length: 128 }),
+  commercialBoundary: text("commercialBoundary"),
+  customerSignoffOwnerUserId: integer("customerSignoffOwnerUserId"),
+  inputBaselineFrozenAt: timestamp("inputBaselineFrozenAt"),
+  inputBaselineFrozenBy: integer("inputBaselineFrozenBy"),
   /** 自定义字段值：fieldKey -> value（定义见 custom_field_defs） */
   customFields: jsonb("customFields").$type<Record<string, unknown>>().notNull().default({}),
   /** 每项目周会配置：{ enabled, weekday(0-6), time:"HH:MM", durationMin, title } */
@@ -201,6 +246,34 @@ export const projects = pgTable("projects", {
 export type ProjectRow = typeof projects.$inferSelect;
 export type InsertProject = typeof projects.$inferInsert;
 
+/** Versioned, structured-only declaration consumed by the SOP risk engine. */
+export const projectChangeScopeDeclarations = pgTable(
+  "project_change_scope_declarations",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 })
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    version: integer("version").notNull().default(1),
+    declaration: jsonb("declaration").$type<ProjectChangeScopeDeclaration>().notNull(),
+    assessment: jsonb("assessment").$type<SopRiskAssessment>().notNull(),
+    ruleVersion: varchar("ruleVersion", { length: 64 }).notNull(),
+    declaredBy: integer("declaredBy").notNull(),
+    engineeringConfirmedBy: integer("engineeringConfirmedBy"),
+    engineeringConfirmedAt: timestamp("engineeringConfirmedAt"),
+    qaOrCertConfirmedBy: integer("qaOrCertConfirmedBy"),
+    qaOrCertConfirmedAt: timestamp("qaOrCertConfirmedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    uniqProjectVersion: uniqueIndex("uniq_change_scope_project_version").on(table.projectId, table.version),
+    idxProject: index("idx_change_scope_project").on(table.projectId, table.version),
+  }),
+);
+
+export type ProjectChangeScopeDeclarationRow = typeof projectChangeScopeDeclarations.$inferSelect;
+export type InsertProjectChangeScopeDeclaration = typeof projectChangeScopeDeclarations.$inferInsert;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Project Member Roles
 // ─────────────────────────────────────────────────────────────────────────────
@@ -220,28 +293,6 @@ export type InsertProject = typeof projects.$inferInsert;
  *   scm        - 供应链/采购，可编辑变更记录中的成本相关字段
  *   viewer     - 只读，仅查看，不可修改任何内容
  */
-export const PROJECT_MEMBER_ROLES = [
-  "owner",
-  "manager",
-  "project_manager",
-  "pm",
-  "rd_hw",
-  "rd_sw",
-  "rd_mech",
-  "qa",
-  "scm",
-  "pe",
-  "mfg",
-  "sales",
-  "cert",
-  "battery_safety",
-  "external_customer",
-  "supplier",
-  "viewer",
-] as const;
-
-export type ProjectMemberRole = (typeof PROJECT_MEMBER_ROLES)[number];
-
 export const projectMemberRoleEnum = pgEnum("project_member_role", PROJECT_MEMBER_ROLES);
 
 /**
@@ -259,6 +310,8 @@ export const projectMembers = pgTable(
     userId: integer("userId").notNull(),
     /** Role determines what the member can do in this project */
     role: projectMemberRoleEnum("role").notNull().default("viewer"),
+    /** Additional hats; normalized to exclude owner, duplicates, and the primary role. */
+    extraRoles: jsonb("extraRoles").$type<ProjectMemberRole[]>().notNull().default([]),
     /** Display name for this member's job title (e.g. "硬件工程师", "测试主管") */
     jobTitle: varchar("jobTitle", { length: 64 }),
     invitedBy: integer("invitedBy").notNull(),
@@ -275,6 +328,65 @@ export const projectMembers = pgTable(
 
 export type ProjectMember = typeof projectMembers.$inferSelect;
 export type InsertProjectMember = typeof projectMembers.$inferInsert;
+
+/** Date-bounded delegation of one project role to another natural person. */
+export const projectRoleDelegations = pgTable(
+  "project_role_delegations",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 })
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    role: projectMemberRoleEnum("role").notNull(),
+    fromUserId: integer("fromUserId"),
+    toUserId: integer("toUserId").notNull(),
+    startDate: date("startDate", { mode: "string" }).notNull(),
+    endDate: date("endDate", { mode: "string" }).notNull(),
+    reason: text("reason").notNull(),
+    active: boolean("active").notNull().default(true),
+    createdBy: integer("createdBy").notNull(),
+    revokedBy: integer("revokedBy"),
+    revokedAt: timestamp("revokedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    idxProjectRoleDates: index("idx_project_role_delegations_project_role_dates").on(
+      table.projectId,
+      table.role,
+      table.startDate,
+      table.endDate,
+    ),
+    idxDelegateActive: index("idx_project_role_delegations_delegate_active").on(
+      table.toUserId,
+      table.active,
+    ),
+  }),
+);
+
+export type ProjectRoleDelegation = typeof projectRoleDelegations.$inferSelect;
+export type InsertProjectRoleDelegation = typeof projectRoleDelegations.$inferInsert;
+
+/** System-level last resort reviewers, maintained by admins per professional role. */
+export const projectRoleFallbackReviewers = pgTable(
+  "project_role_fallback_reviewers",
+  {
+    id: serial("id").primaryKey(),
+    role: projectMemberRoleEnum("role").notNull(),
+    userId: integer("userId").notNull(),
+    active: boolean("active").notNull().default(true),
+    createdBy: integer("createdBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    uniqRoleUser: uniqueIndex("uniq_project_role_fallback_reviewer").on(table.role, table.userId),
+    idxRoleActive: index("idx_project_role_fallback_reviewers_role_active").on(table.role, table.active),
+  }),
+);
+
+export type ProjectRoleFallbackReviewer = typeof projectRoleFallbackReviewers.$inferSelect;
+export type InsertProjectRoleFallbackReviewer = typeof projectRoleFallbackReviewers.$inferInsert;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Project Phases (per-project phase state & dates)
@@ -460,6 +572,11 @@ export const projectDeliverableReviews = pgTable(
     reviewedBy: integer("reviewedBy"),
     reviewedAt: timestamp("reviewedAt"),
     reviewNote: text("reviewNote"),
+    /** Role hat used for the final review decision. */
+    actedAsRole: projectMemberRoleEnum("actedAsRole"),
+    /** Active delegation that granted actedAsRole, when applicable. */
+    viaDelegationId: integer("viaDelegationId")
+      .references(() => projectRoleDelegations.id, { onDelete: "set null" }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
   },
@@ -505,6 +622,8 @@ export const projectTasks = pgTable(
     completed: boolean("completed").notNull().default(false),
     /** Task-level instructions / notes */
     instructions: text("instructions"),
+    /** 轻证据一句话结论：随完成动作提交；取消完成时清空 */
+    completionNote: text("completion_note"),
     /** 交付物完成状态：交付物名称 → 是否完成。模板见 shared/task-deliverables.ts */
     deliverables: jsonb("deliverables").$type<Record<string, boolean>>().default({}),
     /**
@@ -515,10 +634,14 @@ export const projectTasks = pgTable(
     visibleRoles: jsonb("visibleRoles").$type<string[]>().default([]),
     /** Assigned user (FK → users.id) */
     assigneeUserId: integer("assigneeUserId"),
+    /** Original unstaffed role while PM/owner temporarily carries this task. */
+    staffingGapRole: projectMemberRoleEnum("staffingGapRole"),
     /** Due date for this task (DATE column, YYYY-MM-DD string at runtime) */
     dueDate: date("dueDate", { mode: "string" }),
     /** 自动排期生成的任务开始日（YYYY-MM-DD） */
     startDate: date("startDate", { mode: "string" }),
+    /** 人工点击「开始」的实际时刻；不得与计划排期 startDate 混用 */
+    actualStartedAt: timestamp("actualStartedAt"),
     /** Task workflow status */
     status: taskStatusEnum("status").notNull().default("todo"),
     /** Timestamp when workflow status last changed */
@@ -527,6 +650,8 @@ export const projectTasks = pgTable(
     priority: taskPriorityEnum("priority").notNull().default("medium"),
     /** Timestamp when task was marked done */
     completedAt: timestamp("completedAt"),
+    /** Stable natural-person submitter for four-eyes checks; unlike updatedBy it is not overwritten by later edits. */
+    completedBy: integer("completedBy"),
     updatedBy: integer("updatedBy"),
     /** 逐任务审批闸门：是否需要审批人通过才计入完成（默认 false → 零回归） */
     requiresApproval: boolean("requiresApproval").notNull().default(false),
@@ -542,6 +667,10 @@ export const projectTasks = pgTable(
     /** 裁决人 + 时间 */
     approvalDecidedBy: integer("approvalDecidedBy"),
     approvalDecidedAt: timestamp("approvalDecidedAt"),
+    /** Role hat used by the approval decision. */
+    approvalActedAsRole: projectMemberRoleEnum("approvalActedAsRole"),
+    approvalViaDelegationId: integer("approvalViaDelegationId")
+      .references(() => projectRoleDelegations.id, { onDelete: "set null" }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
   },
@@ -607,6 +736,8 @@ export const projectIssues = pgTable(
     verifiedAt: timestamp("verifiedAt"),
     /** 溯源：问题挂在产品上（永久），projectId 为来源项目（可空，量产后客诉无项目） */
     productId: varchar("productId", { length: 32 }),
+    /** 受控转轨时复制开放问题，并保留来源问题引用。 */
+    sourceIssueId: integer("sourceIssueId"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
   },
@@ -1069,6 +1200,8 @@ export type GateReviewTraceSnapshot = {
   projectId: string;
   phaseId: string;
   gateName: string;
+  /** Frozen JDM/DRV execution baseline, including the bound risk declaration version. */
+  projectExecutionBaseline?: ProjectExecutionBaseline | null;
   product: {
     id: string;
     productNumber: string;
@@ -1095,9 +1228,22 @@ export type GateReviewTraceSnapshot = {
       refDesignator: string;
       componentProductId: string | null;
       componentRevisionId: number | null;
+      keyModuleId?: string | null;
+      keyModuleSnapshot?: Record<string, unknown> | null;
+      supplierName?: string;
+      unitCost?: string;
       sortOrder: number;
     }>;
   };
+  /** Exact controlled-module selection captured by this Gate. */
+  deliveryModules?: Array<{
+    moduleType: "battery_energy" | "core_function" | "electronics_hardware";
+    moduleId: string;
+    moduleSnapshot: Record<string, unknown>;
+    customerConfirmationRef: string | null;
+  }>;
+  /** BOM/modules/spec/product fingerprint that final release must reproduce. */
+  releaseConfigurationFingerprint?: string;
   customerVariants: Array<{
     id: number;
     variantCode: string;
@@ -1180,6 +1326,9 @@ export const projectGateReviews = pgTable(
     decision: gateDecisionEnum("decision").notNull().default("conditional"),
     /** Conditions if conditional approval */
     conditions: text("conditions"),
+    /** Structured follow-up owner/due date for a conditional decision. */
+    conditionOwnerUserId: integer("conditionOwnerUserId"),
+    conditionDueDate: date("conditionDueDate", { mode: "string" }),
     notes: text("notes"),
     /** Review round number (1 = first, 2 = re-review, etc.) */
     roundNumber: integer("roundNumber").notNull().default(1),
@@ -1205,6 +1354,144 @@ export const projectGateReviews = pgTable(
 
 export type ProjectGateReview = typeof projectGateReviews.$inferSelect;
 export type InsertProjectGateReview = typeof projectGateReviews.$inferInsert;
+
+/** Full requirement snapshot for one Gate round. */
+export const projectGateSignoffRounds = pgTable(
+  "project_gate_signoff_rounds",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 })
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    phaseId: varchar("phaseId", { length: 32 }).notNull(),
+    roundNumber: integer("roundNumber").notNull(),
+    status: varchar("status", { length: 24 }).$type<GateSignoffRoundStatus>().notNull().default("open"),
+    requirements: jsonb("requirements").$type<Record<GateSignoffSlot, GateSignoffRequirement>>().notNull(),
+    riskSnapshot: jsonb("riskSnapshot").$type<{
+      safetyRiskLevel: ProjectSopRiskLevel;
+      regulatoryRiskLevel: ProjectSopRiskLevel;
+      safetyReasons?: string[];
+      regulatoryReasons?: string[];
+    }>().notNull(),
+    sopTemplateVersion: varchar("sopTemplateVersion", { length: 32 }).notNull(),
+    openedBy: integer("openedBy"),
+    openedAt: timestamp("openedAt").defaultNow().notNull(),
+    supersededBy: integer("supersededBy"),
+    supersededAt: timestamp("supersededAt"),
+    supersedeReason: text("supersedeReason"),
+    completedAt: timestamp("completedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    uniqProjectPhaseRound: uniqueIndex("uniq_gate_signoff_round").on(table.projectId, table.phaseId, table.roundNumber),
+    idxOpenRound: index("idx_gate_signoff_round_open").on(table.projectId, table.phaseId, table.status),
+  }),
+);
+
+export type ProjectGateSignoffRound = typeof projectGateSignoffRounds.$inferSelect;
+export type InsertProjectGateSignoffRound = typeof projectGateSignoffRounds.$inferInsert;
+
+/** Project-specific requirement promotions. Reductions are rejected in the router. */
+export const projectGateSignoffAdditions = pgTable(
+  "project_gate_signoff_additions",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 })
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    phaseId: varchar("phaseId", { length: 32 }).notNull(),
+    slot: varchar("slot", { length: 32 }).$type<GateSignoffSlot>().notNull(),
+    requirement: varchar("requirement", { length: 24 }).$type<GateSignoffRequirement>().notNull(),
+    reason: text("reason").notNull(),
+    active: boolean("active").notNull().default(true),
+    addedBy: integer("addedBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    uniqProjectPhaseSlot: uniqueIndex("uniq_gate_signoff_addition_slot").on(table.projectId, table.phaseId, table.slot),
+    idxProjectPhase: index("idx_gate_signoff_additions_project_phase").on(table.projectId, table.phaseId),
+  }),
+);
+
+export type ProjectGateSignoffAddition = typeof projectGateSignoffAdditions.$inferSelect;
+export type InsertProjectGateSignoffAddition = typeof projectGateSignoffAdditions.$inferInsert;
+
+/**
+ * Structured, per-round Gate signatures. The requirement is computed from the
+ * round snapshot and copied onto each signature for auditability.
+ */
+export const projectGateSignoffs = pgTable(
+  "project_gate_signoffs",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 })
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    phaseId: varchar("phaseId", { length: 32 }).notNull(),
+    roundNumber: integer("roundNumber").notNull().default(1),
+    slot: varchar("slot", { length: 32 }).$type<GateSignoffSlot>().notNull(),
+    requirement: varchar("requirement", { length: 24 }).$type<GateSignoffRequirement>().notNull(),
+    status: varchar("status", { length: 24 }).$type<GateSignoffStatus>().notNull().default("pending"),
+    signedBy: integer("signedBy"),
+    signedAt: timestamp("signedAt"),
+    viaDelegationId: integer("viaDelegationId")
+      .references(() => projectRoleDelegations.id, { onDelete: "set null" }),
+    note: text("note"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    uniqProjectPhaseRoundSlot: uniqueIndex("uniq_gate_signoff_round_slot").on(
+      table.projectId,
+      table.phaseId,
+      table.roundNumber,
+      table.slot,
+    ),
+    idxProjectPhaseRound: index("idx_gate_signoffs_project_phase_round").on(
+      table.projectId,
+      table.phaseId,
+      table.roundNumber,
+    ),
+  }),
+);
+
+export type ProjectGateSignoff = typeof projectGateSignoffs.$inferSelect;
+export type InsertProjectGateSignoff = typeof projectGateSignoffs.$inferInsert;
+
+/** Structured post-release evidence; two QA-confirmed periods covering 14 days are required to close. */
+export const projectStabilityReports = pgTable(
+  "project_stability_reports",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 })
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    revisionId: integer("revisionId"),
+    periodStart: date("periodStart", { mode: "string" }).notNull(),
+    periodEnd: date("periodEnd", { mode: "string" }).notNull(),
+    outputQuantity: integer("outputQuantity").notNull().default(0),
+    targetOutputQuantity: integer("targetOutputQuantity").notNull().default(0),
+    fpyBasisPoints: integer("fpyBasisPoints").notNull().default(0),
+    targetFpyBasisPoints: integer("targetFpyBasisPoints").notNull().default(0),
+    capacityAttainmentBasisPoints: integer("capacityAttainmentBasisPoints").notNull().default(0),
+    qualityEvents: text("qualityEvents"),
+    summary: text("summary"),
+    createdBy: integer("createdBy").notNull(),
+    qaConfirmedBy: integer("qaConfirmedBy"),
+    qaConfirmedAt: timestamp("qaConfirmedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    uniqProjectPeriod: uniqueIndex("uniq_stability_report_period").on(table.projectId, table.periodStart, table.periodEnd),
+    idxProject: index("idx_stability_reports_project").on(table.projectId, table.periodEnd),
+  }),
+);
+
+export type ProjectStabilityReport = typeof projectStabilityReports.$inferSelect;
+export type InsertProjectStabilityReport = typeof projectStabilityReports.$inferInsert;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Change Log / Decisions
@@ -1320,6 +1607,8 @@ export const projectFiles = pgTable(
     storageUrl: varchar("storageUrl", { length: 512 }).notNull(),
     /** User id of the uploader */
     uploadedBy: integer("uploadedBy").notNull(),
+    /** 受控转轨时复制元数据并指向原文件，底层对象不重复上传。 */
+    sourceFileId: integer("sourceFileId"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (table) => ({
@@ -1384,6 +1673,8 @@ export const ACTIVITY_ACTIONS = [
   // Release / product lifecycle
   "mp.release",
   "product.definition_confirmed",
+  "delivery_module.bind",
+  "delivery_module.unbind",
   // External approvals
   "approval.submit",
   "approval.approve",
@@ -1504,14 +1795,340 @@ export const products = pgTable("products", {
   lifecycleState: varchar("lifecycleState", { length: 32 }).notNull().default("concept"),
   /** Product manager / product owner for PRD and product version decisions */
   productManagerUserId: integer("productManagerUserId"),
+  /** Close 后承接量产维护、版本变更与 ECO 决策的责任人。 */
+  maintenanceOwnerUserId: integer("maintenanceOwnerUserId"),
+  /** 产品轴售后问题入口的默认责任人。 */
+  afterSalesOwnerUserId: integer("afterSalesOwnerUserId"),
   /** 当前生产版本（FK product_revisions.id，可空） */
   currentRevisionId: integer("currentRevisionId"),
+  /** 当前产品技术基线；技术配置与轻量 Product Revision 分离。 */
+  currentTechnicalBaselineId: varchar("currentTechnicalBaselineId", { length: 32 })
+    .references((): AnyPgColumn => productTechnicalBaselines.id, { onDelete: "set null" }),
   createdBy: integer("createdBy").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
 });
 export type ProductRow = typeof products.$inferSelect;
 export type InsertProduct = typeof products.$inferInsert;
+
+export type KeyModuleEvidenceRef = {
+  type: string;
+  label: string;
+  ref: string;
+};
+
+export const keyModuleTypeEnum = pgEnum(
+  "key_module_type",
+  KEY_MODULE_TYPE_IDS,
+);
+export const keyModuleStatusEnum = pgEnum(
+  "key_module_status",
+  KEY_MODULE_STATUSES,
+);
+
+/**
+ * 受控关键模块：第一阶段只包含电池/能源、核心功能和电子硬件。
+ * approved 后定义字段和内部 BOM 由服务层保持不可变；变更通过 derivedFrom 新建编号。
+ */
+export const keyModules = pgTable(
+  "key_modules",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    moduleNumber: varchar("moduleNumber", { length: 64 }).notNull(),
+    moduleType: keyModuleTypeEnum("moduleType").notNull(),
+    name: varchar("name", { length: 256 }).notNull(),
+    category: varchar("category", { length: 64 }).notNull().default(""),
+    model: varchar("model", { length: 128 }),
+    attributes: jsonb("attributes").$type<Record<string, unknown>>().notNull().default({}),
+    status: keyModuleStatusEnum("status").notNull().default("draft"),
+    derivedFromModuleId: varchar("derivedFromModuleId", { length: 32 })
+      .references((): AnyPgColumn => keyModules.id),
+    evidenceRefs: jsonb("evidenceRefs").$type<KeyModuleEvidenceRef[]>().notNull().default([]),
+    createdBy: integer("createdBy").notNull().references(() => users.id),
+    technicalConfirmedBy: integer("technicalConfirmedBy").references(() => users.id),
+    technicalConfirmedAt: timestamp("technicalConfirmedAt"),
+    approvedBy: integer("approvedBy").references(() => users.id),
+    approvedAt: timestamp("approvedAt"),
+    restrictionReason: text("restrictionReason"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    uniqModuleNumber: uniqueIndex("uniq_key_modules_number").on(table.moduleNumber),
+    idxTypeStatusCategory: index("idx_key_modules_type_status_category").on(
+      table.moduleType,
+      table.status,
+      table.category,
+    ),
+    idxDerivedFrom: index("idx_key_modules_derived_from").on(table.derivedFromModuleId),
+  }),
+);
+
+export const keyModuleItems = pgTable(
+  "key_module_items",
+  {
+    id: serial("id").primaryKey(),
+    moduleId: varchar("moduleId", { length: 32 })
+      .notNull()
+      .references(() => keyModules.id, { onDelete: "cascade" }),
+    partNumber: varchar("partNumber", { length: 64 }).notNull(),
+    name: varchar("name", { length: 256 }).notNull(),
+    spec: text("spec").notNull().default(""),
+    quantity: integer("quantity").notNull().default(1),
+    refDesignator: varchar("refDesignator", { length: 128 }).notNull().default(""),
+    componentProductId: varchar("componentProductId", { length: 32 })
+      .references(() => products.id, { onDelete: "set null" }),
+    sortOrder: integer("sortOrder").notNull().default(0),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    quantityPositive: check(
+      "key_module_items_quantity_positive",
+      sql`${table.quantity} > 0`,
+    ),
+    uniqModulePartPosition: uniqueIndex("uniq_key_module_item_position").on(
+      table.moduleId,
+      table.partNumber,
+      table.refDesignator,
+    ),
+    idxModule: index("idx_key_module_items_module").on(table.moduleId),
+    idxComponentProduct: index("idx_key_module_items_component_product").on(
+      table.componentProductId,
+    ),
+  }),
+);
+
+export type KeyModule = typeof keyModules.$inferSelect;
+export type InsertKeyModule = typeof keyModules.$inferInsert;
+export type KeyModuleItem = typeof keyModuleItems.$inferSelect;
+export type InsertKeyModuleItem = typeof keyModuleItems.$inferInsert;
+
+export const KEY_MODULE_AUDIT_ACTIONS = [
+  "create",
+  "update_draft",
+  "technical_confirm",
+  "return_to_draft",
+  "approve",
+  "restrict",
+  "obsolete",
+  "derive",
+] as const;
+export type KeyModuleAuditAction = (typeof KEY_MODULE_AUDIT_ACTIONS)[number];
+
+/**
+ * Append-only lifecycle history for controlled key modules.
+ *
+ * moduleId and actorId deliberately remain durable scalar identifiers instead
+ * of cascading foreign keys: audit history must survive later master-data or
+ * account cleanup. Migration 0072 also rejects UPDATE/DELETE at the database
+ * boundary so application code cannot rewrite this history.
+ */
+export const keyModuleAuditEvents = pgTable(
+  "key_module_audit_events",
+  {
+    id: serial("id").primaryKey(),
+    moduleId: varchar("moduleId", { length: 32 }).notNull(),
+    action: varchar("action", { length: 32 }).$type<KeyModuleAuditAction>().notNull(),
+    fromStatus: keyModuleStatusEnum("fromStatus"),
+    toStatus: keyModuleStatusEnum("toStatus"),
+    actorId: integer("actorId").notNull(),
+    reason: text("reason"),
+    meta: jsonb("meta").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    validAction: check(
+      "key_module_audit_events_valid_action",
+      sql`${table.action} IN ('create', 'update_draft', 'technical_confirm', 'return_to_draft', 'approve', 'restrict', 'obsolete', 'derive')`,
+    ),
+    idxModuleTimeline: index("idx_key_module_audit_module_timeline").on(
+      table.moduleId,
+      table.createdAt,
+      table.id,
+    ),
+    idxActor: index("idx_key_module_audit_actor").on(table.actorId),
+  }),
+);
+
+export type KeyModuleAuditEvent = typeof keyModuleAuditEvents.$inferSelect;
+export type InsertKeyModuleAuditEvent = typeof keyModuleAuditEvents.$inferInsert;
+
+export const PROJECT_MODULE_KEYS = PRODUCT_MODULE_IDS;
+export const MODULE_REUSE_STATES = ["reused", "not_reused"] as const;
+export const projectModuleKeyEnum = pgEnum(
+  "project_module_key",
+  PROJECT_MODULE_KEYS,
+);
+export const moduleReuseStateEnum = pgEnum(
+  "module_reuse_state",
+  MODULE_REUSE_STATES,
+);
+
+/** 项目完成后发布的不可变产品技术配置，不复用轻量 Product Revision。 */
+export const productTechnicalBaselines = pgTable(
+  "product_technical_baselines",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    productId: varchar("productId", { length: 32 })
+      .notNull()
+      .references(() => products.id, { onDelete: "restrict" }),
+    baselineLabel: varchar("baselineLabel", { length: 64 }).notNull(),
+    sourceProjectId: varchar("sourceProjectId", { length: 32 })
+      .notNull()
+      .references(() => projects.id, { onDelete: "restrict" }),
+    keyModulesSnapshot: jsonb("keyModulesSnapshot")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    bomSnapshot: jsonb("bomSnapshot")
+      .$type<Record<string, unknown>[]>()
+      .notNull()
+      .default([]),
+    specSnapshot: jsonb("specSnapshot")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    releasedBy: integer("releasedBy").notNull().references(() => users.id),
+    releasedAt: timestamp("releasedAt").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    uniqProductBaselineLabel: uniqueIndex("uniq_product_technical_baseline_label").on(
+      table.productId,
+      table.baselineLabel,
+    ),
+    uniqSourceProject: uniqueIndex("uniq_product_technical_baseline_source_project").on(
+      table.sourceProjectId,
+    ),
+    idxProductReleased: index("idx_product_technical_baselines_product_released").on(
+      table.productId,
+      table.releasedAt,
+    ),
+  }),
+);
+
+/** 技术基线中每类关键模块的可查询引用；snapshot 保证历史不随主数据状态漂移。 */
+export const productModuleAssignments = pgTable(
+  "product_module_assignments",
+  {
+    id: serial("id").primaryKey(),
+    technicalBaselineId: varchar("technicalBaselineId", { length: 32 })
+      .notNull()
+      .references(() => productTechnicalBaselines.id, { onDelete: "cascade" }),
+    moduleType: keyModuleTypeEnum("moduleType").notNull(),
+    moduleId: varchar("moduleId", { length: 32 })
+      .notNull()
+      .references(() => keyModules.id, { onDelete: "restrict" }),
+    moduleSnapshot: jsonb("moduleSnapshot")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    uniqBaselineModuleType: uniqueIndex("uniq_product_module_assignment_type").on(
+      table.technicalBaselineId,
+      table.moduleType,
+    ),
+    idxModule: index("idx_product_module_assignments_module").on(table.moduleId),
+  }),
+);
+
+/** 项目创建时锁定的六模块复用状态；物理模块复用时同时锁定精确关键模块。 */
+export const projectModuleBaselines = pgTable(
+  "project_module_baselines",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 })
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    drvModuleKey: projectModuleKeyEnum("drvModuleKey").notNull(),
+    reuseState: moduleReuseStateEnum("reuseState").notNull(),
+    keyModuleId: varchar("keyModuleId", { length: 32 })
+      .references(() => keyModules.id, { onDelete: "restrict" }),
+    sourceProductId: varchar("sourceProductId", { length: 32 })
+      .references(() => products.id, { onDelete: "set null" }),
+    sourceTechnicalBaselineId: varchar("sourceTechnicalBaselineId", { length: 32 })
+      .references(() => productTechnicalBaselines.id, { onDelete: "set null" }),
+    moduleSnapshot: jsonb("moduleSnapshot")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    confirmedBy: integer("confirmedBy").notNull().references(() => users.id),
+    confirmedAt: timestamp("confirmedAt").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    uniqProjectModule: uniqueIndex("uniq_project_module_baseline_key").on(
+      table.projectId,
+      table.drvModuleKey,
+    ),
+    idxKeyModule: index("idx_project_module_baselines_key_module").on(table.keyModuleId),
+    idxSourceProduct: index("idx_project_module_baselines_source_product").on(
+      table.sourceProductId,
+    ),
+    referenceConsistency: check(
+      "project_module_baselines_reference_consistency",
+      sql`(
+        (
+          ${table.drvModuleKey} IN ('battery', 'core_function', 'electronics')
+          AND (
+            (${table.reuseState} = 'reused' AND ${table.keyModuleId} IS NOT NULL)
+            OR (${table.reuseState} = 'not_reused' AND ${table.keyModuleId} IS NULL)
+          )
+        )
+        OR (
+          ${table.drvModuleKey} IN ('software_connectivity', 'structure_mold', 'id_cmf')
+          AND ${table.keyModuleId} IS NULL
+        )
+      )`,
+    ),
+  }),
+);
+
+/**
+ * 项目最终要交付到产品技术基线的三类受控模块。
+ *
+ * 与 DRV 建项复用基线分开：NPD/JDM/OBT 也可在设计收敛后绑定；DRV 则可用
+ * 这里的最终选型覆盖建项时的复用模块。moduleSnapshot 在绑定时盖章，发布后
+ * 继续写入 product_module_assignments，避免主数据后续限制/停用造成历史漂移。
+ */
+export const projectProductModuleBindings = pgTable(
+  "project_product_module_bindings",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 })
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    moduleType: keyModuleTypeEnum("moduleType").notNull(),
+    moduleId: varchar("moduleId", { length: 32 })
+      .notNull()
+      .references(() => keyModules.id, { onDelete: "restrict" }),
+    moduleSnapshot: jsonb("moduleSnapshot")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    /** JDM/OBT 本次最终选型变更对应的客户书面确认（邮件、文件或批准单号）。 */
+    customerConfirmationRef: text("customerConfirmationRef"),
+    boundBy: integer("boundBy").notNull().references(() => users.id),
+    boundAt: timestamp("boundAt").notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    uniqProjectModuleType: uniqueIndex("uniq_project_product_module_type").on(
+      table.projectId,
+      table.moduleType,
+    ),
+    idxModule: index("idx_project_product_module_binding_module").on(table.moduleId),
+  }),
+);
+
+export type ProductTechnicalBaseline = typeof productTechnicalBaselines.$inferSelect;
+export type InsertProductTechnicalBaseline = typeof productTechnicalBaselines.$inferInsert;
+export type ProductModuleAssignment = typeof productModuleAssignments.$inferSelect;
+export type InsertProductModuleAssignment = typeof productModuleAssignments.$inferInsert;
+export type ProjectModuleBaseline = typeof projectModuleBaselines.$inferSelect;
+export type InsertProjectModuleBaseline = typeof projectModuleBaselines.$inferInsert;
+export type ProjectProductModuleBinding = typeof projectProductModuleBindings.$inferSelect;
+export type InsertProjectProductModuleBinding = typeof projectProductModuleBindings.$inferInsert;
 
 export const PRODUCT_DEFINITION_STATUSES = ["draft", "confirmed"] as const;
 export type ProductDefinitionStatus = (typeof PRODUCT_DEFINITION_STATUSES)[number];
@@ -1628,7 +2245,7 @@ export type InsertProductDefinitionChange = typeof productDefinitionChanges.$inf
 export const PRODUCT_REVISION_STATUSES = ["draft", "released", "superseded"] as const;
 export const productRevisionStatusEnum = pgEnum("product_revision_status", PRODUCT_REVISION_STATUSES);
 
-/** 主版本 / Product Revision = 产品型号下的冻结版本（PLM 轴）；版本链由项目串起 */
+/** Product Revision = 包装、印刷、标签等轻微改版记录；不由项目发布生成。 */
 export const productRevisions = pgTable(
   "product_revisions",
   {
@@ -1636,9 +2253,9 @@ export const productRevisions = pgTable(
     productId: varchar("productId", { length: 32 }).notNull(),
     /** Rev A / B / C */
     revisionLabel: varchar("revisionLabel", { length: 16 }).notNull(),
-    /** 父版本（自引用，量产后版本链） */
+    /** 父版本（自引用，轻微改版链） */
     parentRevisionId: integer("parentRevisionId"),
-    /** 产出该版本的来源项目 */
+    /** 历史兼容：旧 Revision 可能记录来源项目；新 Revision 来自产品库轻量变更。 */
     createdByProjectId: varchar("createdByProjectId", { length: 32 }),
     status: productRevisionStatusEnum("status").notNull().default("draft"),
     releasedAt: timestamp("releasedAt"),
@@ -1656,11 +2273,12 @@ export const productRevisions = pgTable(
 export type ProductRevision = typeof productRevisions.$inferSelect;
 export type InsertProductRevision = typeof productRevisions.$inferInsert;
 
-/** 量产发布记录 = 冻结快照（两轴交接点） */
+/** 量产发布记录 = 项目完成后生成/交付独立产品的冻结快照。 */
 export const mpReleases = pgTable("mp_releases", {
   id: serial("id").primaryKey(),
   productId: varchar("productId", { length: 32 }).notNull(),
-  revisionId: integer("revisionId").notNull(),
+  /** 历史发布可能关联 Revision；新发布不生成 Revision，因此为空。 */
+  revisionId: integer("revisionId"),
   projectId: varchar("projectId", { length: 32 }).notNull(),
   /** 外部审批实例 id（如钉钉 MP Release 审批），用于追溯审批来源 */
   externalApprovalInstanceId: integer("externalApprovalInstanceId"),
@@ -1689,11 +2307,545 @@ export const mpReleases = pgTable("mp_releases", {
   followUpOwner: integer("followUpOwner"),
   /** 条件跟进截止日（override 时必填） */
   dueDate: varchar("dueDate", { length: 32 }),
+  /** Unified controlled-condition row; legacy follow-up fields remain as the release-time snapshot. */
+  followUpConditionId: integer("followUpConditionId"),
   releasedBy: integer("releasedBy").notNull(),
   releasedAt: timestamp("releasedAt").defaultNow().notNull(),
 });
 export type MpRelease = typeof mpReleases.$inferSelect;
 export type InsertMpRelease = typeof mpReleases.$inferInsert;
+
+/** Product/revision/project certificate ledger used by deterministic coverage checks. */
+export const productCertificates = pgTable(
+  "product_certificates",
+  {
+    id: serial("id").primaryKey(),
+    productId: varchar("productId", { length: 32 })
+      .notNull()
+      .references(() => products.id, { onDelete: "cascade" }),
+    projectId: varchar("projectId", { length: 32 })
+      .references(() => projects.id, { onDelete: "set null" }),
+    revisionId: integer("revisionId"),
+    type: varchar("type", { length: 48 }).$type<CertificateType>().notNull(),
+    scopeType: varchar("scopeType", { length: 24 }).$type<CertificateScopeType>().notNull(),
+    status: varchar("status", { length: 24 }).$type<CertificateStatus>().notNull().default("draft"),
+    certificateNumber: varchar("certificateNumber", { length: 256 }),
+    issuingBody: varchar("issuingBody", { length: 256 }),
+    targetMarkets: jsonb("targetMarkets").$type<string[]>().notNull().default([]),
+    validFrom: date("validFrom", { mode: "string" }),
+    validUntil: date("validUntil", { mode: "string" }),
+    evidenceFileId: integer("evidenceFileId"),
+    evidenceReference: text("evidenceReference"),
+    reuseApproved: boolean("reuseApproved").notNull().default(false),
+    reuseBasis: text("reuseBasis"),
+    /** 产品轴续期责任与状态；到期提醒不依赖项目仍处于活跃状态。 */
+    renewalOwnerUserId: integer("renewalOwnerUserId"),
+    renewalStatus: varchar("renewalStatus", { length: 24 }).notNull().default("not_started"),
+    renewalNotes: text("renewalNotes"),
+    replacementCertificateId: integer("replacementCertificateId"),
+    reviewedBy: integer("reviewedBy"),
+    reviewedAt: timestamp("reviewedAt"),
+    createdBy: integer("createdBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    idxProductStatus: index("idx_product_certificates_product_status").on(table.productId, table.status),
+    idxProject: index("idx_product_certificates_project").on(table.projectId),
+    uniqProductCertificateNumber: uniqueIndex("uniq_product_certificate_number").on(table.productId, table.type, table.certificateNumber),
+  }),
+);
+export type ProductCertificate = typeof productCertificates.$inferSelect;
+export type InsertProductCertificate = typeof productCertificates.$inferInsert;
+
+export const PROJECT_CONDITION_SOURCE_TYPES = ["gate", "release", "waiver", "certificate", "other"] as const;
+export type ProjectConditionSourceType = (typeof PROJECT_CONDITION_SOURCE_TYPES)[number];
+export const PROJECT_CONDITION_STATUSES = ["open", "closed", "converted_to_eco"] as const;
+export type ProjectConditionStatus = (typeof PROJECT_CONDITION_STATUSES)[number];
+
+/** Controlled conditions/waivers. Extension changes the due date but remains open. */
+export const projectConditions = pgTable(
+  "project_conditions",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 })
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    sourceType: varchar("sourceType", { length: 24 }).$type<ProjectConditionSourceType>().notNull(),
+    sourceId: varchar("sourceId", { length: 64 }),
+    title: varchar("title", { length: 256 }).notNull(),
+    description: text("description").notNull(),
+    ownerUserId: integer("ownerUserId").notNull(),
+    dueDate: date("dueDate", { mode: "string" }).notNull(),
+    status: varchar("status", { length: 24 }).$type<ProjectConditionStatus>().notNull().default("open"),
+    linkedEcoProjectId: varchar("linkedEcoProjectId", { length: 32 }),
+    resolutionNote: text("resolutionNote"),
+    resolvedBy: integer("resolvedBy"),
+    resolvedAt: timestamp("resolvedAt"),
+    createdBy: integer("createdBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    uniqSource: uniqueIndex("uniq_project_condition_source").on(table.sourceType, table.sourceId),
+    idxProjectStatus: index("idx_project_conditions_project_status").on(table.projectId, table.status),
+    idxOwnerStatus: index("idx_project_conditions_owner_status").on(table.ownerUserId, table.status),
+  }),
+);
+export type ProjectCondition = typeof projectConditions.$inferSelect;
+export type InsertProjectCondition = typeof projectConditions.$inferInsert;
+
+export const PROJECT_TRANSITION_STATUSES = ["completed", "cancelled"] as const;
+export type ProjectTransitionStatus = (typeof PROJECT_TRANSITION_STATUSES)[number];
+
+/** 受控转轨采用关旧开新，不原地改写轨道或历史任务。 */
+export const projectTransitions = pgTable(
+  "project_transitions",
+  {
+    id: serial("id").primaryKey(),
+    sourceProjectId: varchar("sourceProjectId", { length: 32 }).notNull(),
+    targetProjectId: varchar("targetProjectId", { length: 32 }).notNull(),
+    fromCategory: varchar("fromCategory", { length: 32 }).notNull(),
+    toCategory: varchar("toCategory", { length: 32 }).notNull(),
+    reason: text("reason").notNull(),
+    migrationSummary: jsonb("migrationSummary").$type<{ issues: number; files: number; members: number }>()
+      .notNull().default({ issues: 0, files: 0, members: 0 }),
+    status: varchar("status", { length: 24 }).$type<ProjectTransitionStatus>().notNull().default("completed"),
+    createdBy: integer("createdBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    uniqSource: uniqueIndex("uniq_project_transition_source").on(table.sourceProjectId),
+    uniqTarget: uniqueIndex("uniq_project_transition_target").on(table.targetProjectId),
+  }),
+);
+export type ProjectTransition = typeof projectTransitions.$inferSelect;
+export type InsertProjectTransition = typeof projectTransitions.$inferInsert;
+
+export const PROJECT_CLOSE_HANDOFF_STATUSES = ["draft", "pending_acceptance", "accepted"] as const;
+export type ProjectCloseHandoffStatus = (typeof PROJECT_CLOSE_HANDOFF_STATUSES)[number];
+export const PROJECT_CLOSE_HANDOFF_ITEM_KEYS = [
+  "controlled_documents",
+  "maintenance_scope",
+  "after_sales_process",
+  "eco_process",
+] as const;
+export type ProjectCloseHandoffItemKey = (typeof PROJECT_CLOSE_HANDOFF_ITEM_KEYS)[number];
+
+/**
+ * 项目关闭前的正式量产移交单。项目团队提交后必须由 maintenanceOwnerUserId
+ * 本人接收；Close Gate 只认可 accepted 状态，不把“PM 自己勾完成”当成交接。
+ */
+export const projectCloseHandoffs = pgTable(
+  "project_close_handoffs",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 })
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    productId: varchar("productId", { length: 32 })
+      .notNull()
+      .references(() => products.id, { onDelete: "restrict" }),
+    revisionId: integer("revisionId"),
+    status: varchar("status", { length: 24 }).$type<ProjectCloseHandoffStatus>().notNull().default("draft"),
+    maintenanceOwnerUserId: integer("maintenanceOwnerUserId").notNull(),
+    afterSalesOwnerUserId: integer("afterSalesOwnerUserId").notNull(),
+    scopeSummary: text("scopeSummary").notNull(),
+    submittedBy: integer("submittedBy"),
+    submittedAt: timestamp("submittedAt"),
+    acceptedBy: integer("acceptedBy"),
+    acceptedAt: timestamp("acceptedAt"),
+    createdBy: integer("createdBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    uniqProject: uniqueIndex("uniq_project_close_handoff_project").on(table.projectId),
+    idxProductStatus: index("idx_project_close_handoff_product_status").on(table.productId, table.status),
+    idxMaintenanceOwner: index("idx_project_close_handoff_owner_status").on(table.maintenanceOwnerUserId, table.status),
+  }),
+);
+export type ProjectCloseHandoff = typeof projectCloseHandoffs.$inferSelect;
+export type InsertProjectCloseHandoff = typeof projectCloseHandoffs.$inferInsert;
+
+/** 固定四项的结构化移交清单；完成项必须同时提供受控证据引用。 */
+export const projectCloseHandoffItems = pgTable(
+  "project_close_handoff_items",
+  {
+    id: serial("id").primaryKey(),
+    handoffId: integer("handoffId")
+      .notNull()
+      .references(() => projectCloseHandoffs.id, { onDelete: "cascade" }),
+    itemKey: varchar("itemKey", { length: 48 }).$type<ProjectCloseHandoffItemKey>().notNull(),
+    completed: boolean("completed").notNull().default(false),
+    evidenceReference: text("evidenceReference"),
+    completedBy: integer("completedBy"),
+    completedAt: timestamp("completedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    uniqHandoffItem: uniqueIndex("uniq_project_close_handoff_item").on(table.handoffId, table.itemKey),
+  }),
+);
+export type ProjectCloseHandoffItem = typeof projectCloseHandoffItems.$inferSelect;
+export type InsertProjectCloseHandoffItem = typeof projectCloseHandoffItems.$inferInsert;
+
+export const PROJECT_TERMINATION_STATUSES = ["draft", "pending_approval", "approved", "rejected", "cancelled"] as const;
+export type ProjectTerminationStatus = (typeof PROJECT_TERMINATION_STATUSES)[number];
+export const PROJECT_TERMINATION_ITEM_KEYS = [
+  "tooling_disposition",
+  "material_disposition",
+  "sample_disposition",
+  "customer_commitments",
+  "finance_contracts",
+  "ip_documents",
+  "knowledge_capture",
+] as const;
+export type ProjectTerminationItemKey = (typeof PROJECT_TERMINATION_ITEM_KEYS)[number];
+
+/** 项目终止前的结构化评审；批准人与编制人必须分离。 */
+export const projectTerminationReviews = pgTable(
+  "project_termination_reviews",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 }).notNull().references(() => projects.id, { onDelete: "cascade" }),
+    status: varchar("status", { length: 24 }).$type<ProjectTerminationStatus>().notNull().default("draft"),
+    reason: text("reason").notNull(),
+    sunkCostSummary: text("sunkCostSummary").notNull(),
+    customerCommunication: text("customerCommunication").notNull(),
+    ownerUserId: integer("ownerUserId").notNull(),
+    approverUserId: integer("approverUserId").notNull(),
+    createdBy: integer("createdBy").notNull(),
+    submittedBy: integer("submittedBy"),
+    submittedAt: timestamp("submittedAt"),
+    approvedBy: integer("approvedBy"),
+    approvedAt: timestamp("approvedAt"),
+    rejectionReason: text("rejectionReason"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    uniqProject: uniqueIndex("uniq_project_termination_review_project").on(table.projectId),
+    idxApproverStatus: index("idx_project_termination_approver_status").on(table.approverUserId, table.status),
+  }),
+);
+export type ProjectTerminationReview = typeof projectTerminationReviews.$inferSelect;
+export type InsertProjectTerminationReview = typeof projectTerminationReviews.$inferInsert;
+
+export const projectTerminationItems = pgTable(
+  "project_termination_items",
+  {
+    id: serial("id").primaryKey(),
+    reviewId: integer("reviewId").notNull().references(() => projectTerminationReviews.id, { onDelete: "cascade" }),
+    itemKey: varchar("itemKey", { length: 48 }).$type<ProjectTerminationItemKey>().notNull(),
+    disposition: text("disposition").notNull(),
+    completed: boolean("completed").notNull().default(false),
+    evidenceReference: text("evidenceReference"),
+    completedBy: integer("completedBy"),
+    completedAt: timestamp("completedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    uniqReviewItem: uniqueIndex("uniq_project_termination_item").on(table.reviewId, table.itemKey),
+  }),
+);
+export type ProjectTerminationItem = typeof projectTerminationItems.$inferSelect;
+export type InsertProjectTerminationItem = typeof projectTerminationItems.$inferInsert;
+
+export const PRODUCT_SERVICE_CASE_SEVERITIES = ["P0", "P1", "P2", "P3"] as const;
+export type ProductServiceCaseSeverity = (typeof PRODUCT_SERVICE_CASE_SEVERITIES)[number];
+export const PRODUCT_SERVICE_CASE_STATUSES = ["open", "in_progress", "resolved", "closed"] as const;
+export type ProductServiceCaseStatus = (typeof PRODUCT_SERVICE_CASE_STATUSES)[number];
+
+/** 产品轴的轻量售后入口；必要时可关联到由同一入口创建的 ECO 项目。 */
+export const productServiceCases = pgTable(
+  "product_service_cases",
+  {
+    id: serial("id").primaryKey(),
+    caseNumber: varchar("caseNumber", { length: 64 }).notNull(),
+    productId: varchar("productId", { length: 32 })
+      .notNull()
+      .references(() => products.id, { onDelete: "cascade" }),
+    revisionId: integer("revisionId"),
+    sourceProjectId: varchar("sourceProjectId", { length: 32 })
+      .references(() => projects.id, { onDelete: "set null" }),
+    title: varchar("title", { length: 256 }).notNull(),
+    description: text("description").notNull(),
+    severity: varchar("severity", { length: 8 }).$type<ProductServiceCaseSeverity>().notNull().default("P2"),
+    status: varchar("status", { length: 24 }).$type<ProductServiceCaseStatus>().notNull().default("open"),
+    ownerUserId: integer("ownerUserId").notNull(),
+    linkedEcoProjectId: varchar("linkedEcoProjectId", { length: 32 }),
+    resolutionNote: text("resolutionNote"),
+    createdBy: integer("createdBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    uniqCaseNumber: uniqueIndex("uniq_product_service_case_number").on(table.caseNumber),
+    idxProductStatus: index("idx_product_service_cases_product_status").on(table.productId, table.status),
+    idxOwnerStatus: index("idx_product_service_cases_owner_status").on(table.ownerUserId, table.status),
+  }),
+);
+export type ProductServiceCase = typeof productServiceCases.$inferSelect;
+export type InsertProductServiceCase = typeof productServiceCases.$inferInsert;
+
+export const PRODUCT_WAIVER_STATUSES = [
+  "draft", "pending_approval", "approved", "rejected", "expired", "closed", "converted_to_eco", "cancelled",
+] as const;
+export type ProductWaiverStatus = (typeof PRODUCT_WAIVER_STATUSES)[number];
+export const PRODUCT_WAIVER_SCOPE_TYPES = ["lot", "batch", "quantity", "timeboxed"] as const;
+export type ProductWaiverScopeType = (typeof PRODUCT_WAIVER_SCOPE_TYPES)[number];
+
+/** 量产让步/临时代料：产品轴记录，限定批次/数量/期限并要求独立批准。 */
+export const productWaivers = pgTable(
+  "product_waivers",
+  {
+    id: serial("id").primaryKey(),
+    waiverNumber: varchar("waiverNumber", { length: 64 }).notNull(),
+    productId: varchar("productId", { length: 32 }).notNull().references(() => products.id, { onDelete: "cascade" }),
+    projectId: varchar("projectId", { length: 32 }).references(() => projects.id, { onDelete: "set null" }),
+    revisionId: integer("revisionId"),
+    title: varchar("title", { length: 256 }).notNull(),
+    deviationDescription: text("deviationDescription").notNull(),
+    impactAssessment: text("impactAssessment").notNull(),
+    containmentPlan: text("containmentPlan").notNull(),
+    scopeType: varchar("scopeType", { length: 24 }).$type<ProductWaiverScopeType>().notNull(),
+    lotOrBatch: varchar("lotOrBatch", { length: 256 }),
+    quantityLimit: integer("quantityLimit"),
+    affectedPartNumbers: jsonb("affectedPartNumbers").$type<string[]>().notNull().default([]),
+    effectiveFrom: date("effectiveFrom", { mode: "string" }).notNull(),
+    expiresOn: date("expiresOn", { mode: "string" }).notNull(),
+    riskLevel: varchar("riskLevel", { length: 16 }).notNull().default("medium"),
+    status: varchar("status", { length: 24 }).$type<ProductWaiverStatus>().notNull().default("draft"),
+    ownerUserId: integer("ownerUserId").notNull(),
+    approverUserId: integer("approverUserId").notNull(),
+    evidenceReference: text("evidenceReference"),
+    linkedEcoProjectId: varchar("linkedEcoProjectId", { length: 32 }),
+    resolutionNote: text("resolutionNote"),
+    createdBy: integer("createdBy").notNull(),
+    submittedBy: integer("submittedBy"),
+    submittedAt: timestamp("submittedAt"),
+    approvedBy: integer("approvedBy"),
+    approvedAt: timestamp("approvedAt"),
+    resolvedBy: integer("resolvedBy"),
+    resolvedAt: timestamp("resolvedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    uniqNumber: uniqueIndex("uniq_product_waiver_number").on(table.waiverNumber),
+    idxProductStatusExpiry: index("idx_product_waiver_status_expiry").on(table.productId, table.status, table.expiresOn),
+    idxApproverStatus: index("idx_product_waiver_approver_status").on(table.approverUserId, table.status),
+  }),
+);
+export type ProductWaiver = typeof productWaivers.$inferSelect;
+export type InsertProductWaiver = typeof productWaivers.$inferInsert;
+
+/** 证书续期提醒去重；同一有效期的 90/30 天提醒各发送一次。 */
+export const certificateRenewalAlerts = pgTable(
+  "certificate_renewal_alerts",
+  {
+    id: serial("id").primaryKey(),
+    certificateId: integer("certificateId").notNull().references(() => productCertificates.id, { onDelete: "cascade" }),
+    validUntil: date("validUntil", { mode: "string" }).notNull(),
+    leadDays: integer("leadDays").notNull(),
+    recipientUserId: integer("recipientUserId").notNull(),
+    sentAt: timestamp("sentAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    uniqReminder: uniqueIndex("uniq_certificate_renewal_alert").on(table.certificateId, table.validUntil, table.leadDays),
+  }),
+);
+export type CertificateRenewalAlert = typeof certificateRenewalAlerts.$inferSelect;
+
+export const PROJECT_EXPENSE_CATEGORIES = ["tooling", "certification", "nre", "prototype", "travel", "other"] as const;
+export type ProjectExpenseCategory = (typeof PROJECT_EXPENSE_CATEGORIES)[number];
+export const PROJECT_EXPENSE_STATUSES = ["planned", "committed", "paid", "cancelled"] as const;
+export type ProjectExpenseStatus = (typeof PROJECT_EXPENSE_STATUSES)[number];
+
+/** 项目性支出。金额以最小货币单位存储，跨币种永不直接汇总。 */
+export const projectExpenses = pgTable(
+  "project_expenses",
+  {
+    id: serial("id").primaryKey(),
+    projectId: varchar("projectId", { length: 32 })
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    category: varchar("category", { length: 24 }).$type<ProjectExpenseCategory>().notNull(),
+    title: varchar("title", { length: 256 }).notNull(),
+    supplier: varchar("supplier", { length: 256 }),
+    currency: varchar("currency", { length: 3 }).notNull().default("CNY"),
+    budgetAmountMinor: integer("budgetAmountMinor").notNull().default(0),
+    actualAmountMinor: integer("actualAmountMinor").notNull().default(0),
+    status: varchar("status", { length: 24 }).$type<ProjectExpenseStatus>().notNull().default("planned"),
+    ownerUserId: integer("ownerUserId").notNull(),
+    occurredDate: date("occurredDate", { mode: "string" }),
+    evidenceReference: text("evidenceReference"),
+    notes: text("notes"),
+    createdBy: integer("createdBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    idxProjectStatus: index("idx_project_expenses_project_status").on(table.projectId, table.status),
+    idxOwnerStatus: index("idx_project_expenses_owner_status").on(table.ownerUserId, table.status),
+  }),
+);
+export type ProjectExpense = typeof projectExpenses.$inferSelect;
+export type InsertProjectExpense = typeof projectExpenses.$inferInsert;
+
+export const PRODUCT_SOFTWARE_RELEASE_STATUSES = [
+  "draft", "pending_validation", "validated", "staged", "released", "rolled_back", "cancelled",
+] as const;
+export type ProductSoftwareReleaseStatus = (typeof PRODUCT_SOFTWARE_RELEASE_STATUSES)[number];
+
+/** 非安全相关的软件/固件轻量发版单；安全相关变更必须转入 ECO。 */
+export const productSoftwareReleases = pgTable(
+  "product_software_releases",
+  {
+    id: serial("id").primaryKey(),
+    releaseNumber: varchar("releaseNumber", { length: 64 }).notNull(),
+    productId: varchar("productId", { length: 32 })
+      .notNull()
+      .references(() => products.id, { onDelete: "cascade" }),
+    /** 软件有自己的版本号，不依赖包装/印刷类 Product Revision。 */
+    baseRevisionId: integer("baseRevisionId"),
+    version: varchar("version", { length: 64 }).notNull(),
+    status: varchar("status", { length: 24 }).$type<ProductSoftwareReleaseStatus>().notNull().default("draft"),
+    scopeSummary: text("scopeSummary").notNull(),
+    releaseNotes: text("releaseNotes").notNull(),
+    compatibilityNotes: text("compatibilityNotes").notNull(),
+    safetyRelated: boolean("safetyRelated").notNull().default(false),
+    bomOrManufacturingImpact: boolean("bomOrManufacturingImpact").notNull().default(false),
+    regressionEvidenceReference: text("regressionEvidenceReference").notNull(),
+    rolloutPlan: text("rolloutPlan").notNull(),
+    rollbackPlan: text("rollbackPlan").notNull(),
+    rolloutPercent: integer("rolloutPercent").notNull().default(0),
+    qaOwnerUserId: integer("qaOwnerUserId").notNull(),
+    submittedBy: integer("submittedBy"),
+    submittedAt: timestamp("submittedAt"),
+    validatedBy: integer("validatedBy"),
+    validatedAt: timestamp("validatedAt"),
+    releasedBy: integer("releasedBy"),
+    releasedAt: timestamp("releasedAt"),
+    rolledBackBy: integer("rolledBackBy"),
+    rolledBackAt: timestamp("rolledBackAt"),
+    rollbackReason: text("rollbackReason"),
+    createdBy: integer("createdBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    uniqReleaseNumber: uniqueIndex("uniq_product_software_release_number").on(table.releaseNumber),
+    uniqProductVersion: uniqueIndex("uniq_product_software_release_version").on(table.productId, table.version),
+    idxProductStatus: index("idx_product_software_releases_product_status").on(table.productId, table.status),
+    idxQaStatus: index("idx_product_software_releases_qa_status").on(table.qaOwnerUserId, table.status),
+  }),
+);
+export type ProductSoftwareRelease = typeof productSoftwareReleases.$inferSelect;
+export type InsertProductSoftwareRelease = typeof productSoftwareReleases.$inferInsert;
+
+export const PRODUCT_EOL_PLAN_STATUSES = ["draft", "pending_approval", "approved", "completed", "cancelled"] as const;
+export type ProductEolPlanStatus = (typeof PRODUCT_EOL_PLAN_STATUSES)[number];
+export const PRODUCT_EOL_ITEM_KEYS = [
+  "customer_notice",
+  "last_time_buy",
+  "inventory_disposition",
+  "supplier_shutdown",
+  "service_spares_commitment",
+  "certificate_records",
+  "replacement_strategy",
+] as const;
+export type ProductEolItemKey = (typeof PRODUCT_EOL_ITEM_KEYS)[number];
+
+/** 产品停产方案。只有批准且清单完整后才能把产品生命周期置为 eol。 */
+export const productEolPlans = pgTable(
+  "product_eol_plans",
+  {
+    id: serial("id").primaryKey(),
+    productId: varchar("productId", { length: 32 })
+      .notNull()
+      .references(() => products.id, { onDelete: "cascade" }),
+    status: varchar("status", { length: 24 }).$type<ProductEolPlanStatus>().notNull().default("draft"),
+    reason: text("reason").notNull(),
+    lastOrderDate: date("lastOrderDate", { mode: "string" }).notNull(),
+    lastShipDate: date("lastShipDate", { mode: "string" }).notNull(),
+    serviceEndDate: date("serviceEndDate", { mode: "string" }).notNull(),
+    sparePartsYears: integer("sparePartsYears").notNull(),
+    inventoryDisposition: text("inventoryDisposition").notNull(),
+    customerCommunicationPlan: text("customerCommunicationPlan").notNull(),
+    supplierExitPlan: text("supplierExitPlan").notNull(),
+    replacementProductId: varchar("replacementProductId", { length: 32 }),
+    ownerUserId: integer("ownerUserId").notNull(),
+    approverUserId: integer("approverUserId").notNull(),
+    submittedBy: integer("submittedBy"),
+    submittedAt: timestamp("submittedAt"),
+    approvedBy: integer("approvedBy"),
+    approvedAt: timestamp("approvedAt"),
+    completedBy: integer("completedBy"),
+    completedAt: timestamp("completedAt"),
+    cancelledBy: integer("cancelledBy"),
+    cancelledAt: timestamp("cancelledAt"),
+    cancellationReason: text("cancellationReason"),
+    createdBy: integer("createdBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    uniqProduct: uniqueIndex("uniq_product_eol_plan_product").on(table.productId),
+    idxOwnerStatus: index("idx_product_eol_plans_owner_status").on(table.ownerUserId, table.status),
+    idxApproverStatus: index("idx_product_eol_plans_approver_status").on(table.approverUserId, table.status),
+  }),
+);
+export type ProductEolPlan = typeof productEolPlans.$inferSelect;
+export type InsertProductEolPlan = typeof productEolPlans.$inferInsert;
+
+export const productEolPlanItems = pgTable(
+  "product_eol_plan_items",
+  {
+    id: serial("id").primaryKey(),
+    planId: integer("planId")
+      .notNull()
+      .references(() => productEolPlans.id, { onDelete: "cascade" }),
+    itemKey: varchar("itemKey", { length: 48 }).$type<ProductEolItemKey>().notNull(),
+    completed: boolean("completed").notNull().default(false),
+    evidenceReference: text("evidenceReference"),
+    completedBy: integer("completedBy"),
+    completedAt: timestamp("completedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    uniqPlanItem: uniqueIndex("uniq_product_eol_plan_item").on(table.planId, table.itemKey),
+  }),
+);
+export type ProductEolPlanItem = typeof productEolPlanItems.$inferSelect;
+export type InsertProductEolPlanItem = typeof productEolPlanItems.$inferInsert;
+
+/** 产品轴治理操作的不可变审计日志（软件发版、EOL 等无 projectId 的动作）。 */
+export const productGovernanceEvents = pgTable(
+  "product_governance_events",
+  {
+    id: serial("id").primaryKey(),
+    productId: varchar("productId", { length: 32 })
+      .notNull()
+      .references(() => products.id, { onDelete: "cascade" }),
+    entityType: varchar("entityType", { length: 32 }).notNull(),
+    entityId: varchar("entityId", { length: 64 }).notNull(),
+    action: varchar("action", { length: 64 }).notNull(),
+    actorUserId: integer("actorUserId").notNull(),
+    snapshot: jsonb("snapshot").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    idxProductCreated: index("idx_product_governance_events_product_created").on(table.productId, table.createdAt),
+    idxEntity: index("idx_product_governance_events_entity").on(table.entityType, table.entityId),
+  }),
+);
+export type ProductGovernanceEvent = typeof productGovernanceEvents.$inferSelect;
+export type InsertProductGovernanceEvent = typeof productGovernanceEvents.$inferInsert;
 
 export const dingtalkApprovalConfigs = pgTable(
   "dingtalk_approval_configs",
@@ -1857,6 +3009,11 @@ export const bomItems = pgTable(
     refDesignator: varchar("refDesignator", { length: 128 }).notNull().default(""),
     componentProductId: varchar("componentProductId", { length: 32 }),
     componentRevisionId: integer("componentRevisionId"),
+    /** 受控关键模块引用；普通物料行为空。 */
+    keyModuleId: varchar("keyModuleId", { length: 32 })
+      .references(() => keyModules.id, { onDelete: "restrict" }),
+    /** 项目创建/发布时的模块快照，避免主数据后续限制或停用导致历史漂移。 */
+    keyModuleSnapshot: jsonb("keyModuleSnapshot").$type<Record<string, unknown>>(),
     supplierName: varchar("supplierName", { length: 128 }).notNull().default(""),
     unitCost: varchar("unitCost", { length: 64 }).notNull().default(""),
     sortOrder: integer("sortOrder").notNull().default(0),
@@ -1866,6 +3023,7 @@ export const bomItems = pgTable(
     idxRevision: index("idx_bom_revision").on(t.revisionId),
     idxProject: index("idx_bom_project").on(t.projectId),
     idxComponent: index("idx_bom_component").on(t.componentProductId),
+    idxKeyModule: index("idx_bom_key_module").on(t.keyModuleId),
   })
 );
 export type BomItem = typeof bomItems.$inferSelect;
@@ -1935,7 +3093,7 @@ export const automationRuns = pgTable(
     projectId: varchar("projectId", { length: 32 }),
     eventType: varchar("eventType", { length: 64 }).notNull(),
     entityType: varchar("entityType", { length: 32 }).notNull(),
-    entityId: varchar("entityId", { length: 64 }),
+    entityId: varchar("entityId", { length: 128 }),
     status: varchar("status", { length: 16 }).notNull(),
     recipients: jsonb("recipients").$type<unknown>().default([]),
     detail: text("detail"),
@@ -1953,6 +3111,33 @@ export const automationRuns = pgTable(
 export type AutomationRunRow = typeof automationRuns.$inferSelect;
 export type InsertAutomationRun = typeof automationRuns.$inferInsert;
 
+/**
+ * Atomic automation side-effect claim. Runs remain append-only audit rows;
+ * this table owns the stable uniqueness key, lease and last successful fire.
+ */
+export const automationClaims = pgTable(
+  "automation_claims",
+  {
+    claimKey: varchar("claimKey", { length: 256 }).primaryKey(),
+    ruleKey: varchar("ruleKey", { length: 64 }).notNull(),
+    projectId: varchar("projectId", { length: 32 }),
+    entityId: varchar("entityId", { length: 128 }),
+    sourceActivityLogId: integer("sourceActivityLogId"),
+    token: varchar("token", { length: 64 }).notNull(),
+    status: varchar("status", { length: 16 }).notNull().default("running"),
+    claimedAt: timestamp("claimedAt").defaultNow().notNull(),
+    lastFiredAt: timestamp("lastFiredAt"),
+    lastError: text("lastError"),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (t) => ({
+    idxRuleProject: index("idx_automation_claims_rule_project").on(t.ruleKey, t.projectId),
+    idxSourceLog: index("idx_automation_claims_source_log").on(t.sourceActivityLogId),
+  })
+);
+export type AutomationClaim = typeof automationClaims.$inferSelect;
+export type InsertAutomationClaim = typeof automationClaims.$inferInsert;
+
 // ── 行动项：明确指派给个人、可闭环、可去重的「事找人」底座 ────────────────
 export const ACTION_ITEM_KINDS = [
   "task_approval",
@@ -1963,6 +3148,9 @@ export const ACTION_ITEM_KINDS = [
   "critical_issue",
   "delay_impact_notify",
   "mp_release_confirm",
+  "condition_followup",
+  "handoff_acceptance",
+  "task_ready",
 ] as const;
 export type ActionItemKind = (typeof ACTION_ITEM_KINDS)[number];
 export const actionItemKindEnum = pgEnum("action_item_kind", ACTION_ITEM_KINDS);
@@ -2021,6 +3209,61 @@ export const actionItems = pgTable(
 export type ActionItem = typeof actionItems.$inferSelect;
 export type InsertActionItem = typeof actionItems.$inferInsert;
 
+export const SOP_CHANGE_STATUSES = ["draft", "pending_approval", "approved", "rejected", "published", "cancelled"] as const;
+export type SopChangeStatus = (typeof SOP_CHANGE_STATUSES)[number];
+
+/** SOP 自身的受控变更申请；发布记录不直接改写任何历史项目。 */
+export const sopChangeRequests = pgTable(
+  "sop_change_requests",
+  {
+    id: serial("id").primaryKey(),
+    requestNumber: varchar("requestNumber", { length: 64 }).notNull(),
+    title: varchar("title", { length: 256 }).notNull(),
+    currentVersion: varchar("currentVersion", { length: 32 }).notNull(),
+    proposedVersion: varchar("proposedVersion", { length: 32 }).notNull(),
+    affectedTracks: jsonb("affectedTracks").$type<string[]>().notNull().default([]),
+    changeSummary: text("changeSummary").notNull(),
+    rationale: text("rationale").notNull(),
+    impactAnalysis: text("impactAnalysis").notNull(),
+    migrationStrategy: text("migrationStrategy").notNull(),
+    rollbackPlan: text("rollbackPlan").notNull(),
+    effectiveDate: date("effectiveDate", { mode: "string" }).notNull(),
+    status: varchar("status", { length: 24 }).$type<SopChangeStatus>().notNull().default("draft"),
+    requesterUserId: integer("requesterUserId").notNull(),
+    approverUserId: integer("approverUserId").notNull(),
+    approvalNote: text("approvalNote"),
+    submittedAt: timestamp("submittedAt"),
+    approvedAt: timestamp("approvedAt"),
+    publishedAt: timestamp("publishedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (table) => ({
+    uniqRequestNumber: uniqueIndex("uniq_sop_change_request_number").on(table.requestNumber),
+    uniqPublishedVersion: uniqueIndex("uniq_sop_published_version").on(table.proposedVersion).where(sql`${table.status} = 'published'`),
+    idxApproverStatus: index("idx_sop_change_approver_status").on(table.approverUserId, table.status),
+  }),
+);
+export type SopChangeRequest = typeof sopChangeRequests.$inferSelect;
+export type InsertSopChangeRequest = typeof sopChangeRequests.$inferInsert;
+
+/** SOP 申请的不可变事件流。 */
+export const sopChangeEvents = pgTable(
+  "sop_change_events",
+  {
+    id: serial("id").primaryKey(),
+    requestId: integer("requestId").notNull().references(() => sopChangeRequests.id, { onDelete: "cascade" }),
+    action: varchar("action", { length: 48 }).notNull(),
+    actorUserId: integer("actorUserId").notNull(),
+    snapshot: jsonb("snapshot").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    idxRequestCreated: index("idx_sop_change_event_request_created").on(table.requestId, table.createdAt),
+  }),
+);
+export type SopChangeEvent = typeof sopChangeEvents.$inferSelect;
+
 // ── 调度心跳：单实例巡检状态 + 便宜 DB 锁 ──────────────────────────────────
 export const automationHeartbeats = pgTable("automation_heartbeats", {
   schedulerKey: varchar("schedulerKey", { length: 64 }).primaryKey(),
@@ -2062,3 +3305,43 @@ export const customFieldDefs = pgTable(
 );
 export type CustomFieldDef = typeof customFieldDefs.$inferSelect;
 export type InsertCustomFieldDef = typeof customFieldDefs.$inferInsert;
+
+// ── 项目集（手动将若干项目组合成一个集合，如「2027 上海展」「A客户」）───────────
+/** 项目集：跨产品线/类别的人工分组，与产品库（结构性归属）正交。 */
+export const projectCollections = pgTable(
+  "project_collections",
+  {
+    /** col_<nanoid(12)> */
+    id: varchar("id", { length: 32 }).primaryKey(),
+    name: varchar("name", { length: 128 }).notNull(),
+    description: text("description"),
+    createdBy: integer("createdBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+  },
+  (t) => ({ uqName: uniqueIndex("uq_project_collection_name").on(t.name) })
+);
+export type ProjectCollection = typeof projectCollections.$inferSelect;
+export type InsertProjectCollection = typeof projectCollections.$inferInsert;
+
+/** 项目↔项目集：一个项目最多属于一个项目集；重新归类时移动到新的项目集。 */
+export const projectCollectionItems = pgTable(
+  "project_collection_items",
+  {
+    id: serial("id").primaryKey(),
+    collectionId: varchar("collectionId", { length: 32 })
+      .notNull()
+      .references(() => projectCollections.id, { onDelete: "cascade" }),
+    projectId: varchar("projectId", { length: 32 })
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    addedBy: integer("addedBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    uqProject: uniqueIndex("uniq_project_collection_membership").on(t.projectId),
+    idxCollection: index("idx_collection_items_collection").on(t.collectionId),
+  })
+);
+export type ProjectCollectionItem = typeof projectCollectionItems.$inferSelect;
+export type InsertProjectCollectionItem = typeof projectCollectionItems.$inferInsert;

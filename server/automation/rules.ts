@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { shanghaiDayNumber } from "../../shared/shanghai-date";
 
 export const AUTOMATION_RULE_KEYS = [
   "overdue_reminder",
@@ -14,6 +15,8 @@ export const AUTOMATION_RULE_KEYS = [
   "definition_confirmed_notify",
   "gate_decision_notify",
   "phase_advanced_notify",
+  "weekly_meeting_reminder",
+  "task_ready_notify",
 ] as const;
 
 export type AutomationRuleKey = (typeof AUTOMATION_RULE_KEYS)[number];
@@ -39,6 +42,8 @@ export type AutomationEvent = {
   before?: Record<string, unknown> | null;
   after?: Record<string, unknown> | null;
   actorId?: number | null;
+  /** Stable activity-log source id used to make tailer replays idempotent. */
+  sourceActivityLogId?: number | null;
   now?: Date | string;
   impact?: import("../../shared/delay-impact").DelayImpact;
 };
@@ -62,7 +67,7 @@ const overdueConfigSchema = z.object({
   graceDays: z.number().int().min(0).default(0),
   cadenceHours: z.number().int().min(1).default(24),
   scope: z.enum(["tasks", "issues", "both"]).default("both"),
-  notifyRoles: z.array(z.enum(["assignee", "pm"])).default(["assignee", "pm"]),
+  notifyRoles: z.array(z.enum(["assignee", "pm"])).default(["assignee"]),
   pushGroup: z.boolean().default(false),
 });
 
@@ -87,10 +92,10 @@ const mpReleaseConfigSchema = z.object({
 });
 
 const dueSoonConfigSchema = z.object({
-  dueSoonDays: z.number().int().min(1).default(2),
+  dueSoonDays: z.number().int().min(1).max(14).default(2),
   cadenceHours: z.number().int().min(1).default(24),
   scope: z.enum(["tasks", "issues", "both"]).default("both"),
-  notifyRoles: z.array(z.enum(["assignee", "pm"])).default(["assignee", "pm"]),
+  notifyRoles: z.array(z.enum(["assignee", "pm"])).default(["assignee"]),
   pushGroup: z.boolean().default(false),
 });
 
@@ -119,9 +124,12 @@ const delayImpactConfigSchema = z.object({
 });
 
 const exceptionEscalationConfigSchema = z.object({
+  // 责任人层默认第 2 天才升级：day0 起每日 ping 责任人比旧默认（2 天）更吵，
+  // 与「摘要 + 增量升级」的降噪目标相反；逾期类的责任人提醒已由每日摘要覆盖
+  // （见 exceptionEscalationRoles 对 overdue_task 的抑制）。
   assigneeAfterDays: z.number().int().min(0).default(2),
-  pmAfterDays: z.number().int().min(0).default(5),
-  managerAfterDays: z.number().int().min(0).default(10),
+  pmAfterDays: z.number().int().min(0).default(2),
+  managerAfterDays: z.number().int().min(0).default(7),
   cadenceHours: z.number().int().min(1).default(24),
   include: z.object({
     overdueTasks: z.boolean().default(true),
@@ -149,6 +157,9 @@ const phaseAdvancedConfigSchema = z.object({
   pushGroup: z.boolean().default(true),
 });
 
+const weeklyMeetingConfigSchema = z.object({});
+const taskReadyConfigSchema = z.object({});
+
 export type OverdueConfig = z.infer<typeof overdueConfigSchema>;
 export type HighSeverityIssueConfig = z.infer<typeof highSeverityIssueConfigSchema>;
 export type StatusChangeConfig = z.infer<typeof statusChangeConfigSchema>;
@@ -162,6 +173,8 @@ export type ExceptionEscalationConfig = z.infer<typeof exceptionEscalationConfig
 export type DefinitionConfirmedConfig = z.infer<typeof definitionConfirmedConfigSchema>;
 export type GateDecisionConfig = z.infer<typeof gateDecisionConfigSchema>;
 export type PhaseAdvancedConfig = z.infer<typeof phaseAdvancedConfigSchema>;
+export type WeeklyMeetingConfig = z.infer<typeof weeklyMeetingConfigSchema>;
+export type TaskReadyConfig = z.infer<typeof taskReadyConfigSchema>;
 export type AutomationRuleConfig =
   | OverdueConfig
   | HighSeverityIssueConfig
@@ -175,7 +188,9 @@ export type AutomationRuleConfig =
   | ExceptionEscalationConfig
   | DefinitionConfirmedConfig
   | GateDecisionConfig
-  | PhaseAdvancedConfig;
+  | PhaseAdvancedConfig
+  | WeeklyMeetingConfig
+  | TaskReadyConfig;
 
 export type BuiltInAutomationRule = {
   key: AutomationRuleKey;
@@ -189,12 +204,79 @@ export type BuiltInAutomationRule = {
   buildMessage: (event: AutomationEvent, config: AutomationRuleConfig, ctx: AutomationMessageContext) => AutomationMessage;
 };
 
+/**
+ * Versioned default reconciliation for rows seeded by older deployments.
+ *
+ * Runtime applies these only when updatedBy is null AND the complete stored
+ * value still equals the known legacy default. Admin-customized rows are never
+ * overwritten. Keeping this beside the schemas makes the old/new pair
+ * reviewable when defaults change again.
+ */
+export const AUTOMATION_NOTIFICATION_LAYERING_DEFAULT_CHANGES = [
+  {
+    ruleKey: "overdue_reminder",
+    legacyEnabled: true,
+    nextEnabled: false,
+    legacyConfig: {
+      graceDays: 0,
+      cadenceHours: 24,
+      scope: "both",
+      notifyRoles: ["assignee", "pm"],
+      pushGroup: false,
+    },
+    nextConfig: overdueConfigSchema.parse({}),
+    onlyWhenSystemManaged: true,
+  },
+  {
+    ruleKey: "due_soon_reminder",
+    legacyEnabled: true,
+    nextEnabled: false,
+    legacyConfig: {
+      dueSoonDays: 2,
+      cadenceHours: 24,
+      scope: "both",
+      notifyRoles: ["assignee", "pm"],
+      pushGroup: false,
+    },
+    nextConfig: dueSoonConfigSchema.parse({}),
+    onlyWhenSystemManaged: true,
+  },
+  {
+    ruleKey: "exception_escalation",
+    legacyEnabled: true,
+    nextEnabled: true,
+    legacyConfig: {
+      assigneeAfterDays: 2,
+      pmAfterDays: 5,
+      managerAfterDays: 10,
+      cadenceHours: 24,
+      include: {
+        overdueTasks: true,
+        blockedTasks: true,
+        criticalIssues: true,
+        pendingReviews: true,
+      },
+      pushGroup: false,
+    },
+    nextConfig: exceptionEscalationConfigSchema.parse({}),
+    onlyWhenSystemManaged: true,
+  },
+] as const satisfies readonly {
+  ruleKey: AutomationRuleKey;
+  legacyEnabled: boolean;
+  nextEnabled: boolean;
+  legacyConfig: Record<string, unknown>;
+  nextConfig: Record<string, unknown>;
+  onlyWhenSystemManaged: true;
+}[];
+
 export const AUTOMATION_RULES = [
   {
     key: "overdue_reminder",
     label: "逾期催办",
     triggerType: "scheduled",
-    defaultEnabled: true,
+    // 责任人的到期/逾期项由每日个人摘要聚合，避免同一任务当天再散发一条。
+    defaultEnabled: false,
     defaultConfig: overdueConfigSchema.parse({}),
     configSchema: overdueConfigSchema,
     recipientRoles: ["assignee", "pm"],
@@ -205,7 +287,7 @@ export const AUTOMATION_RULES = [
     key: "due_soon_reminder",
     label: "截止前提醒",
     triggerType: "scheduled",
-    defaultEnabled: true,
+    defaultEnabled: false,
     defaultConfig: dueSoonConfigSchema.parse({}),
     configSchema: dueSoonConfigSchema,
     recipientRoles: ["assignee", "pm"],
@@ -329,9 +411,36 @@ export const AUTOMATION_RULES = [
     defaultEnabled: true,
     defaultConfig: phaseAdvancedConfigSchema.parse({}),
     configSchema: phaseAdvancedConfigSchema,
-    recipientRoles: ["pm", "group"],
+    recipientRoles: ["group"],
     matches: (event, _config) => event.action === "phase.advanced" && event.entityType === "phase",
     buildMessage: (event, _config, ctx) => buildPhaseAdvancedMessage(event, ctx),
+  },
+  {
+    key: "weekly_meeting_reminder",
+    label: "项目周会提醒",
+    triggerType: "scheduled",
+    defaultEnabled: true,
+    defaultConfig: weeklyMeetingConfigSchema.parse({}),
+    configSchema: weeklyMeetingConfigSchema,
+    recipientRoles: ["group"],
+    // Project-level meeting config is aggregated by scheduler.ts; keeping the
+    // descriptor here makes the rule visible/configurable without running it
+    // once per task/issue event.
+    matches: () => false,
+    buildMessage: () => ({ title: "项目周会提醒", text: "项目周会提醒", markdown: undefined }),
+  },
+  {
+    key: "task_ready_notify",
+    label: "任务可以开始",
+    triggerType: "event",
+    defaultEnabled: true,
+    defaultConfig: taskReadyConfigSchema.parse({}),
+    configSchema: taskReadyConfigSchema,
+    // Successor owners are resolved by taskReady.ts from the dependency graph;
+    // the generic current-event recipient expansion must stay empty.
+    recipientRoles: [],
+    matches: (event) => matchesTaskReady(event),
+    buildMessage: () => ({ title: "任务可以开始", text: "前置任务已完成" }),
   },
 ] as const satisfies readonly BuiltInAutomationRule[];
 
@@ -366,22 +475,22 @@ function matchesOverdueReminder(event: AutomationEvent, config: OverdueConfig): 
   if (config.scope === "tasks" && event.entityType !== "task") return false;
   if (config.scope === "issues" && event.entityType !== "issue") return false;
 
-  const dueDate = asDate(event.after?.dueDate ?? event.after?.targetDate);
-  if (!dueDate) return false;
+  const dueDay = shanghaiDayNumber(event.after?.dueDate ?? event.after?.targetDate);
+  if (dueDay === null) return false;
   if (isClosedStatus(event.entityType, String(event.after?.status ?? ""))) return false;
 
-  const now = asDate(event.now ?? new Date());
-  if (!now) return false;
-  const daysOverdue = Math.floor((startOfDay(now).getTime() - startOfDay(dueDate).getTime()) / DAY_MS);
+  const nowDay = shanghaiDayNumber(event.now ?? new Date());
+  if (nowDay === null) return false;
+  const daysOverdue = nowDay - dueDay;
   return daysOverdue > config.graceDays;
 }
 
 /** 距截止还有几天（负数=已逾期）；无法解析返回 null */
 function daysUntilDue(event: AutomationEvent): number | null {
-  const due = asDate(event.after?.dueDate ?? event.after?.targetDate);
-  const now = asDate(event.now ?? new Date());
-  if (!due || !now) return null;
-  return Math.floor((startOfDay(due).getTime() - startOfDay(now).getTime()) / DAY_MS);
+  const dueDay = shanghaiDayNumber(event.after?.dueDate ?? event.after?.targetDate);
+  const nowDay = shanghaiDayNumber(event.now ?? new Date());
+  if (dueDay === null || nowDay === null) return null;
+  return dueDay - nowDay;
 }
 
 function matchesDueSoon(event: AutomationEvent, config: DueSoonConfig): boolean {
@@ -399,6 +508,11 @@ function matchesDueSoon(event: AutomationEvent, config: DueSoonConfig): boolean 
 function matchesTaskBlocked(event: AutomationEvent): boolean {
   if (event.action !== "task.update_meta" || event.entityType !== "task") return false;
   return String(event.after?.status ?? "") === "blocked" && String(event.before?.status ?? "") !== "blocked";
+}
+
+function matchesTaskReady(event: AutomationEvent): boolean {
+  if (event.action !== "task.update_meta" || event.entityType !== "task") return false;
+  return String(event.after?.status ?? "") === "done" && String(event.before?.status ?? "") !== "done";
 }
 
 function matchesTaskAssignment(event: AutomationEvent): boolean {
@@ -486,8 +600,11 @@ export function exceptionEscalationRoles(
   config: ExceptionEscalationConfig,
 ): RecipientRole[] {
   const level = exceptionEscalationLevel(event, config);
-  if (level === "manager") return ["assignee", "pm", "manager"];
-  if (level === "pm") return ["assignee", "pm"];
+  // 每一层只通知“新升级到”的角色，避免每天把责任人和上一层重复拉一遍。
+  if (level === "manager") return ["manager"];
+  if (level === "pm") return ["pm"];
+  // 逾期责任人已由每日摘要（或管理员显式开启的 overdue_reminder）覆盖。
+  if (level === "assignee" && String(event.after?.exceptionType ?? "") === "overdue_task") return [];
   if (level === "assignee") return ["assignee"];
   return [];
 }
@@ -570,9 +687,11 @@ function buildMpReleaseMessage(
 ): AutomationMessage {
   const project = ctx.projectName ? `「${ctx.projectName}」` : "项目";
   const product = ctx.productName || String(event.after?.productName ?? "产品");
-  const revision = ctx.revisionLabel || String(event.after?.revisionLabel ?? event.after?.revisionId ?? "新版本");
   const messageTitle = "量产发布完成";
-  const text = `${project}已完成量产发布：${product} ${revision}。`;
+  const legacyRevision = ctx.revisionLabel || event.after?.revisionLabel;
+  const text = legacyRevision
+    ? `${project}已完成量产发布：${product} ${String(legacyRevision)}。`
+    : `${project}已完成量产发布并交付独立产品：${product}。`;
   return {
     title: messageTitle,
     text,
@@ -720,10 +839,10 @@ function changedInto(
 }
 
 function daysOverdueFromEvent(event: AutomationEvent): number | null {
-  const dueDate = asDate(event.after?.dueDate ?? event.after?.targetDate);
-  const now = asDate(event.now ?? new Date());
-  if (!dueDate || !now) return null;
-  return Math.max(0, Math.floor((startOfDay(now).getTime() - startOfDay(dueDate).getTime()) / DAY_MS));
+  const dueDay = shanghaiDayNumber(event.after?.dueDate ?? event.after?.targetDate);
+  const nowDay = shanghaiDayNumber(event.now ?? new Date());
+  if (dueDay === null || nowDay === null) return null;
+  return Math.max(0, nowDay - dueDay);
 }
 
 function entityLabel(entityType: AutomationEntityType): string {
@@ -739,19 +858,6 @@ function isClosedStatus(entityType: AutomationEntityType, status: string): boole
   if (entityType === "task") return status === "done" || status === "skipped";
   if (entityType === "issue") return status === "resolved" || status === "closed" || status === "wont_fix";
   return false;
-}
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-function asDate(value: unknown): Date | null {
-  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
-  if (typeof value !== "string" && typeof value !== "number") return null;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function startOfDay(date: Date): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

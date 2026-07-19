@@ -13,10 +13,11 @@ import {
 import { protectedProcedure, router } from "../_core/trpc";
 import { canRoleViewInternalWorkspace } from "../file-visibility";
 import { assertProjectAccess, type ProjectAccess } from "../project-access";
-import { getPhasesForCategory } from "../../shared/sop-templates";
+import { getEffectivePhasesForProjectLike } from "../../shared/npd-v3";
 import { NPI_READINESS_CATEGORIES, NPI_READINESS_STATUSES } from "../../drizzle/schema";
+import { emitAutomationEvent } from "../automation/events";
 
-const NPI_PHASES = new Set(["dvt", "pvt", "mp"]);
+const NPI_PHASES = new Set(["verification", "dvt", "pvt", "mp"]);
 
 function assertNpiAuthority(access: ProjectAccess) {
   if (!access.isAdmin && !access.permissions.canNpiGateBlock) {
@@ -31,10 +32,10 @@ function assertInternalWorkspace(access: ProjectAccess) {
 }
 
 function assertNpiPhase(access: ProjectAccess, phaseId: string) {
-  const exists = getPhasesForCategory(access.project.category).some((phase) => phase.id === phaseId);
+  const exists = getEffectivePhasesForProjectLike(access.project).some((phase) => phase.id === phaseId);
   if (!exists) throw new TRPCError({ code: "BAD_REQUEST", message: "项目阶段不存在" });
   if (!NPI_PHASES.has(phaseId)) {
-    throw new TRPCError({ code: "BAD_REQUEST", message: "NPI readiness 仅适用于 DVT、PVT、MP 阶段" });
+    throw new TRPCError({ code: "BAD_REQUEST", message: "NPI readiness 仅适用于验证、DVT、PVT、MP 阶段" });
   }
 }
 
@@ -181,6 +182,20 @@ export const npiReadinessRouter = router({
         creatorId: ctx.user.id,
         productId: access.project.productId ?? null,
       });
+      const afterIssue = {
+        id: issueId,
+        projectId: check.projectId,
+        phaseId: check.phaseId,
+        title: `[NPI 阻断] ${check.title}`,
+        description,
+        severity: "P1",
+        status: "open",
+        category: "other",
+        owner: input.owner ?? null,
+        reporter: ctx.user.name ?? null,
+        targetDate: input.targetDate ?? null,
+        creatorId: ctx.user.id,
+      };
       await linkProjectNpiReadinessIssue(check.id, issueId, ctx.user.id);
       await createActivityLog({
         projectId: check.projectId,
@@ -196,7 +211,15 @@ export const npiReadinessRouter = router({
         action: "issue.create",
         entityType: "issue",
         entityId: String(issueId),
-        meta: { phaseId: check.phaseId, title: `[NPI 阻断] ${check.title}`, severity: "P1" },
+        meta: { phaseId: check.phaseId, title: afterIssue.title, severity: "P1", after: afterIssue },
+      });
+      await emitAutomationEvent({
+        action: "issue.create",
+        projectId: check.projectId,
+        entityType: "issue",
+        entityId: issueId,
+        actorId: ctx.user.id,
+        after: afterIssue,
       });
       return { success: true, id: issueId, existed: false };
     }),

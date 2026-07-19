@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import {
   getDb, upsertUser, getUserByOpenId, createProjectWithSeed,
   updateAutomationRuleRow, listAutomationRuns, getAutomationDueTasks, getAutomationDueIssues,
@@ -16,6 +16,22 @@ const MGR_OPEN = `mgr_${SUF}`;
 let pmId = 0;
 let asgId = 0;
 let mgrId = 0;
+
+const OVERDUE_DEFAULT_CONFIG = {
+  graceDays: 0,
+  cadenceHours: 24,
+  scope: "both" as const,
+  notifyRoles: ["assignee"] as const,
+  pushGroup: false,
+};
+const EXCEPTION_DEFAULT_CONFIG = {
+  assigneeAfterDays: 2,
+  pmAfterDays: 2,
+  managerAfterDays: 7,
+  cadenceHours: 24,
+  include: { overdueTasks: true, blockedTasks: true, criticalIssues: true, pendingReviews: true },
+  pushGroup: false,
+};
 
 // 捕获派发，避免真写通知/真发钉钉
 function makeDeps() {
@@ -49,6 +65,8 @@ async function cleanup() {
   await db.execute(sql`DELETE FROM action_items WHERE "projectId" = ${ARCHIVED_PROJECT_ID}`);
   await db.execute(sql`DELETE FROM automation_runs WHERE "projectId" = ${PROJECT_ID}`);
   await db.execute(sql`DELETE FROM automation_runs WHERE "projectId" = ${ARCHIVED_PROJECT_ID}`);
+  await db.execute(sql`DELETE FROM automation_claims WHERE "projectId" = ${PROJECT_ID}`);
+  await db.execute(sql`DELETE FROM automation_claims WHERE "projectId" = ${ARCHIVED_PROJECT_ID}`);
   await db.execute(sql`DELETE FROM project_members WHERE "projectId" = ${PROJECT_ID}`);
   await db.execute(sql`DELETE FROM project_members WHERE "projectId" = ${ARCHIVED_PROJECT_ID}`);
   await db.execute(sql`DELETE FROM project_issues WHERE "projectId" = ${ARCHIVED_PROJECT_ID}`);
@@ -74,15 +92,17 @@ beforeAll(async () => {
     pmId
   );
   await addProjectMember({ projectId: PROJECT_ID, userId: mgrId, role: "manager", invitedBy: pmId });
+  await addProjectMember({ projectId: PROJECT_ID, userId: asgId, role: "rd_hw", invitedBy: pmId });
 });
 afterAll(async () => {
   // 还原规则到 seed 默认，避免污染共享 DB（如把 high_severity_issue 留成 disabled）
   await updateAutomationRuleRow({ ruleKey: "high_severity_issue", enabled: true, config: { severities: ["P0", "P1"], pushGroup: true } });
-  await updateAutomationRuleRow({ ruleKey: "overdue_reminder", enabled: true, config: { graceDays: 0, cadenceHours: 24, scope: "both", notifyRoles: ["assignee", "pm"], pushGroup: false } });
+  await updateAutomationRuleRow({ ruleKey: "overdue_reminder", enabled: false, config: { ...OVERDUE_DEFAULT_CONFIG, notifyRoles: [...OVERDUE_DEFAULT_CONFIG.notifyRoles] } });
   await updateAutomationRuleRow({ ruleKey: "status_change_notify", enabled: false, config: { transitions: { issue: ["resolved", "closed"], task: [], gate: ["approved", "rejected"] }, pushGroup: false } });
   await updateAutomationRuleRow({ ruleKey: "delay_impact_notify", enabled: true, config: { minDeltaDays: 0, notifyGateImpacts: true, notifyTargetBreach: true, onlyNewTargetBreach: false, cadenceHours: 24, pushGroup: false } });
-  await updateAutomationRuleRow({ ruleKey: "exception_escalation", enabled: true, config: { assigneeAfterDays: 2, pmAfterDays: 5, managerAfterDays: 10, cadenceHours: 24, pushGroup: false } });
+  await updateAutomationRuleRow({ ruleKey: "exception_escalation", enabled: true, config: EXCEPTION_DEFAULT_CONFIG });
   await updateAutomationRuleRow({ ruleKey: "task_assignment", enabled: true, config: { cadenceHours: 24, pushGroup: false } });
+  await updateAutomationRuleRow({ ruleKey: "task_ready_notify", enabled: true, config: {} });
   await cleanup();
 });
 beforeEach(async () => {
@@ -91,17 +111,50 @@ beforeEach(async () => {
     const { sql } = await import("drizzle-orm");
     await db.execute(sql`DELETE FROM action_items WHERE "projectId" = ${PROJECT_ID}`);
     await db.execute(sql`DELETE FROM automation_runs WHERE "projectId" = ${PROJECT_ID}`);
+    await db.execute(sql`DELETE FROM automation_claims WHERE "projectId" = ${PROJECT_ID}`);
   }
   // 重置规则到已知状态
   await updateAutomationRuleRow({ ruleKey: "high_severity_issue", enabled: true, config: { severities: ["P0", "P1"], pushGroup: true } });
-  await updateAutomationRuleRow({ ruleKey: "overdue_reminder", enabled: true, config: { graceDays: 0, cadenceHours: 24, scope: "both", notifyRoles: ["assignee", "pm"], pushGroup: false } });
+  await updateAutomationRuleRow({ ruleKey: "overdue_reminder", enabled: true, config: { ...OVERDUE_DEFAULT_CONFIG, notifyRoles: [...OVERDUE_DEFAULT_CONFIG.notifyRoles] } });
   await updateAutomationRuleRow({ ruleKey: "status_change_notify", enabled: false, config: {} });
   await updateAutomationRuleRow({ ruleKey: "delay_impact_notify", enabled: true, config: { minDeltaDays: 0, notifyGateImpacts: true, notifyTargetBreach: true, onlyNewTargetBreach: false, cadenceHours: 24, pushGroup: false } });
-  await updateAutomationRuleRow({ ruleKey: "exception_escalation", enabled: true, config: { assigneeAfterDays: 2, pmAfterDays: 5, managerAfterDays: 10, cadenceHours: 24, pushGroup: false } });
+  await updateAutomationRuleRow({ ruleKey: "exception_escalation", enabled: true, config: EXCEPTION_DEFAULT_CONFIG });
   await updateAutomationRuleRow({ ruleKey: "task_assignment", enabled: true, config: { cadenceHours: 24, pushGroup: false } });
+  await updateAutomationRuleRow({ ruleKey: "task_ready_notify", enabled: true, config: {} });
 });
 
 describe("automation engine integration", () => {
+  it("task_ready 走专用行动项派发，不展开当前事件收件人；派发/静默都完整落 claim/run", async () => {
+    const loadProjectMembers = vi.fn(async () => { throw new Error("task_ready 不应加载项目成员"); });
+    const notifyTaskReady = vi
+      .fn()
+      .mockResolvedValueOnce({ eligible: 2, dispatched: 2 })
+      .mockResolvedValueOnce({ eligible: 0, dispatched: 0 })
+      .mockResolvedValueOnce({ eligible: 1, dispatched: 0 });
+    const baseDeps = makeDeps().deps;
+    const deps = { ...baseDeps, loadProjectMembers, notifyTaskReady };
+    const event = (sourceActivityLogId: number) => ({
+      action: "task.update_meta" as const,
+      projectId: PROJECT_ID,
+      entityType: "task" as const,
+      entityId: `${PROJECT_ID}:concept:c1`,
+      before: { phaseId: "concept", taskId: "c1", status: "in_progress" },
+      after: { phaseId: "concept", taskId: "c1", status: "done" },
+      sourceActivityLogId,
+    });
+
+    expect(await runAutomation(event(990001), deps)).toMatchObject({ matched: 1, fired: 1 });
+    expect(await runAutomation(event(990002), deps)).toMatchObject({ matched: 1, skipped: 1 });
+    expect(await runAutomation(event(990003), deps)).toMatchObject({ matched: 1, skipped: 1 });
+    expect(notifyTaskReady).toHaveBeenCalledTimes(3);
+    expect(loadProjectMembers).not.toHaveBeenCalled();
+
+    const runs = (await listAutomationRuns({ projectId: PROJECT_ID }))
+      .filter((run) => run.ruleKey === "task_ready_notify");
+    expect(runs.filter((run) => run.status === "fired")).toHaveLength(1);
+    expect(runs.filter((run) => run.status === "skipped")).toHaveLength(2);
+  });
+
   it("excludes archived projects from scheduled overdue scans", async () => {
     const db = await getDb();
     if (!db) throw new Error("DB not available");
@@ -192,13 +245,56 @@ describe("automation engine integration", () => {
     expect(b.pushes.length).toBe(1);
   });
 
+  it("falls back to webhook when the bound project group rejects the message", async () => {
+    const { updateProject } = await import("../db");
+    await updateProject(PROJECT_ID, { dingtalkChatId: "chat_broken" });
+    const calls = makeDeps();
+    calls.deps.notifyGroup = async (chatId: string, title: string) => {
+      calls.groups.push({ chatId, title });
+      return false;
+    };
+    await runAutomation({
+      action: "issue.create", projectId: PROJECT_ID, entityType: "issue", entityId: 9103,
+      after: { severity: "P0", title: "项目群失败回退", assigneeUserId: asgId },
+    }, calls.deps);
+    expect(calls.groups).toHaveLength(1);
+    expect(calls.pushes).toHaveLength(1);
+    const runs = await listAutomationRuns({ projectId: PROJECT_ID });
+    expect(runs.some((row) => row.ruleKey === "high_severity_issue" && row.entityId === `${PROJECT_ID}:9103` && row.status === "partial")).toBe(true);
+    await updateProject(PROJECT_ID, { dingtalkChatId: null });
+  });
+
   it("does not trigger high severity for out-of-set severity (P3)", async () => {
     const { notes, deps } = makeDeps();
+    let memberLoads = 0;
+    deps.loadProjectMembers = async () => {
+      memberLoads += 1;
+      return [];
+    };
     await runAutomation({
       action: "issue.create", projectId: PROJECT_ID, entityType: "issue", entityId: 9002,
       after: { severity: "P3", title: "文案微调", assigneeUserId: asgId },
     }, deps);
     expect(notes.length).toBe(0);
+    expect(memberLoads).toBe(0);
+  });
+
+  it("loads project members only after match/claim and reuses the lazy result", async () => {
+    const calls = makeDeps();
+    let memberLoads = 0;
+    const { getProjectMembers } = await import("../db");
+    calls.deps.loadProjectMembers = async (projectId: string) => {
+      memberLoads += 1;
+      return getProjectMembers(projectId);
+    };
+    await runAutomation({
+      action: "issue.create",
+      projectId: PROJECT_ID,
+      entityType: "issue",
+      entityId: 9901,
+      after: { severity: "P0", title: "成员惰性加载", assigneeUserId: asgId },
+    }, calls.deps);
+    expect(memberLoads).toBe(1);
   });
 
   it("dedups overdue reminders within the cadence window", async () => {
@@ -221,6 +317,97 @@ describe("automation engine integration", () => {
     const runs = await listAutomationRuns({ projectId: PROJECT_ID });
     expect(runs.some((r) => r.ruleKey === "overdue_reminder" && r.status === "fired")).toBe(true);
     expect(runs.some((r) => r.ruleKey === "overdue_reminder" && r.status === "skipped")).toBe(true);
+  });
+
+  it("does not repeat the assignee when overdue reminder and exception escalation both match", async () => {
+    // 新默认 assigneeAfterDays=2 且 pmAfterDays=2 时责任人层不可达（day2 直升 PM，
+    // 责任人由每日摘要覆盖）；本用例专测"责任人层与逾期提醒不重复"的抑制路径，
+    // 显式把责任人层配置为 day0 可达。
+    await updateAutomationRuleRow({
+      ruleKey: "exception_escalation",
+      enabled: true,
+      config: { ...EXCEPTION_DEFAULT_CONFIG, assigneeAfterDays: 0 },
+    });
+    const event = {
+      action: "scheduled" as const,
+      projectId: PROJECT_ID,
+      entityType: "task" as const,
+      entityId: `${PROJECT_ID}:concept:overdue-no-duplicate`,
+      now: "2026-06-14",
+      after: {
+        dueDate: "2026-06-01",
+        status: "in_progress",
+        title: "逾期任务不重复通知",
+        exceptionType: "overdue_task",
+        exceptionAgeDays: 0,
+        assigneeUserId: asgId,
+      },
+    };
+    const calls = makeDeps();
+
+    const summary = await runAutomation(event, calls.deps);
+
+    expect(summary).toMatchObject({ matched: 2, fired: 1, skipped: 1 });
+    expect(calls.notes).toEqual([{ userId: asgId, title: "任务逾期提醒" }]);
+    const runs = await listAutomationRuns({ projectId: PROJECT_ID });
+    expect(runs.some((run) =>
+      run.ruleKey === "exception_escalation" &&
+      run.entityId === `${event.entityId}:assignee` &&
+      run.status === "skipped"
+    )).toBe(true);
+    await updateAutomationRuleRow({
+      ruleKey: "exception_escalation",
+      enabled: true,
+      config: EXCEPTION_DEFAULT_CONFIG,
+    });
+  });
+
+  it("atomically claims concurrent scheduled sends", async () => {
+    const event = {
+      action: "scheduled" as const,
+      projectId: PROJECT_ID,
+      entityType: "task" as const,
+      entityId: `${PROJECT_ID}:${"phase".repeat(6)}:${"x".repeat(32)}`,
+      now: "2026-06-14",
+      after: { dueDate: "2026-06-01", status: "in_progress", assigneeUserId: asgId },
+    };
+    const calls = makeDeps();
+
+    await Promise.all([
+      runAutomation(event, calls.deps),
+      runAutomation(event, calls.deps),
+    ]);
+
+    // One winner notifies the assignee (the new low-noise default). The losing scanner only writes a
+    // skipped audit row and never performs an external side effect.
+    expect(calls.notes).toHaveLength(1);
+    const runs = await listAutomationRuns({ projectId: PROJECT_ID });
+    expect(runs.some((row) => row.entityId === event.entityId && row.status === "fired")).toBe(true);
+    expect(runs.some((row) => row.entityId === event.entityId && row.status === "skipped")).toBe(true);
+  });
+
+  it("dedups concurrent activity-log replay by source id", async () => {
+    const event = {
+      action: "issue.create" as const,
+      projectId: PROJECT_ID,
+      entityType: "issue" as const,
+      entityId: 9199,
+      sourceActivityLogId: 881199,
+      after: { severity: "P0", title: "日志重放并发", assigneeUserId: asgId },
+    };
+    const calls = makeDeps();
+
+    await Promise.all([
+      runAutomation(event, calls.deps),
+      runAutomation(event, calls.deps),
+    ]);
+
+    expect(calls.notes.length).toBeGreaterThan(0);
+    expect(new Set(calls.notes.map((note) => note.userId)).size).toBe(calls.notes.length);
+    expect(calls.pushes).toHaveLength(1);
+    const runs = await listAutomationRuns({ projectId: PROJECT_ID });
+    expect(runs.filter((row) => row.ruleKey === "high_severity_issue" && row.entityId === `${PROJECT_ID}:9199` && row.status === "fired")).toHaveLength(1);
+    expect(runs.some((row) => row.ruleKey === "high_severity_issue" && row.entityId === `${PROJECT_ID}:9199` && row.status === "skipped")).toBe(true);
   });
 
   it("asks the PM to assign active unowned tasks and dedups within cadence", async () => {
@@ -302,9 +489,10 @@ describe("automation engine integration", () => {
     const first = makeDeps();
     await runAutomation(event, first.deps);
     const notified = new Set(first.notes.map((n) => n.userId));
-    expect(notified.has(asgId)).toBe(true);
-    expect(notified.has(pmId)).toBe(true);
+    expect(notified.has(asgId)).toBe(false);
+    expect(notified.has(pmId)).toBe(false);
     expect(notified.has(mgrId)).toBe(true);
+    expect(first.notes).toHaveLength(1);
     expect(first.notes.every((n) => n.title === "异常升级至管理层")).toBe(true);
 
     const second = makeDeps();

@@ -70,7 +70,7 @@ async function assertExternalCommentAccess(
   actor: { id: number; role: string },
 ) {
   const access = await assertProjectAccess(projectId, actor);
-  if (!canRoleViewFileVisibility(access.role, audience)) {
+  if (!canRoleViewFileVisibility(access.roles, audience)) {
     throw new TRPCError({ code: "FORBIDDEN", message: "无权访问此外部协作频道" });
   }
   return access;

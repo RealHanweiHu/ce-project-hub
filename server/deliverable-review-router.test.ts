@@ -98,11 +98,12 @@ describe("deliverableReviews 权限", () => {
     expect(byName.get("EOL 100%测试能力验收记录")).toBe(PE);
     expect(byName.get("电芯/电池包安全认证报告或复用确认")).toBe(BATTERY);
   });
-  it("不能指定自己为审核人（禁止自审自批）", async () => {
-    // PM 上传并提交 ID外观图，却把自己设为审核人 → 拒绝
+  it("普通交付物允许多帽自审，红线仍由四眼规则拦截", async () => {
     await expect(
       caller(PM, "user").submit({ projectId: PROJ, phaseId: "design", deliverableName: "ID外观图", reviewerUserId: PM })
-    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    ).resolves.toBeTruthy();
+    // 恢复指定审核人，供后续审核权限用例使用。
+    await caller(PM, "user").submit({ projectId: PROJ, phaseId: "design", deliverableName: "ID外观图", reviewerUserId: REVIEWER });
   });
   it("自动分派审核人时也不会落到提交人自己", async () => {
     // battery_safety 成员亲自提交安全FMEA，默认审核人本应是 battery_safety（=自己）→ 必须回避

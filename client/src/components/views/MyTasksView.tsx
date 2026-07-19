@@ -19,13 +19,16 @@ import { toast } from 'sonner';
 import { cn, toLocalISODate, localISODatePlus } from '@/lib/utils';
 import { PageHeader, SegToggle } from '@/components/linear/primitives';
 import type { TaskStatus, TaskPriority } from '@shared/const';
-import { resolveTaskName, type TaskFocus } from './TaskListView';
-import { getPhasesForCategory } from '@/lib/sop-templates';
+import { taskProjectLike, type TaskFocus } from './TaskListView';
+import { MyWorkBuckets } from './overview/PerspectivePanel';
+import { resolveProjectPhase, resolveTaskName } from '@shared/sop-template-resolution';
+import { buildTaskCompletionActionPath } from '@shared/action-links';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 type ApiTask = {
   id: number; projectId: string; phaseId: string; taskId: string;
   projectName: string; projectNumber: string; projectCategory: string;
+  sopTemplateVersion?: string | null; customFields?: unknown;
   status: string; priority: string | null; dueDate: string | null;
   assigneeUserId: number | null; completed: boolean;
 };
@@ -55,16 +58,6 @@ function isSoon(t: Task): boolean {
   if (t.completed || !t.dueDate || isOverdue(t)) return false;
   const soon = localISODatePlus(6);
   return t.dueDate <= soon;
-}
-
-function resolvePhaseLabel(phaseId: string, category: string): string {
-  try {
-    const phases = getPhasesForCategory(category);
-    const phase = phases.find((p) => p.id === phaseId);
-    return phase ? phase.code : phaseId;
-  } catch {
-    return phaseId;
-  }
 }
 
 // ── Group definitions (preserve逾期 / 进行中 / 已完成 grouping) ──────────────
@@ -146,17 +139,28 @@ export function MyTasksView({ onSelectProject }: { onSelectProject: (id: string,
   // excludes done/skipped, so 已完成 group only renders if/when data has them.
   const tasks: Task[] = useMemo(() => {
     const rows = (workbench?.tasks ?? []) as ApiTask[];
-    return rows.map((t) => ({
-      id: t.id, projectId: t.projectId, phaseId: t.phaseId, taskId: t.taskId,
-      name: resolveTaskName(t.taskId, t.phaseId, t.projectCategory),
-      projectName: t.projectName, projectNumber: t.projectNumber,
-      phaseLabel: resolvePhaseLabel(t.phaseId, t.projectCategory),
-      status: t.status as TaskStatus, priority: (t.priority ?? 'medium') as TaskPriority,
-      dueDate: t.dueDate ? String(t.dueDate) : null, completed: t.completed,
-    }));
+    return rows.map((t) => {
+      const projectLike = taskProjectLike(t);
+      return {
+        id: t.id, projectId: t.projectId, phaseId: t.phaseId, taskId: t.taskId,
+        name: resolveTaskName(projectLike, t.taskId, t.phaseId),
+        projectName: t.projectName, projectNumber: t.projectNumber,
+        phaseLabel: resolveProjectPhase(projectLike, t.phaseId)?.code ?? t.phaseId,
+        status: t.status as TaskStatus, priority: (t.priority ?? 'medium') as TaskPriority,
+        dueDate: t.dueDate ? String(t.dueDate) : null, completed: t.completed,
+      };
+    });
   }, [workbench?.tasks]);
 
   const handleToggle = (t: Task) => {
+    if (!t.completed) {
+      window.location.assign(buildTaskCompletionActionPath({
+        projectId: t.projectId,
+        phaseId: t.phaseId,
+        taskId: t.taskId,
+      }));
+      return;
+    }
     setCompleted.mutate({ projectId: t.projectId, phaseId: t.phaseId, taskId: t.taskId, completed: !t.completed });
   };
 
@@ -207,8 +211,8 @@ export function MyTasksView({ onSelectProject }: { onSelectProject: (id: string,
   return (
     <div className="flex flex-col">
       <PageHeader
-        title="我的任务"
-        sub="只聚合指派给你的待办、待审核与质量复测；点击任意条目直达对应项目阶段与任务详情。"
+        title="我的工作"
+        sub="你的待办、审批、待审核与提醒都在这里；点击任意条目直达对应项目阶段与任务详情。"
         actions={
           <SegToggle<ViewMode>
             value={view}
@@ -220,6 +224,11 @@ export function MyTasksView({ onSelectProject }: { onSelectProject: (id: string,
           />
         }
       />
+
+      {/* 设计4 §6 三桶（现在处理 / 等待别人 / 仅关注）——个人队列全站唯一入口 */}
+      <div className="mb-4">
+        <MyWorkBuckets onSelectProject={onSelectProject} />
+      </div>
 
       {/* Filter bar: status segmented + search + meta */}
       <div className="mb-4 flex flex-wrap items-center gap-3 border-b border-border pb-4">

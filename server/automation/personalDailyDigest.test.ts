@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PersonalDailyDigestItem } from "../db";
 import type { PersonalDailyDigestConfig } from "./digestRules";
+import { SOP_TEMPLATE_VERSION_NPD_V3 } from "../../shared/sop-templates";
 import {
   buildPersonalDailyDigestMarkdown,
   computePersonalDailyDigestTiming,
@@ -47,6 +48,7 @@ function makeDeps(over: Partial<Parameters<typeof runPersonalDailyDigestScan>[1]
       item(),
       item({ recipientUserId: 8, kind: "deliverable_review", entityType: "deliverable_review", entityId: "review-1", title: "EVT 测试报告", dueDate: null }),
     ],
+    getProjectLikes: async () => new Map(),
     hasRun: async () => false,
     now: new Date("2026-06-16T01:30:00Z"),
     writeRun: async (status: "fired" | "skipped", entityId: string, detail: string) => {
@@ -89,6 +91,18 @@ describe("personal daily digest", () => {
     expect(out.body).toContain("P0/P1 1");
     expect(out.body).toContain("逾期 1");
     expect(out.markdown).toContain("充气泵");
+  });
+
+  it("resolves lite/add-on task titles from project template context", () => {
+    const out = buildPersonalDailyDigestMarkdown([
+      item({ phaseId: "design", title: "pb2", entityId: "p1:design:pb2" }),
+    ], "2026-06-16", new Map([["p1", {
+      category: "npd",
+      sopTemplateVersion: SOP_TEMPLATE_VERSION_NPD_V3,
+      customFields: { npdTemplate: { tier: "lite", packs: ["battery"] } },
+    }]]));
+    expect(out.markdown).toContain("安全 FMEA 与保护链路评审");
+    expect(out.markdown).not.toContain("：pb2");
   });
 
   it("sends one digest per user and writes per-user runs", async () => {

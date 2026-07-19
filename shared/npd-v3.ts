@@ -1,0 +1,1064 @@
+// NPD 模板 v3（2026-07-v3）——瘦身分档版。
+//
+// ⚠️ 复杂度预算（准入纪律，勿删）：核心档 ≤25 任务；核心+常规包组合 ≤30；四包全激活上限 32。
+// 任务准入四项判据（至少满足其一，全不满足的职能动作进操作指南/检查项）：
+//   ①改变状态 ②明确责任（独立责任人+截止） ③形成决策 ④产生审计证据。
+// 过了判据还须回答：为什么不能作为①任务内检查项 ②操作指南 ③附加包？答不上来就不准进核心。
+// 55→25 映射依据：docs/superpowers/specs/2026-07-12-npd-template-slimming-tiering-design.md
+import {
+  SOP_TEMPLATE_VERSION_NPD_V3,
+  getPhasesForCategory,
+  type SOPGateStandard,
+  type SOPPhase,
+  type SOPTask,
+} from "./sop-templates";
+import { resolveDerivativeEffectivePhases } from "./derivative-phase-resolver";
+import { resolveJdmEffectivePhases } from "./jdm-phase-resolver";
+import { TASK_DELIVERABLES } from "./task-deliverables";
+
+const gateStandard = (overrides: Partial<SOPGateStandard>): SOPGateStandard => ({
+  entryCriteria: [],
+  exitCriteria: [],
+  requiredDeliverables: [],
+  responsibleRoles: [],
+  evidenceRequirements: [],
+  exceptionStrategy: [],
+  ...overrides,
+});
+
+export const NPD_V3_CORE_PHASES: SOPPhase[] = [
+  {
+    id: "concept",
+    code: "P1",
+    name: "概念阶段",
+    nameEn: "Concept",
+    duration: "2-4周",
+    desc: "市场洞察与产品立项",
+    gate: "立项评审 / Project Charter",
+    gateTaskId: "nc3",
+    color: "#78716c",
+    deliverables: ["立项申请书", "认证路线图初判"],
+    gateStandard: gateStandard({
+      exitCriteria: ["立项论证完成（市场/概念/商业模型）", "技术可行性结论明确", "认证/电池安全硬卡完成初判"],
+      requiredDeliverables: ["立项申请书"],
+      responsibleRoles: ["产品经理", "R&D Lead", "管理层"],
+    }),
+    tasks: [
+      {
+        id: "nc1",
+        name: "产品机会与立项论证",
+        desc: "市场/竞品/用户需求/概念/商业模型，汇为一份立项论证",
+        owner: "产品经理",
+        evidence: "heavy",
+        visibleRoles: ["pm", "sales", "manager", "owner"],
+        durationDays: 10,
+        guide: "检查项：1) 竞品对比矩阵（TOP3-5） 2) 用户痛点与场景（访谈/问卷规模按项目体量自定） 3) 一句话产品定义+核心卖点 4) 销量/成本/毛利模型。全部落入一份立项申请书。",
+      },
+      {
+        id: "nc2",
+        name: "技术可行性评估",
+        desc: "关键技术验证、专利检索、认证路线初判",
+        owner: "R&D Lead",
+        evidence: "heavy",
+        visibleRoles: ["rd_hw", "rd_sw", "rd_mech", "cert", "battery_safety", "pm", "manager", "owner"],
+        durationDays: 7,
+        guide: "1) 关键技术挑战清单与核心 POC 2) 专利检索与规避 3) 目标市场认证路线、电池安全和运输硬卡初判。",
+      },
+      {
+        id: "nc3",
+        name: "立项评审 (Gate 1)",
+        desc: "正式立项决策评审",
+        owner: "管理层",
+        visibleRoles: [],
+        durationDays: 1,
+        dependsOn: ["nc1", "nc2"],
+        guide: "评审材料：立项申请书 + 技术可行性结论。通过后在立项配置中完成成员角色指派与排期初始化（原 p3/p6 已移出任务清单）。",
+      },
+    ],
+  },
+  {
+    id: "planning",
+    code: "P2",
+    name: "规划阶段",
+    nameEn: "Planning",
+    duration: "2-3周",
+    desc: "需求规格与供应基础",
+    gate: "Kickoff评审",
+    gateTaskId: "np3",
+    color: "#a16207",
+    deliverables: ["产品需求文档 PRD", "BOM v0.1"],
+    gateStandard: gateStandard({
+      exitCriteria: ["需求与规格评审通过", "初版 BOM 与关键供应商明确"],
+      requiredDeliverables: ["产品需求文档 PRD", "BOM v0.1"],
+      responsibleRoles: ["产品经理", "R&D", "采购"],
+    }),
+    tasks: [
+      {
+        id: "np1",
+        name: "产品需求与规格书",
+        desc: "PRD/PSD 合一：功能/非功能需求、技术规格、性能与安全边界",
+        owner: "产品经理/R&D",
+        evidence: "heavy",
+        visibleRoles: ["pm", "rd_hw", "rd_sw", "rd_mech", "battery_safety", "manager", "owner"],
+        durationDays: 7,
+        dependsOn: ["nc3"],
+        guide: "检查项：1) 功能需求与验收标准 2) 硬件/软件规格与性能指标 3) 锂电、电机、受压腔体的安全边界与验收指标（必填）。",
+      },
+      {
+        id: "np2",
+        name: "初版 BOM 与关键供应商",
+        desc: "关键料件清单+供应商列，预估成本",
+        owner: "EE/采购",
+        evidence: "light",
+        visibleRoles: ["rd_hw", "scm", "pm", "manager", "owner"],
+        durationDays: 5,
+        dependsOn: ["nc3"],
+        guide: "一张表：料件/供应商(2-3家)/单价/长交期与单一来源标注；安全件标注资质与替代来源风险。",
+      },
+      {
+        id: "np3",
+        name: "Kickoff 会议 (Gate 2)",
+        desc: "项目正式启动，目标对齐",
+        owner: "项目经理/产品经理",
+        visibleRoles: [],
+        durationDays: 1,
+        dependsOn: ["np1", "np2"],
+        guide: "议程：目标/规格 Walk-through/里程碑/角色职责。",
+      },
+    ],
+  },
+  {
+    id: "design",
+    code: "P3",
+    name: "设计阶段",
+    nameEn: "Design",
+    duration: "6-12周",
+    desc: "ID/MD/EE 并行设计（独立工作线，不合并）",
+    gate: "设计冻结评审 (Design Freeze)",
+    gateTaskId: "nd6",
+    color: "#0369a1",
+    deliverables: ["ID 外观设计稿", "结构 3D 设计", "电子原理图", "PCB Layout 文件", "BOM v1.0"],
+    gateStandard: gateStandard({
+      exitCriteria: ["ID/MD/EE 设计完成", "DFM/DFA 检查项闭环", "BOM 成本 vs 目标达标", "关键料件规格冻结"],
+      requiredDeliverables: ["ID 外观设计稿", "结构 3D 设计", "电子原理图", "PCB Layout 文件", "BOM v1.0"],
+      responsibleRoles: ["ID", "MD", "EE", "采购"],
+    }),
+    tasks: [
+      {
+        id: "nd1",
+        name: "ID 工业设计",
+        desc: "外观造型、材质、CMF",
+        owner: "ID",
+        evidence: "heavy",
+        visibleRoles: ["rd_mech", "pm", "manager", "owner"],
+        durationDays: 15,
+        dependsOn: ["np3"],
+        guide: "草图发散→候选精化→CMF 定义→渲染图。外观方向冻结是结构展开前提。",
+      },
+      {
+        id: "nd2",
+        name: "MD 结构设计",
+        desc: "堆叠、装配、公差",
+        owner: "MD",
+        evidence: "heavy",
+        visibleRoles: ["rd_mech", "pm", "manager", "owner"],
+        durationDays: 20,
+        dependsOn: ["nd1"],
+        guide: "内部堆叠→装配工艺→公差分析。堆叠输出是 Layout 板框前提。",
+      },
+      {
+        id: "nd3",
+        name: "EE 原理设计",
+        desc: "电源/MCU/传感/保护链路架构与原理图",
+        owner: "EE",
+        evidence: "heavy",
+        visibleRoles: ["rd_hw", "battery_safety", "pm", "manager", "owner"],
+        durationDays: 15,
+        dependsOn: ["np3"],
+        guide: "系统框图→原理图→电源树与功耗；过充/过放/过流/过温/短路保护链路与测试点为必填检查项。",
+      },
+      {
+        id: "nd4",
+        name: "PCB Layout",
+        desc: "布线、阻抗、EMC",
+        owner: "EE",
+        evidence: "heavy",
+        visibleRoles: ["rd_hw", "pm", "manager", "owner"],
+        durationDays: 10,
+        dependsOn: ["nd3", "nd2"],
+        guide: "板层规划→关键信号阻抗→EMC/EMI→DRC。依赖原理图+结构板框，单独追踪以暴露跨线停等。",
+      },
+      {
+        id: "nd5",
+        name: "关键料件定型与 BOM 冻结",
+        desc: "主料规格冻结、供货协议、BOM v1.0",
+        owner: "EE/采购",
+        evidence: "light",
+        visibleRoles: ["rd_hw", "scm", "battery_safety", "pm", "manager", "owner"],
+        durationDays: 7,
+        dependsOn: ["nd3"],
+        guide: "2nd Source 验证→供货协议→锁定规格；安全件单独记录批准版本与限制条件。",
+      },
+      {
+        id: "nd6",
+        name: "设计冻结评审 (Gate 3)",
+        desc: "Design Freeze，进入打样",
+        owner: "跨部门",
+        visibleRoles: [],
+        durationDays: 1,
+        dependsOn: ["nd1", "nd2", "nd3", "nd4", "nd5"],
+        guide: "评审检查项：1) 各设计线完成度 2) DFM/DFA Checklist（原 d6 转入） 3) BOM 成本 vs 目标 4) EVT 计划。",
+      },
+    ],
+  },
+  {
+    id: "evt",
+    code: "P4",
+    name: "EVT 工程验证",
+    nameEn: "EVT",
+    duration: "4-6周",
+    desc: "工程样机功能验证",
+    gate: "EVT评审",
+    gateTaskId: "ne3",
+    color: "#7c3aed",
+    deliverables: ["EVT 样机", "功能/性能测试报告"],
+    gateStandard: gateStandard({
+      exitCriteria: ["主要功能 Pass Rate ≥ 95%", "Issue List 无未关闭 P0/P1（系统自动检查）", "性能初测达标"],
+      requiredDeliverables: ["功能/性能测试报告"],
+      responsibleRoles: ["EE", "QA"],
+    }),
+    tasks: [
+      {
+        id: "ne1",
+        name: "EVT 样机制作",
+        desc: "手工样机 ≥10 台（含软硬件联调）",
+        owner: "EE/EMS",
+        evidence: "light",
+        visibleRoles: ["rd_hw", "rd_sw", "pm", "manager", "owner"],
+        durationDays: 10,
+        dependsOn: ["nd6"],
+        guide: "PCBA 打样→整机组装→版本序号标注；软硬件联调（Bringup/驱动/协议）为内部检查项。证据：样机照片+Build Record 链接。",
+      },
+      {
+        id: "ne2",
+        name: "EVT 功能/性能测试",
+        desc: "FT+PT 一份报告：功能逐项、续航、热、跌落初测",
+        owner: "QA",
+        evidence: "heavy",
+        visibleRoles: ["qa", "rd_hw", "pm", "manager", "owner"],
+        durationDays: 10,
+        dependsOn: ["ne1"],
+        guide: "Test Plan→逐项 Pass/Fail→问题直接进系统 Issue List（原 e5 问题清单任务已删除）；改板由 Issue/ECR 驱动（原 e6）。",
+      },
+      {
+        id: "ne3",
+        name: "EVT 评审 (Gate 4)",
+        desc: "是否达到进入 DVT 条件",
+        owner: "跨部门",
+        visibleRoles: [],
+        durationDays: 1,
+        dependsOn: ["ne2"],
+        guide: "P0/P1 关闭状态由系统读 Issue List 自动检查，无需人工汇总问题清单。",
+      },
+    ],
+  },
+  {
+    id: "dvt",
+    code: "P5",
+    name: "DVT 设计验证",
+    nameEn: "DVT",
+    duration: "4-8周",
+    desc: "设计成熟度全面验证",
+    gate: "DVT评审",
+    gateTaskId: "nv3",
+    color: "#0f766e",
+    deliverables: ["DVT 样机", "可靠性测试报告"],
+    gateStandard: gateStandard({
+      exitCriteria: ["可靠性测试全部 Pass", "Issue List 无未关闭 P0/P1"],
+      requiredDeliverables: ["可靠性测试报告"],
+      responsibleRoles: ["EMS", "QA"],
+    }),
+    tasks: [
+      {
+        id: "nv1",
+        name: "DVT 样机制作",
+        desc: "半正式产线 ≥30 台",
+        owner: "EMS",
+        evidence: "light",
+        visibleRoles: ["rd_hw", "pm", "manager", "owner"],
+        durationDays: 10,
+        dependsOn: ["ne3"],
+        guide: "半正式产线 SMT→整机组装→模拟量产工艺。证据：Build Record 链接。",
+      },
+      {
+        id: "nv2",
+        name: "可靠性测试",
+        desc: "跌落/高低温/湿热/振动/老化",
+        owner: "QA",
+        evidence: "heavy",
+        visibleRoles: ["qa", "pm", "manager", "owner"],
+        durationDays: 15,
+        dependsOn: ["nv1"],
+        guide: "标准矩阵：跌落 1.5m×26 面、-20~60℃、40℃/95%RH×96h、振动。",
+      },
+      {
+        id: "nv3",
+        name: "DVT 评审 (Gate 5)",
+        desc: "进入 PVT 前的关键评审",
+        owner: "跨部门",
+        visibleRoles: [],
+        durationDays: 1,
+        dependsOn: ["nv2"],
+        guide: "通过标准：可靠性全 Pass；激活的认证/模具/软件包任务闭环。",
+      },
+    ],
+  },
+  {
+    id: "pvt",
+    code: "P6",
+    name: "PVT 试产验证",
+    nameEn: "PVT",
+    duration: "3-6周",
+    desc: "生产工艺与良率验证",
+    gate: "MP准备就绪评审",
+    gateTaskId: "npv5",
+    isReleaseGate: true,
+    color: "#b45309",
+    deliverables: ["SOP/WI作业指导书", "良率报告", "EOL 100%测试能力验收记录", "包装与物流验证报告"],
+    gateStandard: gateStandard({
+      exitCriteria: ["试产良率达标（整机直通率≥95%）", "工艺/检验文件完整", "EOL 100% 测试能力就绪", "物料供应稳定"],
+      requiredDeliverables: ["SOP/WI作业指导书", "良率报告", "EOL 100%测试能力验收记录", "包装与物流验证报告"],
+      responsibleRoles: ["ME", "QA", "测试工程", "SCM"],
+    }),
+    tasks: [
+      {
+        id: "npv1",
+        name: "试产准备",
+        desc: "排程/物料齐套/SOP·WI/检验标准/PFMEA-CTQ 一套文件包",
+        owner: "ME/工厂",
+        evidence: "heavy",
+        visibleRoles: ["rd_mech", "rd_hw", "qa", "scm", "pe", "mfg", "pm", "manager", "owner"],
+        durationDays: 10,
+        dependsOn: ["nv3"],
+        guide: "检查项：试产排程与齐套、每工位 SOP/WI、IPQC/OQC/AQL 检验标准、PFMEA 与 CTQ（原 pv1+pv2+pv7+v7 合一）。",
+      },
+      {
+        id: "npv2",
+        name: "治具与 EOL 100% 测试",
+        desc: "🚩红线：ATE/FCT/老化治具与逐台安全检测能力",
+        owner: "测试工程",
+        evidence: "heavy",
+        visibleRoles: ["rd_hw", "qa", "pe", "battery_safety", "pm", "manager", "owner"],
+        durationDays: 10,
+        dependsOn: ["nv3"],
+        guide: "逐台检测：气压精度、自动停泵/过压保护、连续工作温升；电池项目叠加 Hi-pot/绝缘/保护功能/OCV-IR。输出限值与验收记录。任何档位不得裁剪。",
+      },
+      {
+        id: "npv3",
+        name: "包装与物流验证",
+        desc: "包装结构+ISTA 运输测试+装箱物流方案（承接 DVT 初验）",
+        owner: "SCM/物流",
+        evidence: "heavy",
+        visibleRoles: ["scm", "pm", "manager", "owner"],
+        durationDays: 7,
+        dependsOn: ["nv3"],
+        guide: "包装结构确认→ISTA 跌落/振动/堆叠→装箱单唛头→物流路径。同一证据只传一次，Gate 直接引用。",
+      },
+      {
+        id: "npv4",
+        name: "试产执行与良率",
+        desc: "50-300 台试产 + 良率分析一份报告",
+        owner: "工厂/QE",
+        evidence: "heavy",
+        visibleRoles: ["rd_mech", "rd_hw", "qa", "pe", "mfg", "pm", "manager", "owner"],
+        durationDays: 10,
+        dependsOn: ["npv1", "npv2"],
+        guide: "FAI 首件→全程良率监控（SMT≥99%/组装≥98%/FCT≥97%/直通率≥95% 为检查项）→试产报告含良率分析。",
+      },
+      {
+        id: "npv5",
+        name: "PVT 评审 (Gate 6)",
+        desc: "🚩红线：量产放行（Ready for MP）",
+        owner: "跨部门",
+        visibleRoles: [],
+        durationDays: 1,
+        dependsOn: ["npv1", "npv2", "npv3", "npv4"],
+        guide: "量产 GO：良率达标、文件完整、EOL 能力就绪、（电池包激活时）UN38.3/MSDS/安全认证证据齐套、物料稳定。",
+      },
+    ],
+  },
+  {
+    id: "mp",
+    code: "P7",
+    name: "量产稳定与移交",
+    nameEn: "MP Stabilization & Handover",
+    duration: "2-8周",
+    desc: "爬坡、稳定性验证与项目关闭移交",
+    gate: "项目关闭移交评审",
+    gateTaskId: "nm2",
+    isCloseGate: true,
+    color: "#166534",
+    deliverables: ["良率报告"],
+    gateStandard: gateStandard({
+      exitCriteria: ["首批量产良率稳定", "客户放行完成", "售后/RMA 无未闭环重大问题"],
+      requiredDeliverables: [],
+      responsibleRoles: ["工厂", "项目经理", "QA"],
+    }),
+    tasks: [
+      {
+        id: "nm1",
+        name: "首批量产与客户放行",
+        desc: "🚩红线：爬坡+良率监控+客户样品确认",
+        owner: "工厂/项目经理",
+        evidence: "light",
+        visibleRoles: ["scm", "qa", "mfg", "pe", "pm", "manager", "owner"],
+        durationDays: 15,
+        dependsOn: ["npv5"],
+        guide: "检查项：首批爬坡、日良率监控与 CAR（原 mp2）、产能爬坡曲线（原 mp3）、客户样品确认与放行记录。变更走系统 Change Log/ECR 模块（原 mp4 已删除）。",
+      },
+      {
+        id: "nm2",
+        name: "项目关闭移交评审",
+        desc: "Close Gate：移交量产运营",
+        owner: "跨部门",
+        visibleRoles: [],
+        durationDays: 1,
+        dependsOn: ["nm1"],
+        guide: "检查项：良率稳定证据、RMA/售后数据（原 mp5）、移交清单、经验教训。",
+      },
+    ],
+  },
+];
+
+// ── 附加包 ──────────────────────────────────────────────────────────────────
+export type NpdAddonPackId = "battery" | "cert" | "software" | "mold";
+export type NpdTemplateTier = "lite" | "standard" | "full";
+
+export const NPD_TIER_RANK: Readonly<Record<NpdTemplateTier, number>> = Object.freeze({
+  lite: 0,
+  standard: 1,
+  full: 2,
+});
+
+export function isNpdTierDowngrade(
+  chosen: NpdTemplateTier,
+  recommended: NpdTemplateTier,
+): boolean {
+  return NPD_TIER_RANK[chosen] < NPD_TIER_RANK[recommended];
+}
+
+export interface NpdTemplateConfig {
+  tier: NpdTemplateTier;
+  packs: NpdAddonPackId[];
+}
+
+export interface NpdProjectAttributes {
+  hasBattery: boolean;
+  needsCert: boolean;
+  hasFirmware: boolean;
+  needsNewMold: boolean;
+  safetyRiskLevel?: string | null;
+  regulatoryRiskLevel?: string | null;
+  isNewPlatform: boolean;
+}
+
+export interface NpdTemplateRecommendation {
+  tier: NpdTemplateTier;
+  packs: NpdAddonPackId[];
+  /** 红线锁定：向导中不可取消、服务端强制校验。 */
+  lockedPacks: NpdAddonPackId[];
+  reasons: string[];
+}
+
+/** 设计 §7：最小必要流程推导。纯函数，前端实时预览与服务端校验共用。 */
+export function recommendNpdTemplateConfig(
+  attrs: NpdProjectAttributes
+): NpdTemplateRecommendation {
+  const packs: NpdAddonPackId[] = [];
+  const lockedPacks: NpdAddonPackId[] = [];
+  const reasons: string[] = [];
+
+  if (attrs.hasBattery) {
+    packs.push("battery");
+    lockedPacks.push("battery");
+    reasons.push("含锂电/受压腔体 → 电池安全包锁定（红线）");
+  }
+  if (attrs.needsCert) {
+    packs.push("cert");
+    lockedPacks.push("cert");
+    reasons.push("有目标市场认证需求 → 认证包锁定（红线）");
+  }
+  if (attrs.hasFirmware) {
+    packs.push("software");
+    reasons.push("含固件/APP → 软件包默认勾选");
+  }
+  if (attrs.needsNewMold) {
+    packs.push("mold");
+    reasons.push("需开新模 → 模具包默认勾选");
+  }
+
+  const highRisk =
+    attrs.safetyRiskLevel === "high" || attrs.regulatoryRiskLevel === "high";
+  let tier: NpdTemplateTier;
+  if (highRisk || (attrs.hasBattery && attrs.needsCert) || attrs.isNewPlatform) {
+    tier = "full";
+    reasons.push(
+      highRisk
+        ? "安全/法规风险为高 → 强监管档"
+        : attrs.isNewPlatform
+          ? "全新平台 → 强监管档"
+          : "电池+认证双红线 → 强监管档"
+    );
+  } else if (!attrs.hasBattery && !attrs.needsNewMold) {
+    tier = "lite";
+    reasons.push("无电池、无新模、常规风险 → 轻量档");
+  } else {
+    tier = "standard";
+    reasons.push("常规组合 → 标准档");
+  }
+
+  return { tier, packs, lockedPacks, reasons };
+}
+
+export interface NpdAddonPack {
+  id: NpdAddonPackId;
+  name: string;
+  desc: string;
+  /** 激活后红线：包任务不得再被裁剪/跳过。 */
+  redline?: boolean;
+  /** 包任务插入的核心阶段 id；lite 的 EVT/DVT 目标会映射到 verification。 */
+  tasks: Array<{ phaseId: string; task: SOPTask }>;
+  /** 激活时并入对应阶段 Gate 必交项。 */
+  gateRequiredDeliverables?: Record<string, string[]>;
+}
+
+export const NPD_ADDON_PACKS: NpdAddonPack[] = [
+  {
+    id: "battery",
+    name: "电池安全包",
+    desc: "含锂电/受压腔体的项目激活",
+    redline: true,
+    tasks: [
+      {
+        phaseId: "planning",
+        task: {
+          id: "pb1",
+          name: "电芯/电池包策略与供应商资质",
+          desc: "复用/定点/二供策略 + 电芯厂审核或复用资质确认（原 p5a+d7a）",
+          owner: "EE/采购/电池安全",
+          evidence: "heavy",
+          visibleRoles: ["rd_hw", "scm", "qa", "cert", "battery_safety", "pm", "manager", "owner"],
+          durationDays: 7,
+          dependsOn: ["nc3"],
+          guide: "1) 判定复用等级（成熟电芯/平台电池包/新电芯） 2) 主供/二供与切换条件 3) 复用走平台/年度审核证据，新供应商/新化学体系执行完整电芯厂审核。",
+        },
+      },
+      {
+        phaseId: "design",
+        task: {
+          id: "pb2",
+          name: "安全 FMEA 与保护链路评审",
+          desc: "DFMEA/危害分析 + BMS/保护板链路校核或复用边界确认（原 d6a+d7b）",
+          owner: "QA/电池安全/EE",
+          evidence: "heavy",
+          visibleRoles: ["qa", "battery_safety", "rd_hw", "rd_mech", "rd_sw", "cert", "pm", "manager", "owner"],
+          durationDays: 7,
+          dependsOn: ["nd3"],
+          guide: "1) DFMEA 覆盖热失控/过压爆破/连续过热/保护失效 2) 过充过放过流过温短路链路校核 3) P0/P1 安全风险未关闭不得进设计冻结。",
+        },
+      },
+    ],
+    gateRequiredDeliverables: {
+      planning: ["电芯厂质量审核或复用资质确认"],
+      design: ["安全FMEA与危害分析", "保护电路设计评审或复用确认"],
+      pvt: ["UN38.3运输测试报告或复用确认", "MSDS", "电芯/电池包安全认证报告或复用确认"],
+    },
+  },
+  {
+    id: "cert",
+    name: "认证包",
+    desc: "有目标市场认证需求的项目激活",
+    redline: true,
+    tasks: [
+      {
+        phaseId: "planning",
+        task: {
+          id: "pc1",
+          name: "认证路线图",
+          desc: "目标市场证书清单、前置依赖、送样节奏（原 p6a）",
+          owner: "认证/QA",
+          evidence: "heavy",
+          visibleRoles: ["qa", "cert", "battery_safety", "rd_hw", "scm", "pm", "manager", "owner"],
+          durationDays: 5,
+          dependsOn: ["nc3"],
+          guide: "按目标市场列证书清单（IEC 62133/GB 31241/UL 2054/UN38.3/CCC/CE/FCC/PSE/KC/EMC/RoHS-REACH 适用项），标注卡设计冻结/开模/送样/出口的依赖。",
+        },
+      },
+      {
+        phaseId: "dvt",
+        task: {
+          id: "pc2",
+          name: "认证测试执行",
+          desc: "电池安全、运输、整机、EMC、材料合规送测（原 v3）",
+          owner: "QA/认证",
+          evidence: "heavy",
+          visibleRoles: ["qa", "cert", "battery_safety", "rd_hw", "pm", "manager", "owner"],
+          durationDays: 20,
+          dependsOn: ["nv1"],
+          guide: "每项记录样品版本、BOM/软硬件版本、报告编号和前置依赖。",
+        },
+      },
+    ],
+    gateRequiredDeliverables: { dvt: ["认证报告"] },
+  },
+  {
+    id: "software",
+    name: "软件包",
+    desc: "含固件/APP 的项目激活",
+    tasks: [
+      {
+        phaseId: "design",
+        task: {
+          id: "ps1",
+          name: "软件设计与架构",
+          desc: "固件架构、通信协议、OTA（原 d5）",
+          owner: "SW",
+          evidence: "heavy",
+          visibleRoles: ["rd_sw", "pm", "manager", "owner"],
+          durationDays: 15,
+          dependsOn: ["nd3"],
+          guide: "系统架构图（固件+云+APP）、协议定义、OTA 方案。独立工作线，激活后按独立任务追踪。",
+        },
+      },
+      {
+        phaseId: "dvt",
+        task: {
+          id: "ps2",
+          name: "软件完整测试",
+          desc: "回归/压力/OTA/多设备并发（原 v5，含 e4 联调收尾）",
+          owner: "SW/QA",
+          evidence: "heavy",
+          visibleRoles: ["rd_sw", "qa", "pm", "manager", "owner"],
+          durationDays: 10,
+          dependsOn: ["nv1"],
+          guide: "完整回归+压力+OTA 升级+多 APP/多设备并发。",
+        },
+      },
+    ],
+    gateRequiredDeliverables: { dvt: ["软件完整测试报告"] },
+  },
+  {
+    id: "mold",
+    name: "模具包",
+    desc: "需开新模的项目激活",
+    tasks: [
+      {
+        phaseId: "dvt",
+        task: {
+          id: "pmo1",
+          name: "模具开发与 T1/T2 验证",
+          desc: "开模、试模、修模（原 v4；投模评审为检查项）",
+          owner: "MD/模厂",
+          evidence: "heavy",
+          visibleRoles: ["rd_mech", "pm", "manager", "owner"],
+          durationDays: 30,
+          dependsOn: ["nd6"],
+          guide: "投模评审批准（检查项）→开模 4-6 周→T1 试模备认证样品→T2 修模。",
+        },
+      },
+    ],
+    gateRequiredDeliverables: { dvt: ["模具T1样品"] },
+  },
+];
+
+/**
+ * 新建 NPD 的唯一流程配置。
+ *
+ * 新产品开发不再按属性问答分档，也不再让用户选择附加包；完整流程固定包含
+ * 7 个阶段与全部专业工作线。历史项目仍按自身已保存的配置解析，保证追溯兼容。
+ */
+export const NPD_FULL_TEMPLATE_CONFIG: NpdTemplateConfig = {
+  tier: "full",
+  packs: ["battery", "cert", "software", "mold"],
+};
+
+// ── 轻量档（15 任务，EVT+DVT 合并为 verification）──────────────────────────
+const coreTask = (id: string): SOPTask => {
+  for (const phase of NPD_V3_CORE_PHASES) {
+    const task = phase.tasks.find((candidate) => candidate.id === id);
+    if (task) return task;
+  }
+  throw new Error(`npd-v3 core task not found: ${id}`);
+};
+
+const corePhase = (id: string): SOPPhase => {
+  const phase = NPD_V3_CORE_PHASES.find((candidate) => candidate.id === id);
+  if (!phase) throw new Error(`npd-v3 core phase not found: ${id}`);
+  return phase;
+};
+
+const overrideTask = (sourceId: string, patch: Partial<SOPTask>): SOPTask => ({
+  ...coreTask(sourceId),
+  ...patch,
+});
+
+export const NPD_V3_LITE_PHASES: SOPPhase[] = [
+  {
+    ...corePhase("concept"),
+    deliverables: ["立项申请书"],
+    gateStandard: {
+      ...corePhase("concept").gateStandard,
+      requiredDeliverables: ["立项申请书"],
+    },
+    tasks: [
+      overrideTask("nc1", {
+        id: "nlc1",
+        name: "产品机会与立项论证（含技术可行性检查项）",
+        desc: "立项论证、技术可行性与安全/认证硬卡初判合一",
+        evidence: "light",
+        dependsOn: [],
+        guide: `${coreTask("nc1").guide} 5) 技术可行性与认证/电池硬卡初判（吸收原技术可行性任务为检查项）。`,
+      }),
+      overrideTask("nc3", { dependsOn: ["nlc1"] }),
+    ],
+  },
+  {
+    ...corePhase("planning"),
+    deliverables: ["产品需求文档 PRD", "BOM v0.1"],
+    gateStandard: {
+      ...corePhase("planning").gateStandard,
+      requiredDeliverables: ["产品需求文档 PRD", "BOM v0.1"],
+    },
+    tasks: [
+      overrideTask("np1", {
+        id: "nlp1",
+        name: "产品需求与规格一页纸（含 BOM 初版检查项）",
+        desc: "需求、规格、安全边界、BOM 初版与关键供应商合一",
+        evidence: "light",
+        guide: "一页纸：需求/规格/安全边界；BOM 初版与关键供应商作为检查项附上。",
+      }),
+      overrideTask("np3", { dependsOn: ["nlp1"] }),
+    ],
+  },
+  {
+    ...corePhase("design"),
+    deliverables: ["结构 3D 设计", "EE 原理图 & PCB Layout"],
+    gateStandard: {
+      ...corePhase("design").gateStandard,
+      exitCriteria: ["MD/EE 设计完成", "DFM/DFA 检查项闭环", "保护链路与关键结构边界冻结"],
+      requiredDeliverables: ["结构 3D 设计", "EE 原理图 & PCB Layout"],
+      responsibleRoles: ["MD", "EE"],
+    },
+    tasks: [
+      overrideTask("nd2", { dependsOn: ["np3"] }),
+      overrideTask("nd3", {
+        id: "nld3",
+        name: "电子设计（原理图+Layout）",
+        desc: "原理图、保护链路与 PCB Layout 合一",
+        dependsOn: ["np3"],
+        guide: "小改款合并追踪：原理图→Layout 一条线；保护链路检查项照旧必填。",
+      }),
+      overrideTask("nd6", { dependsOn: ["nd2", "nld3"] }),
+    ],
+  },
+  {
+    id: "verification",
+    code: "P4",
+    name: "样机验证",
+    nameEn: "Verification",
+    duration: "4-8周",
+    desc: "EVT/DVT 合一验证（轻量档）",
+    gate: "验证评审",
+    gateTaskId: "nv3",
+    color: "#0f766e",
+    deliverables: ["Build Record", "功能/性能测试报告", "可靠性测试报告"],
+    gateStandard: gateStandard({
+      exitCriteria: ["功能/性能测试通过", "可靠性测试全部 Pass", "Issue List 无未关闭 P0/P1"],
+      requiredDeliverables: ["功能/性能测试报告", "可靠性测试报告"],
+      responsibleRoles: ["EE", "QA"],
+    }),
+    tasks: [
+      overrideTask("ne1", {
+        id: "nle1",
+        name: "样机与功能/性能测试",
+        desc: "样机制作、软硬件联调、FT/PT 与 DVT 样机合一（轻量档）",
+        evidence: "heavy",
+        dependsOn: ["nd6"],
+        guide: "样机制作（含联调检查项）→功能/性能测试一份报告；验证版本和 Build Record 一并留痕。",
+      }),
+      overrideTask("nv2", { dependsOn: ["nle1"] }),
+      overrideTask("nv3", {
+        name: "验证评审 (Gate)",
+        desc: "EVT/DVT 合一评审（轻量档）",
+        dependsOn: ["nle1", "nv2"],
+      }),
+    ],
+  },
+  {
+    ...corePhase("pvt"),
+    tasks: [
+      overrideTask("npv1", {
+        id: "nlpv1",
+        name: "试产准备与执行",
+        desc: "准备、执行、良率与包装验证合一（轻量档）",
+        dependsOn: ["nv3"],
+        guide: "检查项：排程齐套、SOP/WI 与检验标准、试产良率、包装与运输验证。",
+      }),
+      overrideTask("npv2", { dependsOn: ["nv3"] }),
+      overrideTask("npv5", { dependsOn: ["nlpv1", "npv2"] }),
+    ],
+  },
+  { ...corePhase("mp") },
+];
+
+// ── 生效阶段计算 ────────────────────────────────────────────────────────────
+const NPD_TEMPLATE_TIERS: NpdTemplateTier[] = ["lite", "standard", "full"];
+const NPD_ADDON_PACK_IDS = NPD_ADDON_PACKS.map((pack) => pack.id);
+
+export function normalizeNpdTemplateConfig(raw?: unknown): NpdTemplateConfig {
+  const input = raw && typeof raw === "object" && !Array.isArray(raw)
+    ? (raw as Partial<NpdTemplateConfig>)
+    : {};
+  const tier = NPD_TEMPLATE_TIERS.includes(input.tier as NpdTemplateTier)
+    ? (input.tier as NpdTemplateTier)
+    : "standard";
+  const packs = Array.isArray(input.packs)
+    ? input.packs.filter((pack): pack is NpdAddonPackId =>
+      NPD_ADDON_PACK_IDS.includes(pack as NpdAddonPackId)
+    )
+    : [];
+  return { tier, packs: Array.from(new Set(packs)) };
+}
+
+/** lite 没有 EVT/DVT 阶段，包任务与必交物都归入 verification。 */
+function effectivePhaseTarget(phaseId: string, tier: NpdTemplateTier): string {
+  if (tier === "lite" && (phaseId === "evt" || phaseId === "dvt")) return "verification";
+  return phaseId;
+}
+
+const LITE_DEPENDENCY_REMAP: Record<string, string> = {
+  nd3: "nld3",
+  nv1: "nle1",
+};
+
+function effectiveAddonTask(task: SOPTask, tier: NpdTemplateTier): SOPTask {
+  if (tier !== "lite") return task;
+  return {
+    ...task,
+    dependsOn: task.dependsOn?.map((dependencyId) => LITE_DEPENDENCY_REMAP[dependencyId] ?? dependencyId),
+  };
+}
+
+function packDeliverablesForPhase(
+  pack: NpdAddonPack,
+  phaseId: string,
+  tier: NpdTemplateTier
+): string[] {
+  return Object.entries(pack.gateRequiredDeliverables ?? {}).flatMap(([sourcePhaseId, deliverables]) =>
+    effectivePhaseTarget(sourcePhaseId, tier) === phaseId ? deliverables : []
+  );
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values));
+}
+
+const NPD_EFFECTIVE_PHASE_CACHE = new Map<string, SOPPhase[]>();
+
+function cloneEffectivePhases(phases: SOPPhase[]): SOPPhase[] {
+  return phases.map((phase) => ({
+    ...phase,
+    deliverables: [...phase.deliverables],
+    tasks: phase.tasks.map((task) => ({
+      ...task,
+      visibleRoles: task.visibleRoles ? [...task.visibleRoles] : task.visibleRoles,
+      dependsOn: task.dependsOn ? [...task.dependsOn] : task.dependsOn,
+    })),
+    gateStandard: {
+      ...phase.gateStandard,
+      entryCriteria: [...phase.gateStandard.entryCriteria],
+      exitCriteria: [...phase.gateStandard.exitCriteria],
+      requiredDeliverables: [...phase.gateStandard.requiredDeliverables],
+      responsibleRoles: [...phase.gateStandard.responsibleRoles],
+      evidenceRequirements: [...phase.gateStandard.evidenceRequirements],
+      exceptionStrategy: [...phase.gateStandard.exceptionStrategy],
+    },
+  }));
+}
+
+function freezeEffectivePhases(phases: SOPPhase[]): SOPPhase[] {
+  for (const phase of phases) {
+    for (const task of phase.tasks) {
+      if (task.visibleRoles) Object.freeze(task.visibleRoles);
+      if (task.dependsOn) Object.freeze(task.dependsOn);
+      Object.freeze(task);
+    }
+    Object.freeze(phase.tasks);
+    Object.freeze(phase.deliverables);
+    for (const value of Object.values(phase.gateStandard)) {
+      if (Array.isArray(value)) Object.freeze(value);
+    }
+    Object.freeze(phase.gateStandard);
+    Object.freeze(phase);
+  }
+  return Object.freeze(phases) as unknown as SOPPhase[];
+}
+
+export function getNpdV3EffectivePhases(config?: unknown): SOPPhase[] {
+  const { tier, packs } = normalizeNpdTemplateConfig(config);
+  const cacheKey = `${tier}|${[...packs].sort().join(",")}`;
+  const cached = NPD_EFFECTIVE_PHASE_CACHE.get(cacheKey);
+  if (cached) return cached;
+  const base = tier === "lite" ? NPD_V3_LITE_PHASES : NPD_V3_CORE_PHASES;
+  const activePacks = NPD_ADDON_PACKS.filter((pack) => packs.includes(pack.id));
+  const composed = activePacks.length === 0 ? base : base.map((phase) => {
+    const extraTasks = activePacks.flatMap((pack) =>
+      pack.tasks
+        .filter((entry) => effectivePhaseTarget(entry.phaseId, tier) === phase.id)
+        .map((entry) => effectiveAddonTask(entry.task, tier))
+    );
+    const extraDeliverables = activePacks.flatMap((pack) =>
+      packDeliverablesForPhase(pack, phase.id, tier)
+    );
+    if (extraTasks.length === 0 && extraDeliverables.length === 0) return phase;
+
+    const extraTaskIds = extraTasks.map((task) => task.id);
+    const phaseTasks = phase.tasks.map((task) =>
+      task.id === phase.gateTaskId && extraTaskIds.length > 0
+        ? { ...task, dependsOn: uniqueStrings([...(task.dependsOn ?? []), ...extraTaskIds]) }
+        : task
+    );
+    const gateIndex = phaseTasks.findIndex((task) => task.id === phase.gateTaskId);
+    const tasks = gateIndex === -1
+      ? [...phaseTasks, ...extraTasks]
+      : [...phaseTasks.slice(0, gateIndex), ...extraTasks, ...phaseTasks.slice(gateIndex)];
+
+    return {
+      ...phase,
+      tasks,
+      deliverables: uniqueStrings([...phase.deliverables, ...extraDeliverables]),
+      gateStandard: {
+        ...phase.gateStandard,
+        requiredDeliverables: uniqueStrings([
+          ...phase.gateStandard.requiredDeliverables,
+          ...extraDeliverables,
+        ]),
+      },
+    };
+  });
+  const frozen = freezeEffectivePhases(cloneEffectivePhases(composed));
+  NPD_EFFECTIVE_PHASE_CACHE.set(cacheKey, frozen);
+  return frozen;
+}
+
+export interface ProjectTemplateLike {
+  category?: string | null;
+  sopTemplateVersion?: string | null;
+  customFields?: unknown;
+}
+
+/** 按项目版本、档位和附加包返回生效阶段；非 NPD v3 项目保持原模板。 */
+export function getEffectivePhasesForProjectLike(project: ProjectTemplateLike): SOPPhase[] {
+  const customFields = (project.customFields ?? {}) as Record<string, unknown>;
+  if (
+    project.category === "npd" &&
+    project.sopTemplateVersion === SOP_TEMPLATE_VERSION_NPD_V3
+  ) {
+    return getNpdV3EffectivePhases(customFields.npdTemplate);
+  }
+  if (project.category === "derivative") {
+    const derivativePhases = resolveDerivativeEffectivePhases(
+      customFields.projectExecutionBaseline,
+      project.sopTemplateVersion,
+    );
+    if (derivativePhases) return derivativePhases;
+  }
+  if (project.category === "jdm") {
+    const jdmPhases = resolveJdmEffectivePhases(
+      customFields.projectExecutionBaseline,
+      project.sopTemplateVersion,
+    );
+    if (jdmPhases) return jdmPhases;
+  }
+  return getPhasesForCategory(project.category ?? undefined, project.sopTemplateVersion);
+}
+
+/** 查询项目实际生效模板中的任务证据级别；无标注或找不到任务时按轻证据处理。 */
+export function getTaskEvidenceLevel(
+  project: ProjectTemplateLike,
+  phaseId: string,
+  taskId: string,
+): "light" | "heavy" {
+  const phase = getEffectivePhasesForProjectLike(project).find((entry) => entry.id === phaseId);
+  return phase?.tasks.find((task) => task.id === taskId)?.evidence ?? "light";
+}
+
+/** 路线图三条永久红线；激活的 battery/cert 包任务在项目维度追加。 */
+export const NPD_V3_CORE_REDLINE_TASK_IDS = Object.freeze([
+  "npv2",
+  "npv5",
+  "nm1",
+] as const);
+
+export interface NpdV3RedlinePolicy {
+  taskIds: ReadonlySet<string>;
+  auditDeliverables: ReadonlySet<string>;
+}
+
+/**
+ * Resolve non-tailorable tasks/evidence from the project's actual v3 tier and
+ * active packs. Legacy NPD and non-NPD projects intentionally have no policy.
+ */
+export function getNpdV3RedlinePolicy(project: ProjectTemplateLike): NpdV3RedlinePolicy {
+  const taskIds = new Set<string>();
+  const auditDeliverables = new Set<string>();
+  if (
+    project.category !== "npd" ||
+    project.sopTemplateVersion !== SOP_TEMPLATE_VERSION_NPD_V3
+  ) {
+    return { taskIds, auditDeliverables };
+  }
+
+  const customFields = (project.customFields ?? {}) as Record<string, unknown>;
+  const config = normalizeNpdTemplateConfig(customFields.npdTemplate);
+  const phases = getEffectivePhasesForProjectLike(project);
+  const effectiveTaskIds = new Set(
+    phases.flatMap((phase) => phase.tasks.map((task) => task.id))
+  );
+  for (const taskId of NPD_V3_CORE_REDLINE_TASK_IDS) {
+    if (effectiveTaskIds.has(taskId)) taskIds.add(taskId);
+  }
+
+  const activeRedlinePacks = NPD_ADDON_PACKS.filter(
+    (pack) => pack.redline && config.packs.includes(pack.id)
+  );
+  for (const pack of activeRedlinePacks) {
+    for (const { task } of pack.tasks) {
+      if (effectiveTaskIds.has(task.id)) taskIds.add(task.id);
+    }
+    for (const deliverables of Object.values(pack.gateRequiredDeliverables ?? {})) {
+      for (const deliverable of deliverables) auditDeliverables.add(deliverable);
+    }
+  }
+
+  for (const taskId of Array.from(taskIds)) {
+    for (const deliverable of TASK_DELIVERABLES[taskId] ?? []) {
+      auditDeliverables.add(deliverable);
+    }
+  }
+  for (const phase of phases) {
+    if (!taskIds.has(phase.gateTaskId)) continue;
+    for (const deliverable of phase.gateStandard.requiredDeliverables ?? []) {
+      auditDeliverables.add(deliverable);
+    }
+  }
+
+  return { taskIds, auditDeliverables };
+}
+
+export function isNpdV3RedlineAuditDeliverable(
+  project: ProjectTemplateLike,
+  deliverableName: string,
+): boolean {
+  return getNpdV3RedlinePolicy(project).auditDeliverables.has(deliverableName);
+}

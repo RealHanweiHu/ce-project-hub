@@ -4,8 +4,9 @@
  * 避免「卡片勾选」与系统状态写入改到不同列导致进度/看板不一致。
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { setTaskCompletion, updateTaskMeta, getProjectTasks, getDb, refreshProjectTaskStatuses } from "./db";
-import { projectTasks, projects } from "../drizzle/schema";
+import { setTaskCompletion, updateTaskMeta, getProjectTasks, getDb, refreshProjectTaskStatuses, applyAutomaticTaskStatuses } from "./db";
+import { projectTasks, projects, type ProjectTask } from "../drizzle/schema";
+import { PROJECT_CATEGORIES, SOP_TEMPLATE_VERSION_CURRENT } from "../shared/sop-templates";
 import { and, eq } from "drizzle-orm";
 
 const P = `test-sot-${Date.now()}`;
@@ -17,6 +18,40 @@ const P_AUTO = `${P}-auto`;
 async function row() {
   const tasks = await getProjectTasks(P, PH);
   return tasks.find((x) => x.taskId === T)!;
+}
+
+function makeTask(over: Partial<ProjectTask>): ProjectTask {
+  return {
+    id: 1,
+    projectId: "p1",
+    phaseId: "concept",
+    taskId: "c1",
+    completed: false,
+    instructions: "",
+    deliverables: {},
+    visibleRoles: [],
+    assigneeUserId: null,
+    dueDate: null,
+    startDate: null,
+    actualStartedAt: null,
+    completionNote: null,
+    status: "todo",
+    statusChangedAt: new Date(),
+    priority: "medium",
+    completedAt: null,
+    updatedBy: null,
+    requiresApproval: false,
+    approverUserId: null,
+    approvalStatus: "none",
+    approvalNote: null,
+    approvalRequestedBy: null,
+    approvalRequestedAt: null,
+    approvalDecidedBy: null,
+    approvalDecidedAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...over,
+  } as ProjectTask;
 }
 
 beforeAll(async () => {
@@ -89,7 +124,84 @@ describe("task completion single source of truth", () => {
     expect(r.priority).toBe("high");
   });
 
-  it("依赖未完成时自动标记 blocked,依赖完成后回到待处理", async () => {
+  it("未启动项目在所有项目类型 SOP 中保持待开始,不因依赖图变成阻塞", () => {
+    for (const category of PROJECT_CATEGORIES) {
+      const rows = category.phases.flatMap((phase, phaseIndex) =>
+        phase.tasks.map((task, taskIndex) =>
+          makeTask({
+            id: phaseIndex * 100 + taskIndex + 1,
+            projectId: `pending-${category.id}`,
+            phaseId: phase.id,
+            taskId: task.id,
+          })
+        )
+      );
+
+      const out = applyAutomaticTaskStatuses(rows, category.id, "2026-06-25", {
+        projectStartDate: null,
+      });
+      expect(out.map((task) => task.status), category.id).not.toContain("blocked");
+      expect(new Set(out.map((task) => task.status)), category.id).toEqual(new Set(["todo"]));
+    }
+  });
+
+  it("状态派生与开始守卫共用裁剪后的项目有效依赖图", () => {
+    const projectLike = {
+      category: "derivative",
+      sopTemplateVersion: SOP_TEMPLATE_VERSION_CURRENT,
+      customFields: {
+        projectExecutionBaseline: {
+          modelVersion: "project-track-v1",
+          status: "frozen",
+          productDefinitionRef: "PSD-DRV-001",
+          moduleReuse: {
+            battery: "reused",
+            core_function: "not_reused",
+            electronics: "not_reused",
+            software_connectivity: "not_reused",
+            structure_mold: "not_reused",
+            id_cmf: "not_reused",
+          },
+          reuseEvidence: {
+            battery: {
+              sourceRef: "BAT-PLATFORM",
+              modelOrVersion: "v1",
+              evidenceRef: "EV-BAT-001",
+              boundaryConfirmed: true,
+            },
+          },
+          frozenAt: "2026-07-15T10:00:00.000Z",
+          frozenBy: 1,
+        },
+      },
+    };
+    const rows = [
+      makeTask({
+        id: 1,
+        projectId: "contracted-status",
+        phaseId: "iteration",
+        taskId: "drv_common_kickoff_gate",
+        status: "done",
+        completed: true,
+        completedAt: new Date(),
+      }),
+      makeTask({
+        id: 2,
+        projectId: "contracted-status",
+        phaseId: "design",
+        taskId: "drv_common_dfm_validation_plan",
+        actualStartedAt: new Date(),
+      }),
+    ];
+
+    const out = applyAutomaticTaskStatuses(rows, "derivative", "2026-07-12", {
+      projectStartDate: "2026-07-01",
+      projectLike,
+    });
+    expect(out.find((task) => task.taskId === "drv_common_dfm_validation_plan")?.status).toBe("in_progress");
+  });
+
+  it("项目启动后依赖未完成的任务保持待开始(不标阻塞),依赖完成后按排期推进", async () => {
     const db = await getDb();
     expect(db).toBeTruthy();
     if (!db) return;
@@ -101,6 +213,7 @@ describe("task completion single source of truth", () => {
       category: "npd",
       risk: "low",
       currentPhase: "concept",
+      startDate: "2026-06-01",
       progress: 0,
       createdBy: U,
       archived: false,
@@ -108,19 +221,29 @@ describe("task completion single source of truth", () => {
     await db.insert(projectTasks).values([
       { projectId: P_AUTO, phaseId: "concept", taskId: "c1", status: "todo", completed: false },
       { projectId: P_AUTO, phaseId: "concept", taskId: "c2", status: "todo", completed: false },
-      { projectId: P_AUTO, phaseId: "concept", taskId: "c3", status: "todo", completed: false },
+      // c3 计划开始日已过但前置 c1/c2 未完成：还没轮到 = 待开始，不是阻塞
+      { projectId: P_AUTO, phaseId: "concept", taskId: "c3", status: "todo", completed: false, startDate: "2026-06-05", dueDate: "2026-06-12" },
       { projectId: P_AUTO, phaseId: "concept", taskId: "c4", status: "todo", completed: false, startDate: "2099-01-01", dueDate: "2099-01-08" },
     ]);
 
-    await refreshProjectTaskStatuses(P_AUTO);
+    await refreshProjectTaskStatuses(P_AUTO, "2026-06-25");
     let rows = await getProjectTasks(P_AUTO, "concept");
-    expect(rows.find((task) => task.taskId === "c3")?.status).toBe("blocked");
+    expect(rows.find((task) => task.taskId === "c3")?.status).toBe("todo");
     expect(rows.find((task) => task.taskId === "c4")?.status).toBe("todo");
+    expect(rows.map((task) => task.status)).not.toContain("blocked");
 
+    // 前置完成后，排期已经开始也仍保持 todo；只有人工开始动作才产生 in_progress。
     await updateTaskMeta(P_AUTO, "concept", "c1", { status: "done", updatedBy: U });
     await updateTaskMeta(P_AUTO, "concept", "c2", { status: "done", updatedBy: U });
-    await refreshProjectTaskStatuses(P_AUTO);
+    await refreshProjectTaskStatuses(P_AUTO, "2026-06-25");
     rows = await getProjectTasks(P_AUTO, "concept");
     expect(rows.find((task) => task.taskId === "c3")?.status).toBe("todo");
+
+    await db.update(projectTasks)
+      .set({ actualStartedAt: new Date("2026-06-25T01:00:00.000Z") })
+      .where(and(eq(projectTasks.projectId, P_AUTO), eq(projectTasks.taskId, "c3")));
+    await refreshProjectTaskStatuses(P_AUTO, "2026-06-25");
+    rows = await getProjectTasks(P_AUTO, "concept");
+    expect(rows.find((task) => task.taskId === "c3")?.status).toBe("in_progress");
   });
 });

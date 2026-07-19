@@ -16,8 +16,10 @@ export type StorageAuthDeps = {
   getFileAccess?: (key: string) => Promise<{ projectId: string; visibility: string } | null>;
   /** Caller's effective role in the project, or null if they have no access. */
   getRole: (projectId: string, userId: number) => Promise<ProjectMemberRole | null>;
+  /** 多岗成员的全部有效角色（并集语义）；未提供时回退到单一 getRole。 */
+  getRoles?: (projectId: string, userId: number) => Promise<Set<ProjectMemberRole>>;
   /** Optional role/visibility policy for customer/supplier-facing files. */
-  canRoleViewFile?: (role: ProjectMemberRole, visibility: string) => boolean;
+  canRoleViewFile?: (role: ProjectMemberRole | Iterable<ProjectMemberRole>, visibility: string) => boolean;
 };
 
 export async function resolveStorageAuthorization(
@@ -35,6 +37,8 @@ export async function resolveStorageAuthorization(
   const { projectId, visibility } = fileAccess;
   const role = await deps.getRole(projectId, userId);
   if (!role) return "forbidden";
-  if (deps.canRoleViewFile && !deps.canRoleViewFile(role, visibility)) return "forbidden";
+  const roles = deps.getRoles ? await deps.getRoles(projectId, userId) : null;
+  const roleForPolicy: ProjectMemberRole | Iterable<ProjectMemberRole> = roles && roles.size > 0 ? roles : role;
+  if (deps.canRoleViewFile && !deps.canRoleViewFile(roleForPolicy, visibility)) return "forbidden";
   return "ok";
 }

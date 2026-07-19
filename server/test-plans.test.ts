@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { createProjectFile, getDb } from "./db";
 import { appRouter } from "./routers";
 import {
@@ -147,6 +147,15 @@ describe("testPlans router", () => {
 
     const issue = await qaCaller.testPlans.createIssueFromCase({ id: testCase.id });
     expect(issue.existed).toBe(false);
+    const db = await getDb();
+    const [canonical] = await db!.select().from(activityLogs).where(and(
+      eq(activityLogs.projectId, PROJECT),
+      eq(activityLogs.action, "issue.create"),
+      eq(activityLogs.entityId, String(issue.id)),
+    ));
+    expect(canonical.meta).toMatchObject({
+      after: { creatorId: QA, status: "open", severity: "P1" },
+    });
     readiness = await qaCaller.gateReviews.readiness({ projectId: PROJECT, phaseId: "evt" });
     expect(readiness?.dimensions.find((dimension) => dimension.dimension === "test_reports")?.ok).toBe(false);
 

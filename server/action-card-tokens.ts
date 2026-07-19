@@ -33,6 +33,13 @@ const tokenPayloadSchema = z.discriminatedUnion("kind", [
     taskId: z.string().min(1),
   }),
   baseSchema.extend({
+    kind: z.literal("task_start"),
+    actionItemId: z.number().int().positive().optional(),
+    projectId: z.string().min(1),
+    phaseId: z.string().min(1),
+    taskId: z.string().min(1),
+  }),
+  baseSchema.extend({
     kind: z.literal("issue_validation"),
     actionItemId: z.number().int().positive().optional(),
     projectId: z.string().min(1),
@@ -43,7 +50,7 @@ const tokenPayloadSchema = z.discriminatedUnion("kind", [
   baseSchema.extend({
     kind: z.literal("action_item_snooze"),
     actionItemId: z.number().int().positive(),
-    until: z.enum(["tomorrow_morning"]).default("tomorrow_morning"),
+    until: z.enum(["tomorrow_morning", "in_2_days"]).default("tomorrow_morning"),
   }),
   baseSchema.extend({
     kind: z.literal("delay_impact_confirm"),

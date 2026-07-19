@@ -3,13 +3,16 @@ import { pushWebhook as defaultPushWebhook } from "../_core/notify";
 import { sendToGroupChat as defaultNotifyGroup } from "../_core/dingtalkGroup";
 import {
   createAutomationRun,
+  finishAutomationClaim,
   getProjectById,
   getProjectMembers,
-  hasRecentAutomationFire,
   listAutomationRuleRows,
   seedAutomationRuleDefaults,
+  syncAutomationRuleDefaultChanges,
+  tryClaimAutomation,
 } from "../db";
 import {
+  AUTOMATION_NOTIFICATION_LAYERING_DEFAULT_CHANGES,
   AUTOMATION_RULES,
   AutomationEvent,
   AutomationMessageContext,
@@ -25,6 +28,11 @@ import { isAutomationSuppressedProject } from "./project-filter";
 import { notifyPersonal, type NotifyPersonalDeps } from "../notification-gateway";
 import { actionDedupeKey, notifyActionItem } from "../action-item-notify";
 import {
+  notifyTaskReadyActionItems,
+  type TaskReadyDeps,
+  type TaskReadyResult,
+} from "./taskReady";
+import {
   buildDeliverableReviewActionPath,
   buildIssueValidationActionPath,
   buildProjectActionPath,
@@ -39,13 +47,27 @@ type ResolvedRecipients = {
   chatId: string | null;
 };
 
-type DispatchDeps = NotifyPersonalDeps & {
-  pushWebhook?: typeof defaultPushWebhook;
+type DispatchDeps = TaskReadyDeps & {
+  pushWebhook?: (text: string, opts?: { title?: string; markdown?: string }) => Promise<boolean | void>;
   notifyGroup?: (chatId: string, title: string, markdown: string) => Promise<boolean>;
+  loadProjectMembers?: typeof getProjectMembers;
+  notifyTaskReady?: (
+    event: AutomationEvent,
+    project: Parameters<typeof notifyTaskReadyActionItems>[1],
+    deps?: TaskReadyDeps,
+  ) => Promise<TaskReadyResult>;
   allowAutomationTestProjects?: boolean;
 };
 
 let seededDefaults = false;
+
+export type AutomationRunSummary = {
+  matched: number;
+  fired: number;
+  partial: number;
+  skipped: number;
+  errors: number;
+};
 
 export async function ensureAutomationRuleDefaults(): Promise<void> {
   if (seededDefaults) return;
@@ -61,17 +83,25 @@ export async function ensureAutomationRuleDefaults(): Promise<void> {
       config: { ...rule.defaultConfig } as Record<string, unknown>,
     })),
   ]);
+  await syncAutomationRuleDefaultChanges(AUTOMATION_NOTIFICATION_LAYERING_DEFAULT_CHANGES);
   seededDefaults = true;
 }
 
-export async function runAutomation(event: AutomationEvent, deps: DispatchDeps = {}): Promise<void> {
+export async function runAutomation(event: AutomationEvent, deps: DispatchDeps = {}): Promise<AutomationRunSummary> {
+  const summary: AutomationRunSummary = { matched: 0, fired: 0, partial: 0, skipped: 0, errors: 0 };
   await ensureAutomationRuleDefaults();
   const projectId = projectIdForEvent(event);
+  const project = projectId ? await getProjectById(projectId) : undefined;
   if (projectId) {
-    const project = await getProjectById(projectId);
-    if (event.action !== "mp.release" && (!project || project.archived)) return;
-    if (!deps.allowAutomationTestProjects && isAutomationSuppressedProject(project)) return;
+    if (!project || project.archived || project.lifecycle !== "active") return summary;
+    if (!deps.allowAutomationTestProjects && isAutomationSuppressedProject(project)) return summary;
   }
+  let membersPromise: ReturnType<typeof getProjectMembers> | null = null;
+  const loadMembers = () => {
+    if (!projectId) return Promise.resolve([]);
+    membersPromise ??= (deps.loadProjectMembers ?? getProjectMembers)(projectId);
+    return membersPromise;
+  };
 
   const rows = await listAutomationRuleRows();
   const rowByKey = new Map(rows.map((row) => [row.ruleKey, row]));
@@ -83,36 +113,93 @@ export async function runAutomation(event: AutomationEvent, deps: DispatchDeps =
     if (!row?.enabled) continue;
 
     let entityId: string | null | undefined;
+    let claim: { claimKey: string; token: string } | null = null;
     try {
       const config = parseAutomationRuleConfig(rule.key, row.config ?? {});
       if (!rule.matches(event, config)) continue;
+      summary.matched += 1;
 
       entityId = entityIdForRuleRun(rule, event, config);
       const cadenceHours = rule.triggerType === "scheduled"
         ? getCadenceHours(config)
         : getEventCadenceHours(config);
-      if (cadenceHours !== null && entityId) {
-        const since = new Date(Date.now() - cadenceHours * 60 * 60 * 1000);
-        if (await hasRecentAutomationFire({ ruleKey: rule.key, entityId, since })) {
-          await writeRun(rule, event, "skipped", [], `dedup within ${cadenceHours}h`, entityId);
+      if (entityId && (cadenceHours !== null || event.sourceActivityLogId != null)) {
+        const since = cadenceHours === null
+          ? undefined
+          : new Date(Date.now() - cadenceHours * 60 * 60 * 1000);
+        // Cadence rules intentionally share one stable key across source logs;
+        // otherwise each tailer row would bypass the rolling suppression.
+        const claimKey = automationClaimKey(
+          rule.key,
+          projectId,
+          entityId,
+          cadenceHours === null ? event.sourceActivityLogId : null,
+        );
+        const acquired = await tryClaimAutomation({
+          claimKey,
+          ruleKey: rule.key,
+          projectId,
+          entityId,
+          sourceActivityLogId: event.sourceActivityLogId ?? null,
+          ...(since ? { since } : {}),
+        });
+        if (!acquired) {
+          const reason = cadenceHours === null
+            ? `dedup activity ${event.sourceActivityLogId}`
+            : `dedup within ${cadenceHours}h`;
+          await writeRun(rule, event, "skipped", [], reason, entityId);
+          summary.skipped += 1;
           continue;
         }
+        claim = { claimKey, token: acquired.token };
       }
 
-      const ctx = await buildMessageContext(event);
+      if (rule.key === "task_ready_notify") {
+        const result = project
+          ? await (deps.notifyTaskReady ?? notifyTaskReadyActionItems)(event, project, deps)
+          : { eligible: 0, dispatched: 0 };
+        const fired = result.dispatched > 0;
+        if (claim) {
+          await finishAutomationClaim({
+            ...claim,
+            status: fired ? "fired" : "skipped",
+          });
+        }
+        await writeRun(
+          rule,
+          event,
+          fired ? "fired" : "skipped",
+          fired ? [{ channel: "action_item", count: result.dispatched }] : [],
+          `eligible ${result.eligible}; dispatched ${result.dispatched}`,
+          entityId,
+        );
+        if (fired) summary.fired += 1;
+        else summary.skipped += 1;
+        continue;
+      }
+
+      const ctx = buildMessageContext(event, project);
       const message = rule.buildMessage(event, config, ctx);
-      const recipients = await resolveRecipients(rule, event, config);
+      // Only matching, successfully claimed rules need recipient expansion.
+      // Multiple matching rules share one lazy query per automation event.
+      const members = await loadMembers();
+      const recipients = resolveRecipients(rule, event, config, project, members);
+      const delivered: unknown[] = [];
+      const deliveryErrors: string[] = [];
 
       if (recipients.userIds.length === 0 && !recipients.pushGroup) {
+        if (claim) await finishAutomationClaim({ ...claim, status: "skipped" });
         await writeRun(rule, event, "skipped", [], "no recipients", entityId);
+        summary.skipped += 1;
         continue;
       }
 
       if (recipients.userIds.length > 0) {
         if (rule.key === "delay_impact_notify" && projectId) {
-          await notifyDelayImpactActionItems(event, recipients.userIds, message, projectId, entityId, deps);
+          const count = await notifyDelayImpactActionItems(event, recipients.userIds, message, projectId, entityId, deps);
+          delivered.push(...Array.from({ length: count }, (_, index) => ({ channel: "action_item", index })));
         } else {
-          await notifyPersonal({
+          const personal = await notifyPersonal({
             eventKey: rule.key,
             userIds: recipients.userIds,
             title: message.title,
@@ -121,7 +208,13 @@ export async function runAutomation(event: AutomationEvent, deps: DispatchDeps =
             entityType: event.entityType,
             entityId: entityId ?? entityIdForRun(event),
             actionPath: actionPathForAutomationEvent(event, projectId),
+            priority: deliveryPriority(event),
           }, deps);
+          delivered.push(
+            ...recipients.userIds.slice(0, personal.site).map((userId) => ({ userId, channel: "site" })),
+            ...recipients.userIds.slice(0, personal.dingtalk).map((userId) => ({ userId, channel: "dingtalk" })),
+          );
+          deliveryErrors.push(...personal.errors);
         }
       }
 
@@ -131,19 +224,46 @@ export async function runAutomation(event: AutomationEvent, deps: DispatchDeps =
         if (recipients.chatId) {
           // 有项目专属钉钉群 → 提醒发到本项目群
           const notifyGroup = deps.notifyGroup ?? defaultNotifyGroup;
-          await notifyGroup(recipients.chatId, message.title, md);
-        } else {
+          const groupDelivered = await notifyGroup(recipients.chatId, message.title, md);
+          if (groupDelivered) delivered.push({ group: true, channel: "project_group" });
+          else deliveryErrors.push("项目群发送失败");
+        }
+        if (!recipients.chatId || !delivered.some((item) => (item as { channel?: string }).channel === "project_group")) {
           // 否则回退到全局群机器人 webhook
           const pushWebhook = deps.pushWebhook ?? defaultPushWebhook;
-          await pushWebhook(message.text, { title: message.title, markdown: md });
+          const webhookResult = await pushWebhook(message.text, { title: message.title, markdown: md });
+          if (webhookResult === false) deliveryErrors.push("群机器人 webhook 发送失败或未配置");
+          else delivered.push({ group: true, channel: "webhook" });
         }
       }
 
-      await writeRun(rule, event, "fired", serializeRecipients(recipients), message.text, entityId);
+      if (delivered.length === 0) {
+        throw new Error(deliveryErrors.join("；") || "没有渠道实际送达");
+      }
+      if (claim) await finishAutomationClaim({ ...claim, status: "fired" });
+      await writeRun(
+        rule,
+        event,
+        deliveryErrors.length > 0 ? "partial" : "fired",
+        delivered,
+        deliveryErrors.length > 0 ? `${message.text}；${deliveryErrors.join("；")}` : message.text,
+        entityId,
+      );
+      if (deliveryErrors.length > 0) summary.partial += 1;
+      else summary.fired += 1;
     } catch (error) {
+      if (claim) {
+        await finishAutomationClaim({
+          ...claim,
+          status: "error",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       await writeRun(rule, event, "error", [], error instanceof Error ? error.message : String(error), entityId);
+      summary.errors += 1;
     }
   }
+  return summary;
 }
 
 async function notifyDelayImpactActionItems(
@@ -153,18 +273,20 @@ async function notifyDelayImpactActionItems(
   projectId: string,
   entityId: string | null | undefined,
   deps: NotifyPersonalDeps,
-): Promise<void> {
+): Promise<number> {
   const taskId = String(event.after?.taskId ?? event.entityId ?? "");
   const actionEntityId = entityId ?? entityIdForRun(event) ?? taskId;
-  if (!actionEntityId) return;
+  if (!actionEntityId) return 0;
+  let dispatched = 0;
   for (const userId of userIds) {
-    await notifyActionItem({
+    const result = await notifyActionItem({
       kind: "delay_impact_notify",
       projectId,
       entityType: "task",
       entityId: String(actionEntityId),
       dedupeKey: actionDedupeKey({
         kind: "delay_impact_notify",
+        projectId,
         entityId: String(actionEntityId),
         recipientUserId: userId,
       }),
@@ -180,17 +302,18 @@ async function notifyDelayImpactActionItems(
         impact: event.impact ?? null,
       },
     }, deps);
+    if (result.dispatched) dispatched += 1;
   }
+  return dispatched;
 }
 
-async function resolveRecipients(
+function resolveRecipients(
   rule: BuiltInAutomationRule,
   event: AutomationEvent,
-  config: AutomationRuleConfig
-): Promise<ResolvedRecipients> {
-  const projectId = projectIdForEvent(event);
-  const project = projectId ? await getProjectById(projectId) : undefined;
-  const members = projectId ? await getProjectMembers(projectId) : [];
+  config: AutomationRuleConfig,
+  project: Awaited<ReturnType<typeof getProjectById>>,
+  members: Awaited<ReturnType<typeof getProjectMembers>>,
+): ResolvedRecipients {
   const userIds = new Set<number>();
   // 优先用规则 config 里的 notifyRoles（如逾期催办可配通知对象）；没配则回退到规则静态 recipientRoles
   const configuredRoles = (config as { notifyRoles?: RecipientRole[] }).notifyRoles;
@@ -229,7 +352,14 @@ function resolveRole(
       numberField(event.before, "assigneeUserId") ??
       numberField(event.after, "reviewerUserId") ??
       numberField(event.before, "reviewerUserId");
-    if (assigneeId) return [assigneeId];
+    if (assigneeId) {
+      const allowed = new Set([
+        ...members.map((member) => member.userId),
+        ...(project?.createdBy ? [project.createdBy] : []),
+        ...(project?.pmUserId ? [project.pmUserId] : []),
+      ]);
+      return allowed.has(assigneeId) ? [assigneeId] : [];
+    }
     return resolveMemberByName(members, stringField(event.after, "owner") ?? stringField(event.before, "owner"));
   }
   if (role === "reporter") {
@@ -255,9 +385,10 @@ function resolveMemberByName(
     .map((member) => member.userId);
 }
 
-async function buildMessageContext(event: AutomationEvent): Promise<AutomationMessageContext> {
-  const projectId = projectIdForEvent(event);
-  const project = projectId ? await getProjectById(projectId) : undefined;
+function buildMessageContext(
+  event: AutomationEvent,
+  project: Awaited<ReturnType<typeof getProjectById>>,
+): AutomationMessageContext {
   return {
     projectName: project?.name ?? null,
     entityTitle:
@@ -275,7 +406,7 @@ async function buildMessageContext(event: AutomationEvent): Promise<AutomationMe
 async function writeRun(
   rule: BuiltInAutomationRule,
   event: AutomationEvent,
-  status: "fired" | "skipped" | "error",
+  status: "fired" | "partial" | "skipped" | "error",
   recipients: unknown,
   detail: string,
   entityIdOverride?: string | null
@@ -313,9 +444,27 @@ function entityIdForRuleRun(
   config: AutomationRuleConfig,
 ): string | null {
   const base = entityIdForRun(event);
-  if (!base || rule.key !== "exception_escalation") return base;
+  if (!base) return base;
+  const projectId = projectIdForEvent(event);
+  const phaseId = stringField(event.after, "phaseId") ?? stringField(event.before, "phaseId");
+  const scoped = !projectId || base.startsWith(`${projectId}:`)
+    ? base
+    : event.entityType === "task" && phaseId
+      ? `${projectId}:${phaseId}:${base}`
+      : `${projectId}:${base}`;
+  if (rule.key !== "exception_escalation") return scoped;
   const level = exceptionEscalationLevel(event, config as Parameters<typeof exceptionEscalationLevel>[1]);
-  return level ? `${base}:${level}` : base;
+  return level ? `${scoped}:${level}` : scoped;
+}
+
+function automationClaimKey(
+  ruleKey: string,
+  projectId: string | null,
+  entityId: string,
+  sourceActivityLogId?: number | null,
+): string {
+  const source = sourceActivityLogId == null ? "cadence" : `activity:${sourceActivityLogId}`;
+  return `${ruleKey}:${projectId ?? "global"}:${entityId}:${source}`;
 }
 
 function projectIdForEvent(event: AutomationEvent): string | null {
@@ -416,6 +565,16 @@ function numberField(record: Record<string, unknown> | null | undefined, key: st
 function stringField(record: Record<string, unknown> | null | undefined, key: string): string | null {
   const value = record?.[key];
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+function deliveryPriority(event: AutomationEvent): "critical" | "high" | undefined {
+  const severity = stringField(event.after, "severity") ?? stringField(event.before, "severity");
+  if (severity === "P0") return "critical";
+  if (severity === "P1") return "high";
+  const priority = stringField(event.after, "priority") ?? stringField(event.before, "priority");
+  if (priority === "critical") return "critical";
+  if (priority === "high") return "high";
+  return undefined;
 }
 
 function toConfigRecord(config: AutomationRuleConfig): Record<string, unknown> {

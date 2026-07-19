@@ -88,7 +88,7 @@ export function roleDashboardTitle(lens: RoleDashboardLens): { title: string; de
     case "product_manager":
       return { title: "产品经理工作台", desc: "关注产品定义、客户需求、规格冻结、目标成本和需求偏离。" };
     case "quality":
-      return { title: "质量 / 测试工作台", desc: "跟踪 EVT/DVT/PVT 测试、报告审核、P0/P1 闭环和 QA Gate 阻断。" };
+      return { title: "质量 / 测试工作台", desc: "跟踪验证、EVT/DVT/PVT 测试、报告审核、P0/P1 闭环和 QA Gate 阻断。" };
     case "npi":
       return { title: "PE / NPI 工作台", desc: "跟踪可制造性、SOP/夹具/制程/试产报告和 PVT/MP readiness。" };
     case "engineering":

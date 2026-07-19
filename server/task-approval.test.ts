@@ -35,7 +35,8 @@ function makeTask(over: Partial<ProjectTask>): ProjectTask {
   return {
     id: 1, projectId: "p1", phaseId: "ph1", taskId: "c1",
     completed: false, instructions: "", deliverables: {}, visibleRoles: [],
-    assigneeUserId: null, dueDate: null, startDate: null,
+    assigneeUserId: null, dueDate: null, startDate: null, actualStartedAt: null,
+    completionNote: null,
     status: "todo", statusChangedAt: new Date(), priority: "medium",
     completedAt: null, updatedBy: null,
     requiresApproval: false, approverUserId: null, approvalStatus: "none",
@@ -54,9 +55,32 @@ describe("automaticTaskStatus 保留 pending_approval", () => {
     expect(out[0].completed).toBe(false);
   });
 
-  it("普通 todo 任务仍按规则重算（指派 → in_progress）", () => {
+  it("项目已启动时单纯指派责任人仍保持 todo", () => {
     const rows = [makeTask({ taskId: "c1", status: "todo", assigneeUserId: 5 })];
-    const out = applyAutomaticTaskStatuses(rows, "npd", "2026-06-25");
+    const out = applyAutomaticTaskStatuses(rows, "npd", "2026-06-25", {
+      projectStartDate: "2026-06-01",
+    });
+    expect(out[0].status).toBe("todo");
+  });
+
+  it("项目未启动时单纯指派责任人仍保持 todo", () => {
+    const rows = [makeTask({ taskId: "c1", status: "todo", assigneeUserId: 5 })];
+    const out = applyAutomaticTaskStatuses(rows, "npd", "2026-06-25", {
+      projectStartDate: null,
+    });
+    expect(out[0].status).toBe("todo");
+  });
+
+  it("人工开始后才派生 in_progress", () => {
+    const rows = [makeTask({
+      taskId: "c1",
+      status: "todo",
+      assigneeUserId: 5,
+      actualStartedAt: new Date("2026-06-25T01:00:00.000Z"),
+    })];
+    const out = applyAutomaticTaskStatuses(rows, "npd", "2026-06-25", {
+      projectStartDate: "2026-06-01",
+    });
     expect(out[0].status).toBe("in_progress");
   });
 });
@@ -121,11 +145,13 @@ describe("decideTaskApproval", () => {
   it("通过 → done/completed=true/approved，记 task.approve", async () => {
     const pid = await newProject();
     await intoPending(pid);
-    await decideTaskApproval(pid, "ph1", "c1", "approved", 2, "可以", false);
+    await decideTaskApproval(pid, "ph1", "c1", "approved", 2, "可以", false, "qa", null);
     const row = (await getProjectTasks(pid, "ph1"))[0];
     expect(row.status).toBe("done");
     expect(row.completed).toBe(true);
     expect(row.approvalStatus).toBe("approved");
+    expect(row.completedBy).toBe(3);
+    expect(row.approvalActedAsRole).toBe("qa");
     const actions = (await getActivityLogs(pid)).filter((a) => a.entityId === "c1").map((a) => a.action);
     expect(actions).toContain("task.approve");
   });

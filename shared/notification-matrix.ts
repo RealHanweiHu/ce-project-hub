@@ -1,5 +1,6 @@
 export const NOTIFICATION_EVENT_KEYS = [
   "task_approval",
+  "task_ready",
   "task_rework",
   "deliverable_review",
   "deliverable_rework",
@@ -16,6 +17,9 @@ export const NOTIFICATION_EVENT_KEYS = [
   "gate_ready_notify",
   "mp_release_broadcast",
   "mp_release_confirm",
+  "condition_followup",
+  "certificate_renewal",
+  "handoff_acceptance",
   "delay_impact_notify",
   "exception_escalation",
   "definition_confirmed_notify",
@@ -23,6 +27,9 @@ export const NOTIFICATION_EVENT_KEYS = [
   "phase_advanced_notify",
   "health_digest",
   "personal_daily_digest",
+  "group_weekly_digest",
+  "weekly_meeting_reminder",
+  "task_ready_notify",
 ] as const;
 
 export type NotificationEventKey = (typeof NOTIFICATION_EVENT_KEYS)[number];
@@ -42,6 +49,12 @@ export type NotificationPolicy = {
 };
 
 export const NOTIFICATION_MATRIX = {
+  task_ready: {
+    tier: "immediate_action",
+    personalChannels: ["site", "dingtalk"],
+    requiresAction: true,
+    label: "任务可以开始",
+  },
   task_approval: {
     tier: "immediate_action",
     personalChannels: ["site", "dingtalk"],
@@ -120,6 +133,24 @@ export const NOTIFICATION_MATRIX = {
     requiresAction: true,
     label: "MP Release 发布确认",
   },
+  condition_followup: {
+    tier: "immediate_action",
+    personalChannels: ["site", "dingtalk"],
+    requiresAction: true,
+    label: "条件项跟进",
+  },
+  certificate_renewal: {
+    tier: "immediate_action",
+    personalChannels: ["site", "dingtalk"],
+    requiresAction: false,
+    label: "证书续期",
+  },
+  handoff_acceptance: {
+    tier: "immediate_action",
+    personalChannels: ["site", "dingtalk"],
+    requiresAction: true,
+    label: "量产移交接收",
+  },
   overdue_reminder: {
     tier: "daily_digest",
     personalChannels: ["site"],
@@ -155,6 +186,24 @@ export const NOTIFICATION_MATRIX = {
     personalChannels: ["site", "dingtalk"],
     requiresAction: false,
     label: "个人每日摘要",
+  },
+  group_weekly_digest: {
+    tier: "weekly_digest",
+    personalChannels: [],
+    requiresAction: false,
+    label: "项目群周摘要",
+  },
+  weekly_meeting_reminder: {
+    tier: "weekly_digest",
+    personalChannels: [],
+    requiresAction: false,
+    label: "项目周会提醒",
+  },
+  task_ready_notify: {
+    tier: "immediate_action",
+    personalChannels: ["site", "dingtalk"],
+    requiresAction: true,
+    label: "任务可以开始规则",
   },
   status_change_notify: {
     tier: "inbox_only",

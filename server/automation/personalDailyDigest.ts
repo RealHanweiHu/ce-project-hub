@@ -1,5 +1,6 @@
 import {
   createAutomationRun,
+  getAutomationActiveProjects,
   getPersonalDailyDigestItems as defaultGetItems,
   hasAutomationRunForEntity,
   listAutomationRuleRows,
@@ -18,6 +19,7 @@ import {
   type PersonalDailyDigestConfig,
 } from "./digestRules";
 import { shanghaiParts } from "./healthDigest";
+import type { ProjectTemplateLike } from "../../shared/npd-v3";
 
 export type PersonalDailyDigestDeps = {
   getConfigRow?: () => Promise<{ enabled: boolean; config: PersonalDailyDigestConfig } | null>;
@@ -29,6 +31,7 @@ export type PersonalDailyDigestDeps = {
   }) => Promise<PersonalDailyDigestItem[]>;
   hasRun?: (entityId: string) => Promise<boolean>;
   writeRun?: (status: "fired" | "skipped", entityId: string, detail: string, recipients?: unknown) => Promise<void>;
+  getProjectLikes?: (projectIds: string[]) => Promise<Map<string, ProjectTemplateLike>>;
 } & NotifyPersonalDeps;
 
 async function defaultGetConfigRow(): Promise<{ enabled: boolean; config: PersonalDailyDigestConfig } | null> {
@@ -63,6 +66,7 @@ export function groupPersonalDigestItems(items: PersonalDailyDigestItem[]): Map<
 export function buildPersonalDailyDigestMarkdown(
   items: PersonalDailyDigestItem[],
   todayISO: string,
+  projectLikes: Map<string, ProjectTemplateLike> = new Map(),
 ): { title: string; body: string; markdown: string } {
   const counts = {
     critical: items.filter((item) => item.kind === "issue_critical").length,
@@ -80,7 +84,7 @@ export function buildPersonalDailyDigestMarkdown(
     counts.dueSoon ? `临期 ${counts.dueSoon}` : null,
   ].filter(Boolean).join(" · ") || "暂无异常";
   const visible = items.slice(0, 10);
-  const lines = visible.map((item) => `- ${itemKindLabel(item)} ${item.projectName}：${itemTitle(item)}${dateSuffix(item)}`);
+  const lines = visible.map((item) => `- ${itemKindLabel(item)} ${item.projectName}：${itemTitle(item, projectLikes)}${dateSuffix(item)}`);
   if (items.length > visible.length) {
     lines.push(`- 还有 ${items.length - visible.length} 项，请到我的工作台查看`);
   }
@@ -128,11 +132,32 @@ export async function runPersonalDailyDigestScan(now: Date, deps: PersonalDailyD
     return;
   }
 
+  let projectLikes = new Map<string, ProjectTemplateLike>();
+  const projectIds = Array.from(new Set(items
+    .filter((item) => item.entityType === "task")
+    .map((item) => item.projectId)));
+  if (projectIds.length > 0) {
+    try {
+      if (deps.getProjectLikes) {
+        projectLikes = await deps.getProjectLikes(projectIds);
+      } else {
+        const wanted = new Set(projectIds);
+        projectLikes = new Map(
+          (await getAutomationActiveProjects())
+            .filter((project) => wanted.has(project.id))
+            .map((project) => [project.id, project] as const),
+        );
+      }
+    } catch (error) {
+      console.warn("[automation] personal digest project template context failed; using task ids:", error);
+    }
+  }
+
   for (const [userId, userItems] of Array.from(grouped.entries())) {
     const entityId = `${periodKey}:${userId}`;
     if (await hasRun(entityId)) continue;
-    const { title, body, markdown } = buildPersonalDailyDigestMarkdown(userItems, todayISO);
-    await notifyPersonal({
+    const { title, body, markdown } = buildPersonalDailyDigestMarkdown(userItems, todayISO, projectLikes);
+    const delivery = await notifyPersonal({
       eventKey: "personal_daily_digest",
       userIds: [userId],
       title,
@@ -142,10 +167,11 @@ export async function runPersonalDailyDigestScan(now: Date, deps: PersonalDailyD
       entityId,
       actionPath: "/?view=overview",
       bestEffortDingtalk: !config.pushDingtalk,
-    }, {
-      ...deps,
-      notifyDingtalk: config.pushDingtalk ? deps.notifyDingtalk : async () => {},
-    });
+      suppressDingtalk: !config.pushDingtalk,
+    }, deps);
+    if (delivery.site + delivery.dingtalk === 0) {
+      throw new Error(delivery.errors.join("；") || `个人摘要 ${userId} 没有渠道实际送达`);
+    }
     await writeRun("fired", entityId, `items ${userItems.length}`, [{ userId, channel: "digest" }]);
   }
 }
@@ -158,12 +184,12 @@ function itemKindLabel(item: PersonalDailyDigestItem): string {
   return "临期";
 }
 
-function itemTitle(item: PersonalDailyDigestItem): string {
+function itemTitle(item: PersonalDailyDigestItem, projectLikes: Map<string, ProjectTemplateLike>): string {
   if (item.entityType === "task") {
     return taskDisplayTitle({
       taskId: item.title,
       phaseId: item.phaseId,
-      projectCategory: item.projectCategory,
+      projectLike: projectLikes.get(item.projectId) ?? { category: item.projectCategory },
     });
   }
   return item.title;

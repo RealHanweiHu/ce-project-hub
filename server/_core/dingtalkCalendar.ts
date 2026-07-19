@@ -1,4 +1,5 @@
 import { getAccessToken, isDingtalkConfigured } from "./dingtalk";
+import { addDays } from "../../shared/shanghai-date";
 
 export type WeeklyEventInput = {
   title: string; weekday: number; time: string; durationMin: number;
@@ -15,14 +16,11 @@ export type DingtalkEvent = {
   onlineMeetingInfo: { type: "dingtalk" };
 };
 
-function addDaysISO(dateISO: string, days: number): string {
-  const [y, m, d] = dateISO.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d + days));
-  return dt.toISOString().slice(0, 10);
-}
+// 0=Sun..6=Sat（JS getUTCDay 约定）。注意 shared/shanghai-date 的 isoWeekdayOf
+// 是 1=Mon..7=Sun，两者不可互换；日期加减统一用 shared 的 addDays。
 function weekdayOf(dateISO: string): number {
   const [y, m, d] = dateISO.split("-").map(Number);
-  return new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0=Sun..6=Sat
+  return new Date(Date.UTC(y, m - 1, d)).getUTCDay();
 }
 function addMinutes(time: string, mins: number): string {
   const [h, mi] = time.split(":").map(Number);
@@ -35,14 +33,14 @@ function addMinutes(time: string, mins: number): string {
 /** 首次会议日 = start 当天或之后、第一个匹配 weekday 的日期 */
 export function firstOccurrence(startDate: string, weekday: number): string {
   let d = startDate;
-  for (let i = 0; i < 7; i++) { if (weekdayOf(d) === weekday) return d; d = addDaysISO(d, 1); }
+  for (let i = 0; i < 7; i++) { if (weekdayOf(d) === weekday) return d; d = addDays(d, 1); }
   return startDate;
 }
 
 export function buildWeeklyEvent(input: WeeklyEventInput): DingtalkEvent {
   const first = firstOccurrence(input.startDate, input.weekday);
   const endTime = addMinutes(input.time, input.durationMin);
-  const endDate = input.targetDate ?? addDaysISO(first, 13 * 7);
+  const endDate = input.targetDate ?? addDays(first, 13 * 7);
   // 钉钉要求 dateTime 带时区偏移；国内固定 +08:00（与 Asia/Shanghai 一致）
   return {
     summary: input.title,

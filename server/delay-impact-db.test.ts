@@ -70,13 +70,19 @@ describe("rescheduleProjectFromTask 返回 impact + 冲击 emit", () => {
     const head = rows.find((r) => r.startDate && r.dueDate)!;
     const { addWorkingDays } = await import("@shared/scheduling");
 
-    const events: string[] = [];
+    const events: any[] = [];
     const res = await rescheduleProjectFromTask(P, head.taskId, head.startDate!, addWorkingDays(head.dueDate!, 30), {
-      emit: async (e: any) => { events.push(e.action); },
+      emit: async (e: any) => { events.push(e); },
     });
     expect(typeof res.count).toBe("number");
     expect(res.impact).not.toBeNull();
-    if (res.impact?.hasImpact) expect(events).toContain("task.rescheduled");
+    if (res.impact?.hasImpact) {
+      expect(events[0]).toMatchObject({
+        action: "task.rescheduled",
+        entityId: `${P}:${events[0].after.phaseId}:${head.taskId}`,
+        after: { taskId: head.taskId },
+      });
+    }
 
     await db!.delete(projectTasks).where(eq(projectTasks.projectId, P));
     await db!.delete(projects).where(eq(projects.id, P));

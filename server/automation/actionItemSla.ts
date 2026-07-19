@@ -135,7 +135,7 @@ async function createEscalationAction(
     projectId: item.projectId,
     entityType: item.entityType,
     entityId: item.entityId,
-    dedupeKey: actionDedupeKey({ kind: item.kind, entityId: item.entityId, recipientUserId, level }),
+    dedupeKey: actionDedupeKey({ kind: item.kind, projectId: item.projectId, entityId: item.entityId, recipientUserId, level }),
     recipientUserId,
     level,
     title: level === "pm" ? `SLA升级：${item.title}` : `管理层红名单：${item.title}`,

@@ -6,19 +6,22 @@ import { protectedProcedure, router } from "../_core/trpc";
 import {
   getDb,
   createProduct, getProductById, listProductsByCategory,
+  listProductTechnicalBaselines, getProductTechnicalBaseline,
+  getCurrentProductTechnicalBaseline,
   getProductDefinitionByProductId, listProductDefinitionStatuses,
   upsertProductDefinition, confirmProductDefinition, listProductDefinitionSnapshots,
   listProductDefinitionChanges, createProductDefinitionChange,
   getProductDefinitionChangeById, updateProductDefinitionChange,
   getProductDefinitionDeviation,
-  createPlatform, listProductRevisions,
+  createPlatform, listProductRevisions, createLightweightProductRevision,
   setProjectProduct, getOpenP0P1Count, releaseProject, getProjectById,
-  getReleaseGateStatus, isReleaseOverrideAuthorized,
+  getReleaseGateStatus, isReleaseOverrideAuthorized, getMpReleaseByProjectId,
   createCustomerVariant, listVariantsByCustomer, listVariantsByParentProduct,
   getDownstreamVariantImpact,
   getApprovalConfig, getExternalApprovalByProcessInstanceId,
   getProjectRolesForUser, getProjectsByProductId,
   createActivityLog,
+  userCanSeeProductCommercials,
 } from "../db";
 import { VARIANT_DIMENSIONS } from "../../shared/oem-variant";
 import { isSystemAdminRole, isSystemExternalRole, systemRoleCanCreateProject } from "../../shared/system-roles";
@@ -31,16 +34,17 @@ import {
   CHANGE_STATUSES, PRODUCT_DEFINITION_CHANGE_AREAS,
   products, projects, productDefinitions, productDefinitionSnapshots,
   productDefinitionChanges, productRevisions, customerVariants,
+  productTechnicalBaselines,
 } from "../../drizzle/schema";
 import { emitAutomationEvent } from "../automation/events";
 import { assertProjectAccess, assertProjectPermission } from "../project-access";
-import { cancelAndRecordProjectMeeting } from "../services/project-meeting-lifecycle";
 import {
   listReleaseApprovals,
   MP_RELEASE_APPROVAL,
   submitReleaseApproval,
   syncExternalApprovalByProcessInstanceId,
 } from "../services/external-approval-service";
+import { canApproveProductTechnicalChange } from "../product-control";
 
 const competitorSchema = z.object({
   brand: z.string().optional(),
@@ -116,6 +120,13 @@ const productDefinitionChangeUpdateSchema = productDefinitionChangeCreateSchema
     productId: z.string(),
   });
 
+const releaseProductDraftSchema = z.object({
+  name: z.string().trim().min(1).max(256),
+  productNumber: z.string().trim().max(64).optional(),
+  category: z.string().trim().max(64).optional(),
+  targetMarkets: z.array(z.string().trim().min(1)).max(32).optional(),
+});
+
 function canMaintainProductDefinition(
   user: { id: number; role: string; canCreateProject?: boolean | null },
   product: { createdBy: number; productManagerUserId?: number | null },
@@ -127,15 +138,96 @@ function canMaintainProductDefinition(
 }
 
 async function assertProductLibraryAccess(user: { id: number; role: string; canCreateProject?: boolean | null }) {
-  if (isSystemAdminRole(user.role) || user.canCreateProject === true) return;
   if (isSystemExternalRole(user.role)) {
     throw new TRPCError({ code: "FORBIDDEN", message: "外部协作账号不能访问内部产品库" });
   }
+  if (isSystemAdminRole(user.role) || user.canCreateProject === true) return;
   const roles = await getProjectRolesForUser(user.id);
   const hasInternalRole = Array.from(roles.values()).some((role) => role !== "external_customer" && role !== "supplier");
   if (!hasInternalRole) {
     throw new TRPCError({ code: "FORBIDDEN", message: "外部协作账号不能访问内部产品库" });
   }
+}
+
+const PRODUCT_DEFINITION_COMMERCIAL_KEYS = new Set([
+  "price",
+  "priceband",
+  "targetcost",
+  "targetprice",
+  "targetgrossmargin",
+  "unitcost",
+  "grossmargin",
+]);
+
+function normalizeSnapshotKey(key: string): string {
+  return key.replaceAll(/[^a-z0-9]/gi, "").toLowerCase();
+}
+
+function isProductDefinitionCommercialKey(key: string): boolean {
+  const normalized = normalizeSnapshotKey(key);
+  return PRODUCT_DEFINITION_COMMERCIAL_KEYS.has(normalized)
+    || normalized.endsWith("price")
+    || normalized.endsWith("cost")
+    || normalized.endsWith("margin");
+}
+
+/**
+ * Product-definition snapshots are JSON and may gain nested SKU/competitor
+ * structures over time. Redact by semantic key recursively so a later schema
+ * extension cannot accidentally expose commercial values through a baseline.
+ */
+function redactProductDefinitionCommercials(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(redactProductDefinitionCommercials);
+  }
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, nested]) => [
+    key,
+    isProductDefinitionCommercialKey(key)
+      ? ""
+      : redactProductDefinitionCommercials(nested),
+  ]));
+}
+
+function redactTechnicalBaselineCommercials<
+  T extends {
+    bomSnapshot: Record<string, unknown>[];
+    specSnapshot: Record<string, unknown>;
+  },
+>(baseline: T): T {
+  const productDefinitionSnapshot = baseline.specSnapshot.productDefinitionSnapshot;
+  return {
+    ...baseline,
+    bomSnapshot: baseline.bomSnapshot.map((line) => ({
+      ...line,
+      supplierName: "",
+      unitCost: "",
+    })),
+    specSnapshot: {
+      ...baseline.specSnapshot,
+      ...(productDefinitionSnapshot === undefined
+        ? {}
+        : { productDefinitionSnapshot: redactProductDefinitionCommercials(productDefinitionSnapshot) }),
+    },
+  };
+}
+
+async function redactTechnicalBaselineForUser<
+  T extends {
+    productId: string;
+    bomSnapshot: Record<string, unknown>[];
+    specSnapshot: Record<string, unknown>;
+  },
+>(
+  baseline: T,
+  user: { id: number; role: string },
+): Promise<T> {
+  const canSeeCommercials = await userCanSeeProductCommercials(
+    user.id,
+    isSystemAdminRole(user.role),
+    baseline.productId,
+  );
+  return canSeeCommercials ? baseline : redactTechnicalBaselineCommercials(baseline);
 }
 
 async function resolveProductCategoryName(value: string): Promise<string> {
@@ -166,6 +258,29 @@ export const productsRouter = router({
     .query(async ({ ctx, input }) => {
       await assertProductLibraryAccess(ctx.user);
       return listProductRevisions(input.productId);
+    }),
+
+  technicalBaselines: protectedProcedure
+    .input(z.object({ productId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      await assertProductLibraryAccess(ctx.user);
+      return listProductTechnicalBaselines(input.productId);
+    }),
+
+  technicalBaseline: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .query(async ({ ctx, input }) => {
+      await assertProductLibraryAccess(ctx.user);
+      const baseline = await getProductTechnicalBaseline(input.id);
+      return baseline ? redactTechnicalBaselineForUser(baseline, ctx.user) : null;
+    }),
+
+  currentTechnicalBaseline: protectedProcedure
+    .input(z.object({ productId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      await assertProductLibraryAccess(ctx.user);
+      const baseline = await getCurrentProductTechnicalBaseline(input.productId);
+      return baseline ? redactTechnicalBaselineForUser(baseline, ctx.user) : null;
     }),
 
   definition: protectedProcedure
@@ -317,7 +432,10 @@ export const productsRouter = router({
         scheduleImpact: patch.scheduleImpact ?? undefined,
         decisionNotes: patch.decisionNotes ?? undefined,
       });
-      return change;
+      const revision = change && input.status === "implemented" && existing.status !== "implemented"
+        ? await createLightweightProductRevision(product.id, ctx.user.id)
+        : null;
+      return change ? { ...change, generatedRevisionLabel: revision?.revisionLabel ?? null } : change;
     }),
 
   // ── OEM 客户版本 / Customer Revision（PLM 侧登记） ─────────────────────────
@@ -425,6 +543,17 @@ export const productsRouter = router({
       const allowed = isSystemAdminRole(ctx.user.role) || product.createdBy === ctx.user.id;
       if (!allowed) throw new TRPCError({ code: "FORBIDDEN" });
 
+      const [controlledBaseline] = await db.select({ id: productTechnicalBaselines.id })
+        .from(productTechnicalBaselines)
+        .where(eq(productTechnicalBaselines.productId, input.id))
+        .limit(1);
+      if (controlledBaseline) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "该产品已有受控技术基线，不能物理删除；如不再使用，请将产品停用",
+        });
+      }
+
       const refs = await db.select({ id: projects.id }).from(projects).where(eq(projects.productId, input.id));
       if (refs.length > 0) {
         throw new TRPCError({ code: "BAD_REQUEST", message: `该产品被 ${refs.length} 个项目引用，请先在项目里解绑后再删除` });
@@ -460,6 +589,29 @@ export const productsRouter = router({
     .mutation(async ({ ctx, input }) => {
       await assertProjectPermission(input.projectId, ctx.user, "canEditProjectInfo", "没有关联产品的权限");
       const beforeProject = await getProjectById(input.projectId);
+      if (!beforeProject) throw new TRPCError({ code: "NOT_FOUND", message: "项目不存在" });
+      const product = await getProductById(input.productId);
+      if (!product) throw new TRPCError({ code: "NOT_FOUND", message: "产品不存在" });
+      if (!canApproveProductTechnicalChange(ctx.user, product)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "关联或变更现有产品必须由该产品负责人批准",
+        });
+      }
+      if (beforeProject.productId !== input.productId) {
+        if (await getMpReleaseByProjectId(input.projectId)) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "项目已发布，产品关联属于受控追溯信息，不能再修改",
+          });
+        }
+        if (beforeProject.category === "eco") {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "ECO 已冻结来源产品与技术基线，不能改绑产品",
+          });
+        }
+      }
       await setProjectProduct(input.projectId, input.productId);
       await createActivityLog({
         projectId: input.projectId,
@@ -482,20 +634,22 @@ export const productsRouter = router({
       const { project } = await assertProjectAccess(input.projectId, ctx.user);
       const openP0P1 = await getOpenP0P1Count(input.projectId);
       const gate = await getReleaseGateStatus(project);
-      const hasProduct = !!project.productId;
+      const existingRelease = await getMpReleaseByProjectId(input.projectId);
+      const outputProduct = project.productId ? await getProductById(project.productId) : undefined;
+      const hasProduct = !!outputProduct;
       const failedHardDimensions = gate.dimensions.filter((d) => !d.ok && d.dimension !== "review_conditions");
 
       const hardPass =
-        hasProduct && openP0P1 === 0 &&
+        openP0P1 === 0 &&
         gate.phaseId !== null && failedHardDimensions.length === 0 &&
         gate.decision !== null && gate.decision !== "rejected";
 
-      const canRelease = hardPass && gate.ready && gate.decision === "approved";
-      const canForceRelease = hardPass && gate.decision === "conditional" &&
+      const canRelease = !existingRelease && hardPass && gate.ready && gate.decision === "approved";
+      const canForceRelease = !existingRelease && hardPass && gate.decision === "conditional" &&
         await isReleaseOverrideAuthorized(project, { id: ctx.user.id, role: ctx.user.role });
 
       const blockers: string[] = [];
-      if (!hasProduct) blockers.push("未关联产品");
+      if (existingRelease) blockers.push("产品交付已完成，请完成稳定期后走 Close Gate");
       if (openP0P1 > 0) blockers.push(`${openP0P1} 个未关闭的 P0/P1 问题`);
       if (gate.phaseId === null) blockers.push("未定义 MP Release 前置 Gate");
       for (const dim of failedHardDimensions) {
@@ -523,7 +677,13 @@ export const productsRouter = router({
 
       return {
         hasProduct,
-        productId: project.productId ?? null,
+        productId: outputProduct?.id ?? null,
+        productName: outputProduct?.name ?? null,
+        suggestedProduct: {
+          name: project.name,
+          productNumber: project.projectNumber,
+          category: typeof project.customFields?.productType === "string" ? project.customFields.productType : "",
+        },
         downstreamVariants,
         approvalRequired: !!approvalConfig?.enabled,
         approvalInstances,
@@ -536,12 +696,16 @@ export const productsRouter = router({
         },
         deliverables: gate.deliverables,
         blockers, canRelease, canForceRelease,
+        alreadyReleased: !!existingRelease,
+        releasedAt: existingRelease?.releasedAt ?? null,
+        revisionId: existingRelease?.revisionId ?? null,
       };
     }),
 
   submitReleaseApproval: protectedProcedure
     .input(z.object({
       projectId: z.string(),
+      product: releaseProductDraftSchema.optional(),
       override: z.object({
         overrideReason: z.string().min(1),
         followUpOwner: z.number(),
@@ -554,6 +718,7 @@ export const productsRouter = router({
         const result = await submitReleaseApproval({
           projectId: input.projectId,
           actor: { id: ctx.user.id, role: ctx.user.role },
+          product: input.product,
           override: input.override,
         });
         return { success: true, approval: result.instance, alreadyPending: result.alreadyPending } as const;
@@ -582,6 +747,7 @@ export const productsRouter = router({
     .input(z.object({
       projectId: z.string(),
       notes: z.string().optional(),
+      product: releaseProductDraftSchema.optional(),
       override: z.object({
         overrideReason: z.string().min(1),
         followUpOwner: z.number(),
@@ -595,38 +761,35 @@ export const productsRouter = router({
         if (approvalConfig?.enabled) {
           throw new Error("已启用钉钉发布审批，请先发起并通过 MP Release 审批");
         }
-        const project = await getProjectById(input.projectId);
-        const product = project?.productId ? await getProductById(project.productId) : undefined;
         const result = await releaseProject({
           projectId: input.projectId,
           actor: { id: ctx.user.id, role: ctx.user.role },
           notes: input.notes,
+          product: input.product,
           override: input.override,
         });
-        if (project && (project.dingtalkEventId || (project.meetingConfig as { enabled?: boolean } | null)?.enabled)) {
-          try { await cancelAndRecordProjectMeeting(project); }
-          catch (error) { console.warn("[meeting] cancel on release failed (non-fatal):", error); }
-        }
         const after = {
           projectId: input.projectId,
-          productId: project?.productId ?? null,
-          productName: product?.name ?? null,
+          productId: result.productId,
+          productName: result.productName,
           revisionId: result.revisionId,
           revisionLabel: result.revisionLabel,
+          technicalBaselineId: result.technicalBaselineId,
+          technicalBaselineLabel: result.technicalBaselineLabel,
         };
         await createActivityLog({
           projectId: input.projectId,
           userId: ctx.user.id,
           action: "mp.release",
           entityType: "mp_release",
-          entityId: `${input.projectId}:${result.revisionId}`,
+          entityId: `${input.projectId}:${result.productId}`,
           meta: { after },
         });
         await emitAutomationEvent({
           action: "mp.release",
           projectId: input.projectId,
           entityType: "mp_release",
-          entityId: `${input.projectId}:${result.revisionId}`,
+          entityId: `${input.projectId}:${result.productId}`,
           actorId: ctx.user.id,
           after,
         });

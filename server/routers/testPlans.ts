@@ -22,7 +22,7 @@ import {
 import { protectedProcedure, router } from "../_core/trpc";
 import { canRoleViewInternalWorkspace } from "../file-visibility";
 import { assertProjectAccess, type ProjectAccess } from "../project-access";
-import { getPhasesForCategory } from "../../shared/sop-templates";
+import { getEffectivePhasesForProjectLike } from "../../shared/npd-v3";
 import {
   ISSUE_CATEGORIES,
   ISSUE_SEVERITIES,
@@ -32,8 +32,9 @@ import {
   TEST_REPORT_REVIEW_STATUSES,
   type IssueCategory,
 } from "../../drizzle/schema";
+import { emitAutomationEvent } from "../automation/events";
 
-const FORMAL_TEST_PHASES = new Set(["evt", "dvt", "pvt"]);
+const FORMAL_TEST_PHASES = new Set(["verification", "evt", "dvt", "pvt"]);
 
 function assertQaAuthority(access: ProjectAccess) {
   if (!access.isAdmin && !access.permissions.canQualityGateBlock) {
@@ -54,10 +55,10 @@ function assertInternalWorkspace(access: ProjectAccess) {
 }
 
 function assertFormalTestPhase(access: ProjectAccess, phaseId: string) {
-  const exists = getPhasesForCategory(access.project.category).some((phase) => phase.id === phaseId);
+  const exists = getEffectivePhasesForProjectLike(access.project).some((phase) => phase.id === phaseId);
   if (!exists) throw new TRPCError({ code: "BAD_REQUEST", message: "项目阶段不存在" });
   if (!FORMAL_TEST_PHASES.has(phaseId)) {
-    throw new TRPCError({ code: "BAD_REQUEST", message: "正式测试计划/报告仅适用于 EVT、DVT、PVT 阶段" });
+    throw new TRPCError({ code: "BAD_REQUEST", message: "正式测试计划/报告仅适用于验证、EVT、DVT、PVT 阶段" });
   }
 }
 
@@ -427,6 +428,20 @@ export const testPlansRouter = router({
         creatorId: ctx.user.id,
         productId: access.project.productId ?? null,
       });
+      const afterIssue = {
+        id: issueId,
+        projectId: testCase.projectId,
+        phaseId: testCase.phaseId,
+        title: `[测试失败] ${testCase.title}`,
+        description,
+        severity: testCase.severity,
+        status: "open",
+        category: toIssueCategory(testCase.category),
+        owner: input.owner ?? null,
+        reporter: ctx.user.name ?? null,
+        targetDate: input.targetDate ?? null,
+        creatorId: ctx.user.id,
+      };
       await linkProjectTestCaseIssue(testCase.id, issueId, ctx.user.id);
       await createActivityLog({
         projectId: testCase.projectId,
@@ -442,7 +457,15 @@ export const testPlansRouter = router({
         action: "issue.create",
         entityType: "issue",
         entityId: String(issueId),
-        meta: { phaseId: testCase.phaseId, title: `[测试失败] ${testCase.title}`, severity: testCase.severity },
+        meta: { phaseId: testCase.phaseId, title: afterIssue.title, severity: testCase.severity, after: afterIssue },
+      });
+      await emitAutomationEvent({
+        action: "issue.create",
+        projectId: testCase.projectId,
+        entityType: "issue",
+        entityId: issueId,
+        actorId: ctx.user.id,
+        after: afterIssue,
       });
       return { success: true, id: issueId, existed: false };
     }),

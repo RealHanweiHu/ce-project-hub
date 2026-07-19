@@ -25,7 +25,8 @@ import {
   createProjectFile,
   getProjectFiles,
   getProjectFileById,
-  deleteProjectFile,
+  deleteProjectFileWithBaselineGuard,
+  ProjectFileBaselineConflictError,
   createActivityLog,
 } from "../db";
 import { TRPCError } from "@trpc/server";
@@ -34,7 +35,7 @@ import { storagePut, storageDelete } from "../storage";
 import multer from "multer";
 import type { Express, Request, Response } from "express";
 import { createContext } from "../_core/context";
-import { getEffectiveProjectRoleById as getEffectiveRole } from "../project-access";
+import { getEffectiveProjectRoleById as getEffectiveRole, getEffectiveProjectRolesById } from "../project-access";
 import { normalizeFileType, normalizeFileVersion } from "../../shared/file-types";
 import { canMutateFileForProject } from "../deliverable-access";
 import { PROJECT_FILE_VISIBILITIES } from "../../drizzle/schema";
@@ -86,8 +87,9 @@ export const filesRouter = router({
       if (!role || !ROLE_PERMISSIONS[role].canView) {
         throw new TRPCError({ code: "FORBIDDEN" });
       }
+      const roles = await getEffectiveProjectRolesById(input.projectId, ctx.user.id);
       const files = await getProjectFiles(input.projectId, input.phaseId, input.taskId);
-      return files.filter((file) => canRoleViewFileVisibility(role, file.visibility));
+      return files.filter((file) => canRoleViewFileVisibility(roles.size > 0 ? roles : role, file.visibility));
     }),
 
   /**
@@ -112,8 +114,15 @@ export const filesRouter = router({
       if (!role || !canDeleteFile(role, !!file.taskId)) {
         throw new TRPCError({ code: "FORBIDDEN" });
       }
-
-      const deleted = await deleteProjectFile(input.id);
+      let deleted: Awaited<ReturnType<typeof deleteProjectFileWithBaselineGuard>>;
+      try {
+        deleted = await deleteProjectFileWithBaselineGuard(input.id, input.projectId);
+      } catch (error) {
+        if (error instanceof ProjectFileBaselineConflictError) {
+          throw new TRPCError({ code: "CONFLICT", message: error.message });
+        }
+        throw error;
+      }
       if (!deleted) {
         throw new TRPCError({ code: "NOT_FOUND", message: "File not found" });
       }

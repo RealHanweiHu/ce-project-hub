@@ -12,7 +12,7 @@ import {
 import { protectedProcedure, router } from "../_core/trpc";
 import { canRoleViewFileVisibility, canRoleViewInternalWorkspace } from "../file-visibility";
 import { assertProjectAccess, type ProjectAccess } from "../project-access";
-import { getPhasesForCategory } from "../../shared/sop-templates";
+import { getEffectivePhasesForProjectLike } from "../../shared/npd-v3";
 import {
   SAMPLE_SIGNOFF_AUDIENCES,
   SAMPLE_SIGNOFF_STATUSES,
@@ -45,7 +45,7 @@ function assertCanManageSignoff(access: ProjectAccess) {
 }
 
 function assertPhaseExists(access: ProjectAccess, phaseId: string) {
-  const exists = getPhasesForCategory(access.project.category).some((phase) => phase.id === phaseId);
+  const exists = getEffectivePhasesForProjectLike(access.project).some((phase) => phase.id === phaseId);
   if (!exists) throw new TRPCError({ code: "BAD_REQUEST", message: "项目阶段不存在" });
 }
 
@@ -96,7 +96,7 @@ export const sampleSignoffsRouter = router({
       const access = await assertProjectAccess(input.projectId, ctx.user);
       const audience = visibleAudienceForRole(access.role);
       if (audience) return getProjectSampleSignoffs(input.projectId, input.phaseId, audience);
-      if (!canRoleViewInternalWorkspace(access.role)) return [];
+      if (!canRoleViewInternalWorkspace(access.roles)) return [];
       return getProjectSampleSignoffs(input.projectId, input.phaseId);
     }),
 
@@ -116,10 +116,10 @@ export const sampleSignoffsRouter = router({
       const access = await assertProjectAccess(input.projectId, ctx.user);
       assertCanManageSignoff(access);
       assertPhaseExists(access, input.phaseId);
-      if (input.audience === "internal" && !canRoleViewInternalWorkspace(access.role)) {
+      if (input.audience === "internal" && !canRoleViewInternalWorkspace(access.roles)) {
         throw new TRPCError({ code: "FORBIDDEN", message: "外部协作者不能创建内部签样项" });
       }
-      if (input.fileId != null && !canRoleViewFileVisibility(access.role, input.audience === "customer" ? "customer" : input.audience === "supplier" ? "supplier" : "internal")) {
+      if (input.fileId != null && !canRoleViewFileVisibility(access.roles, input.audience === "customer" ? "customer" : input.audience === "supplier" ? "supplier" : "internal")) {
         throw new TRPCError({ code: "FORBIDDEN", message: "无权绑定该可见性范围的文件" });
       }
       await assertSignoffFile({

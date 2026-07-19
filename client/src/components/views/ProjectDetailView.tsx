@@ -15,11 +15,13 @@ import {
 import { TaskActivityTab, TaskFlowTab, TaskApprovalTab } from './task/TaskTabs';
 import {
   Project, SOP_PHASES, PHASE_MAP, HEALTH_CONFIG,
-  computePhaseProgress, computeOverallProgress, getPhaseStatus,
+  getPhaseProgress, getOverallProgress, getPhaseStatus,
   isPhaseUnlocked, getBlockingGate, getProjectPhases,
   TaskDetails, FileAttachment, formatBytes, SOPTask, SOPPhase,
 } from '@/lib/data';
 import { CATEGORY_MAP } from '@/lib/sop-templates';
+import { TASK_STATUS_UI, TASK_PRIORITY_OPTIONS } from '@/lib/task-ui';
+import { FileNameBadges } from './FileBadges';
 import { LinearCard, StatusDot, LinearBar, SegToggle } from '@/components/linear/primitives';
 import { ProgressBar } from '@/components/shared/ProgressBar';
 import { GateStandardPanel } from '@/components/shared/GateStandardPanel';
@@ -29,8 +31,11 @@ import { IssueList } from './IssueList';
 import { ChangeLog } from './ChangeLog';
 import { Issue, GateReview, ChangeRecord } from '@/lib/data';
 import { GateReviewModal, GateReviewBadge } from './GateReviewModal';
+import { GateReadinessChecklist } from './GateReadinessChecklist';
+import { JdmDefinitionBaselinePanel } from './JdmDefinitionBaselinePanel';
 import { ReleaseDialog } from './ReleaseDialog';
 import { BomPanel } from './BomPanel';
+import { ProjectDeliveryModulesPanel } from './ProjectDeliveryModulesPanel';
 import { OverviewPanel } from './OverviewPanel';
 import { ProjectDashboard } from './project-overview/ProjectDashboard';
 import { ProjectSettingsDrawer } from './project-overview/ProjectSettingsDrawer';
@@ -51,12 +56,46 @@ import { useAuth } from '@/_core/hooks/useAuth';
 import { trpc } from '@/lib/trpc';
 import { toast } from 'sonner';
 import { getTaskDeliverables } from '@shared/task-deliverables';
+import { getDeliverableTemplatePath } from '@shared/deliverable-templates';
 import { FILE_TYPES } from '@shared/file-types';
 import { canRoleContributeToDeliverable, canRoleReviewDeliverables, preferredDeliverableReviewerRoles } from '@shared/deliverable-permissions';
 import { isSystemAdminRole } from '@shared/system-roles';
+import type { ProjectMemberRole } from '@shared/project-roles';
+import { getTaskEvidenceLevel } from '@shared/npd-v3';
+import { todayShanghai } from '@shared/shanghai-date';
+import { resolveTaskName } from '@shared/sop-template-resolution';
+import { shouldOfferCompletionAfterEvidenceUpload } from '@shared/task-evidence-actions';
+import { buildTaskCompletionActionPath } from '@shared/action-links';
+import { SOP_TEMPLATE_VERSION_NPD_V3 } from '@shared/sop-templates';
+import type { ProjectExecutionBaseline } from '@shared/project-track-tailoring';
+import {
+  buildJdmDefinitionFreezeCandidate,
+  createJdmDefinitionFormState,
+  getJdmDefinitionGateFreezePayload,
+  validateJdmDefinitionFreeze,
+} from '@/lib/jdm-definition';
 import { Users } from 'lucide-react';
 
 const MAX_FILE_SIZE = 16 * 1024 * 1024;
+
+function readProjectExecutionBaseline(project: Project): ProjectExecutionBaseline {
+  const value = project.customFields?.projectExecutionBaseline;
+  if (
+    value &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    (value as Record<string, unknown>).modelVersion === 'project-track-v1' &&
+    ((value as Record<string, unknown>).status === 'draft' ||
+      (value as Record<string, unknown>).status === 'frozen')
+  ) {
+    return value as ProjectExecutionBaseline;
+  }
+  return {
+    modelVersion: 'project-track-v1',
+    status: 'draft',
+    customerConceptRef: '',
+  };
+}
 
 interface ProjectDetailViewProps {
   project: Project;
@@ -429,12 +468,7 @@ function FileUploadArea({
                 className={`flex-1 min-w-0 ${previewable ? 'cursor-pointer' : ''}`}
                 onClick={(e) => { if (previewable) { e.stopPropagation(); setPreviewFile(file); } }}
               >
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className={`text-sm text-foreground truncate ${previewable ? 'group-hover:text-primary' : ''}`}>{file.name}</span>
-                  {file.fileType && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground">{file.fileType}</span>}
-                  {file.fileVersion && <span className="shrink-0 text-[10px] num text-primary">{file.fileVersion}</span>}
-                  {file.visibility && file.visibility !== 'internal' && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-border text-muted-foreground">{file.visibility === 'customer' ? '客户可见' : file.visibility === 'supplier' ? '供应商可见' : '公开'}</span>}
-                </div>
+                <FileNameBadges name={file.name} fileType={file.fileType} fileVersion={file.fileVersion} visibility={file.visibility} nameClassName={previewable ? 'group-hover:text-primary' : ''} />
                 <div className="text-[10px] num text-muted-foreground">{formatBytes(file.size)}</div>
               </div>
               {previewable && (
@@ -503,22 +537,8 @@ function canSubmitDeliverableFromUi({
   return canRoleContributeToDeliverable(role, deliverableName);
 }
 
-// Static task-status / priority configs — hoisted out of TaskDetail so they aren't
-// re-created every render (no closure dependencies).
-const TASK_STATUS_CONFIG: Record<string, { label: string; className: string }> = {
-  todo: { label: '待开始', className: 'bg-secondary text-muted-foreground border-border' },
-  in_progress: { label: '进行中', className: 'bg-[color:var(--acc-soft)] text-primary border-[color:var(--acc-border)]' },
-  blocked: { label: '阻塞', className: 'bg-red-50 text-red-700 border-red-200' },
-  done: { label: '已完成', className: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-  skipped: { label: '跳过', className: 'bg-secondary text-muted-foreground border-border' },
-  pending_approval: { label: '待审批', className: 'bg-[color:var(--acc-soft)] text-[color:var(--warning)] border-[color:var(--acc-border)]' },
-};
-const TASK_PRIORITY_OPTIONS = [
-  { value: 'critical', label: 'P0 紧急' },
-  { value: 'high', label: 'P1 高' },
-  { value: 'medium', label: 'P2 中' },
-  { value: 'low', label: 'P3 低' },
-];
+// 状态标签/配色与优先级选项统一取自 lib/task-ui（全站单一口径，B8 收敛；
+// 原本地 className 版本含 red-50/emerald-50 等非 token 硬编码色，已一并消除）。
 
 function isProductDefinitionTask(taskId: string) {
   return taskId.startsWith('pd_');
@@ -564,35 +584,6 @@ interface GateReadiness {
   openP0P1: number; fileCount: number;
   signoffRoles: string[]; blockers: string[]; ready: boolean;
 }
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function computeGateReadiness(phase: any, phaseData: any, submittedDeliverables?: string[], satisfiedSet?: string[]): GateReadiness {
-  const allTasks: Array<{ id: string }> = phase?.tasks ?? [];
-  const tasks = allTasks.filter((t) => t.id !== phase?.gateTaskId);
-  const tasksDone = tasks.filter((t) => phaseData?.tasks?.[t.id]).length;
-  let delivDone = 0, delivTotal = 0;
-  if (submittedDeliverables) {
-    delivTotal = submittedDeliverables.length;
-    const satisfiedNames = new Set(satisfiedSet ?? []);
-    delivDone = submittedDeliverables.filter((name) => satisfiedNames.has(name)).length;
-  } else {
-    for (const t of tasks) {
-      const names = getTaskDeliverables(t.id);
-      const status: Record<string, boolean> = phaseData?.taskDetails?.[t.id]?.deliverables ?? {};
-      delivTotal += names.length;
-      delivDone += names.filter((n) => status[n]).length;
-    }
-  }
-  const issues = phaseData?.issues ?? [];
-  const openP0P1 = issues.filter((i: { severity: string; status: string }) =>
-    (i.severity === 'P0' || i.severity === 'P1') && (i.status === 'open' || i.status === 'in_progress')).length;
-  let fileCount = 0;
-  for (const t of tasks) fileCount += (phaseData?.taskDetails?.[t.id]?.files ?? []).length;
-  const blockers: string[] = [];
-  if (openP0P1 > 0) blockers.push(`${openP0P1} 个未关闭的 P0/P1 问题`);
-  if (tasksDone < tasks.length) blockers.push(`${tasks.length - tasksDone} 项任务未完成`);
-  if (delivTotal > 0 && delivDone < delivTotal) blockers.push(`交付物未齐(${delivDone}/${delivTotal})`);
-  return { tasksDone, tasksTotal: tasks.length, delivDone, delivTotal, openP0P1, fileCount, signoffRoles: phase?.gateStandard?.responsibleRoles ?? [], blockers, ready: blockers.length === 0 };
-}
 
 type GateReadinessSummary = {
   ready: boolean;
@@ -603,6 +594,7 @@ type GateReadinessSummary = {
 type ReleasePrecheckSummary = {
   canRelease: boolean;
   canForceRelease: boolean;
+  alreadyReleased?: boolean;
   blockers: string[];
   releaseGate: { decision: string | null; gateName?: string | null } | null;
 } | null | undefined;
@@ -638,17 +630,21 @@ function ProjectFocusBand({
 }) {
   const gateBlocked = readiness ? !readiness.ready : false;
   const firstGateBlocker = readiness?.dimensions.find((dim) => !dim.ok)?.summary;
-  const releaseBlocked = releasePrecheck ? !releasePrecheck.canRelease && !releasePrecheck.canForceRelease : false;
+  const releaseBlocked = releasePrecheck ? !releasePrecheck.alreadyReleased && !releasePrecheck.canRelease && !releasePrecheck.canForceRelease : false;
   const releaseLabel = !releasePrecheck
     ? '预检中'
-    : releasePrecheck.canRelease
+    : releasePrecheck.alreadyReleased
+      ? '已发布 · 待关闭'
+      : releasePrecheck.canRelease
       ? '可发布'
       : releasePrecheck.canForceRelease
         ? '需强制发布'
         : `${releasePrecheck.blockers.length} 项阻断`;
   const releaseTone = !releasePrecheck
     ? 'text-muted-foreground'
-    : releasePrecheck.canRelease
+    : releasePrecheck.alreadyReleased
+      ? 'text-emerald-700'
+      : releasePrecheck.canRelease
       ? 'text-emerald-700'
       : releasePrecheck.canForceRelease
         ? 'text-primary'
@@ -689,9 +685,9 @@ function ProjectFocusBand({
         />
         <FocusItem
           icon={<Rocket size={15} />}
-          label="量产发布"
+          label="项目完成与产品交付"
           value={releaseLabel}
-          detail={releaseBlocked ? releasePrecheck?.blockers[0] ?? '发布条件未满足' : releasePrecheck?.releaseGate?.decision === 'conditional' ? '有条件通过需留痕' : '发布前置条件'}
+          detail={releasePrecheck?.alreadyReleased ? '完成 2–8 周稳定期后走 Close Gate' : releaseBlocked ? releasePrecheck?.blockers[0] ?? '完成条件未满足' : releasePrecheck?.releaseGate?.decision === 'conditional' ? '有条件通过需留痕' : '完成与交付前置条件'}
           tone={releaseTone}
           actionLabel={canReleaseAction ? '打开预检' : '仅可查看'}
           onAction={onRelease}
@@ -743,23 +739,26 @@ function FocusItem({
   );
 }
 
-function ReadinessRow({ label, ok, detail, soft }: { label: string; ok: boolean; detail: React.ReactNode; soft?: boolean }) {
-  return (
-    <div className="flex items-center justify-between py-1 text-sm">
-      <span className="flex items-center gap-1.5">
-        {ok ? <CheckCircle2 size={14} className="text-emerald-600" /> : <AlertTriangle size={14} className={soft ? 'text-primary' : 'text-rose-500'} />}
-        <span className="text-foreground">{label}</span>
-      </span>
-      <span className={`text-xs num ${ok ? 'text-muted-foreground' : soft ? 'text-primary' : 'text-rose-600'}`}>{detail}</span>
-    </div>
-  );
-}
-
 /**
  * Gate 交付物资源库手工增删面板（仅 PM/admin 可见）
  * - 从资源库选择并添加交付物
  * - 对手工添加项提供"移除"，对模板/归集项提供"排除"
  */
+/** 「参照模板」下载入口：名称命中 shared 常量表才渲染；服务端按白名单发文件。 */
+function TemplateDownloadLink({ name, className = '' }: { name: string; className?: string }) {
+  if (!getDeliverableTemplatePath(name)) return null;
+  return (
+    <a
+      href={`/api/deliverable-template?name=${encodeURIComponent(name)}`}
+      onClick={(e) => e.stopPropagation()}
+      className={`shrink-0 text-[10px] leading-none rounded px-1 py-0.5 text-primary bg-[color:var(--acc-soft)] border border-[color:var(--acc-border)] hover:opacity-80 transition-opacity ${className}`}
+      title="下载参照模板（Excel）"
+    >
+      模板 ↓
+    </a>
+  );
+}
+
 // ── DeliverableReviewControls ─────────────────────────────────────────────────
 /** 每条 gate 交付物的审核态徽标 + 提交/通过/驳回操作 */
 function pickDeliverableReviewer(
@@ -874,6 +873,7 @@ function DeliverableReviewControls({
   const [reviewerSelections, setReviewerSelections] = useState<Record<string, number | ''>>({}); // deliverableName → selected reviewerUserId
   const [rejectNote, setRejectNote] = useState<Record<string, string>>({}); // deliverableName → note draft
   const [rejectOpen, setRejectOpen] = useState<Record<string, boolean>>({}); // deliverableName → note input open
+  const [actedAsSelections, setActedAsSelections] = useState<Record<string, ProjectMemberRole | ''>>({});
 
   const submitMut = trpc.deliverableReviews.submit.useMutation({
     onSuccess: () => {
@@ -904,8 +904,14 @@ function DeliverableReviewControls({
   const uploadedNames = new Set(files.map((f) => (f as { deliverableName?: string | null }).deliverableName).filter((n): n is string => !!n));
 
   // Type-aware reviewer default, then PM/Owner fallback.
-  const reviewableMembers = members.filter((m) => canRoleReviewDeliverables(m.role) || m.isOwner);
+  const reviewableMembers = members.filter((m) =>
+    canRoleReviewDeliverables(m.role) || (m.extraRoles ?? []).some(canRoleReviewDeliverables) || m.isOwner
+  );
   const pmMember = reviewableMembers.find((m) => m.userId === pmUserId) ?? reviewableMembers.find((m) => m.role === 'project_manager' || m.role === 'pm' || m.isOwner);
+  const currentMember = members.find((member) => member.userId === currentUserId);
+  const currentRoles = currentMember
+    ? [currentMember.role, ...(currentMember.extraRoles ?? [])] as ProjectMemberRole[]
+    : [];
 
   return (
     <div className="mt-3 pt-3 border-t border-border space-y-2">
@@ -929,7 +935,10 @@ function DeliverableReviewControls({
         return (
           <div key={name} className="space-y-1">
             <div className="flex items-center justify-between gap-2 flex-wrap">
-              <span className="text-xs text-muted-foreground min-w-0 truncate">{name}</span>
+              <span className="flex items-center gap-1.5 min-w-0">
+                <span className="text-xs text-muted-foreground min-w-0 truncate">{name}</span>
+                <TemplateDownloadLink name={name} />
+              </span>
               <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
                 {/* Status badge */}
                 {!record && hasFile && (
@@ -1001,9 +1010,19 @@ function DeliverableReviewControls({
                 {/* Approve/Reject actions: reviewer & status=pending */}
                 {isReviewer && record?.status === 'pending' && (
                   <div className="flex items-center gap-1">
+                    {currentRoles.length > 1 && (
+                      <select
+                        value={actedAsSelections[name] ?? ''}
+                        onChange={(event) => setActedAsSelections((previous) => ({ ...previous, [name]: event.target.value as ProjectMemberRole }))}
+                        className="max-w-28 rounded border border-border bg-card px-1.5 py-0.5 text-[10px]"
+                      >
+                        <option value="">签字角色</option>
+                        {currentRoles.map((role) => <option key={role} value={role}>{ROLE_LABEL_BY_VALUE.get(role) ?? role}</option>)}
+                      </select>
+                    )}
                     <button
                       disabled={reviewMut.isPending}
-                      onClick={() => reviewMut.mutate({ projectId, phaseId, deliverableName: name, decision: 'approved' })}
+                      onClick={() => reviewMut.mutate({ projectId, phaseId, deliverableName: name, decision: 'approved', actedAsRole: actedAsSelections[name] || undefined })}
                       className="text-[10px] rounded px-1.5 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-300 hover:bg-emerald-100 disabled:opacity-50 transition-colors"
                     >
                       通过
@@ -1036,6 +1055,7 @@ function DeliverableReviewControls({
                     reviewMut.mutate({
                       projectId, phaseId, deliverableName: name,
                       decision: 'rejected', note: rejectNote[name] || null,
+                      actedAsRole: actedAsSelections[name] || undefined,
                     });
                     setRejectOpen((prev) => ({ ...prev, [name]: false }));
                   }}
@@ -1077,7 +1097,7 @@ function GateDeliverableOverridePanel({
   const overrideMut = trpc.tailoring.setDeliverableOverride.useMutation({
     onError: (e) => {
       // 服务端仅允许 PM/管理员裁剪；失败要给出可读提示而不是静默不变
-      toast.error(e.data?.code === 'FORBIDDEN' ? '仅项目 PM 或管理员可调整流程裁剪' : `裁剪失败：${e.message}`);
+      toast.error(e.data?.code === 'FORBIDDEN' ? '仅项目 PM 或管理员可调整交付物' : `交付物调整失败：${e.message}`);
     },
     onSettled: () => {
       utils.tailoring.effectiveProcess.invalidate({ projectId });
@@ -1250,24 +1270,26 @@ function DeliverablesChecklist({
         const done = !!status[d];
         const fromPhase = carried?.[d];
         return (
-          <button
-            key={d}
-            disabled={!canEdit || pending === d}
-            onClick={() => { setPending(d); mutation.mutate({ projectId, phaseId, taskId, name: d, done: !done }); }}
-            className={`w-full flex items-start gap-2 text-left text-sm py-0.5 ${canEdit ? 'hover:bg-secondary cursor-pointer' : 'cursor-default'} ${pending === d ? 'opacity-50' : ''}`}
-          >
-            {done
-              ? <CheckCircle2 size={15} className="shrink-0 mt-0.5 text-emerald-600" />
-              : <Circle size={15} className="shrink-0 mt-0.5 text-muted-foreground" />}
-            <span className="flex items-center gap-1.5 min-w-0">
-              <span className={done ? 'text-muted-foreground line-through' : 'text-foreground'}>{d}</span>
-              {fromPhase && (
-                <span className="shrink-0 text-[9px] text-primary bg-[color:var(--acc-soft)] border border-[color:var(--acc-border)] rounded px-1 py-0.5 leading-none">
-                  来自 {fromPhase}
-                </span>
-              )}
-            </span>
-          </button>
+          <div key={d} className="w-full flex items-start gap-2">
+            <button
+              disabled={!canEdit || pending === d}
+              onClick={() => { setPending(d); mutation.mutate({ projectId, phaseId, taskId, name: d, done: !done }); }}
+              className={`flex-1 min-w-0 flex items-start gap-2 text-left text-sm py-0.5 ${canEdit ? 'hover:bg-secondary cursor-pointer' : 'cursor-default'} ${pending === d ? 'opacity-50' : ''}`}
+            >
+              {done
+                ? <CheckCircle2 size={15} className="shrink-0 mt-0.5 text-emerald-600" />
+                : <Circle size={15} className="shrink-0 mt-0.5 text-muted-foreground" />}
+              <span className="flex items-center gap-1.5 min-w-0">
+                <span className={done ? 'text-muted-foreground line-through' : 'text-foreground'}>{d}</span>
+                {fromPhase && (
+                  <span className="shrink-0 text-[9px] text-primary bg-[color:var(--acc-soft)] border border-[color:var(--acc-border)] rounded px-1 py-0.5 leading-none">
+                    来自 {fromPhase}
+                  </span>
+                )}
+              </span>
+            </button>
+            <TemplateDownloadLink name={d} className="mt-1" />
+          </div>
         );
       })}
     </div>
@@ -1277,7 +1299,7 @@ function DeliverablesChecklist({
 function TaskDetail({
   taskId, taskDetails, onUpdate, visibleRoles, onVisibleRolesChange, canEditRoles,
   projectId, phaseId, canEdit = true, compact = false, layout = 'full',
-  currentUserId, canEditPriority, canUploadFiles,
+  currentUserId, canEditPriority, canUploadFiles, onFilesUploaded,
 }: {
   taskId: string;
   taskDetails: TaskDetails;
@@ -1292,6 +1314,8 @@ function TaskDetail({
   canEditPriority?: boolean;
   /** 文件上传/删除可改 = 负责人本人 || canEditProjectInfo。默认沿用 canEdit。 */
   canUploadFiles?: boolean;
+  /** 普通任务附件成功落库后的业务提示；Gate 交付物不走此入口。 */
+  onFilesUploaded?: () => void;
   projectId: string;
   phaseId?: string;
   canEdit?: boolean;
@@ -1383,7 +1407,7 @@ function TaskDetail({
     setApprovalMut.mutate({ projectId, phaseId, taskId, ...next });
   };
   const taskStatus = taskDetails?.taskStatus ?? 'todo';
-  const taskStatusCfg = TASK_STATUS_CONFIG[taskStatus] ?? TASK_STATUS_CONFIG.todo;
+  const taskStatusCfg = TASK_STATUS_UI[taskStatus as keyof typeof TASK_STATUS_UI] ?? TASK_STATUS_UI.todo;
   // 权限收口：优先级仅管理/PM 可改；附件上传/删除限负责人或管理/PM。
   // 未显式传入时（如 legacy 'full' 布局）沿用 canEdit，行为不回归。
   const priorityEditable = (canEditPriority ?? canEdit) && canEdit;
@@ -1438,6 +1462,7 @@ function TaskDetail({
           onUpdate({ ...taskDetails, files: [...(taskDetails?.files || []), ...newFiles] });
           // Invalidate files.list so useProjectData re-fetches the updated list from DB
           utils.files.list.invalidate({ projectId });
+          onFilesUploaded?.();
         }}
         onRemove={handleRemoveFile}
         projectId={projectId}
@@ -1610,7 +1635,7 @@ function TaskDetail({
         <div>
           <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">状态</div>
           <div className="flex h-[30px] items-center gap-1.5 px-1.5 text-xs">
-            <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] ${taskStatusCfg.className}`}>{taskStatusCfg.label}</span>
+            <span className="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px]" style={{ color: taskStatusCfg.tone.color, background: taskStatusCfg.tone.bg, borderColor: taskStatusCfg.tone.border }}>{taskStatusCfg.label}</span>
             <span className="text-[10px] text-muted-foreground">自动</span>
           </div>
         </div>
@@ -1692,7 +1717,7 @@ function TaskDetail({
         <div>
           <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">状态</div>
           <div className="flex h-[30px] items-center gap-1.5 px-1.5 text-xs">
-            <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] ${taskStatusCfg.className}`}>{taskStatusCfg.label}</span>
+            <span className="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px]" style={{ color: taskStatusCfg.tone.color, background: taskStatusCfg.tone.bg, borderColor: taskStatusCfg.tone.border }}>{taskStatusCfg.label}</span>
             <span className="text-[10px] text-muted-foreground">自动</span>
           </div>
         </div>
@@ -1949,9 +1974,33 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
   // 任务 tab 的阶段筛选器：'all' 看全部，或某 phaseId 只看该阶段。
   // 列表子视图本身只展示 activePhaseId，对应阶段切换交给下方阶段轴。
   const [taskPhaseFilter, setTaskPhaseFilter] = useState<string>('all');
+  // 设计4 §2：默认"我的·当前阶段"——员工首屏只见自己的任务，管理视角默认全员
+  const [taskScope, setTaskScope] = useState<'mine' | 'all' | null>(null);
   const perms = useProjectPermission(project.id);
   const { user: currentUser } = useAuth();
   const isSystemAdmin = isSystemAdminRole(currentUser?.role);
+  const jdmExecutionBaseline = useMemo(
+    () => readProjectExecutionBaseline(project),
+    [project.customFields],
+  );
+  const jdmExecutionBaselineKey = JSON.stringify(jdmExecutionBaseline);
+  const [jdmDefinitionState, setJdmDefinitionState] = useState(() =>
+    createJdmDefinitionFormState(jdmExecutionBaseline),
+  );
+  useEffect(() => {
+    setJdmDefinitionState(createJdmDefinitionFormState(jdmExecutionBaseline));
+  }, [jdmExecutionBaselineKey]);
+  const jdmDefinitionValidation = useMemo(
+    () => validateJdmDefinitionFreeze(jdmDefinitionState),
+    [jdmDefinitionState],
+  );
+  const jdmDefinitionFreezeCandidate = useMemo(
+    () => buildJdmDefinitionFreezeCandidate(jdmDefinitionState),
+    [jdmDefinitionState],
+  );
+  const canEditJdmDefinition = isSystemAdmin ||
+    perms.canEditProjectInfo ||
+    project.productOwnerUserId === currentUser?.id;
   const externalCommentChannels = useMemo(() => {
     const channels: Array<{ audience: 'customer' | 'supplier'; label: string }> = [];
     if (perms.canViewCustomerFiles) channels.push({ audience: 'customer', label: '客户协作' });
@@ -1966,14 +2015,37 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
   const confirmGateMutation = trpc.gateReviews.confirmAndAdvance.useMutation();
   const conveneGateMutation = trpc.gateReviews.create.useMutation();
   // 撤回待审批：直接以 completed=false 调用，避免本地 toggle 误发 completed=true（=重复提交）。
+  // 设计4 §3：待开始任务首屏的 ▶开始（写 actualStartedAt，状态派生 in_progress）
+  const startTaskMut = trpc.tasks.start.useMutation({
+    onSuccess: () => {
+      detailUtils.tasks.list.invalidate({ projectId: project.id });
+      detailUtils.projects.statusSummary.invalidate({ projectId: project.id });
+      toast.success('已开始，状态更新为进行中');
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
   const withdrawApprovalMut = trpc.tasks.setCompleted.useMutation({
     onSuccess: () => {
       detailUtils.tasks.list.invalidate({ projectId: project.id });
       detailUtils.projects.get.invalidate({ id: project.id });
+      detailUtils.projects.statusSummary.invalidate({ projectId: project.id });
     },
     onError: (e) => {
       toast.error(e.data?.code === 'FORBIDDEN' ? '没有撤回此任务的权限' : `撤回失败：${e.message}`);
     },
+  });
+  const completeEvidenceMut = trpc.tasks.setCompleted.useMutation({
+    onSuccess: async () => {
+      toast.success('任务已完成');
+      await Promise.all([
+        detailUtils.tasks.list.invalidate({ projectId: project.id }),
+        detailUtils.projects.get.invalidate({ id: project.id }),
+        detailUtils.projects.statusSummary.invalidate({ projectId: project.id }),
+        detailUtils.workbench.mine.invalidate(),
+      ]);
+    },
+    onError: (e) => toast.error(`完成失败：${e.message}`),
   });
   const withdrawTaskApproval = (taskId: string) => {
     // 无编辑权者点了也会被服务端拒；提前拦一下给出明确反馈
@@ -2058,8 +2130,8 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
       PHASE_MAP[fromPhaseId]?.name ?? fromPhaseId,
     ])
   );
-  const activeProgress = computePhaseProgress(activePhaseData, activePhaseId, activePhase);
-  const overallProgress = computeOverallProgress(project);
+  const activeProgress = getPhaseProgress(project, activePhaseId);
+  const overallProgress = getOverallProgress(project);
   const health = HEALTH_CONFIG[project.risk];
   const riskOverrideActive = !!project.riskOverrideRisk;
   const riskOverrideReason = project.riskOverrideReason?.trim() ?? '';
@@ -2092,16 +2164,62 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
       currentPhaseName: activePhase?.name ?? activePhaseId,
     };
   })();
-  const visibleActiveTasks = activePhase?.tasks.filter((task) => {
+  const isManagerialViewer = perms.roles.some((role) => ['owner', 'manager', 'project_manager'].includes(role));
+  // 默认打开姿势（设计4 §2）：员工=只看我的；PM/管理层=当前阶段全员。显式切换后遵从用户选择。
+  const effectiveTaskScope: 'mine' | 'all' = taskScope ?? (isManagerialViewer ? 'all' : 'mine');
+  const roleVisibleActiveTasks = activePhase?.tasks.filter((task) => {
     // 指派优先于岗位可见性：指派给当前用户的任务无条件可见，
     // 避免「被指派了任务、工作台能看到、点进项目却被 visibleRoles 过滤隐藏」的死角。
     const assignee = activePhaseData?.taskDetails?.[task.id]?.assigneeUserId;
     if (assignee != null && assignee === currentUser?.id) return true;
     const effectiveRoles = project.taskVisibleRoles?.[task.id] ?? (task.visibleRoles || []);
     if (!effectiveRoles || effectiveRoles.length === 0) return true;
-    if (['owner', 'manager', 'project_manager'].includes(perms.role)) return true;
-    return effectiveRoles.includes(perms.role);
+    if (isManagerialViewer) return true;
+    return perms.roles.some((role) => effectiveRoles.includes(role));
   }) || [];
+  // "我的"视图排序（设计4 §2）：逾期 → 今日到期 → 可开始（前置已清）→ 进行中 → 等待别人（前置未清）
+  const taskDepsResolved = (task: { id: string; dependsOn?: string[] }): boolean =>
+    (task.dependsOn ?? []).every((depId) => {
+      for (const ph of projectPhases) {
+        const detail = project.phases[ph.id]?.taskDetails?.[depId];
+        if (detail) return detail.taskStatus === 'done' || detail.taskStatus === 'skipped';
+        if (project.phases[ph.id]?.tasks?.[depId] === true) return true;
+      }
+      return true; // 依赖不在生效任务集（被裁剪）视为已清
+    });
+  const myTaskRank = (task: { id: string; dependsOn?: string[] }): number => {
+    const detail = activePhaseData?.taskDetails?.[task.id];
+    const status = detail?.taskStatus ?? 'todo';
+    const today = todayShanghai(); // 全系统状态判定按上海日期，UTC 会在凌晨 0-8 点慢一天
+    const active = status === 'todo' || status === 'in_progress';
+    if (active && detail?.dueDate && detail.dueDate < today) return 0;   // 逾期
+    if (active && detail?.dueDate === today) return 1;                   // 今日到期
+    if (status === 'todo' && taskDepsResolved(task)) return 2;           // 可开始
+    if (status === 'in_progress') return 3;                              // 进行中
+    if (status === 'todo') return 4;                                     // 等待别人（前置未清=还没轮到）
+    if (status === 'pending_approval') return 5;
+    return 9;                                                            // done/skipped 沉底
+  };
+  const visibleActiveTasks = roleVisibleActiveTasks
+    .filter((task) => {
+      if (effectiveTaskScope === 'all') return true;
+      const detail = activePhaseData?.taskDetails?.[task.id];
+      // "我的" = 指派给我，或未指派但明确属于我岗位（visibleRoles 非空且含我的角色）。
+      // 无负责人且无岗位限制的任务不进"我的"——否则人人首屏膨胀，违背减负目标。
+      if (detail?.assigneeUserId != null) return detail.assigneeUserId === currentUser?.id;
+      const effectiveRoles = project.taskVisibleRoles?.[task.id] ?? (task.visibleRoles || []);
+      return effectiveRoles.length > 0 && perms.roles.some((role) => effectiveRoles.includes(role));
+    })
+    .slice()
+    .sort((a, b) => {
+      if (effectiveTaskScope === 'all') return 0; // 全员视图保持模板顺序（依赖链阅读性）
+      const ra = myTaskRank(a);
+      const rb = myTaskRank(b);
+      if (ra !== rb) return ra - rb;
+      const dueA = activePhaseData?.taskDetails?.[a.id]?.dueDate ?? '9999-12-31';
+      const dueB = activePhaseData?.taskDetails?.[b.id]?.dueDate ?? '9999-12-31';
+      return dueA < dueB ? -1 : dueA > dueB ? 1 : 0;
+    });
   const selectedTask = selectedTaskId
     ? visibleActiveTasks.find((task) => task.id === selectedTaskId) || null
     : null;
@@ -2115,12 +2233,12 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
   // 判定一致——qa/scm/sales/cert/battery_safety 没有 canEditTasks，这是他们完成自己任务的通道。
   const canActOnTask = (taskId: string) => {
     if (perms.canEditTasks) return true;
-    if (!perms.role || perms.role === 'viewer') return false;
+    if (perms.roles.length === 0 || perms.roles.every((role) => role === 'viewer')) return false;
     const assignee = activePhaseData?.taskDetails?.[taskId]?.assigneeUserId;
     if (assignee != null && assignee === currentUser?.id) return true;
     const effectiveRoles = project.taskVisibleRoles?.[taskId]
       ?? (activePhase?.tasks.find((t) => t.id === taskId)?.visibleRoles || []);
-    return effectiveRoles.length > 0 && effectiveRoles.includes(perms.role);
+    return effectiveRoles.length > 0 && perms.roles.some((role) => effectiveRoles.includes(role));
   };
   const canActOnSelectedTask = selectedTask ? canActOnTask(selectedTask.id) : false;
   const compactTaskDetail = isExecutionRole(perms.role) && !selectedTaskIsGate;
@@ -2184,36 +2302,34 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
       toast.error('没有编辑此任务的权限（仅任务负责人或对应岗位可完成）');
       return;
     }
+    const currentlyDone = Boolean(activePhaseData.tasks[taskId]);
+    if (!currentlyDone) {
+      const evidenceLevel = getTaskEvidenceLevel(project, activePhaseId, taskId);
+      if (
+        project.category === 'npd'
+        && project.sopTemplateVersion === SOP_TEMPLATE_VERSION_NPD_V3
+        && evidenceLevel === 'heavy'
+      ) {
+        setSelectedTaskId(taskId);
+        toast('这是重证据任务，请先由负责人上传正式文件，再标记完成。');
+        return;
+      }
+      window.location.assign(buildTaskCompletionActionPath({
+        projectId: project.id,
+        phaseId: activePhaseId,
+        taskId,
+      }));
+      return;
+    }
     const newProject = { ...project };
     newProject.phases = { ...project.phases };
     newProject.phases[activePhaseId] = {
       ...activePhaseData,
       tasks: { ...activePhaseData.tasks, [taskId]: !activePhaseData.tasks[taskId] },
     };
-    const becameDone = !activePhaseData.tasks[taskId];
-    const newProgress = computePhaseProgress(newProject.phases[activePhaseId], activePhaseId, activePhase);
-    let advancedTo: string | null = null;
-    if (newProgress === 100) {
-      const idx = projectPhases.findIndex((p) => p.id === activePhaseId);
-      if (idx < projectPhases.length - 1 && activePhaseId === project.currentPhase) {
-        newProject.currentPhase = projectPhases[idx + 1].id;
-        advancedTo = projectPhases[idx + 1].name;
-      }
-    }
     onUpdate(newProject);
-    // P1-2: 完成任务后给执行者明确反馈——是否推进阶段 / 还差什么阻塞项。
-    if (becameDone) {
-      if (advancedTo) {
-        toast.success(`本阶段已全部完成，阶段推进至「${advancedTo}」`);
-      } else {
-        const { blockers } = computeGateReadiness(activePhase, newProject.phases[activePhaseId], activeGateDeliverables, serverDelivSatisfiedSet);
-        if (blockers.length > 0) {
-          toast(`任务已完成。本阶段距 Gate 放行还差：${blockers.join('、')}`);
-        } else {
-          toast.success('任务已完成');
-        }
-      }
-    }
+    // 完成普通任务不推进阶段；阶段前进只能由 Gate 原子评审完成。
+    // Gate 缺口以服务端 gateReviews.readiness 为唯一事实源（缺口清单），此处不再本地重算。
   };
 
   const updateTaskDetails = (taskId: string, details: TaskDetails) => {
@@ -2286,27 +2402,44 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
   };
 
   // Gate Review Modal state
-  const [gateReviewPending, setGateReviewPending] = useState<{ phaseId: string } | null>(null);
+  const [gateReviewPending, setGateReviewPending] = useState<{ phaseId: string; gateTaskId: string } | null>(null);
   // MP Release dialog state
   const [releaseOpen, setReleaseOpen] = useState(false);
 
   const handleGateTaskToggle = (taskId: string) => {
-    // If checking a gate task (not unchecking), show review modal
-    const isChecking = !activePhaseData?.tasks[taskId];
-    if (isChecking && taskId === activePhase?.gateTaskId) {
-      setGateReviewPending({ phaseId: activePhaseId });
+    if (taskId !== activePhase?.gateTaskId) return;
+    if (activePhaseData?.tasks[taskId]) {
+      toast('Gate 已形成正式评审与阶段记录，不能从任务勾选撤销；如需回退请走受控阶段流程。');
       return;
     }
-    toggleTask(taskId);
+    setGateReviewPending({ phaseId: activePhaseId, gateTaskId: taskId });
+  };
+
+  const openActiveGateReview = () => {
+    if (!activePhase?.gateTaskId) return;
+    setGateReviewPending({ phaseId: activePhaseId, gateTaskId: activePhase.gateTaskId });
   };
 
   const handleGateReviewConfirm = async (review: GateReview) => {
     // 原子化：服务端一次完成「记录评审 + 标 gate task done + 推进阶段」，
     // 避免旧的客户端三笔分散写经 600ms 防抖串起时的部分持久化（→阶段锁死）。
     const phaseId = activePhaseId;
+    const jdmDefinitionFreeze = activePhase?.gateTaskId === 'jdm_product_definition_gate'
+      ? getJdmDefinitionGateFreezePayload({
+          category: project.category,
+          phaseId,
+          decision: review.decision,
+          state: jdmDefinitionState,
+        })
+      : undefined;
+    const freezesJdmDefinition = !!jdmDefinitionFreeze;
+    if (freezesJdmDefinition && !jdmDefinitionValidation.ok) {
+      toast.error(`JDM 产品定义尚不能冻结：${jdmDefinitionValidation.issues[0]?.message ?? '请补齐规格和六模块复用证据'}`);
+      return;
+    }
     setGateReviewPending(null);
     try {
-      await confirmGateMutation.mutateAsync({
+      const result = await confirmGateMutation.mutateAsync({
         projectId: project.id,
         phaseId,
         gateTaskId: activePhase?.gateTaskId || null,
@@ -2316,7 +2449,11 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         participants: review.participants || null,
         decision: review.decision,
         conditions: review.conditions || null,
+        conditionOwnerUserId: review.conditionOwnerUserId ?? null,
+        conditionDueDate: review.conditionDueDate ?? null,
+        conditionItems: review.conditionItems ?? [],
         notes: review.notes || null,
+        jdmDefinitionFreeze,
       });
       // 刷新项目详情 + 组合看板（取代旧的乐观本地更新，确保与服务端一致）
       await Promise.all([
@@ -2328,7 +2465,8 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         detailUtils.projects.list.invalidate(),
         detailUtils.projects.portfolio.invalidate(),
       ]);
-      if (review.decision === 'rejected') toast.error('已记录：本阶段 Gate 未通过，整改后可重新评审');
+      if (result.closed) toast.success('Close Gate 已通过，项目完成移交并归档');
+      else if (review.decision === 'rejected') toast.error('已记录：本阶段 Gate 未通过，整改后可重新评审');
       else toast.success(review.decision === 'conditional' ? 'Gate 有条件通过，已推进' : 'Gate 已通过，已推进');
     } catch (e) {
       toast.error(`Gate 评审保存失败，请重试${e instanceof Error ? `：${e.message}` : ''}`);
@@ -2386,7 +2524,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                 onClick={() => setReleaseOpen(true)}
                 className="flex items-center gap-1.5 rounded-md text-xs font-medium bg-primary hover:opacity-90 text-white px-3 py-1.5 shadow-sm transition-opacity"
               >
-                <Rocket size={13} /> 量产发布
+                <Rocket size={13} /> 完成并交付
               </button>
             )}
           </div>
@@ -2398,6 +2536,16 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
               {catConfig && (
                 <span className={`text-[9px] uppercase tracking-wider rounded px-1.5 py-0.5 ${catConfig.color} ${catConfig.textColor} border ${catConfig.borderColor}`}>
                   {catConfig.badge}
+                </span>
+              )}
+              {project.lifecycle === 'paused' && (
+                <span className="text-[9px] rounded px-1.5 py-0.5 bg-amber-100 text-amber-700 border border-amber-200" title={project.lifecycleReason ?? undefined}>
+                  已暂停
+                </span>
+              )}
+              {project.lifecycle === 'terminated' && (
+                <span className="text-[9px] rounded px-1.5 py-0.5 bg-rose-100 text-rose-700 border border-rose-200" title={project.lifecycleReason ?? undefined}>
+                  已终止
                 </span>
               )}
             </div>
@@ -2569,28 +2717,30 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
         </div>
       )}
 
-      <ProjectFocusBand
-        phaseName={activePhase?.name ?? activePhaseId}
-        activeProgress={activeProgress}
-        gateName={activePhase?.gate ?? 'Gate 评审'}
-        readiness={serverGateReadiness}
-        openIssueCount={projectOpenIssueCount}
-        pendingChangeCount={pendingChangeCount}
-        releasePrecheck={releasePrecheck}
-        canReleaseAction={perms.canEditProjectInfo}
-        onTasks={() => setMainTab('tasks')}
-        onGate={() => {
-          setMainTab('tasks');
-          if (activePhase?.gateTaskId) setSelectedTaskId(activePhase.gateTaskId);
-        }}
-        onIssues={() => {
-          if (firstOpenIssuePhaseId) setActivePhaseId(firstOpenIssuePhaseId);
-          setReviewsView('issues');
-          setMainTab('reviews');
-        }}
-        onChanges={() => setMainTab('activity')}
-        onRelease={() => setReleaseOpen(true)}
-      />
+      {mainTab !== 'overview' && (
+        <ProjectFocusBand
+          phaseName={activePhase?.name ?? activePhaseId}
+          activeProgress={activeProgress}
+          gateName={activePhase?.gate ?? 'Gate 评审'}
+          readiness={serverGateReadiness}
+          openIssueCount={projectOpenIssueCount}
+          pendingChangeCount={pendingChangeCount}
+          releasePrecheck={releasePrecheck}
+          canReleaseAction={perms.canEditProjectInfo}
+          onTasks={() => setMainTab('tasks')}
+          onGate={() => {
+            setMainTab('tasks');
+            if (activePhase?.gateTaskId) setSelectedTaskId(activePhase.gateTaskId);
+          }}
+          onIssues={() => {
+            if (firstOpenIssuePhaseId) setActivePhaseId(firstOpenIssuePhaseId);
+            setReviewsView('issues');
+            setMainTab('reviews');
+          }}
+          onChanges={() => setMainTab('activity')}
+          onRelease={() => setReleaseOpen(true)}
+        />
+      )}
 
       {/* Main Tab Bar (collapsed to 5): 总览 / 任务 / 评审与风险 / 物料与文件 / 动态
           滚动后 sticky（P0-4）：头部滚出视野时在标签栏左侧补显项目名与当前阶段 */}
@@ -2756,6 +2906,16 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
       {/* ── Gate sub-view：复用现有 Gate 评审就绪度 + GateReviewModal 流程 ────── */}
       {mainTab === 'reviews' && reviewsView === 'gate' && (
         <div className="p-6 space-y-4">
+          {project.category === 'jdm' && activePhaseId === 'input' && (
+            <JdmDefinitionBaselinePanel
+              projectId={project.id}
+              baseline={jdmExecutionBaseline}
+              state={jdmDefinitionState}
+              onChange={setJdmDefinitionState}
+              canEdit={canEditJdmDefinition}
+            />
+          )}
+          {/* 阶段导航去重（P0-4）：紧凑下拉替代完整阶段轨道 */}
           <ActivePhaseSelect
             label="评审节点"
             phases={projectPhases}
@@ -2781,7 +2941,9 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
             {(() => {
               const reviews = activePhaseData?.gateReviews || [];
               const latest = reviews[reviews.length - 1];
-              const { blockers } = computeGateReadiness(activePhase, activePhaseData, activeGateDeliverables, serverDelivSatisfiedSet);
+              const blockers = (serverGateReadiness?.dimensions ?? [])
+                .filter((dim) => !dim.ok)
+                .map((dim) => dim.summary);
               return (
                 <>
                   {latest ? (
@@ -2796,13 +2958,14 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                   ) : (
                     <div className="text-xs text-muted-foreground">本阶段尚无 Gate 评审记录。</div>
                   )}
+                  {/* 缺口明细只在缺口清单（GateReadinessChecklist）一处渲染，这里只留计数入口（设计4 §4） */}
                   {blockers.length > 0 && (
-                    <div className="text-xs text-muted-foreground">
-                      放行阻塞项：{blockers.join('、')}
+                    <div className="text-xs text-[color:var(--warning)]">
+                      距放行还差 {blockers.length} 项，打开评审弹窗查看缺口清单。
                     </div>
                   )}
                   <button
-                    onClick={() => setGateReviewPending({ phaseId: activePhaseId })}
+                    onClick={openActiveGateReview}
                     className="text-xs text-primary rounded-md border border-dashed border-[color:var(--acc-border)] px-3 py-2 hover:bg-[color:var(--acc-soft)] transition-colors"
                   >
                     {latest ? '查看 / 补充 Gate 评审记录' : '+ 填写 Gate 评审记录'}
@@ -2867,7 +3030,13 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
       )}
 
       {mainTab === 'materials' && materialsView === 'bom' && (
-        <div className="p-6">
+        <div className="space-y-5 p-6">
+          {['npd', 'jdm', 'obt', 'derivative', 'eco'].includes(project.category ?? '') && perms.canViewInternalWorkspace ? (
+            <ProjectDeliveryModulesPanel
+              projectId={project.id}
+              canEdit={perms.canEditProjectInfo}
+            />
+          ) : null}
           <BomPanel
             projectId={project.id}
             canEdit={perms.canEditProjectInfo || perms.canEditChangelog || !!perms.canEditBomStructure}
@@ -2916,7 +3085,6 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
           canEdit={perms.canEditProjectInfo}
           canManageMembers={perms.canManageMembers}
           isAdmin={isSystemAdmin}
-          onOpenRiskOverride={perms.canEditProjectInfo ? openRiskOverrideEditor : undefined}
         />
       </ProjectSettingsDrawer>
 
@@ -2982,9 +3150,11 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
               setSelectedTaskId(null);
             }}
             optionInfo={(phase) => {
-              if (!isPhaseUnlocked(project, phase.id)) return ' · 未解锁';
+              const summary = project.phaseProgress?.find((item) => item.phaseId === phase.id);
+              const progress = summary && summary.total > 0 ? ` · ${summary.done}/${summary.total}` : '';
+              if (!isPhaseUnlocked(project, phase.id)) return `${progress} · 未解锁`;
               const status = getPhaseStatus(project, phase.id);
-              return status === 'completed' ? ' ✓' : phase.id === project.currentPhase ? ' · 当前' : '';
+              return status === 'completed' ? `${progress} ✓` : phase.id === project.currentPhase ? `${progress} · 当前` : progress;
             }}
           />
 
@@ -3031,6 +3201,27 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
               )}
 
               {/* Role-based task filter notice */}
+              {/* 设计4 §2：视野切换——员工默认"我的"，一键切全员 */}
+              <div className="flex items-center gap-1.5">
+                {(['mine', 'all'] as const).map((scope) => (
+                  <button
+                    key={scope}
+                    type="button"
+                    onClick={() => setTaskScope(scope)}
+                    className={`px-2.5 py-1 rounded-full text-xs border transition-colors ${
+                      effectiveTaskScope === scope
+                        ? 'border-primary text-primary bg-[color:var(--acc-soft)]'
+                        : 'border-border text-muted-foreground hover:bg-secondary'
+                    }`}
+                  >
+                    {scope === 'mine' ? '我的任务' : '全员任务'}
+                  </button>
+                ))}
+                {effectiveTaskScope === 'mine' && (
+                  <span className="text-[11px] text-muted-foreground">按 逾期 → 今日到期 → 可开始 → 进行中 → 等待别人 排序</span>
+                )}
+              </div>
+
               {perms.role !== 'owner' && !perms.isLoading && (() => {
                 const totalTasks = activePhase?.tasks.length || 0;
                 const hiddenCount = totalTasks - visibleActiveTasks.length;
@@ -3099,6 +3290,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                             locked ? '此阶段已锁定，请先完成前置 Gate 评审'
                             : isPendingApproval ? '待审批中，点击撤回'
                             : isGateTask && !checked ? '点击完成 Gate 评审并填写评审记录'
+                            : isGateTask && checked ? 'Gate 已通过；回退请走受控阶段流程'
                             : undefined
                           }
                         >
@@ -3251,19 +3443,19 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                             <Target size={11} />
                             交付物
                           </div>
-                          <DeliverablesChecklist
-                            projectId={project.id}
-                            phaseId={activePhaseId}
-                            taskId={selectedTask.id}
-                            items={
-                              selectedTaskIsGate
-                                ? activeGateDeliverables
-                                : getTaskDeliverables(selectedTask.id)
-                            }
-                            status={selectedTaskDetails?.deliverables || {}}
-                            canEdit={canActOnSelectedTask && isCurrentPhaseUnlocked}
-                            carried={selectedTaskIsGate ? activeGateCarriedMap : undefined}
-                          />
+                          {/* Gate 任务的交付物完成度只在缺口清单（GateReadinessChecklist）展示一处，
+                              此处不再重复渲染勾选清单（设计4 §4：同一证据只出现一次）；
+                              裁剪与审核是"动作"面板，保留。 */}
+                          {!selectedTaskIsGate && (
+                            <DeliverablesChecklist
+                              projectId={project.id}
+                              phaseId={activePhaseId}
+                              taskId={selectedTask.id}
+                              items={getTaskDeliverables(selectedTask.id)}
+                              status={selectedTaskDetails?.deliverables || {}}
+                              canEdit={canActOnSelectedTask && isCurrentPhaseUnlocked}
+                            />
+                          )}
                           {selectedTaskIsGate && (
                             <GateDeliverableOverridePanel
                               projectId={project.id}
@@ -3296,54 +3488,37 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                           )}
                         </div>
 
-                        <StepKicker n={3} label="确认完成" />
+                        {project.category === 'jdm' &&
+                          activePhaseId === 'input' &&
+                          (selectedTask.id === 'jdm_module_reuse_draft' || selectedTaskIsGate) && (
+                            <JdmDefinitionBaselinePanel
+                              projectId={project.id}
+                              baseline={jdmExecutionBaseline}
+                              state={jdmDefinitionState}
+                              onChange={setJdmDefinitionState}
+                              canEdit={canEditJdmDefinition}
+                              compact
+                            />
+                          )}
 
-                        {/* 普通任务：完成路径提示 */}
-                        {!selectedTaskIsGate && (
-                          <div className="rounded-md bg-secondary/40 p-3 text-xs leading-relaxed text-muted-foreground">
-                            {selectedTaskChecked
-                              ? '任务已完成。'
-                              : selectedTaskDetails?.approvalStatus && selectedTaskDetails.approvalStatus !== 'none'
-                                ? '本任务完成需审批：证据齐全后在下方「状态审批」提交，由审批人确认。'
-                                : '证据齐全后，在右侧「属性」中把状态更新为已完成。'}
-                          </div>
-                        )}
+                        <StepKicker n={3} label="确认完成" />
+                        {/* 普通任务的完成路径由下方「状态渐进面板」按当前状态给出具体动作 */}
 
                         {/* ── Gate-only sections (under 交付物) ──────────────── */}
-                        {selectedTaskIsGate && (() => {
-                          const r = computeGateReadiness(activePhase, activePhaseData, activeGateDeliverables, serverDelivSatisfiedSet);
-                          return (
-                            <div className={`p-3 rounded-md border ${r.ready ? 'border-emerald-200 bg-emerald-50/50' : 'border-[color:var(--acc-border)] bg-[color:var(--acc-soft)]'}`}>
-                              <div className="flex items-center justify-between mb-2">
-                                <div className="text-[10px] uppercase tracking-widest text-muted-foreground">Gate 就绪检查</div>
-                                <span className={`text-[10px] rounded px-1.5 py-0.5 border ${r.ready ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-[color:var(--acc-soft)] text-primary border-[color:var(--acc-border)]'}`}>
-                                  {r.ready ? '已就绪' : '未就绪'}
-                                </span>
-                              </div>
-                              <div className="divide-y divide-border">
-                                <ReadinessRow label="阶段任务完成" ok={r.tasksDone === r.tasksTotal} detail={`${r.tasksDone}/${r.tasksTotal}`} />
-                                <ReadinessRow label="交付物审核" ok={r.delivTotal === 0 || r.delivDone === r.delivTotal} detail={`${r.delivDone}/${r.delivTotal}`} />
-                                <ReadinessRow label="无未关闭 P0/P1" ok={r.openP0P1 === 0} detail={r.openP0P1 === 0 ? '通过' : `${r.openP0P1} 个待关闭`} />
-                                <ReadinessRow label="关键文件已上传" ok={r.fileCount > 0} detail={`${r.fileCount} 个`} soft />
-                              </div>
-                              {r.signoffRoles.length > 0 && (
-                                <div className="mt-2 pt-2 border-t border-border">
-                                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">需会签角色</div>
-                                  <div className="flex flex-wrap gap-1">
-                                    {r.signoffRoles.map((role, i) => (
-                                      <span key={i} className="text-[10px] text-muted-foreground bg-card border border-border rounded px-1.5 py-0.5">{role}</span>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                              {!r.ready && (
-                                <div className="mt-2 pt-2 border-t border-[color:var(--acc-border)] text-xs text-primary leading-relaxed">
-                                  未就绪:{r.blockers.join('、')}。补齐后再通过;若需放行,请在评审里选「有条件通过」并填写例外项的责任人与截止。
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })()}
+                        {selectedTaskIsGate && (
+                          <GateReadinessChecklist
+                            projectId={project.id}
+                            phaseId={activePhaseId}
+                            gateTaskId={selectedTask.id}
+                            canEdit={perms.role !== 'viewer' && (perms.canEditProjectInfo || perms.canEditTasks)}
+                            canQualityGateBlock={perms.canQualityGateBlock}
+                            canNpiGateBlock={perms.canNpiGateBlock}
+                            onTaskClick={(gapPhaseId: string, gapTaskId: string) => {
+                              setActivePhaseId(gapPhaseId);
+                              setSelectedTaskId(gapTaskId);
+                            }}
+                          />
+                        )}
 
                         {selectedTaskIsGate && activePhase?.gateStandard && (
                           <div className="p-3 rounded-md border-l-2 border-l-primary bg-secondary">
@@ -3413,7 +3588,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                                     )}
                                   </div>
                                   <button
-                                    onClick={() => setGateReviewPending({ phaseId: activePhaseId })}
+                                    onClick={openActiveGateReview}
                                     className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
                                   >
                                     查看历史
@@ -3435,11 +3610,88 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                           if (selectedTaskChecked && !latest) {
                             return (
                               <button
-                                onClick={() => setGateReviewPending({ phaseId: activePhaseId })}
+                                onClick={openActiveGateReview}
                                 className="w-full text-xs text-primary rounded-md border border-dashed border-[color:var(--acc-border)] py-2 hover:bg-[color:var(--acc-soft)] transition-colors"
                               >
                                 + 补充填写 Gate 评审记录
                               </button>
+                            );
+                          }
+                          return null;
+                        })()}
+
+                        {/* ── 设计4 §3 × 三步路径第③步：状态渐进面板——先回答"当下该做什么" ── */}
+                        {!selectedTaskIsGate && (() => {
+                          const status = selectedTaskDetails?.taskStatus ?? (selectedTaskChecked ? 'done' : 'todo');
+                          const deps = (selectedTask.dependsOn ?? []).map((depId) => {
+                            let depDone = false;
+                            for (const ph of projectPhases) {
+                              const detail = project.phases[ph.id]?.taskDetails?.[depId];
+                              if (detail) { depDone = detail.taskStatus === 'done' || detail.taskStatus === 'skipped'; break; }
+                              if (project.phases[ph.id]?.tasks?.[depId] === true) { depDone = true; break; }
+                            }
+                            return { id: depId, name: resolveTaskName(project, depId), done: depDone };
+                          });
+                          const depsClear = deps.every((dep) => dep.done);
+                          const evidence = getTaskEvidenceLevel(project, activePhaseId, selectedTask.id);
+                          if (status === 'todo') {
+                            return (
+                              <div className="rounded-md border border-[color:var(--acc-border)] bg-[color:var(--acc-soft)] p-3 space-y-2">
+                                <div className="text-[10px] uppercase tracking-widest text-muted-foreground">待开始</div>
+                                {deps.length > 0 && (
+                                  <ul className="text-xs space-y-0.5">
+                                    {deps.map((dep) => (
+                                      <li key={dep.id} className={dep.done ? 'text-muted-foreground' : 'text-[color:var(--warning)]'}>
+                                        {dep.done ? '✓' : '…'} 前置：{dep.name}{dep.done ? '' : '（未完成）'}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                )}
+                                <button
+                                  type="button"
+                                  disabled={!depsClear || !canActOnSelectedTask || startTaskMut.isPending}
+                                  onClick={() => startTaskMut.mutate({ projectId: project.id, phaseId: activePhaseId, taskId: selectedTask.id })}
+                                  className="px-3 py-1.5 rounded-md text-xs font-medium text-white bg-primary disabled:opacity-50"
+                                >
+                                  ▶ 开始任务
+                                </button>
+                                {!depsClear && <div className="text-[11px] text-muted-foreground">前置未完成 = 还没轮到（不是阻塞）；前置清空后可开始。</div>}
+                              </div>
+                            );
+                          }
+                          if (status === 'in_progress') {
+                            return (
+                              <div className="rounded-md border border-border bg-secondary p-3 space-y-2">
+                                <div className="text-[10px] uppercase tracking-widest text-muted-foreground">进行中 · 怎么算完成</div>
+                                <div className="text-xs text-muted-foreground">
+                                  {evidence === 'heavy'
+                                    ? '重证据任务：由负责人在右侧属性栏上传正式文件后，点「标记完成」。'
+                                    : '轻证据任务：点「标记完成」并填一句话结论（照片/链接可贴在结论里）。'}
+                                </div>
+                                <button
+                                  type="button"
+                                  disabled={!canActOnSelectedTask}
+                                  onClick={() => toggleTask(selectedTask.id)}
+                                  className="px-3 py-1.5 rounded-md text-xs font-medium text-white bg-[color:var(--success)] disabled:opacity-50"
+                                >
+                                  ✓ 标记完成
+                                </button>
+                              </div>
+                            );
+                          }
+                          if (status === 'pending_approval') {
+                            return (
+                              <div className="rounded-md border border-[color:var(--warning)] bg-[color:var(--warning-soft)] p-3 text-xs text-muted-foreground">
+                                已提交审批，等待审批人处理；可在下方「状态审批」标签查看或撤回。
+                              </div>
+                            );
+                          }
+                          if (status === 'done' && selectedTaskDetails?.completionNote) {
+                            return (
+                              <div className="rounded-md border border-border bg-secondary p-3">
+                                <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">完成结论</div>
+                                <div className="text-sm text-foreground whitespace-pre-wrap">{selectedTaskDetails.completionNote}</div>
+                              </div>
                             );
                           }
                           return null;
@@ -3527,26 +3779,6 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                       {/* ── Right sidebar: 属性 ──────────────────────────────── */}
                       <aside className="rounded-lg border border-border bg-secondary p-3 h-fit space-y-3">
                         <div className="text-[10px] uppercase tracking-widest text-muted-foreground">属性</div>
-                        {/* 责任角色 (read-only summary). 可见岗位移入「任务设置」⚙ 弹层。 */}
-                        <div className="space-y-1.5 text-xs">
-                          <div className="flex gap-2">
-                            <span className="w-16 shrink-0 text-muted-foreground">责任角色</span>
-                            <span className="text-foreground">{selectedTask.owner || '未指定'}</span>
-                          </div>
-                          {selectedTaskIsGate && activePhase?.gateStandard?.responsibleRoles?.length > 0 && (
-                            <div className="pt-1 text-muted-foreground">
-                              <div className="mb-1">Gate 责任分工</div>
-                              <div className="space-y-1">
-                                {activePhase.gateStandard.responsibleRoles.map((role, i) => (
-                                  <div key={i} className="flex items-start gap-2 text-foreground">
-                                    <span className="text-muted-foreground mt-0.5">▸</span>
-                                    <span>{role}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </div>
                         {/* meta (assignee/due/status/priority) + 需审批配置 + 附件 + 可见岗位编辑 */}
                         <TaskDetail
                           taskId={selectedTask.id}
@@ -3567,12 +3799,40 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                           canEdit={canActOnSelectedTask && isCurrentPhaseUnlocked}
                           /* 优先级仅管理/PM 可改 */
                           canEditPriority={perms.canEditProjectInfo}
-                          /* 文件上传/删除限负责人本人或管理/PM */
+                          /* v3 重证据只认负责人本人；其它任务保留管理/PM 代维护能力。 */
                           canUploadFiles={
                             (selectedTaskDetails?.assigneeUserId != null
                               && selectedTaskDetails.assigneeUserId === currentUser?.id)
-                            || perms.canEditProjectInfo
+                            || (
+                              perms.canEditProjectInfo
+                              && !(
+                                project.category === 'npd'
+                                && project.sopTemplateVersion === SOP_TEMPLATE_VERSION_NPD_V3
+                                && getTaskEvidenceLevel(project, activePhaseId, selectedTask.id) === 'heavy'
+                              )
+                            )
                           }
+                          onFilesUploaded={() => {
+                            const evidenceLevel = getTaskEvidenceLevel(project, activePhaseId, selectedTask.id);
+                            if (!shouldOfferCompletionAfterEvidenceUpload({
+                              evidenceLevel,
+                              isGateTask: selectedTaskIsGate,
+                              completed: selectedTaskChecked,
+                              status: selectedTaskDetails?.taskStatus ?? (selectedTaskChecked ? 'done' : 'todo'),
+                            })) return;
+                            toast.success('证据已上传', {
+                              description: '正式证据已归到这条任务，是否顺手标记完成？',
+                              action: {
+                                label: '标记完成',
+                                onClick: () => completeEvidenceMut.mutate({
+                                  projectId: project.id,
+                                  phaseId: activePhaseId,
+                                  taskId: selectedTask.id,
+                                  completed: true,
+                                }),
+                              },
+                            });
+                          }}
                           compact={compactTaskDetail}
                           projectId={project.id}
                           phaseId={activePhaseId}
@@ -3610,7 +3870,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                 <div className="space-y-3">
                   {projectPhases.map((phase) => {
                     const pd = project.phases[phase.id];
-                    const prog = computePhaseProgress(pd, phase.id);
+                    const prog = getPhaseProgress(project, phase.id);
                     const status = getPhaseStatus(project, phase.id);
                     return (
                       <div
@@ -3690,12 +3950,32 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
           gateStandard={activePhase?.gateStandard}
           existingReviews={activePhaseData?.gateReviews}
           projectId={project.id}
-          gateTaskId={activePhase?.gateTaskId}
+          gateTaskId={gateReviewPending.gateTaskId}
+          onOpenSettings={() => {
+            setGateReviewPending(null);
+            setSettingsOpen(true);
+          }}
           /* 就绪清单上传/删除按钮：viewer 隐藏，避免点了就 403 */
           canEditDeliverables={perms.role !== 'viewer' && (perms.canEditProjectInfo || perms.canEditTasks)}
           canQualityGateBlock={perms.canQualityGateBlock}
           canNpiGateBlock={perms.canNpiGateBlock}
-          blockers={computeGateReadiness(activePhase, activePhaseData, activeGateDeliverables, serverDelivSatisfiedSet).blockers}
+          jdmDefinitionFreeze={
+            project.category === 'jdm' && gateReviewPending.phaseId === 'input'
+              ? jdmDefinitionFreezeCandidate
+              : undefined
+          }
+          jdmDefinitionIssues={
+            project.category === 'jdm' && gateReviewPending.phaseId === 'input'
+              ? jdmDefinitionValidation.issues.map(issue => issue.message)
+              : undefined
+          }
+          onTaskClick={(gapPhaseId, gapTaskId) => {
+            setGateReviewPending(null);
+            setActivePhaseId(gapPhaseId);
+            setSelectedTaskId(gapTaskId);
+            setTaskView('list');
+            setMainTab('tasks');
+          }}
           onConfirm={perms.canGateReview
             ? handleGateReviewConfirm
             : perms.canConveneGateReview

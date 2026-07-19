@@ -12,6 +12,7 @@ import type { TrpcContext } from "./_core/context";
  */
 
 const PROJECT = `move-guard-${Date.now()}`;
+const LITE_PROJECT = `move-guard-lite-${Date.now()}`;
 const OWNER = 983001;
 const ADMIN = 983002;
 
@@ -64,13 +65,24 @@ beforeAll(async () => {
     currentPhase: "design",
     createdBy: OWNER,
   });
+  await db.insert(projects).values({
+    id: LITE_PROJECT,
+    name: "MoveGuard Lite",
+    projectNumber: LITE_PROJECT,
+    category: "npd",
+    sopTemplateVersion: "2026-07-v3",
+    customFields: { npdTemplate: { tier: "lite", packs: ["battery"] } },
+    risk: "low",
+    currentPhase: "verification",
+    createdBy: OWNER,
+  });
 });
 
 afterAll(async () => {
   const db = await getDb();
   if (!db) return;
   await db.delete(activityLogs).where(eq(activityLogs.projectId, PROJECT));
-  await db.delete(projects).where(inArray(projects.id, [PROJECT]));
+  await db.delete(projects).where(inArray(projects.id, [PROJECT, LITE_PROJECT]));
 });
 
 describe("projects.move phase guard", () => {
@@ -90,6 +102,65 @@ describe("projects.move phase guard", () => {
       caller.projects.move({ id: PROJECT, currentPhase: "mp" })
     ).rejects.toThrow(/Gate/i);
     expect(await currentPhaseInDb()).toBe("design");
+  });
+
+  it("rejects moving lite verification forward instead of treating it as dirty data", async () => {
+    const caller = appRouter.createCaller(makeCtx(OWNER));
+    await expect(
+      caller.projects.move({ id: LITE_PROJECT, currentPhase: "pvt" })
+    ).rejects.toThrow(/Gate/i);
+    const db = await getDb();
+    const [row] = await db!.select({ phase: projects.currentPhase })
+      .from(projects)
+      .where(eq(projects.id, LITE_PROJECT));
+    expect(row.phase).toBe("verification");
+  });
+
+  it("rejects forward phase changes through the generic project update API", async () => {
+    const caller = appRouter.createCaller(makeCtx(OWNER));
+    await expect(caller.projects.update({
+      id: LITE_PROJECT,
+      name: "MoveGuard Lite",
+      projectNumber: LITE_PROJECT,
+      category: "npd",
+      risk: "low",
+      currentPhase: "pvt",
+      progress: 0,
+      startDate: null,
+      targetDate: null,
+    })).rejects.toThrow(/Gate|阶段/);
+    const db = await getDb();
+    const [row] = await db!.select({ phase: projects.currentPhase })
+      .from(projects)
+      .where(eq(projects.id, LITE_PROJECT));
+    expect(row.phase).toBe("verification");
+  });
+
+  it("generic metadata updates cannot remove the frozen NPD tier or locked packs", async () => {
+    const caller = appRouter.createCaller(makeCtx(OWNER));
+    await caller.projects.update({
+      id: LITE_PROJECT,
+      name: "MoveGuard Lite renamed",
+      projectNumber: LITE_PROJECT,
+      category: "npd",
+      risk: "low",
+      currentPhase: "verification",
+      progress: 0,
+      startDate: null,
+      targetDate: null,
+      customFields: {
+        note: "ordinary metadata remains editable",
+        npdTemplate: { tier: "lite", packs: [] },
+      },
+    });
+    const db = await getDb();
+    const [row] = await db!.select({ customFields: projects.customFields })
+      .from(projects)
+      .where(eq(projects.id, LITE_PROJECT));
+    expect(row.customFields).toMatchObject({
+      note: "ordinary metadata remains editable",
+      npdTemplate: { tier: "lite", packs: ["battery"] },
+    });
   });
 
   it("rejects phase ids that are not part of the project category's SOP", async () => {

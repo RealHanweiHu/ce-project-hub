@@ -16,6 +16,7 @@ const QA_ASSIGNEE = 983002;      // qa：被指派 → 可完成
 const SCM_VISIBLE = 983003;      // scm：未指派但任务对 scm 可见 → 可完成
 const SALES_UNRELATED = 983004;  // sales：未指派且不可见 → 仍禁止
 const VIEWER_ASSIGNED = 983005;  // viewer：即使被指派也保持只读
+const QA_SAME_ROLE = 983006;     // qa：同岗位但不是负责人 → 不可代操作
 
 function makeCtx(userId: number): TrpcContext {
   return {
@@ -59,6 +60,7 @@ beforeAll(async () => {
     { projectId: PROJECT, userId: SCM_VISIBLE, role: "scm", invitedBy: OWNER },
     { projectId: PROJECT, userId: SALES_UNRELATED, role: "sales", invitedBy: OWNER },
     { projectId: PROJECT, userId: VIEWER_ASSIGNED, role: "viewer", invitedBy: OWNER },
+    { projectId: PROJECT, userId: QA_SAME_ROLE, role: "qa", invitedBy: OWNER },
   ]);
   await db.insert(projectTasks).values([
     {
@@ -127,6 +129,23 @@ describe("被指派人任务完成例外（qa/scm 等无 canEditTasks 角色）"
     const caller = appRouter.createCaller(makeCtx(SALES_UNRELATED));
     await expect(
       caller.tasks.setCompleted({ projectId: PROJECT, phaseId: "evt", taskId: "e2", completed: true })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("任务已有负责人时，同岗位其他人和管理者都不能代替本人点开始", async () => {
+    const caller = appRouter.createCaller(makeCtx(QA_SAME_ROLE));
+    await expect(
+      caller.tasks.setCompleted({ projectId: PROJECT, phaseId: "evt", taskId: "e2", completed: true })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      caller.tasks.start({ projectId: PROJECT, phaseId: "evt", taskId: "e2" })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      appRouter.createCaller(makeCtx(OWNER)).tasks.start({
+        projectId: PROJECT,
+        phaseId: "evt",
+        taskId: "e2",
+      })
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 

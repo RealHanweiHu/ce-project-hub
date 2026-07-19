@@ -44,6 +44,8 @@ export type GateReadinessInput = {
   criticalIssues: { titles: string[] };
   roleBlocks?: { titles: string[] };
   latestReview: { decision: "approved" | "conditional" | "rejected"; conditions: string | null; notes: string | null } | null;
+  /** 最新 rejected 之后是否已显式开启更高轮次；开启后才解除驳回阻塞。 */
+  hasNewerOpenRound?: boolean;
 };
 
 export type GateDimResult = { dimension: GateDim; ok: boolean; summary: string; blockers: string[] };
@@ -153,9 +155,13 @@ export function computeGateReadiness(input: GateReadinessInput): GateReadiness {
     reviewBlockers = [review.conditions || "上轮评审有遗留条件"];
     reviewSummary = "上轮评审有遗留条件";
   } else if (review && review.decision === "rejected") {
-    reviewOk = false;
-    reviewBlockers = [review.notes || review.conditions || "上轮评审被驳回"];
-    reviewSummary = "上轮评审被驳回";
+    if (input.hasNewerOpenRound) {
+      reviewSummary = "上轮评审未通过，已开启新一轮评审";
+    } else {
+      reviewOk = false;
+      reviewBlockers = [review.conditions || review.notes || "上轮评审未通过，请显式开启新一轮评审"];
+      reviewSummary = "上轮评审未通过，尚未开启新一轮";
+    }
   }
   dimensions.push({ dimension: "review_conditions", ok: reviewOk, summary: reviewSummary, blockers: reviewBlockers });
 

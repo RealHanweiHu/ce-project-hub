@@ -1,7 +1,9 @@
 import { useRef, useState } from "react";
+import { resolveTaskName } from '@shared/sop-template-resolution';
 import { trpc } from "@/lib/trpc";
-import { CheckCircle2, ChevronRight, XCircle, Upload, Trash2, FileText } from "lucide-react";
+import { AlertCircle, CheckCircle2, ChevronRight, XCircle, Upload, Trash2, FileText } from "lucide-react";
 import { toast } from "sonner";
+import { getGateEvidenceState } from "@/lib/gate-evidence-state";
 
 const DIM_LABEL: Record<string, string> = {
   prereq: "前置任务",
@@ -22,6 +24,11 @@ type GateBlockerRow = {
   description: string | null;
   status: "open" | "resolved";
 };
+type DeliverableReviewRow = {
+  phaseId: string;
+  deliverableName: string;
+  status: "pending" | "approved" | "rejected";
+};
 
 /**
  * Gate 就绪清单（服务端 gateReviews.readiness 驱动，含测试报告与 QA/PE 阻断维度）。
@@ -29,6 +36,7 @@ type GateBlockerRow = {
  */
 export function GateReadinessChecklist({
   projectId, phaseId, gateTaskId, canEdit = true, canQualityGateBlock = false, canNpiGateBlock = false,
+  onTaskClick,
 }: {
   projectId: string;
   phaseId: string;
@@ -36,17 +44,34 @@ export function GateReadinessChecklist({
   canEdit?: boolean;
   canQualityGateBlock?: boolean;
   canNpiGateBlock?: boolean;
+  /** 缺口行"去处理"跳转（设计4 §4：每行一键动作）。 */
+  onTaskClick?: (phaseId: string, taskId: string) => void;
 }) {
   const utils = trpc.useUtils();
   const { data: readiness, isLoading } = trpc.gateReviews.readiness.useQuery({ projectId, phaseId });
-  const { data: files = [] } = trpc.files.list.useQuery({ projectId, phaseId, taskId: gateTaskId });
+  // Match server readiness: evidence may be uploaded from the producing task,
+  // not only from the Gate task itself.
+  const { data: files = [] } = trpc.files.list.useQuery({ projectId, phaseId });
+  const { data: deliverableReviews = [] } = trpc.deliverableReviews.list.useQuery({ projectId });
   const { data: gateBlockers = [] } = trpc.gateBlockers.list.useQuery({ projectId, phaseId });
+  // §4 缺口清单：前置任务缺口带名称+责任人+跳转，而不是裸 id
+  const { data: projectRow } = trpc.projects.get.useQuery({ id: projectId }, { staleTime: 30_000 });
+  const { data: phaseTasks = [] } = trpc.tasks.list.useQuery({ projectId, phaseId }, { staleTime: 5_000 });
+  const { data: userRows = [] } = trpc.admin.listUsersForSelect.useQuery(undefined, { staleTime: 60_000 });
+  const taskRowById = new Map((phaseTasks as Array<{ taskId: string; assigneeUserId: number | null }>)
+    .map((task) => [task.taskId, task]));
+  const userName = (id: number | null | undefined) => {
+    if (id == null) return null;
+    const u = (userRows as Array<{ id: number; name?: string | null; username?: string | null }>).find((x) => x.id === id);
+    return u ? (u.name || u.username || `#${id}`) : `#${id}`;
+  };
 
   const refresh = async () => {
     await Promise.all([
       utils.gateReviews.readiness.invalidate({ projectId, phaseId }),
-      utils.files.list.invalidate({ projectId, phaseId, taskId: gateTaskId }),
+      utils.files.list.invalidate({ projectId, phaseId }),
       utils.gateBlockers.list.invalidate({ projectId, phaseId }),
+      utils.deliverableReviews.list.invalidate({ projectId }),
     ]);
   };
 
@@ -90,12 +115,40 @@ export function GateReadinessChecklist({
         <DeliverableRows
           missing={deliverablesDim?.blockers ?? []}
           files={files as FileRow[]}
+          reviews={(deliverableReviews as DeliverableReviewRow[])
+            .filter(review => review.phaseId === phaseId)}
           canEdit={canEdit}
           onUpload={uploadFor}
           onDelete={(id) => del.mutate({ id, projectId })}
         />
       )}
-      {dim.dimension !== "deliverables" && !dim.ok && dim.blockers.length > 0 && (
+      {dim.dimension === "prereq" && !dim.ok && dim.blockers.length > 0 && (
+        <ul className="ml-6 mt-0.5 text-xs space-y-0.5">
+          {dim.blockers.map((taskId) => {
+            const row = taskRowById.get(taskId);
+            const owner = userName(row?.assigneeUserId);
+            return (
+              <li key={taskId} className="flex items-center gap-2 text-muted-foreground">
+                <span className="text-foreground">
+                  {projectRow ? resolveTaskName(projectRow as never, taskId, phaseId) : taskId}
+                </span>
+                {owner && <span className="text-[11px]">@{owner}</span>}
+                {!owner && <span className="text-[11px] text-[color:var(--warning)]">待指派</span>}
+                {onTaskClick && (
+                  <button
+                    type="button"
+                    onClick={() => onTaskClick(phaseId, taskId)}
+                    className="text-[11px] text-primary hover:underline"
+                  >
+                    去处理 →
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {dim.dimension !== "deliverables" && dim.dimension !== "prereq" && !dim.ok && dim.blockers.length > 0 && (
         <ul className="ml-6 mt-0.5 text-xs text-muted-foreground list-disc pl-3 space-y-0.5">
           {dim.blockers.map((b, i) => <li key={i}>{b}</li>)}
         </ul>
@@ -228,10 +281,11 @@ function GateBlockerControls({
 }
 
 function DeliverableRows({
-  missing, files, canEdit, onUpload, onDelete,
+  missing, files, reviews, canEdit, onUpload, onDelete,
 }: {
   missing: string[];
   files: FileRow[];
+  reviews: DeliverableReviewRow[];
   canEdit: boolean;
   onUpload: (name: string, file: File) => void;
   onDelete: (id: number) => void;
@@ -239,16 +293,42 @@ function DeliverableRows({
   // 全集 = 已上传(文件里出现的 deliverableName) ∪ 缺失(missing)
   const uploadedNames = Array.from(new Set(files.map((f) => f.deliverableName).filter((n): n is string => !!n)));
   const names = Array.from(new Set([...uploadedNames, ...missing]));
+  const reviewByName = new Map(reviews.map(review => [review.deliverableName, review]));
   if (names.length === 0) return null;
+
+  const stateOf = (name: string) => getGateEvidenceState({
+    hasFile: files.some((f) => f.deliverableName === name),
+    readinessMissing: missing.includes(name),
+    reviewStatus: reviewByName.get(name)?.status ?? null,
+  });
 
   const row = (name: string) => {
     const versions = files.filter((f) => f.deliverableName === name).sort((a, b) => b.id - a.id);
-    const has = versions.length > 0;
+    const state = stateOf(name);
+    const statusLabel = {
+      missing: "缺少文件",
+      uploaded: "已上传，待提交审核",
+      pending: "审核中",
+      rejected: "审核未通过",
+      approved: "已通过",
+    }[state];
     return (
       <div key={name} className="text-xs">
         <div className="flex items-center gap-2">
-          {has ? <CheckCircle2 size={12} className="text-[color:var(--success)] shrink-0" /> : <XCircle size={12} className="text-destructive shrink-0" />}
-          <span className={has ? "text-foreground" : "text-muted-foreground"}>{name}</span>
+          {state === "approved"
+            ? <CheckCircle2 size={12} className="shrink-0 text-[color:var(--success)]" />
+            : state === "missing"
+              ? <XCircle size={12} className="shrink-0 text-destructive" />
+              : <AlertCircle size={12} className="shrink-0 text-[color:var(--warning)]" />}
+          <span className={state === "missing" ? "text-muted-foreground" : "text-foreground"}>{name}</span>
+          <span className={state === "approved"
+            ? "text-[10px] text-[color:var(--success)]"
+            : state === "missing" || state === "rejected"
+              ? "text-[10px] text-destructive"
+              : "text-[10px] text-[color:var(--warning)]"}
+          >
+            {statusLabel}
+          </span>
           {canEdit && <UploadButton onPick={(f) => onUpload(name, f)} />}
         </div>
         {versions.map((v, idx) => (
@@ -267,19 +347,19 @@ function DeliverableRows({
     );
   };
 
-  // 首屏聚焦：缺失项展开在外，已上传项折叠
-  const missingNames = names.filter((n) => !files.some((f) => f.deliverableName === n));
-  const doneNames = names.filter((n) => files.some((f) => f.deliverableName === n));
+  // 首屏聚焦（P0-5）×审核闭环：待处理态（缺失/待审/被拒）展开在外，已通过的折叠
+  const actionNames = names.filter((n) => stateOf(n) !== 'approved');
+  const approvedNames = names.filter((n) => stateOf(n) === 'approved');
   return (
     <div className="ml-6 mt-1 space-y-1">
-      {missingNames.map(row)}
-      {doneNames.length > 0 && (
+      {actionNames.map(row)}
+      {approvedNames.length > 0 && (
         <details className="group">
           <summary className="flex cursor-pointer list-none items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
             <ChevronRight size={11} className="shrink-0 transition-transform group-open:rotate-90" />
-            已上传 {doneNames.length} 项交付物
+            已通过 {approvedNames.length} 项交付物
           </summary>
-          <div className="mt-1 space-y-1">{doneNames.map(row)}</div>
+          <div className="mt-1 space-y-1">{approvedNames.map(row)}</div>
         </details>
       )}
     </div>

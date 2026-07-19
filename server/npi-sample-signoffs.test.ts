@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { appRouter } from "./routers";
 import { createProjectFile, getDb, getGateReadiness } from "./db";
 import {
@@ -168,6 +168,15 @@ describe("NPI readiness and sample signoff workflow", () => {
 
     const issue = await peCaller.npiReadiness.createIssueFromCheck({ id: check.id });
     expect(issue.existed).toBe(false);
+    const db = await getDb();
+    const [canonical] = await db!.select().from(activityLogs).where(and(
+      eq(activityLogs.projectId, PROJECT),
+      eq(activityLogs.action, "issue.create"),
+      eq(activityLogs.entityId, String(issue.id)),
+    ));
+    expect(canonical.meta).toMatchObject({
+      after: { creatorId: PE, status: "open", severity: "P1" },
+    });
 
     await peCaller.npiReadiness.update({ id: check.id, projectId: PROJECT, status: "ready" });
     readiness = await getGateReadiness(PROJECT, "pvt");

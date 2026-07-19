@@ -1,9 +1,12 @@
-import { eq, desc, and, or, isNull, inArray, between, getTableColumns, sql as drizzleSql } from "drizzle-orm";
+import { eq, desc, and, or, isNull, inArray, between, lt, lte, gte, getTableColumns, sql as drizzleSql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
+import { nanoid } from "nanoid";
+import { createHash } from "node:crypto";
 import {
   EXTERNAL_APPROVAL_STATUSES,
   InsertUser, users, projects, InsertProject, ProjectRow,
   projectMembers, InsertProjectMember, ProjectMember, ProjectMemberRole,
+  projectRoleDelegations, ProjectRoleDelegation, InsertProjectRoleDelegation,
   projectPhases, ProjectPhase, InsertProjectPhase,
   projectCalendarEvents, ProjectCalendarEvent, InsertProjectCalendarEvent,
   projectTasks, ProjectTask, InsertProjectTask,
@@ -17,6 +20,11 @@ import {
   projectSampleSignoffs, ProjectSampleSignoff, InsertProjectSampleSignoff,
   projectRequirements, ProjectRequirement, InsertProjectRequirement,
   projectGateReviews, ProjectGateReview, InsertProjectGateReview,
+  projectGateSignoffRounds, ProjectGateSignoffRound, InsertProjectGateSignoffRound,
+  projectGateSignoffAdditions, ProjectGateSignoffAddition, InsertProjectGateSignoffAddition,
+  projectGateSignoffs, ProjectGateSignoff, InsertProjectGateSignoff,
+  projectChangeScopeDeclarations, ProjectChangeScopeDeclarationRow, InsertProjectChangeScopeDeclaration,
+  projectStabilityReports, ProjectStabilityReport, InsertProjectStabilityReport,
   projectChangelog, ProjectChangeRecord, InsertProjectChangeRecord,
   projectFiles, InsertProjectFile, ProjectFile,
   activityLogs, InsertActivityLog, ActivityLog,
@@ -27,18 +35,38 @@ import {
   productDefinitionChanges, ProductDefinitionChange, InsertProductDefinitionChange,
   productRevisions, InsertProductRevision, ProductRevision,
   mpReleases, InsertMpRelease,
+  productCertificates, ProductCertificate, InsertProductCertificate,
+  projectConditions, ProjectCondition, InsertProjectCondition,
+  projectCloseHandoffs, ProjectCloseHandoff,
+  projectCloseHandoffItems, ProjectCloseHandoffItem,
+  projectTerminationReviews, projectTerminationItems,
+  productServiceCases, ProductServiceCase, InsertProductServiceCase,
+  projectExpenses, ProjectExpense, InsertProjectExpense,
+  productSoftwareReleases, ProductSoftwareRelease, InsertProductSoftwareRelease,
+  productEolPlans, ProductEolPlan,
+  productEolPlanItems, ProductEolPlanItem,
+  productGovernanceEvents, ProductGovernanceEvent, InsertProductGovernanceEvent,
+  PRODUCT_EOL_ITEM_KEYS, type ProductEolItemKey,
+  PROJECT_CLOSE_HANDOFF_ITEM_KEYS, type ProjectCloseHandoffItemKey,
   dingtalkApprovalConfigs, DingtalkApprovalConfig, InsertDingtalkApprovalConfig,
   externalApprovalInstances, ExternalApprovalInstance, InsertExternalApprovalInstance,
   dingtalkInteractiveCards, DingtalkInteractiveCard, InsertDingtalkInteractiveCard,
   customerVariants, CustomerVariant, InsertCustomerVariant,
   bomItems, BomItem, InsertBomItem,
+  keyModules, projectModuleBaselines, InsertProjectModuleBaseline,
+  projectProductModuleBindings, InsertProjectProductModuleBinding,
+  productTechnicalBaselines, ProductTechnicalBaseline,
+  productModuleAssignments, ProductModuleAssignment,
   comments, Comment,
   notifications,
   actionItems, ActionItem, InsertActionItem,
   automationHeartbeats, AutomationHeartbeat, InsertAutomationHeartbeat,
   automationRules, AutomationRuleRow, InsertAutomationRule,
   automationRuns, AutomationRunRow, InsertAutomationRun,
+  automationClaims,
   customFieldDefs, CustomFieldDef, InsertCustomFieldDef,
+  projectCollections, ProjectCollection,
+  projectCollectionItems,
   projectTailoring, ProjectTailoring, InsertProjectTailoring, TailoringTarget,
   projectDeliverableOverrides, ProjectDeliverableOverride,
   projectDeliverableReviews, ProjectDeliverableReview,
@@ -51,12 +79,58 @@ import {
 import { buildRevisionChangelogSnapshot, REVISION_CHANGE_STATUSES, type RevisionChangeEntry } from "../shared/changelog-snapshot";
 import { normalizeFileType, normalizeFileVersion } from "../shared/file-types";
 import { ENV } from './_core/env';
-import { getSopPhasesForCategory } from "./sop-data";
-import { getPhasesForCategory, getReleaseGatePhase } from "../shared/sop-templates";
+import {
+  getEffectivePhasesForProjectLike,
+  getNpdV3RedlinePolicy,
+  isNpdV3RedlineAuditDeliverable,
+  type ProjectTemplateLike,
+} from "../shared/npd-v3";
+import {
+  getPhasesForCategory,
+  SOP_TEMPLATE_VERSION_CURRENT,
+  type SOPPhase,
+} from "../shared/sop-templates";
+import {
+  validateProjectExecutionBaseline,
+  type ModuleReuseEvidence,
+  type ModuleReuseState,
+  type ProductModuleId,
+  type ProjectExecutionBaseline,
+} from "../shared/project-track-tailoring";
+import { isDeliverableSatisfied } from "../shared/deliverable-review";
 import { computeDownstreamImpact, type DownstreamImpactRow, type VariantStatus } from "../shared/oem-variant";
 import { computeGateReadiness, type GateReadiness } from "../shared/gate-readiness";
-import { getDeliverableLibrary, getEffectiveProcess, type EffectiveProcess } from "../shared/effective-process";
-import { buildSchedTasks } from "../shared/schedule-graph";
+import {
+  getDeliverableLibraryForPhases,
+  getEffectiveProcess,
+  type EffectiveProcess,
+} from "../shared/effective-process";
+import {
+  buildGateSignoffRequirements,
+  gateSignoffsReady,
+  promoteGateSignoffRequirement,
+  type GateSignoffRequirement,
+  type GateSignoffSlot,
+  type GateSignoffStatus,
+} from "../shared/gate-signoffs";
+import {
+  isHighRiskProtectedDeliverable,
+  isHighRiskProtectedTask,
+  isHighSopRisk,
+  phaseContainsHighRiskControls,
+  deriveSopRiskAssessment,
+  EMPTY_CHANGE_SCOPE_DECLARATION,
+  type ProjectChangeScopeDeclaration,
+  type ProjectSopRiskLevel,
+  type SopRiskAssessment,
+} from "../shared/sop-risk";
+import {
+  certificationRequirementLabel,
+  evaluateCertificationCoverage,
+  getRequiredCertificationCoverage,
+  type CertificationCoverageRecord,
+} from "../shared/certification";
+import { buildOperationalProjectSchedTasks, buildSchedTasks } from "../shared/schedule-graph";
 import {
   forecastSchedule,
   projectedEndFromSchedule,
@@ -77,9 +151,22 @@ import {
 import type { MetricGate, MetricIssue, MetricPhase, MetricTask } from "../shared/metrics";
 import { computeProjectMetrics, type ProjectMetrics } from "../shared/metrics";
 import { rollupPortfolioMetrics, type PortfolioMetricsRollup } from "../shared/portfolio-metrics";
-import { computeManagementKpis, parseCostValue, type ManagementKpis } from "../shared/management-kpis";
+import {
+  MANAGEMENT_VALIDATION_PHASES,
+  computeManagementKpis,
+  parseCostValue,
+  type ManagementKpis,
+} from "../shared/management-kpis";
 import { isSystemAdminRole } from "../shared/system-roles";
+import { normalizeExtraRoles } from "../shared/project-roles";
 import { defaultFromISO } from "./metrics-window";
+import { buildProjectActionPath } from "../shared/action-links";
+import {
+  KEY_MODULE_TYPE_BY_DRV_MODULE,
+  type KeyModuleType,
+  type PhysicalDrvModuleId,
+} from "../shared/key-modules";
+import { canApproveProductTechnicalChange } from "./product-control";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 const PROJECT_FILE_VISIBILITY_SET = new Set<string>(PROJECT_FILE_VISIBILITIES);
@@ -101,6 +188,21 @@ export async function getDb() {
     }
   }
   return _db;
+}
+
+/**
+ * Project-scoped release barrier for every mutation that can change a
+ * technical-baseline release decision. Call this before narrower advisory
+ * locks, row locks, or DML in the surrounding transaction.
+ */
+export async function acquireProjectReleaseStateLock(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec: any,
+  projectId: string,
+): Promise<void> {
+  await exec.execute(
+    drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`release-state:${projectId}`}))`,
+  );
 }
 
 // `deliverable-review-service` and this module form an import cycle (it imports
@@ -194,6 +296,14 @@ export async function getUserById(id: number) {
   if (!db) return undefined;
   const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
   return result[0];
+}
+
+export async function getUsersByIds(ids: readonly number[]) {
+  const uniqueIds = Array.from(new Set(ids));
+  if (uniqueIds.length === 0) return [];
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(users).where(inArray(users.id, uniqueIds));
 }
 
 export async function getUserByDingtalkIdentity(identity: {
@@ -316,6 +426,8 @@ export async function getProjectsByUser(userId: number): Promise<ProjectRow[]> {
           eq(projects.archived, false),
           or(
             eq(projects.createdBy, userId),
+            eq(projects.productOwnerUserId, userId),
+            eq(projects.pmUserId, userId),
             inArray(projects.id, memberProjectIds)
           )
         )
@@ -326,7 +438,14 @@ export async function getProjectsByUser(userId: number): Promise<ProjectRow[]> {
   return db
     .select()
     .from(projects)
-    .where(and(eq(projects.createdBy, userId), eq(projects.archived, false)))
+    .where(and(
+      or(
+        eq(projects.createdBy, userId),
+        eq(projects.productOwnerUserId, userId),
+        eq(projects.pmUserId, userId),
+      ),
+      eq(projects.archived, false),
+    ))
     .orderBy(desc(projects.updatedAt));
 }
 
@@ -341,6 +460,29 @@ export async function getAllActiveProjects(): Promise<ProjectRow[]> {
     .orderBy(desc(projects.updatedAt));
 }
 
+/** 归档/终止审计视图；正常关闭与异常终止通过 lifecycle 区分。 */
+export async function getArchivedProjects(userId: number, includeAll = false): Promise<ProjectRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  if (includeAll) return db.select().from(projects).where(eq(projects.archived, true)).orderBy(desc(projects.updatedAt));
+  const memberships = await db.select({ projectId: projectMembers.projectId }).from(projectMembers).where(eq(projectMembers.userId, userId));
+  const ids = memberships.map((row) => row.projectId);
+  const access = ids.length > 0
+    ? or(eq(projects.createdBy, userId), eq(projects.productOwnerUserId, userId), eq(projects.pmUserId, userId), inArray(projects.id, ids))
+    : or(eq(projects.createdBy, userId), eq(projects.productOwnerUserId, userId), eq(projects.pmUserId, userId));
+  return db.select().from(projects).where(and(eq(projects.archived, true), access)).orderBy(desc(projects.updatedAt));
+}
+
+/** Automation-only project scope: paused/terminated projects are excluded. */
+export async function getAutomationActiveProjects(): Promise<ProjectRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(projects).where(and(
+    eq(projects.archived, false),
+    eq(projects.lifecycle, "active"),
+  )).orderBy(desc(projects.updatedAt));
+}
+
 export async function getProjectById(id: string): Promise<ProjectRow | undefined> {
   const db = await getDb();
   if (!db) return undefined;
@@ -348,27 +490,229 @@ export async function getProjectById(id: string): Promise<ProjectRow | undefined
   return result[0];
 }
 
+export type SaveJdmDefinitionDraftResult =
+  | { ok: true; baseline: ProjectExecutionBaseline }
+  | {
+      ok: false;
+      reason: "not_found" | "not_jdm" | "not_input" | "not_draft" | "invalid_baseline";
+      message: string;
+    };
+
+/**
+ * Save the converging JDM product-definition draft under the same phase lock
+ * used by Gate confirmation. The locked re-read prevents a stale editor from
+ * overwriting a baseline that the input Gate has just frozen.
+ */
+export async function saveJdmDefinitionDraftBaseline(input: {
+  projectId: string;
+  productDefinitionRef: string;
+  moduleReuse: Record<ProductModuleId, ModuleReuseState>;
+  reuseEvidence: Partial<Record<ProductModuleId, ModuleReuseEvidence>>;
+  savedBy: number;
+}): Promise<SaveJdmDefinitionDraftResult> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, input.projectId);
+    await tx.execute(
+      drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${input.projectId}:input`}))`,
+    );
+    const [lockedProject] = await tx.select().from(projects)
+      .where(eq(projects.id, input.projectId))
+      .limit(1);
+    if (!lockedProject) {
+      return { ok: false, reason: "not_found", message: "项目不存在" };
+    }
+    if (lockedProject.category !== "jdm") {
+      return {
+        ok: false,
+        reason: "not_jdm",
+        message: "仅 JDM 项目可保存产品定义草稿",
+      };
+    }
+    if (lockedProject.currentPhase !== "input") {
+      return {
+        ok: false,
+        reason: "not_input",
+        message: "仅 JDM 的 input 产品定义阶段可保存草稿",
+      };
+    }
+
+    const customFields = lockedProject.customFields &&
+      typeof lockedProject.customFields === "object" &&
+      !Array.isArray(lockedProject.customFields)
+      ? lockedProject.customFields as Record<string, unknown>
+      : {};
+    const storedValue = customFields.projectExecutionBaseline;
+    const storedRecord = storedValue && typeof storedValue === "object" && !Array.isArray(storedValue)
+      ? storedValue as Record<string, unknown>
+      : null;
+    if (
+      !storedRecord ||
+      storedRecord.modelVersion !== "project-track-v1" ||
+      storedRecord.status !== "draft"
+    ) {
+      return {
+        ok: false,
+        reason: "not_draft",
+        message: "JDM 产品定义基线已冻结或不是有效草稿，不能继续保存",
+      };
+    }
+    if (
+      typeof storedRecord.customerConceptRef !== "string" ||
+      !storedRecord.customerConceptRef.trim()
+    ) {
+      return {
+        ok: false,
+        reason: "invalid_baseline",
+        message: "JDM 草稿缺少创建时冻结的客户概念原始输入引用",
+      };
+    }
+
+    const {
+      frozenAt: _frozenAt,
+      frozenBy: _frozenBy,
+      ...storedDraft
+    } = storedValue as ProjectExecutionBaseline;
+    const nextBaseline: ProjectExecutionBaseline = {
+      ...storedDraft,
+      modelVersion: "project-track-v1",
+      status: "draft",
+      customerConceptRef: storedRecord.customerConceptRef.trim(),
+      productDefinitionRef: input.productDefinitionRef.trim(),
+      moduleReuse: { ...input.moduleReuse },
+      reuseEvidence: { ...input.reuseEvidence },
+    };
+    const validation = validateProjectExecutionBaseline(nextBaseline, { track: "jdm" });
+    if (!validation.ok) {
+      return {
+        ok: false,
+        reason: "invalid_baseline",
+        message: `JDM 产品定义草稿无效：${validation.issues.map(issue => issue.message).join("；")}`,
+      };
+    }
+
+    await tx.update(projects).set({
+      customFields: {
+        ...customFields,
+        projectExecutionBaseline: nextBaseline,
+      },
+      updatedAt: new Date(),
+    }).where(eq(projects.id, input.projectId));
+    await createActivityLog({
+      projectId: input.projectId,
+      userId: input.savedBy,
+      action: "project.jdm_definition_draft.save",
+      entityType: "project_execution_baseline",
+      entityId: `${input.projectId}:input`,
+      meta: {
+        productDefinitionRef: nextBaseline.productDefinitionRef,
+        moduleReuse: nextBaseline.moduleReuse,
+        reuseEvidenceModuleIds: Object.keys(nextBaseline.reuseEvidence ?? {}),
+      },
+    }, tx);
+
+    return { ok: true, baseline: nextBaseline };
+  });
+}
+
 export async function createProject(project: InsertProject): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.insert(projects).values(project);
+  await db.insert(projects).values({
+    ...project,
+    productOwnerUserId: project.productOwnerUserId ?? project.createdBy,
+  });
 }
 
 export async function createProjectWithSeed(
   project: InsertProject,
   category: string,
-  createdBy: number
+  createdBy: number,
+  riskDeclaration?: { declaration: ProjectChangeScopeDeclaration; assessment: SopRiskAssessment },
+  controlledSeed?: {
+    moduleBaselines?: Array<Omit<InsertProjectModuleBaseline, "id" | "projectId" | "createdAt">>;
+    bomItems?: Array<Omit<InsertBomItem, "id" | "projectId" | "revisionId" | "createdAt">>;
+    deliveryModules?: Array<Omit<InsertProjectProductModuleBinding, "id" | "projectId" | "updatedAt">>;
+  },
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const phases = getSopPhasesForCategory(category);
+  const phases = getEffectivePhasesForProjectLike({
+    category,
+    sopTemplateVersion: project.sopTemplateVersion,
+    customFields: project.customFields,
+  });
   // 安全网：currentPhase 必须是该 category 真实存在的阶段（如 jdm→input / obt→intake），
   // 否则（如非 UI 调用方沿用默认 "concept"）落到不存在的阶段。缺省取首阶段。
+  const projectWithOwner = {
+    ...project,
+    productOwnerUserId: project.productOwnerUserId ?? project.createdBy,
+  };
   const seeded = phases.some((p) => p.id === project.currentPhase)
-    ? project
-    : { ...project, currentPhase: phases[0]?.id ?? project.currentPhase };
+    ? projectWithOwner
+    : { ...projectWithOwner, currentPhase: phases[0]?.id ?? project.currentPhase };
   await db.transaction(async (tx) => {
+    const controlledModuleIds = Array.from(new Set(
+      (controlledSeed?.moduleBaselines ?? [])
+        .map(row => row.keyModuleId)
+        .filter((id): id is string => Boolean(id)),
+    ));
+    if (controlledModuleIds.length > 0) {
+      const lockedModules = await tx.select({ id: keyModules.id, status: keyModules.status })
+        .from(keyModules)
+        .where(inArray(keyModules.id, controlledModuleIds))
+        .for("update");
+      if (lockedModules.length !== controlledModuleIds.length || lockedModules.some(row => row.status !== "approved")) {
+        throw new Error("所选关键模块已不再处于已批准状态，请重新选择");
+      }
+    }
     await tx.insert(projects).values(seeded);
+    if (riskDeclaration) {
+      await tx.insert(projectChangeScopeDeclarations).values({
+        projectId: project.id,
+        version: 1,
+        declaration: riskDeclaration.declaration,
+        assessment: riskDeclaration.assessment,
+        ruleVersion: riskDeclaration.assessment.ruleVersion,
+        declaredBy: createdBy,
+      });
+    }
+    if (controlledSeed?.moduleBaselines?.length) {
+      await tx.insert(projectModuleBaselines).values(
+        controlledSeed.moduleBaselines.map(row => ({ ...row, projectId: project.id })),
+      );
+      const initialDeliveryModules = controlledSeed.moduleBaselines.flatMap((row) => {
+        const moduleType = KEY_MODULE_TYPE_BY_DRV_MODULE[
+          row.drvModuleKey as PhysicalDrvModuleId
+        ];
+        if (!moduleType || row.reuseState !== "reused" || !row.keyModuleId) return [];
+        return [{
+          projectId: project.id,
+          moduleType,
+          moduleId: row.keyModuleId,
+          moduleSnapshot: row.moduleSnapshot ?? {},
+          boundBy: createdBy,
+          boundAt: row.confirmedAt ?? new Date(),
+        }];
+      });
+      // DRV 复用模块就是立项时的默认交付选型。后续若开发了新编号，PM 可在
+      // 产品交付模块区用已批准模块覆盖；NPD/JDM/OBT 则在设计收敛后手动绑定。
+      if (initialDeliveryModules.length > 0) {
+        await tx.insert(projectProductModuleBindings).values(initialDeliveryModules);
+      }
+    }
+    if (controlledSeed?.deliveryModules?.length) {
+      await tx.insert(projectProductModuleBindings).values(
+        controlledSeed.deliveryModules.map(row => ({ ...row, projectId: project.id })),
+      );
+    }
+    if (controlledSeed?.bomItems?.length) {
+      await tx.insert(bomItems).values(
+        controlledSeed.bomItems.map(row => ({ ...row, projectId: project.id, revisionId: null })),
+      );
+    }
     for (const phase of phases) {
       await tx.insert(projectPhases).values({ projectId: project.id, phaseId: phase.id });
       for (const task of phase.tasks) {
@@ -386,15 +730,1237 @@ export async function createProjectWithSeed(
   await refreshProjectTaskStatuses(project.id);
 }
 
+export async function getLatestProjectChangeScopeDeclaration(
+  projectId: string,
+): Promise<ProjectChangeScopeDeclarationRow | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db.select().from(projectChangeScopeDeclarations)
+    .where(eq(projectChangeScopeDeclarations.projectId, projectId))
+    .orderBy(desc(projectChangeScopeDeclarations.version))
+    .limit(1);
+  return row ?? null;
+}
+
+function isFrozenJdmProject(project: Pick<ProjectRow, "category" | "customFields">): boolean {
+  if (project.category !== "jdm") return false;
+  const customFields = project.customFields && typeof project.customFields === "object" && !Array.isArray(project.customFields)
+    ? project.customFields as Record<string, unknown>
+    : {};
+  const baseline = customFields.projectExecutionBaseline;
+  return !!baseline && typeof baseline === "object" && !Array.isArray(baseline) &&
+    (baseline as Record<string, unknown>).status === "frozen";
+}
+
+export async function createProjectChangeScopeDeclarationVersion(input: {
+  projectId: string;
+  declaration: ProjectChangeScopeDeclaration;
+  assessment: SopRiskAssessment;
+  declaredBy: number;
+}): Promise<ProjectChangeScopeDeclarationRow> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const projectBefore = await getProjectById(input.projectId);
+  if (!projectBefore) throw new Error("Project not found");
+  const row = await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, input.projectId);
+    // Gate progression, round creation, requirement additions and risk
+    // upgrades all serialize on the current phase before taking narrower
+    // locks. This makes the signoff snapshot a real point-in-time boundary.
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${input.projectId}:${projectBefore.currentPhase}`}))`);
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${input.projectId}:risk-scope`}))`);
+    const [lockedProject] = await tx.select().from(projects)
+      .where(eq(projects.id, input.projectId))
+      .limit(1);
+    if (!lockedProject) throw new Error("Project not found");
+    if (lockedProject.currentPhase !== projectBefore.currentPhase) {
+      throw new Error("项目阶段已变化，请刷新后重新提交风险声明");
+    }
+    if (isFrozenJdmProject(lockedProject)) {
+      throw new Error("JDM 产品定义与风险声明已在 Gate 冻结；受控变更将在下一增量开放");
+    }
+    // The assessment may have been derived before this request acquired the
+    // locks. Clamp it against the locked project so a stale concurrent
+    // standard assessment can never lower an already-high risk baseline.
+    const safetyRemainsHigh = lockedProject.safetyRiskLevel === "high";
+    const regulatoryRemainsHigh = lockedProject.regulatoryRiskLevel === "high";
+    const effectiveAssessment: SopRiskAssessment = {
+      ...input.assessment,
+      safetyRiskLevel: safetyRemainsHigh ? "high" : input.assessment.safetyRiskLevel,
+      regulatoryRiskLevel: regulatoryRemainsHigh ? "high" : input.assessment.regulatoryRiskLevel,
+      safetyReasons: safetyRemainsHigh
+        ? Array.from(new Set([...input.assessment.safetyReasons, "既有安全高风险基线（受控降级前保持）"]))
+        : input.assessment.safetyReasons,
+      regulatoryReasons: regulatoryRemainsHigh
+        ? Array.from(new Set([...input.assessment.regulatoryReasons, "既有法规高风险基线（受控降级前保持）"]))
+        : input.assessment.regulatoryReasons,
+    };
+    const [latest] = await tx.select({
+      maxVersion: drizzleSql<number>`coalesce(max(${projectChangeScopeDeclarations.version}), 0)::int`,
+    }).from(projectChangeScopeDeclarations)
+      .where(eq(projectChangeScopeDeclarations.projectId, input.projectId));
+    const [created] = await tx.insert(projectChangeScopeDeclarations).values({
+      projectId: input.projectId,
+      version: (latest?.maxVersion ?? 0) + 1,
+      declaration: input.declaration,
+      assessment: effectiveAssessment,
+      ruleVersion: effectiveAssessment.ruleVersion,
+      declaredBy: input.declaredBy,
+    } as InsertProjectChangeScopeDeclaration).returning();
+    await tx.update(projects).set({
+      safetyRiskLevel: effectiveAssessment.safetyRiskLevel,
+      regulatoryRiskLevel: effectiveAssessment.regulatoryRiskLevel,
+      updatedAt: new Date(),
+    }).where(eq(projects.id, input.projectId));
+    const riskIncreased =
+      (lockedProject.safetyRiskLevel !== "high" && effectiveAssessment.safetyRiskLevel === "high") ||
+      (lockedProject.regulatoryRiskLevel !== "high" && effectiveAssessment.regulatoryRiskLevel === "high");
+    if (riskIncreased) {
+      await supersedeOpenGateSignoffRoundsInTransaction(
+        tx,
+        input.projectId,
+        input.declaredBy,
+        "风险升级：按新矩阵重开会签轮次",
+        lockedProject.currentPhase,
+      );
+    }
+    return created;
+  });
+  return row;
+}
+
+export async function confirmProjectChangeScopeDeclaration(input: {
+  projectId: string;
+  version: number;
+  kind: "engineering" | "qa_or_cert";
+  confirmedBy: number;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, input.projectId);
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${input.projectId}:risk-scope`}))`);
+    const [lockedProject] = await tx.select({
+      category: projects.category,
+      customFields: projects.customFields,
+    }).from(projects).where(eq(projects.id, input.projectId)).limit(1);
+    if (!lockedProject) throw new Error("Project not found");
+    if (isFrozenJdmProject(lockedProject)) {
+      throw new Error("JDM 产品定义与风险声明已在 Gate 冻结；受控变更将在下一增量开放");
+    }
+    await tx.update(projectChangeScopeDeclarations).set(input.kind === "engineering"
+      ? { engineeringConfirmedBy: input.confirmedBy, engineeringConfirmedAt: new Date() }
+      : { qaOrCertConfirmedBy: input.confirmedBy, qaOrCertConfirmedAt: new Date() })
+      .where(and(
+        eq(projectChangeScopeDeclarations.projectId, input.projectId),
+        eq(projectChangeScopeDeclarations.version, input.version),
+      ));
+  });
+}
+
+export async function listProductCertificates(productId: string): Promise<ProductCertificate[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(productCertificates)
+    .where(eq(productCertificates.productId, productId))
+    .orderBy(desc(productCertificates.createdAt), desc(productCertificates.id));
+}
+
+export async function createProductCertificate(
+  input: Omit<InsertProductCertificate, "id" | "status" | "reviewedBy" | "reviewedAt" | "createdAt" | "updatedAt">,
+): Promise<ProductCertificate> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  if (!input.certificateNumber?.trim() && !input.evidenceReference?.trim()) {
+    throw new Error("证书编号与证据引用至少填写一项");
+  }
+  if (input.scopeType === "project" && !input.projectId) throw new Error("项目范围证书必须关联项目");
+  if (input.scopeType === "revision" && !input.revisionId) throw new Error("Revision 范围证书必须关联版本");
+  if (input.scopeType === "revision" && input.reuseApproved && !input.reuseBasis?.trim()) {
+    throw new Error("Revision 复用批准必须填写复用边界和依据");
+  }
+  const [row] = await db.insert(productCertificates).values({ ...input, status: "draft" }).returning();
+  return row;
+}
+
+export async function reviewProductCertificate(input: {
+  id: number;
+  status: "valid" | "revoked";
+  reviewedBy: number;
+}): Promise<ProductCertificate> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [existing] = await db.select().from(productCertificates).where(eq(productCertificates.id, input.id)).limit(1);
+  if (!existing) throw new Error("证书记录不存在");
+  if (input.status === "valid") {
+    if (!existing.certificateNumber?.trim() && !existing.evidenceReference?.trim()) {
+      throw new Error("缺少证书编号或证据引用，不能确认有效");
+    }
+    if (existing.scopeType === "revision" && (!existing.reuseApproved || !existing.reuseBasis?.trim())) {
+      throw new Error("Revision 复用证书缺少批准和复用依据");
+    }
+  }
+  const [row] = await db.update(productCertificates).set({
+    status: input.status,
+    reviewedBy: input.reviewedBy,
+    reviewedAt: new Date(),
+    updatedAt: new Date(),
+  }).where(eq(productCertificates.id, input.id)).returning();
+  return row;
+}
+
+export async function evaluateProductCertificationCoverage(input: {
+  productId: string;
+  projectId: string;
+  declaration: ProjectChangeScopeDeclaration;
+  baselineTargetMarkets?: string[] | null;
+  baseRevisionId?: number | null;
+  resultRevisionId?: number | null;
+  todayISO?: string;
+}): Promise<ReturnType<typeof evaluateCertificationCoverage> & { requirements: ReturnType<typeof getRequiredCertificationCoverage> }> {
+  const records = await listProductCertificates(input.productId);
+  const requirements = getRequiredCertificationCoverage({
+    declaration: input.declaration,
+    baselineTargetMarkets: input.baselineTargetMarkets,
+  });
+  const result = evaluateCertificationCoverage({
+    requirements,
+    records: records as CertificationCoverageRecord[],
+    projectId: input.projectId,
+    baseRevisionId: input.baseRevisionId,
+    resultRevisionId: input.resultRevisionId,
+    todayISO: input.todayISO ?? new Date().toISOString().slice(0, 10),
+  });
+  return { ...result, requirements };
+}
+
+export async function getProjectCertificationCoverage(projectId: string) {
+  const [project, declaration] = await Promise.all([
+    getProjectById(projectId),
+    getLatestProjectChangeScopeDeclaration(projectId),
+  ]);
+  if (!project) throw new Error("项目不存在");
+  const product = project.productId ? await getProductById(project.productId) : null;
+  const scope = declaration?.declaration ?? EMPTY_CHANGE_SCOPE_DECLARATION;
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const coverageThroughISO = project.targetDate && project.targetDate > todayISO ? project.targetDate : todayISO;
+  if (!project.productId) {
+    const requirements = getRequiredCertificationCoverage({ declaration: scope, baselineTargetMarkets: [] });
+    return {
+      requirements,
+      covered: requirements.length === 0,
+      missing: requirements,
+      coveredByRequirement: requirements.map((requirement) => ({ requirement, certificateId: null })),
+      coverageThroughISO,
+    };
+  }
+  const result = await evaluateProductCertificationCoverage({
+    productId: project.productId,
+    projectId,
+    declaration: scope,
+    baselineTargetMarkets: product?.targetMarkets ?? [],
+    baseRevisionId: project.baseRevisionId,
+    resultRevisionId: project.resultRevisionId,
+    todayISO: coverageThroughISO,
+  });
+  return { ...result, coverageThroughISO };
+}
+
+export async function listProjectConditions(projectId: string): Promise<ProjectCondition[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(projectConditions)
+    .where(eq(projectConditions.projectId, projectId))
+    .orderBy(projectConditions.status, projectConditions.dueDate, projectConditions.id);
+}
+
+export async function createProjectCondition(
+  input: Omit<InsertProjectCondition, "id" | "status" | "resolvedBy" | "resolvedAt" | "createdAt" | "updatedAt">,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec?: any,
+): Promise<ProjectCondition> {
+  const db = exec ?? await getDb();
+  if (!db) throw new Error("Database not available");
+  if (!input.description.trim()) throw new Error("条件或让步内容不能为空");
+  const [row] = await db.insert(projectConditions).values({ ...input, status: "open" })
+    .onConflictDoUpdate({
+      target: [projectConditions.sourceType, projectConditions.sourceId],
+      set: {
+        title: input.title,
+        description: input.description,
+        ownerUserId: input.ownerUserId,
+        dueDate: input.dueDate,
+        updatedAt: new Date(),
+      },
+    }).returning();
+  await db.insert(actionItems).values({
+    kind: "condition_followup",
+    projectId: input.projectId,
+    entityType: "condition",
+    entityId: String(row.id),
+    dedupeKey: `condition:${row.id}:owner`,
+    recipientUserId: input.ownerUserId,
+    level: "owner",
+    title: input.title,
+    body: input.description,
+    actionUrl: buildProjectActionPath({ projectId: input.projectId, tab: "overview" }),
+    status: "open",
+    priority: "high",
+    dueAt: new Date(`${input.dueDate}T23:59:59Z`),
+    metadata: { conditionId: row.id, sourceType: input.sourceType, dueDate: input.dueDate },
+  }).onConflictDoUpdate({
+    target: actionItems.dedupeKey,
+    set: {
+      recipientUserId: input.ownerUserId,
+      title: input.title,
+      body: input.description,
+      status: "open",
+      dueAt: new Date(`${input.dueDate}T23:59:59Z`),
+      metadata: { conditionId: row.id, sourceType: input.sourceType, dueDate: input.dueDate },
+      handledAt: null,
+      closedAt: null,
+      updatedAt: new Date(),
+    },
+  });
+  return row;
+}
+
+export async function extendProjectCondition(input: {
+  id: number;
+  projectId: string;
+  dueDate: string;
+  note: string;
+  updatedBy: number;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [row] = await db.select().from(projectConditions).where(and(
+    eq(projectConditions.id, input.id),
+    eq(projectConditions.projectId, input.projectId),
+  )).limit(1);
+  if (!row) throw new Error("条件项不存在");
+  if (row.status !== "open") throw new Error("只有未关闭条件项可以延期");
+  await db.update(projectConditions).set({
+    dueDate: input.dueDate,
+    resolutionNote: input.note,
+    updatedAt: new Date(),
+  }).where(eq(projectConditions.id, input.id));
+  await db.update(actionItems).set({
+    dueAt: new Date(`${input.dueDate}T23:59:59Z`),
+    metadata: { conditionId: input.id, sourceType: row.sourceType, dueDate: input.dueDate, extensionNote: input.note },
+    updatedAt: new Date(),
+  }).where(and(eq(actionItems.entityType, "condition"), eq(actionItems.entityId, String(input.id))));
+}
+
+export async function resolveProjectCondition(input: {
+  id: number;
+  projectId: string;
+  resolution: "closed" | "converted_to_eco";
+  linkedEcoProjectId?: string | null;
+  note: string;
+  resolvedBy: number;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [row] = await db.select().from(projectConditions).where(and(
+    eq(projectConditions.id, input.id),
+    eq(projectConditions.projectId, input.projectId),
+  )).limit(1);
+  if (!row) throw new Error("条件项不存在");
+  if (row.status !== "open") throw new Error("条件项已闭环");
+  if (!input.note.trim()) throw new Error("闭环说明不能为空");
+  if (input.resolution === "converted_to_eco") {
+    if (!input.linkedEcoProjectId) throw new Error("转 ECO 必须选择目标 ECO 项目");
+    const [source, eco] = await Promise.all([
+      getProjectById(input.projectId),
+      getProjectById(input.linkedEcoProjectId),
+    ]);
+    if (!eco || eco.category !== "eco") throw new Error("目标项目不是 ECO");
+    if (source?.productId && eco.productId !== source.productId) throw new Error("目标 ECO 必须关联同一产品");
+  }
+  await db.update(projectConditions).set({
+    status: input.resolution,
+    linkedEcoProjectId: input.resolution === "converted_to_eco" ? input.linkedEcoProjectId : null,
+    resolutionNote: input.note,
+    resolvedBy: input.resolvedBy,
+    resolvedAt: new Date(),
+    updatedAt: new Date(),
+  }).where(eq(projectConditions.id, input.id));
+  await db.update(actionItems).set({
+    status: "closed",
+    handledAt: new Date(),
+    closedAt: new Date(),
+    updatedAt: new Date(),
+  }).where(and(eq(actionItems.entityType, "condition"), eq(actionItems.entityId, String(input.id))));
+}
+
+export async function getProjectConditionsReadiness(projectId: string): Promise<{
+  ready: boolean;
+  openCount: number;
+  blockers: string[];
+}> {
+  const rows = await listProjectConditions(projectId);
+  const open = rows.filter((row) => row.status === "open");
+  return {
+    ready: open.length === 0,
+    openCount: open.length,
+    blockers: open.map((row) => `${row.title}（负责人 #${row.ownerUserId}，截止 ${row.dueDate}）`),
+  };
+}
+
+export type ProjectCloseHandoffBundle = {
+  handoff: ProjectCloseHandoff;
+  items: ProjectCloseHandoffItem[];
+};
+
+export async function getProjectCloseHandoff(projectId: string): Promise<ProjectCloseHandoffBundle | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const [handoff] = await db.select().from(projectCloseHandoffs)
+    .where(eq(projectCloseHandoffs.projectId, projectId))
+    .limit(1);
+  if (!handoff) return null;
+  const items = await db.select().from(projectCloseHandoffItems)
+    .where(eq(projectCloseHandoffItems.handoffId, handoff.id))
+    .orderBy(projectCloseHandoffItems.id);
+  return { handoff, items };
+}
+
+function closeHandoffContentBlockers(bundle: ProjectCloseHandoffBundle | null): string[] {
+  if (!bundle) return ["尚未建立正式量产移交单"];
+  const blockers: string[] = [];
+  if (!bundle.handoff.maintenanceOwnerUserId) blockers.push("未指定产品维护责任人");
+  if (!bundle.handoff.afterSalesOwnerUserId) blockers.push("未指定售后责任人");
+  if (!bundle.handoff.scopeSummary.trim()) blockers.push("未说明量产维护边界");
+  const itemByKey = new Map(bundle.items.map((item) => [item.itemKey, item]));
+  for (const key of PROJECT_CLOSE_HANDOFF_ITEM_KEYS) {
+    const item = itemByKey.get(key);
+    if (!item?.completed) blockers.push(`移交清单未完成：${key}`);
+    else if (!item.evidenceReference?.trim()) blockers.push(`移交清单缺少证据引用：${key}`);
+  }
+  return blockers;
+}
+
+export async function saveProjectCloseHandoffDraft(input: {
+  projectId: string;
+  maintenanceOwnerUserId: number;
+  afterSalesOwnerUserId: number;
+  scopeSummary: string;
+  items: Array<{ itemKey: ProjectCloseHandoffItemKey; completed: boolean; evidenceReference: string | null }>;
+  savedBy: number;
+}): Promise<ProjectCloseHandoffBundle> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const project = await getProjectById(input.projectId);
+  if (!project) throw new Error("项目不存在");
+  if (!project.productId) throw new Error("项目尚未生成交付产品，不能建立关闭移交单");
+  const release = await getMpReleaseByProjectId(input.projectId);
+  if (!release) throw new Error("项目尚未完成产品交付，不能提交关闭移交");
+  const uniqueItems = new Map(input.items.map((item) => [item.itemKey, item]));
+  const bundle = await db.transaction(async (tx) => {
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${input.projectId}:close-handoff`}))`);
+    const [handoff] = await tx.insert(projectCloseHandoffs).values({
+      projectId: input.projectId,
+      productId: project.productId!,
+      revisionId: release.revisionId ?? null,
+      status: "draft",
+      maintenanceOwnerUserId: input.maintenanceOwnerUserId,
+      afterSalesOwnerUserId: input.afterSalesOwnerUserId,
+      scopeSummary: input.scopeSummary.trim(),
+      submittedBy: null,
+      submittedAt: null,
+      acceptedBy: null,
+      acceptedAt: null,
+      createdBy: input.savedBy,
+    }).onConflictDoUpdate({
+      target: projectCloseHandoffs.projectId,
+      set: {
+        productId: project.productId!,
+        revisionId: release.revisionId ?? null,
+        status: "draft",
+        maintenanceOwnerUserId: input.maintenanceOwnerUserId,
+        afterSalesOwnerUserId: input.afterSalesOwnerUserId,
+        scopeSummary: input.scopeSummary.trim(),
+        submittedBy: null,
+        submittedAt: null,
+        acceptedBy: null,
+        acceptedAt: null,
+        updatedAt: new Date(),
+      },
+    }).returning();
+    for (const itemKey of PROJECT_CLOSE_HANDOFF_ITEM_KEYS) {
+      const item = uniqueItems.get(itemKey) ?? { itemKey, completed: false, evidenceReference: null };
+      await tx.insert(projectCloseHandoffItems).values({
+        handoffId: handoff.id,
+        itemKey,
+        completed: item.completed,
+        evidenceReference: item.evidenceReference?.trim() || null,
+        completedBy: item.completed ? input.savedBy : null,
+        completedAt: item.completed ? new Date() : null,
+      }).onConflictDoUpdate({
+        target: [projectCloseHandoffItems.handoffId, projectCloseHandoffItems.itemKey],
+        set: {
+          completed: item.completed,
+          evidenceReference: item.evidenceReference?.trim() || null,
+          completedBy: item.completed ? input.savedBy : null,
+          completedAt: item.completed ? new Date() : null,
+          updatedAt: new Date(),
+        },
+      });
+    }
+    await tx.update(actionItems).set({
+      status: "closed",
+      handledAt: new Date(),
+      closedAt: new Date(),
+      updatedAt: new Date(),
+    }).where(and(eq(actionItems.entityType, "close_handoff"), eq(actionItems.entityId, String(handoff.id))));
+    const items = await tx.select().from(projectCloseHandoffItems)
+      .where(eq(projectCloseHandoffItems.handoffId, handoff.id))
+      .orderBy(projectCloseHandoffItems.id);
+    return { handoff, items };
+  });
+  return bundle;
+}
+
+export async function submitProjectCloseHandoff(projectId: string, submittedBy: number): Promise<ProjectCloseHandoffBundle> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const bundle = await getProjectCloseHandoff(projectId);
+  const blockers = closeHandoffContentBlockers(bundle);
+  if (!bundle || blockers.length > 0) throw new Error(`移交单尚未就绪：${blockers.join("；")}`);
+  if (bundle.handoff.status === "accepted") throw new Error("移交单已被接收");
+  const [handoff] = await db.update(projectCloseHandoffs).set({
+    status: "pending_acceptance",
+    submittedBy,
+    submittedAt: new Date(),
+    acceptedBy: null,
+    acceptedAt: null,
+    updatedAt: new Date(),
+  }).where(eq(projectCloseHandoffs.id, bundle.handoff.id)).returning();
+  await db.insert(actionItems).values({
+    kind: "handoff_acceptance",
+    projectId,
+    entityType: "close_handoff",
+    entityId: String(handoff.id),
+    dedupeKey: `close-handoff:${handoff.id}:acceptance`,
+    recipientUserId: handoff.maintenanceOwnerUserId,
+    level: "owner",
+    title: "请接收量产项目关闭移交",
+    body: handoff.scopeSummary,
+    actionUrl: buildProjectActionPath({ projectId, tab: "overview" }),
+    status: "open",
+    priority: "high",
+    metadata: { handoffId: handoff.id, productId: handoff.productId, revisionId: handoff.revisionId },
+  }).onConflictDoUpdate({
+    target: actionItems.dedupeKey,
+    set: {
+      recipientUserId: handoff.maintenanceOwnerUserId,
+      body: handoff.scopeSummary,
+      status: "open",
+      handledAt: null,
+      closedAt: null,
+      updatedAt: new Date(),
+    },
+  });
+  return { handoff, items: bundle.items };
+}
+
+export async function acceptProjectCloseHandoff(projectId: string, acceptedBy: number, allowAdmin = false): Promise<ProjectCloseHandoffBundle> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const bundle = await getProjectCloseHandoff(projectId);
+  if (!bundle) throw new Error("移交单不存在");
+  const blockers = closeHandoffContentBlockers(bundle);
+  if (blockers.length > 0) throw new Error(`移交单尚未就绪：${blockers.join("；")}`);
+  if (bundle.handoff.status !== "pending_acceptance") throw new Error("移交单尚未提交接收");
+  if (!allowAdmin && bundle.handoff.maintenanceOwnerUserId !== acceptedBy) {
+    throw new Error("只有指定的产品维护责任人可以接收移交");
+  }
+  const handoff = await db.transaction(async (tx) => {
+    const [accepted] = await tx.update(projectCloseHandoffs).set({
+      status: "accepted",
+      acceptedBy,
+      acceptedAt: new Date(),
+      updatedAt: new Date(),
+    }).where(eq(projectCloseHandoffs.id, bundle.handoff.id)).returning();
+    await tx.update(products).set({
+      maintenanceOwnerUserId: accepted.maintenanceOwnerUserId,
+      afterSalesOwnerUserId: accepted.afterSalesOwnerUserId,
+      updatedAt: new Date(),
+    }).where(eq(products.id, accepted.productId));
+    await tx.update(actionItems).set({
+      status: "done",
+      handledAt: new Date(),
+      closedAt: new Date(),
+      updatedAt: new Date(),
+    }).where(and(eq(actionItems.entityType, "close_handoff"), eq(actionItems.entityId, String(accepted.id))));
+    return accepted;
+  });
+  return { handoff, items: bundle.items };
+}
+
+export async function getProjectCloseHandoffReadiness(projectId: string): Promise<{
+  ready: boolean;
+  status: ProjectCloseHandoff["status"] | "missing";
+  blockers: string[];
+  handoff: ProjectCloseHandoff | null;
+  items: ProjectCloseHandoffItem[];
+}> {
+  const [bundle, project, release] = await Promise.all([
+    getProjectCloseHandoff(projectId),
+    getProjectById(projectId),
+    getMpReleaseByProjectId(projectId),
+  ]);
+  const blockers = closeHandoffContentBlockers(bundle);
+  if (!project) blockers.push("项目不存在");
+  else {
+    if (!project.productId) blockers.push("项目尚未生成交付产品");
+    if (!release) blockers.push("项目尚未完成产品交付");
+    if (bundle && project.productId && bundle.handoff.productId !== project.productId) {
+      blockers.push("移交单关联产品与项目当前产品不一致，必须重新编制");
+    }
+    if (bundle && release?.revisionId && bundle.handoff.revisionId !== release.revisionId) {
+      blockers.push("历史移交单 Revision 与发布记录不一致，必须重新编制");
+    }
+  }
+  if (bundle && bundle.handoff.status !== "accepted") {
+    blockers.push(bundle.handoff.status === "pending_acceptance"
+      ? "产品维护责任人尚未接收移交"
+      : "移交单尚未提交给产品维护责任人");
+  }
+  return {
+    ready: blockers.length === 0,
+    status: bundle?.handoff.status ?? "missing",
+    blockers,
+    handoff: bundle?.handoff ?? null,
+    items: bundle?.items ?? [],
+  };
+}
+
+export async function listProductServiceCases(productId: string): Promise<ProductServiceCase[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(productServiceCases)
+    .where(eq(productServiceCases.productId, productId))
+    .orderBy(desc(productServiceCases.createdAt), desc(productServiceCases.id));
+}
+
+export async function createProductServiceCase(
+  input: Omit<InsertProductServiceCase, "id" | "status" | "linkedEcoProjectId" | "resolutionNote" | "createdAt" | "updatedAt">,
+): Promise<ProductServiceCase> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [row] = await db.insert(productServiceCases).values({
+    ...input,
+    status: "open",
+    linkedEcoProjectId: null,
+    resolutionNote: null,
+  }).returning();
+  return row;
+}
+
+export async function updateProductServiceCase(input: {
+  id: number;
+  productId: string;
+  status: ProductServiceCase["status"];
+  ownerUserId?: number;
+  linkedEcoProjectId?: string | null;
+  resolutionNote?: string | null;
+}): Promise<ProductServiceCase> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [row] = await db.update(productServiceCases).set({
+    status: input.status,
+    ownerUserId: input.ownerUserId,
+    linkedEcoProjectId: input.linkedEcoProjectId,
+    resolutionNote: input.resolutionNote,
+    updatedAt: new Date(),
+  }).where(and(eq(productServiceCases.id, input.id), eq(productServiceCases.productId, input.productId))).returning();
+  if (!row) throw new Error("售后记录不存在");
+  return row;
+}
+
+export type ProjectExpenseCurrencySummary = {
+  currency: string;
+  budgetAmountMinor: number;
+  actualAmountMinor: number;
+  varianceAmountMinor: number;
+  itemCount: number;
+};
+
+export async function listProjectExpenses(projectId: string): Promise<ProjectExpense[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(projectExpenses)
+    .where(eq(projectExpenses.projectId, projectId))
+    .orderBy(projectExpenses.status, desc(projectExpenses.updatedAt), desc(projectExpenses.id));
+}
+
+export async function getProjectExpenseSummary(projectId: string): Promise<ProjectExpenseCurrencySummary[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({
+    currency: projectExpenses.currency,
+    budgetAmountMinor: drizzleSql<number>`coalesce(sum(${projectExpenses.budgetAmountMinor}) filter (where ${projectExpenses.status} <> 'cancelled'), 0)::int`,
+    actualAmountMinor: drizzleSql<number>`coalesce(sum(${projectExpenses.actualAmountMinor}) filter (where ${projectExpenses.status} <> 'cancelled'), 0)::int`,
+    itemCount: drizzleSql<number>`count(*) filter (where ${projectExpenses.status} <> 'cancelled')::int`,
+  }).from(projectExpenses)
+    .where(eq(projectExpenses.projectId, projectId))
+    .groupBy(projectExpenses.currency)
+    .orderBy(projectExpenses.currency);
+  return rows.map((row) => ({
+    ...row,
+    varianceAmountMinor: row.actualAmountMinor - row.budgetAmountMinor,
+  }));
+}
+
+export async function createProjectExpense(
+  input: Omit<InsertProjectExpense, "id" | "createdAt" | "updatedAt">,
+): Promise<ProjectExpense> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [row] = await db.insert(projectExpenses).values(input).returning();
+  return row;
+}
+
+export async function updateProjectExpense(input: {
+  id: number;
+  projectId: string;
+  patch: Partial<Omit<InsertProjectExpense, "id" | "projectId" | "createdBy" | "createdAt" | "updatedAt">>;
+}): Promise<ProjectExpense> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [row] = await db.update(projectExpenses).set({ ...input.patch, updatedAt: new Date() })
+    .where(and(eq(projectExpenses.id, input.id), eq(projectExpenses.projectId, input.projectId)))
+    .returning();
+  if (!row) throw new Error("费用记录不存在");
+  return row;
+}
+
+export async function deleteProjectExpense(id: number, projectId: string): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [row] = await db.select().from(projectExpenses).where(and(
+    eq(projectExpenses.id, id),
+    eq(projectExpenses.projectId, projectId),
+  )).limit(1);
+  if (!row) throw new Error("费用记录不存在");
+  if (row.actualAmountMinor > 0 || row.status === "paid") {
+    throw new Error("已有实际支出或已付款的记录不能删除，请改为取消并保留审计痕迹");
+  }
+  await db.delete(projectExpenses).where(eq(projectExpenses.id, id));
+}
+
+export async function listProductSoftwareReleases(productId: string): Promise<ProductSoftwareRelease[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(productSoftwareReleases)
+    .where(eq(productSoftwareReleases.productId, productId))
+    .orderBy(desc(productSoftwareReleases.createdAt), desc(productSoftwareReleases.id));
+}
+
+export async function createProductGovernanceEvent(input: Omit<InsertProductGovernanceEvent, "id" | "createdAt">): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.insert(productGovernanceEvents).values(input);
+}
+
+export async function listProductGovernanceEvents(productId: string): Promise<ProductGovernanceEvent[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(productGovernanceEvents)
+    .where(eq(productGovernanceEvents.productId, productId))
+    .orderBy(desc(productGovernanceEvents.createdAt), desc(productGovernanceEvents.id));
+}
+
+export async function saveProductSoftwareReleaseDraft(input: {
+  id?: number | null;
+  releaseNumber: string;
+  productId: string;
+  baseRevisionId: number | null;
+  version: string;
+  scopeSummary: string;
+  releaseNotes: string;
+  compatibilityNotes: string;
+  safetyRelated: boolean;
+  bomOrManufacturingImpact: boolean;
+  regressionEvidenceReference: string;
+  rolloutPlan: string;
+  rollbackPlan: string;
+  qaOwnerUserId: number;
+  savedBy: number;
+}): Promise<ProductSoftwareRelease> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  if (input.id) {
+    const [existing] = await db.select().from(productSoftwareReleases).where(and(
+      eq(productSoftwareReleases.id, input.id),
+      eq(productSoftwareReleases.productId, input.productId),
+    )).limit(1);
+    if (!existing) throw new Error("软件发版单不存在");
+    if (existing.status !== "draft") throw new Error("只有草稿状态的软件发版单可以修改");
+    const [row] = await db.update(productSoftwareReleases).set({
+      baseRevisionId: input.baseRevisionId,
+      version: input.version.trim(),
+      scopeSummary: input.scopeSummary.trim(),
+      releaseNotes: input.releaseNotes.trim(),
+      compatibilityNotes: input.compatibilityNotes.trim(),
+      safetyRelated: input.safetyRelated,
+      bomOrManufacturingImpact: input.bomOrManufacturingImpact,
+      regressionEvidenceReference: input.regressionEvidenceReference.trim(),
+      rolloutPlan: input.rolloutPlan.trim(),
+      rollbackPlan: input.rollbackPlan.trim(),
+      qaOwnerUserId: input.qaOwnerUserId,
+      updatedAt: new Date(),
+    }).where(eq(productSoftwareReleases.id, existing.id)).returning();
+    return row;
+  }
+  const [row] = await db.insert(productSoftwareReleases).values({
+    releaseNumber: input.releaseNumber,
+    productId: input.productId,
+    baseRevisionId: input.baseRevisionId,
+    version: input.version.trim(),
+    status: "draft",
+    scopeSummary: input.scopeSummary.trim(),
+    releaseNotes: input.releaseNotes.trim(),
+    compatibilityNotes: input.compatibilityNotes.trim(),
+    safetyRelated: input.safetyRelated,
+    bomOrManufacturingImpact: input.bomOrManufacturingImpact,
+    regressionEvidenceReference: input.regressionEvidenceReference.trim(),
+    rolloutPlan: input.rolloutPlan.trim(),
+    rollbackPlan: input.rollbackPlan.trim(),
+    rolloutPercent: 0,
+    qaOwnerUserId: input.qaOwnerUserId,
+    createdBy: input.savedBy,
+  }).returning();
+  return row;
+}
+
+export async function submitProductSoftwareRelease(id: number, productId: string, submittedBy: number): Promise<ProductSoftwareRelease> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [existing] = await db.select().from(productSoftwareReleases).where(and(
+    eq(productSoftwareReleases.id, id), eq(productSoftwareReleases.productId, productId),
+  )).limit(1);
+  if (!existing) throw new Error("软件发版单不存在");
+  if (existing.status !== "draft") throw new Error("只有草稿可以提交验证");
+  const required = [existing.scopeSummary, existing.releaseNotes, existing.compatibilityNotes, existing.regressionEvidenceReference, existing.rolloutPlan, existing.rollbackPlan];
+  if (required.some((value) => !value.trim())) throw new Error("回归证据、兼容范围、灰度计划和回滚方案必须完整");
+  const [row] = await db.update(productSoftwareReleases).set({
+    status: "pending_validation",
+    submittedBy,
+    submittedAt: new Date(),
+    updatedAt: new Date(),
+  }).where(eq(productSoftwareReleases.id, id)).returning();
+  return row;
+}
+
+export async function validateProductSoftwareRelease(id: number, productId: string, validatedBy: number, allowAdmin = false): Promise<ProductSoftwareRelease> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [existing] = await db.select().from(productSoftwareReleases).where(and(
+    eq(productSoftwareReleases.id, id), eq(productSoftwareReleases.productId, productId),
+  )).limit(1);
+  if (!existing) throw new Error("软件发版单不存在");
+  if (existing.status !== "pending_validation") throw new Error("发版单当前不在待验证状态");
+  if (!allowAdmin && existing.qaOwnerUserId !== validatedBy) throw new Error("只有指定验证责任人可以确认回归通过");
+  const [row] = await db.update(productSoftwareReleases).set({
+    status: "validated",
+    validatedBy,
+    validatedAt: new Date(),
+    updatedAt: new Date(),
+  }).where(eq(productSoftwareReleases.id, id)).returning();
+  return row;
+}
+
+export async function rolloutProductSoftwareRelease(input: {
+  id: number;
+  productId: string;
+  rolloutPercent: number;
+  releasedBy: number;
+}): Promise<ProductSoftwareRelease> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [existing] = await db.select().from(productSoftwareReleases).where(and(
+    eq(productSoftwareReleases.id, input.id), eq(productSoftwareReleases.productId, input.productId),
+  )).limit(1);
+  if (!existing) throw new Error("软件发版单不存在");
+  if (!["validated", "staged"].includes(existing.status)) throw new Error("只有验证通过或灰度中的版本可以推进发布");
+  if (input.rolloutPercent <= existing.rolloutPercent || input.rolloutPercent > 100) throw new Error("灰度比例必须单向提高且不超过 100%");
+  const [row] = await db.update(productSoftwareReleases).set({
+    status: input.rolloutPercent === 100 ? "released" : "staged",
+    rolloutPercent: input.rolloutPercent,
+    releasedBy: input.releasedBy,
+    releasedAt: new Date(),
+    updatedAt: new Date(),
+  }).where(eq(productSoftwareReleases.id, input.id)).returning();
+  return row;
+}
+
+export async function rollbackProductSoftwareRelease(input: {
+  id: number;
+  productId: string;
+  reason: string;
+  rolledBackBy: number;
+}): Promise<ProductSoftwareRelease> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [existing] = await db.select().from(productSoftwareReleases).where(and(
+    eq(productSoftwareReleases.id, input.id), eq(productSoftwareReleases.productId, input.productId),
+  )).limit(1);
+  if (!existing) throw new Error("软件发版单不存在");
+  if (!["staged", "released"].includes(existing.status)) throw new Error("只有灰度中或已发布版本可以回滚");
+  if (!input.reason.trim()) throw new Error("回滚原因不能为空");
+  const [row] = await db.update(productSoftwareReleases).set({
+    status: "rolled_back",
+    rolledBackBy: input.rolledBackBy,
+    rolledBackAt: new Date(),
+    rollbackReason: input.reason.trim(),
+    updatedAt: new Date(),
+  }).where(eq(productSoftwareReleases.id, input.id)).returning();
+  return row;
+}
+
+export async function cancelProductSoftwareRelease(input: {
+  id: number;
+  productId: string;
+  reason: string;
+}): Promise<ProductSoftwareRelease> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [existing] = await db.select().from(productSoftwareReleases).where(and(
+    eq(productSoftwareReleases.id, input.id), eq(productSoftwareReleases.productId, input.productId),
+  )).limit(1);
+  if (!existing) throw new Error("软件发版单不存在");
+  if (!["draft", "pending_validation", "validated"].includes(existing.status)) throw new Error("灰度或正式发布后的版本不能取消，只能执行回滚");
+  const [row] = await db.update(productSoftwareReleases).set({
+    status: "cancelled",
+    rollbackReason: input.reason.trim(),
+    updatedAt: new Date(),
+  }).where(eq(productSoftwareReleases.id, input.id)).returning();
+  return row;
+}
+
+export type ProductEolPlanBundle = { plan: ProductEolPlan; items: ProductEolPlanItem[] };
+
+export async function getProductEolPlan(productId: string): Promise<ProductEolPlanBundle | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const [plan] = await db.select().from(productEolPlans).where(eq(productEolPlans.productId, productId)).limit(1);
+  if (!plan) return null;
+  const items = await db.select().from(productEolPlanItems)
+    .where(eq(productEolPlanItems.planId, plan.id))
+    .orderBy(productEolPlanItems.id);
+  return { plan, items };
+}
+
+export async function saveProductEolPlanDraft(input: {
+  productId: string;
+  reason: string;
+  lastOrderDate: string;
+  lastShipDate: string;
+  serviceEndDate: string;
+  sparePartsYears: number;
+  inventoryDisposition: string;
+  customerCommunicationPlan: string;
+  supplierExitPlan: string;
+  replacementProductId: string | null;
+  ownerUserId: number;
+  approverUserId: number;
+  items: Array<{ itemKey: ProductEolItemKey; completed: boolean; evidenceReference: string | null }>;
+  savedBy: number;
+}): Promise<ProductEolPlanBundle> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const existing = await getProductEolPlan(input.productId);
+  if (existing?.plan.status === "completed") throw new Error("已完成停产的产品不能重开 EOL 方案");
+  if (existing && !["draft", "cancelled"].includes(existing.plan.status)) {
+    throw new Error("待审批或已批准的 EOL 方案不能改写核心内容；如需变更请先取消并重新编制");
+  }
+  const itemByKey = new Map(input.items.map((item) => [item.itemKey, item]));
+  return db.transaction(async (tx) => {
+    const [plan] = await tx.insert(productEolPlans).values({
+      productId: input.productId,
+      status: "draft",
+      reason: input.reason.trim(),
+      lastOrderDate: input.lastOrderDate,
+      lastShipDate: input.lastShipDate,
+      serviceEndDate: input.serviceEndDate,
+      sparePartsYears: input.sparePartsYears,
+      inventoryDisposition: input.inventoryDisposition.trim(),
+      customerCommunicationPlan: input.customerCommunicationPlan.trim(),
+      supplierExitPlan: input.supplierExitPlan.trim(),
+      replacementProductId: input.replacementProductId,
+      ownerUserId: input.ownerUserId,
+      approverUserId: input.approverUserId,
+      createdBy: input.savedBy,
+    }).onConflictDoUpdate({
+      target: productEolPlans.productId,
+      set: {
+        status: "draft",
+        reason: input.reason.trim(),
+        lastOrderDate: input.lastOrderDate,
+        lastShipDate: input.lastShipDate,
+        serviceEndDate: input.serviceEndDate,
+        sparePartsYears: input.sparePartsYears,
+        inventoryDisposition: input.inventoryDisposition.trim(),
+        customerCommunicationPlan: input.customerCommunicationPlan.trim(),
+        supplierExitPlan: input.supplierExitPlan.trim(),
+        replacementProductId: input.replacementProductId,
+        ownerUserId: input.ownerUserId,
+        approverUserId: input.approverUserId,
+        submittedBy: null, submittedAt: null,
+        approvedBy: null, approvedAt: null,
+        cancelledBy: null, cancelledAt: null, cancellationReason: null,
+        updatedAt: new Date(),
+      },
+    }).returning();
+    for (const itemKey of PRODUCT_EOL_ITEM_KEYS) {
+      const item = itemByKey.get(itemKey) ?? { itemKey, completed: false, evidenceReference: null };
+      await tx.insert(productEolPlanItems).values({
+        planId: plan.id,
+        itemKey,
+        completed: item.completed,
+        evidenceReference: item.evidenceReference?.trim() || null,
+        completedBy: item.completed ? input.savedBy : null,
+        completedAt: item.completed ? new Date() : null,
+      }).onConflictDoUpdate({
+        target: [productEolPlanItems.planId, productEolPlanItems.itemKey],
+        set: {
+          completed: item.completed,
+          evidenceReference: item.evidenceReference?.trim() || null,
+          completedBy: item.completed ? input.savedBy : null,
+          completedAt: item.completed ? new Date() : null,
+          updatedAt: new Date(),
+        },
+      });
+    }
+    const items = await tx.select().from(productEolPlanItems).where(eq(productEolPlanItems.planId, plan.id)).orderBy(productEolPlanItems.id);
+    return { plan, items };
+  });
+}
+
+export async function updateProductEolPlanItems(input: {
+  productId: string;
+  items: Array<{ itemKey: ProductEolItemKey; completed: boolean; evidenceReference: string | null }>;
+  updatedBy: number;
+}): Promise<ProductEolPlanBundle> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const bundle = await getProductEolPlan(input.productId);
+  if (!bundle) throw new Error("EOL 方案不存在");
+  if (bundle.plan.status !== "approved") throw new Error("只有已批准的 EOL 方案可以执行关闭清单");
+  const itemByKey = new Map(input.items.map((item) => [item.itemKey, item]));
+  const items = await db.transaction(async (tx) => {
+    for (const itemKey of PRODUCT_EOL_ITEM_KEYS) {
+      const item = itemByKey.get(itemKey) ?? { itemKey, completed: false, evidenceReference: null };
+      await tx.insert(productEolPlanItems).values({
+        planId: bundle.plan.id,
+        itemKey,
+        completed: item.completed,
+        evidenceReference: item.evidenceReference?.trim() || null,
+        completedBy: item.completed ? input.updatedBy : null,
+        completedAt: item.completed ? new Date() : null,
+      }).onConflictDoUpdate({
+        target: [productEolPlanItems.planId, productEolPlanItems.itemKey],
+        set: {
+          completed: item.completed,
+          evidenceReference: item.evidenceReference?.trim() || null,
+          completedBy: item.completed ? input.updatedBy : null,
+          completedAt: item.completed ? new Date() : null,
+          updatedAt: new Date(),
+        },
+      });
+    }
+    return tx.select().from(productEolPlanItems).where(eq(productEolPlanItems.planId, bundle.plan.id)).orderBy(productEolPlanItems.id);
+  });
+  return { plan: bundle.plan, items };
+}
+
+function eolPlanContentBlockers(bundle: ProductEolPlanBundle | null): string[] {
+  if (!bundle) return ["尚未建立 EOL 方案"];
+  const p = bundle.plan;
+  const blockers: string[] = [];
+  if (!p.reason.trim()) blockers.push("停产原因未填写");
+  if (p.lastOrderDate > p.lastShipDate) blockers.push("末次下单日期不能晚于末次出货日期");
+  if (p.lastShipDate > p.serviceEndDate) blockers.push("服务终止日期不能早于末次出货日期");
+  const serviceMinimum = new Date(`${p.lastShipDate}T00:00:00Z`);
+  serviceMinimum.setUTCFullYear(serviceMinimum.getUTCFullYear() + p.sparePartsYears);
+  if (p.serviceEndDate < serviceMinimum.toISOString().slice(0, 10)) blockers.push("服务终止日期未覆盖承诺的备件年限");
+  if (!p.inventoryDisposition.trim()) blockers.push("库存处置方案未填写");
+  if (!p.customerCommunicationPlan.trim()) blockers.push("客户通知方案未填写");
+  if (!p.supplierExitPlan.trim()) blockers.push("供应商退出方案未填写");
+  return blockers;
+}
+
+export async function submitProductEolPlan(productId: string, submittedBy: number): Promise<ProductEolPlan> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const bundle = await getProductEolPlan(productId);
+  const blockers = eolPlanContentBlockers(bundle);
+  if (!bundle || blockers.length > 0) throw new Error(`EOL 方案尚未就绪：${blockers.join("；")}`);
+  if (bundle.plan.status !== "draft") throw new Error("只有草稿 EOL 方案可以提交审批");
+  const [plan] = await db.update(productEolPlans).set({
+    status: "pending_approval",
+    submittedBy,
+    submittedAt: new Date(),
+    updatedAt: new Date(),
+  }).where(eq(productEolPlans.id, bundle.plan.id)).returning();
+  return plan;
+}
+
+export async function approveProductEolPlan(productId: string, approvedBy: number, allowAdmin = false): Promise<ProductEolPlan> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const bundle = await getProductEolPlan(productId);
+  if (!bundle) throw new Error("EOL 方案不存在");
+  if (bundle.plan.status !== "pending_approval") throw new Error("EOL 方案不在待审批状态");
+  if (!allowAdmin && bundle.plan.approverUserId !== approvedBy) throw new Error("只有指定审批人可以批准 EOL 方案");
+  const [plan] = await db.update(productEolPlans).set({
+    status: "approved",
+    approvedBy,
+    approvedAt: new Date(),
+    updatedAt: new Date(),
+  }).where(eq(productEolPlans.id, bundle.plan.id)).returning();
+  return plan;
+}
+
+export async function getProductEolReadiness(productId: string, todayISO = new Date().toISOString().slice(0, 10)): Promise<{
+  ready: boolean;
+  status: ProductEolPlan["status"] | "missing";
+  blockers: string[];
+  plan: ProductEolPlan | null;
+  items: ProductEolPlanItem[];
+}> {
+  const db = await getDb();
+  if (!db) return { ready: false, status: "missing", blockers: ["数据库不可用"], plan: null, items: [] };
+  const bundle = await getProductEolPlan(productId);
+  const blockers = eolPlanContentBlockers(bundle);
+  if (bundle) {
+    if (bundle.plan.status !== "approved") blockers.push(bundle.plan.status === "pending_approval" ? "EOL 方案尚未批准" : "EOL 方案尚未提交或已结束");
+    if (bundle.plan.lastShipDate > todayISO) blockers.push(`末次出货日期尚未到达（${bundle.plan.lastShipDate}）`);
+    const itemByKey = new Map(bundle.items.map((item) => [item.itemKey, item]));
+    for (const itemKey of PRODUCT_EOL_ITEM_KEYS) {
+      const item = itemByKey.get(itemKey);
+      if (!item?.completed) blockers.push(`EOL 清单未完成：${itemKey}`);
+      else if (!item.evidenceReference?.trim()) blockers.push(`EOL 清单缺少证据：${itemKey}`);
+    }
+  }
+  const [activeProjects, openCriticalCases, activeReleases] = await Promise.all([
+    db.select({ id: projects.id }).from(projects).where(and(eq(projects.productId, productId), eq(projects.archived, false))),
+    db.select({ id: productServiceCases.id }).from(productServiceCases).where(and(
+      eq(productServiceCases.productId, productId),
+      inArray(productServiceCases.severity, ["P0", "P1"]),
+      inArray(productServiceCases.status, ["open", "in_progress"]),
+    )),
+    db.select({ id: productSoftwareReleases.id }).from(productSoftwareReleases).where(and(
+      eq(productSoftwareReleases.productId, productId),
+      inArray(productSoftwareReleases.status, ["draft", "pending_validation", "validated", "staged"]),
+    )),
+  ]);
+  if (activeProjects.length > 0) blockers.push(`仍有 ${activeProjects.length} 个未归档项目`);
+  if (openCriticalCases.length > 0) blockers.push(`仍有 ${openCriticalCases.length} 个未关闭 P0/P1 售后问题`);
+  if (activeReleases.length > 0) blockers.push(`仍有 ${activeReleases.length} 个未结束的软件发版单`);
+  return { ready: blockers.length === 0, status: bundle?.plan.status ?? "missing", blockers, plan: bundle?.plan ?? null, items: bundle?.items ?? [] };
+}
+
+export async function completeProductEolPlan(productId: string, completedBy: number): Promise<ProductEolPlan> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const readiness = await getProductEolReadiness(productId);
+  if (!readiness.ready || !readiness.plan) throw new Error(`产品尚不能完成停产：${readiness.blockers.join("；")}`);
+  return db.transaction(async (tx) => {
+    const [plan] = await tx.update(productEolPlans).set({
+      status: "completed",
+      completedBy,
+      completedAt: new Date(),
+      updatedAt: new Date(),
+    }).where(eq(productEolPlans.id, readiness.plan!.id)).returning();
+    await tx.update(products).set({ lifecycleState: "eol", updatedAt: new Date() }).where(eq(products.id, productId));
+    return plan;
+  });
+}
+
+export async function cancelProductEolPlan(productId: string, cancelledBy: number, reason: string): Promise<ProductEolPlan> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const bundle = await getProductEolPlan(productId);
+  if (!bundle) throw new Error("EOL 方案不存在");
+  if (bundle.plan.status === "completed") throw new Error("已完成停产的方案不能取消");
+  if (!reason.trim()) throw new Error("取消原因不能为空");
+  const [plan] = await db.update(productEolPlans).set({
+    status: "cancelled",
+    cancelledBy,
+    cancelledAt: new Date(),
+    cancellationReason: reason.trim(),
+    updatedAt: new Date(),
+  }).where(eq(productEolPlans.id, bundle.plan.id)).returning();
+  return plan;
+}
+
+export class ProjectControlledStateConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProjectControlledStateConflictError";
+  }
+}
+
 export async function updateProject(
   id: string,
   patch: Partial<Omit<InsertProject, "id" | "createdBy" | "createdAt">>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   exec?: any
 ): Promise<void> {
-  const db = exec ?? (await getDb());
+  if (exec) {
+    await exec.update(projects).set(patch).where(eq(projects.id, id));
+    return;
+  }
+  const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(projects).set(patch).where(eq(projects.id, id));
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, id);
+    const [current] = await tx.select().from(projects)
+      .where(eq(projects.id, id))
+      .limit(1)
+      .for("update");
+    if (!current) throw new Error("项目不存在");
+
+    const changed = <K extends keyof typeof current>(key: K, next: unknown) =>
+      Object.prototype.hasOwnProperty.call(patch, key) && next !== current[key];
+    const executionBaseline = (value: unknown) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+      return (value as Record<string, unknown>).projectExecutionBaseline ?? null;
+    };
+    const controlledStateChanged =
+      changed("productId", patch.productId ?? null) ||
+      changed("baseRevisionId", patch.baseRevisionId ?? null) ||
+      changed("baseTechnicalBaselineId", patch.baseTechnicalBaselineId ?? null) ||
+      changed("productDefinitionSnapshotId", patch.productDefinitionSnapshotId ?? null) ||
+      changed("currentPhase", patch.currentPhase) ||
+      (Object.prototype.hasOwnProperty.call(patch, "customFields") &&
+        JSON.stringify(executionBaseline(patch.customFields)) !==
+          JSON.stringify(executionBaseline(current.customFields)));
+    if (controlledStateChanged) {
+      const [release] = await tx.select({ id: mpReleases.id }).from(mpReleases)
+        .where(eq(mpReleases.projectId, id))
+        .limit(1);
+      if (release) {
+        throw new ProjectControlledStateConflictError(
+          "项目已发布，产品关联、技术输入与发布阶段已冻结；后续设计变更请创建 ECO",
+        );
+      }
+    }
+    if (
+      current.category === "eco" &&
+      (changed("productId", patch.productId ?? null) ||
+        changed("baseTechnicalBaselineId", patch.baseTechnicalBaselineId ?? null))
+    ) {
+      throw new ProjectControlledStateConflictError(
+        "ECO 已冻结来源产品与技术基线，不能改绑或重写",
+      );
+    }
+    await tx.update(projects).set(patch).where(eq(projects.id, id));
+  });
 }
 
 /** 更新项目周会配置 */
@@ -718,8 +2284,15 @@ async function deleteProjectRows(projectId: string, options: { allowReleased: bo
     .select({ id: productRevisions.id })
     .from(productRevisions)
     .where(eq(productRevisions.createdByProjectId, projectId));
+  const technicalBaselineRows = await db
+    .select({ id: productTechnicalBaselines.id })
+    .from(productTechnicalBaselines)
+    .where(eq(productTechnicalBaselines.sourceProjectId, projectId));
 
-  if (!options.allowReleased && (project.resultRevisionId !== null || release || projectRevisionRows.length > 0)) {
+  if (!options.allowReleased && (
+    project.resultRevisionId !== null || release ||
+    projectRevisionRows.length > 0 || technicalBaselineRows.length > 0
+  )) {
     throw new Error("Cannot hard-delete a released project; keep its PLM trace and archive it instead.");
   }
 
@@ -728,6 +2301,7 @@ async function deleteProjectRows(projectId: string, options: { allowReleased: bo
     .from(projectFiles)
     .where(eq(projectFiles.projectId, projectId));
   const revisionIds = projectRevisionRows.map((row) => row.id);
+  const technicalBaselineIds = technicalBaselineRows.map((row) => row.id);
 
   await db.transaction(async (tx) => {
     // Product-level records may outlive the project. Remove dangling project links
@@ -740,6 +2314,15 @@ async function deleteProjectRows(projectId: string, options: { allowReleased: bo
       .where(and(eq(customerVariants.sourceType, "project"), eq(customerVariants.sourceRefId, projectId)));
 
     if (options.allowReleased) {
+      if (technicalBaselineIds.length > 0) {
+        await tx.update(products)
+          .set({ currentTechnicalBaselineId: null })
+          .where(inArray(products.currentTechnicalBaselineId, technicalBaselineIds));
+        await tx.delete(productModuleAssignments)
+          .where(inArray(productModuleAssignments.technicalBaselineId, technicalBaselineIds));
+        await tx.delete(productTechnicalBaselines)
+          .where(inArray(productTechnicalBaselines.id, technicalBaselineIds));
+      }
       if (revisionIds.length > 0) {
         await tx.delete(bomItems).where(inArray(bomItems.revisionId, revisionIds));
       }
@@ -808,8 +2391,8 @@ export async function getProjectsByMember(userId: number): Promise<ProjectRow[]>
     .where(eq(projectMembers.userId, userId));
   const memberProjectIds = memberRows.map((r) => r.projectId);
   const projectScope = memberProjectIds.length > 0
-    ? or(eq(projects.createdBy, userId), eq(projects.pmUserId, userId), inArray(projects.id, memberProjectIds))
-    : or(eq(projects.createdBy, userId), eq(projects.pmUserId, userId));
+    ? or(eq(projects.createdBy, userId), eq(projects.productOwnerUserId, userId), eq(projects.pmUserId, userId), inArray(projects.id, memberProjectIds))
+    : or(eq(projects.createdBy, userId), eq(projects.productOwnerUserId, userId), eq(projects.pmUserId, userId));
   return db
     .select()
     .from(projects)
@@ -817,13 +2400,72 @@ export async function getProjectsByMember(userId: number): Promise<ProjectRow[]>
     .orderBy(desc(projects.updatedAt));
 }
 
+export type ProjectPhaseProgress = { phaseId: string; total: number; done: number; progress: number };
+export type ProjectProgressSummary = { progress: number; phaseProgress: ProjectPhaseProgress[] };
+
+/**
+ * §5 统一状态口径：进度只在服务端算一次，所有页面（列表/总览/详情/甘特/摘要）
+ * 消费同一结果。口径与原客户端算法一致：skipped 双侧剔除；某阶段任务全被
+ * skipped 视为该阶段 100%。
+ */
+export async function getProjectProgressSummaries(
+  projectIds: string[],
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec?: any,
+): Promise<Map<string, ProjectProgressSummary>> {
+  const map = new Map<string, ProjectProgressSummary>();
+  if (projectIds.length === 0) return map;
+  const db = exec ?? (await getDb());
+  if (!db) return map;
+  const rows = await db.select({
+    projectId: projectTasks.projectId,
+    phaseId: projectTasks.phaseId,
+    raw: drizzleSql<number>`count(*)::int`,
+    total: drizzleSql<number>`count(*) filter (where ${projectTasks.status} <> 'skipped')::int`,
+    done: drizzleSql<number>`count(*) filter (where ${projectTasks.status} = 'done')::int`,
+  }).from(projectTasks)
+    .where(inArray(projectTasks.projectId, projectIds))
+    .groupBy(projectTasks.projectId, projectTasks.phaseId);
+  type AggRow = { projectId: string; phaseId: string; raw: number; total: number; done: number };
+  const grouped = new Map<string, AggRow[]>();
+  for (const row of rows as AggRow[]) {
+    const list = grouped.get(row.projectId) ?? [];
+    list.push(row);
+    grouped.set(row.projectId, list);
+  }
+  grouped.forEach((phaseRows, projectId) => {
+    let total = 0; let done = 0; let raw = 0;
+    const phaseProgress = phaseRows.map((row) => {
+      total += row.total; done += row.done; raw += row.raw;
+      const pct = row.total === 0 ? (row.raw > 0 ? 100 : 0) : Math.round((row.done / row.total) * 100);
+      return { phaseId: row.phaseId, total: row.total, done: row.done, progress: pct };
+    });
+    const progress = total === 0 ? (raw > 0 ? 100 : 0) : Math.round((done / total) * 100);
+    map.set(projectId, { progress, phaseProgress });
+  });
+  return map;
+}
+
+export async function getProjectProgressSummary(
+  projectId: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec?: any,
+): Promise<ProjectProgressSummary> {
+  const map = await getProjectProgressSummaries([projectId], exec);
+  return map.get(projectId) ?? { progress: 0, phaseProgress: [] };
+}
+
 export type PortfolioRow = {
   id: string; name: string; projectNumber: string; category: string; risk: string;
+  sopTemplateVersion: string | null;
+  customFields: unknown;
   ragLevel: RagLevel;
   ragReasons: string[];
   customer: string | null;
   currentPhase: string; startDate: string | null; targetDate: string | null; pmUserId: number | null; pmName: string | null;
   myRole?: ProjectMemberRole | null;
+  progress: number;
+  phaseProgress: ProjectPhaseProgress[];
   taskTotal: number; taskDone: number; taskInProgress: number; overdueTasks: number; blockedTasks: number;
   openIssues: number; criticalIssues: number; plannedEnd: string | null; projectedEnd: string | null;
   openRisks: number; highRisks: number; mediumRisks: number;
@@ -847,6 +2489,11 @@ export type PortfolioRow = {
   releaseDeliverableTotal: number;
   releaseHardBlockers: number;
   releaseConditions: string | null;
+  expenseCurrency: string | null;
+  expenseCurrencyCount: number;
+  expenseBudgetMinor: number | null;
+  expenseActualMinor: number | null;
+  expenseVarianceMinor: number | null;
 };
 
 const PORTFOLIO_REQUIRED_ROLES: ProjectMemberRole[] = ["project_manager", "pm", "rd_hw", "rd_mech", "rd_sw", "qa", "scm"];
@@ -897,7 +2544,7 @@ function maxRiskLevel(a: RiskLevel, b: RiskLevel): RiskLevel {
 }
 
 function forecastProjectEnd(
-  project: Pick<ProjectRow, "category" | "startDate">,
+  project: Pick<ProjectRow, "category" | "startDate" | "sopTemplateVersion" | "customFields">,
   rows: Array<{
     taskId: string;
     status: string;
@@ -913,8 +2560,8 @@ function forecastProjectEnd(
   if (effectiveRows.length === 0) return null;
   const hasScheduleSignal = !!project.startDate || effectiveRows.some((row) => row.startDate || row.dueDate || row.completedAt);
   if (!hasScheduleSignal) return null;
-  const rowIds = new Set(effectiveRows.map((row) => row.taskId));
-  const schedTasks = buildSchedTasks(getPhasesForCategory(project.category)).filter((task) => rowIds.has(task.id));
+  // 与排期、状态、开始/完成守卫共用同一运行时图；审批裁剪不会断开上游依赖。
+  const schedTasks = buildOperationalProjectSchedTasks(project, rows);
   if (schedTasks.length === 0) return maxISODate(effectiveRows.map((row) => row.dueDate));
   const states: ForecastTaskState[] = effectiveRows.map((row) => ({
     id: row.taskId,
@@ -984,14 +2631,16 @@ async function getRiskAggByProjectIds(db: DbClient, projectIds: string[]) {
 }
 
 /** 跨项目组合看板：用户可见项目 + 每项目健康度聚合(任务/逾期/阻塞/开放问题/预计完成) */
-export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
+export async function getPortfolio(userId: number, options?: { projectId?: string }): Promise<PortfolioRow[]> {
   const db = await getDb();
   if (!db) return [];
   const viewer = await getUserById(userId);
   const viewerIsAdmin = isSystemAdminRole(viewer?.role);
-  const allProjects = viewerIsAdmin
+  let allProjects = viewerIsAdmin
     ? await db.select().from(projects).where(eq(projects.archived, false))
     : await getProjectsByMember(userId);
+  // 单项目视角（项目详情/状态摘要）：只聚合这一个项目，避免详情页扫描整个组合
+  if (options?.projectId) allProjects = allProjects.filter((row) => row.id === options.projectId);
   const projById = new Map<string, ProjectRow>();
   for (const p of allProjects) projById.set(p.id, p);
   const ids = Array.from(projById.keys());
@@ -1000,8 +2649,10 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
 
   const taskAgg = await db.select({
     projectId: projectTasks.projectId,
-    total: drizzleSql<number>`count(*)::int`,
-    done: drizzleSql<number>`count(*) filter (where ${projectTasks.status} in ('done','skipped'))::int`,
+    // 口径与 getProjectProgressSummaries 一致（设计4 §5）：skipped 双侧剔除，
+    // 否则总览同一张卡上 "13%" 与 "4/25" 互相矛盾（裁剪项目尤甚）。
+    total: drizzleSql<number>`count(*) filter (where ${projectTasks.status} <> 'skipped')::int`,
+    done: drizzleSql<number>`count(*) filter (where ${projectTasks.status} = 'done')::int`,
     inProgress: drizzleSql<number>`count(*) filter (where ${projectTasks.status} = 'in_progress')::int`,
     overdue: drizzleSql<number>`count(*) filter (where ${projectTasks.dueDate} is not null and ${projectTasks.dueDate} < ${todayISO} and ${projectTasks.status} not in ('done','skipped'))::int`,
     blocked: drizzleSql<number>`count(*) filter (where ${projectTasks.status} = 'blocked')::int`,
@@ -1030,6 +2681,15 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
 
   const riskAgg = await getRiskAggByProjectIds(db, ids);
 
+  const expenseAgg = await db.select({
+    projectId: projectExpenses.projectId,
+    currency: projectExpenses.currency,
+    budgetAmountMinor: drizzleSql<number>`coalesce(sum(${projectExpenses.budgetAmountMinor}) filter (where ${projectExpenses.status} <> 'cancelled'), 0)::int`,
+    actualAmountMinor: drizzleSql<number>`coalesce(sum(${projectExpenses.actualAmountMinor}) filter (where ${projectExpenses.status} <> 'cancelled'), 0)::int`,
+  }).from(projectExpenses)
+    .where(inArray(projectExpenses.projectId, ids))
+    .groupBy(projectExpenses.projectId, projectExpenses.currency);
+
   const memberRows = await db.select({
     projectId: projectMembers.projectId,
     role: projectMembers.role,
@@ -1053,6 +2713,7 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
   const pmRows = pmIds.length ? await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, pmIds)) : [];
   const pmName = new Map(pmRows.map((r) => [r.id, r.name]));
   const taskMap = new Map(taskAgg.map((t) => [t.projectId, t]));
+  const progressMap = await getProjectProgressSummaries(ids);
   const taskRowsByProject = new Map<string, typeof taskRows>();
   for (const row of taskRows) {
     const list = taskRowsByProject.get(row.projectId) ?? [];
@@ -1062,6 +2723,12 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
   const taskByProjectTask = new Map(taskRows.map((t) => [`${t.projectId}:${t.taskId}`, t]));
   const issueMap = new Map(issueAgg.map((i) => [i.projectId, i]));
   const riskMap = new Map(riskAgg.map((r) => [r.projectId, r]));
+  const expensesByProject = new Map<string, typeof expenseAgg>();
+  for (const row of expenseAgg) {
+    const rows = expensesByProject.get(row.projectId) ?? [];
+    rows.push(row);
+    expensesByProject.set(row.projectId, rows);
+  }
   const roleMap = new Map<string, Set<ProjectMemberRole>>();
   for (const row of memberRows) {
     const roles = roleMap.get(row.projectId) ?? new Set<ProjectMemberRole>();
@@ -1084,12 +2751,16 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
     const myRole = (() => {
       let role: ProjectMemberRole | null = myRoleMap.get(p.id) ?? null;
       if (p.pmUserId === userId) role = higher(role, "project_manager");
+      if (p.productOwnerUserId === userId) role = higher(role, "owner");
       if (p.createdBy === userId) role = higher(role, "owner");
       if (viewerIsAdmin) role = higher(role, "manager");
       return role;
     })();
     const isExternalRole = myRole === "external_customer" || myRole === "supplier";
-    const phases = getPhasesForCategory(p.category);
+    const canViewExpenses = viewerIsAdmin || !!myRole && ["owner", "manager", "project_manager", "pm", "scm"].includes(myRole);
+    const expenseRows = canViewExpenses ? (expensesByProject.get(p.id) ?? []) : [];
+    const singleExpense = expenseRows.length === 1 ? expenseRows[0] : null;
+    const phases = getEffectivePhasesForProjectLike(p);
     const phase = phases.find((item) => item.id === p.currentPhase) ?? null;
     const gateTaskIds = phases.map((item) => item.gateTaskId).filter(Boolean);
     const gateTaskTotal = gateTaskIds.length;
@@ -1132,6 +2803,8 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
     });
     return {
       id: p.id, name: p.name, projectNumber: p.projectNumber, category: p.category, risk: isExternalRole ? "low" as RiskLevel : health.risk,
+      sopTemplateVersion: p.sopTemplateVersion,
+      customFields: p.customFields,
       ragLevel: isExternalRole ? "green" as RagLevel : health.ragLevel,
       ragReasons: isExternalRole ? [] : health.reasons,
       customer: p.customer ?? null,
@@ -1140,6 +2813,8 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
       pmName: p.pmUserId ? (pmName.get(p.pmUserId) ?? null) : null,
       // 当前用户对本项目的有效角色（成员角色 ∪ pm/owner/admin 兜底），供前端定视角
       myRole,
+      progress: progressMap.get(p.id)?.progress ?? 0,
+      phaseProgress: isExternalRole ? [] : progressMap.get(p.id)?.phaseProgress ?? [],
       taskTotal: isExternalRole ? 0 : t?.total ?? 0,
       taskDone: isExternalRole ? 0 : t?.done ?? 0,
       taskInProgress: isExternalRole ? 0 : t?.inProgress ?? 0,
@@ -1172,6 +2847,11 @@ export async function getPortfolio(userId: number): Promise<PortfolioRow[]> {
       releaseDeliverableTotal: isExternalRole ? 0 : releaseGate.deliverables.total,
       releaseHardBlockers: isExternalRole ? 0 : releaseHardBlockers,
       releaseConditions: isExternalRole ? null : releaseGate.conditions ?? null,
+      expenseCurrency: singleExpense?.currency ?? null,
+      expenseCurrencyCount: expenseRows.length,
+      expenseBudgetMinor: singleExpense?.budgetAmountMinor ?? null,
+      expenseActualMinor: singleExpense?.actualAmountMinor ?? null,
+      expenseVarianceMinor: singleExpense ? singleExpense.actualAmountMinor - singleExpense.budgetAmountMinor : null,
     };
   }));
 }
@@ -1196,7 +2876,10 @@ export type PortfolioHealthRow = {
 export async function getPortfolioHealthForDigest(todayISO: string): Promise<PortfolioHealthRow[]> {
   const db = await getDb();
   if (!db) return [];
-  const projRows = await db.select().from(projects).where(eq(projects.archived, false));
+  const projRows = await db.select().from(projects).where(and(
+    eq(projects.archived, false),
+    eq(projects.lifecycle, "active"),
+  ));
   if (projRows.length === 0) return [];
   const ids = projRows.map((p) => p.id);
 
@@ -1242,7 +2925,7 @@ export async function getPortfolioHealthForDigest(todayISO: string): Promise<Por
   const riskMap = new Map(riskAgg.map((r) => [r.projectId, r]));
   const gateByProject = new Map<string, "red" | "amber">();
   await Promise.all(projRows.map(async (p) => {
-    const phases = getPhasesForCategory(p.category);
+    const phases = getEffectivePhasesForProjectLike(p);
     const phase = phases.find((item) => item.id === p.currentPhase);
     if (!phase) return;
     const gate = (taskRowsByProject.get(p.id) ?? []).find((task) => task.taskId === phase.gateTaskId);
@@ -1340,6 +3023,7 @@ export async function getProjectMembers(projectId: string): Promise<Array<Projec
       projectId: projectMembers.projectId,
       userId: projectMembers.userId,
       role: projectMembers.role,
+      extraRoles: projectMembers.extraRoles,
       jobTitle: projectMembers.jobTitle,
       invitedBy: projectMembers.invitedBy,
       createdAt: projectMembers.createdAt,
@@ -1371,6 +3055,58 @@ export async function getProjectMember(projectId: string, userId: number): Promi
     .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId)))
     .limit(1);
   return result[0];
+}
+
+export async function listProjectRoleDelegations(projectId: string): Promise<ProjectRoleDelegation[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(projectRoleDelegations)
+    .where(eq(projectRoleDelegations.projectId, projectId))
+    .orderBy(desc(projectRoleDelegations.createdAt));
+}
+
+export async function getActiveProjectRoleDelegationsForUser(
+  projectId: string,
+  userId: number,
+  today: string,
+): Promise<ProjectRoleDelegation[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(projectRoleDelegations).where(and(
+    eq(projectRoleDelegations.projectId, projectId),
+    eq(projectRoleDelegations.toUserId, userId),
+    eq(projectRoleDelegations.active, true),
+    lte(projectRoleDelegations.startDate, today),
+    gte(projectRoleDelegations.endDate, today),
+  ));
+}
+
+export async function createProjectRoleDelegation(
+  input: InsertProjectRoleDelegation,
+): Promise<ProjectRoleDelegation> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [row] = await db.insert(projectRoleDelegations).values(input).returning();
+  return row;
+}
+
+export async function revokeProjectRoleDelegation(
+  projectId: string,
+  id: number,
+  revokedBy: number,
+): Promise<ProjectRoleDelegation | undefined> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [row] = await db.update(projectRoleDelegations).set({
+    active: false,
+    revokedBy,
+    revokedAt: new Date(),
+  }).where(and(
+    eq(projectRoleDelegations.id, id),
+    eq(projectRoleDelegations.projectId, projectId),
+    eq(projectRoleDelegations.active, true),
+  )).returning();
+  return row;
 }
 
 /** 某产品派生的全部未归档项目（定义冻结等产品级事件按项目扇出通知用） */
@@ -1462,7 +3198,15 @@ export async function ensureProjectMember(
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const existing = await getProjectMember(projectId, userId);
-  if (existing) return false;
+  if (existing) {
+    if (role !== "owner" && role !== existing.role) {
+      const extraRoles = normalizeExtraRoles(existing.role, [...existing.extraRoles, role]);
+      await db.update(projectMembers)
+        .set({ extraRoles })
+        .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId)));
+    }
+    return false;
+  }
   await db.insert(projectMembers).values({ projectId, userId, role, invitedBy });
   return true;
 }
@@ -1471,13 +3215,20 @@ export async function ensureProjectMember(
 export async function updateProjectMember(
   projectId: string,
   userId: number,
-  patch: { role?: ProjectMemberRole; jobTitle?: string | null }
+  patch: { role?: ProjectMemberRole; extraRoles?: ProjectMemberRole[]; jobTitle?: string | null }
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+  const existing = await getProjectMember(projectId, userId);
+  if (!existing) return;
+  const role = patch.role ?? existing.role;
+  const normalizedPatch = {
+    ...patch,
+    extraRoles: normalizeExtraRoles(role, patch.extraRoles ?? existing.extraRoles),
+  };
   await db
     .update(projectMembers)
-    .set(patch)
+    .set(normalizedPatch)
     .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId)));
 }
 
@@ -1485,9 +3236,84 @@ export async function updateProjectMember(
 export async function removeProjectMember(projectId: string, userId: number): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db
-    .delete(projectMembers)
-    .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId)));
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, projectId);
+    const [project] = await tx.select({
+      createdBy: projects.createdBy,
+      pmUserId: projects.pmUserId,
+    }).from(projects).where(eq(projects.id, projectId)).limit(1);
+    const replacementReviewer = project?.pmUserId && project.pmUserId !== userId
+      ? project.pmUserId
+      : project?.createdBy;
+    const now = new Date();
+
+    await tx.update(projectTasks).set({
+      assigneeUserId: null,
+      updatedAt: now,
+    }).where(and(
+      eq(projectTasks.projectId, projectId),
+      eq(projectTasks.assigneeUserId, userId),
+    ));
+    await tx.update(projectTasks).set({
+      requiresApproval: false,
+      approverUserId: null,
+      approvalStatus: "none",
+      approvalNote: null,
+      approvalRequestedBy: null,
+      approvalRequestedAt: null,
+      approvalDecidedBy: null,
+      approvalDecidedAt: null,
+      status: drizzleSql`CASE WHEN ${projectTasks.status} = 'pending_approval' THEN 'todo'::task_status ELSE ${projectTasks.status} END`,
+      updatedAt: now,
+    }).where(and(
+      eq(projectTasks.projectId, projectId),
+      eq(projectTasks.approverUserId, userId),
+    ));
+    if (replacementReviewer && replacementReviewer !== userId) {
+      await tx.update(projectDeliverableReviews).set({
+        reviewerUserId: replacementReviewer,
+        updatedAt: now,
+      }).where(and(
+        eq(projectDeliverableReviews.projectId, projectId),
+        eq(projectDeliverableReviews.reviewerUserId, userId),
+        eq(projectDeliverableReviews.status, "pending"),
+      ));
+    }
+    await tx.update(actionItems).set({
+      status: "closed",
+      handledAt: now,
+      closedAt: now,
+      updatedAt: now,
+    }).where(and(
+      eq(actionItems.projectId, projectId),
+      eq(actionItems.recipientUserId, userId),
+      inArray(actionItems.status, ACTIVE_ACTION_ITEM_STATUSES),
+    ));
+    if (project?.pmUserId === userId) {
+      await tx.update(projects).set({ pmUserId: null, updatedAt: now }).where(eq(projects.id, projectId));
+    }
+    await tx.delete(projectMembers)
+      .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId)));
+  });
+}
+
+/** Current access check used immediately before automation/action-item delivery. */
+export async function canReceiveProjectNotification(projectId: string, userId: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const [project] = await db.select({
+    createdBy: projects.createdBy,
+    pmUserId: projects.pmUserId,
+    archived: projects.archived,
+    lifecycle: projects.lifecycle,
+  }).from(projects).where(eq(projects.id, projectId)).limit(1);
+  if (!project || project.archived || project.lifecycle !== "active") return false;
+  if (project.createdBy === userId || project.pmUserId === userId) return true;
+  const [member] = await db.select({ userId: projectMembers.userId }).from(projectMembers).where(and(
+    eq(projectMembers.projectId, projectId),
+    eq(projectMembers.userId, userId),
+  )).limit(1);
+  return Boolean(member);
 }
 
 // ── Project Phases helpers ────────────────────────────────────────────────────
@@ -1551,9 +3377,12 @@ export async function upsertProjectTask(
     status?: TaskStatus;
     priority?: TaskPriority;
     completedAt?: Date | null;
+    completedBy?: number | null;
     updatedBy?: number | null;
     dueDate?: string | null;
     startDate?: string | null;
+    actualStartedAt?: Date | null;
+    completionNote?: string | null;
     requiresApproval?: boolean;
     approverUserId?: number | null;
     approvalStatus?: TaskApprovalStatus;
@@ -1562,12 +3391,22 @@ export async function upsertProjectTask(
     approvalRequestedAt?: Date | null;
     approvalDecidedBy?: number | null;
     approvalDecidedAt?: Date | null;
+    approvalActedAsRole?: ProjectMemberRole | null;
+    approvalViaDelegationId?: number | null;
   },
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   exec?: any
 ): Promise<void> {
-  const db = exec ?? (await getDb());
-  if (!db) throw new Error("Database not available");
+  if (!exec) {
+    const db = await getDb();
+    if (!db) throw new Error("Database not available");
+    await db.transaction(async (tx) => {
+      await upsertProjectTask(projectId, phaseId, taskId, patch, tx);
+    });
+    return;
+  }
+  const db = exec;
+  await acquireProjectReleaseStateLock(db, projectId);
   const existing = await db
     .select()
     .from(projectTasks)
@@ -1603,11 +3442,16 @@ export async function upsertProjectTask(
 export async function seedProjectPhasesAndTasks(
   projectId: string,
   category: string,
-  createdBy: number
+  createdBy: number,
+  templateVersion?: string | null,
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const phases = getSopPhasesForCategory(category);
+  const project = await getProjectById(projectId);
+  const phases = getEffectivePhasesForProjectLike(project ?? {
+    category,
+    sopTemplateVersion: templateVersion,
+  });
   for (const phase of phases) {
     // Insert phase record
     await db.insert(projectPhases).values({ projectId, phaseId: phase.id });
@@ -1649,8 +3493,11 @@ export async function getProjectIssues(projectId: string, phaseId?: string): Pro
 export async function createProjectIssue(issue: InsertProjectIssue): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(projectIssues).values(issue).returning({ id: projectIssues.id });
-  return result[0].id;
+  return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, issue.projectId);
+    const result = await tx.insert(projectIssues).values(issue).returning({ id: projectIssues.id });
+    return result[0].id;
+  });
 }
 
 /** Update an issue */
@@ -1660,14 +3507,32 @@ export async function updateProjectIssue(
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(projectIssues).set(patch).where(eq(projectIssues.id, id));
+  const [issue] = await db.select({ projectId: projectIssues.projectId })
+    .from(projectIssues).where(eq(projectIssues.id, id)).limit(1);
+  if (!issue) return;
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, issue.projectId);
+    await tx.update(projectIssues).set(patch).where(and(
+      eq(projectIssues.id, id),
+      eq(projectIssues.projectId, issue.projectId),
+    ));
+  });
 }
 
 /** Delete an issue */
 export async function deleteProjectIssue(id: number): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.delete(projectIssues).where(eq(projectIssues.id, id));
+  const [issue] = await db.select({ projectId: projectIssues.projectId })
+    .from(projectIssues).where(eq(projectIssues.id, id)).limit(1);
+  if (!issue) return;
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, issue.projectId);
+    await tx.delete(projectIssues).where(and(
+      eq(projectIssues.id, id),
+      eq(projectIssues.projectId, issue.projectId),
+    ));
+  });
 }
 
 // ── Project Risk helpers ─────────────────────────────────────────────────────
@@ -1750,16 +3615,28 @@ export async function getProjectGateBlockerById(id: number): Promise<ProjectGate
 export async function createProjectGateBlocker(blocker: InsertProjectGateBlocker): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(projectGateBlockers).values(blocker).returning({ id: projectGateBlockers.id });
-  return result[0].id;
+  return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, blocker.projectId);
+    const result = await tx.insert(projectGateBlockers).values(blocker).returning({ id: projectGateBlockers.id });
+    return result[0].id;
+  });
 }
 
 export async function resolveProjectGateBlocker(id: number, resolvedBy: number): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(projectGateBlockers)
-    .set({ status: "resolved", resolvedBy, resolvedAt: new Date() })
-    .where(eq(projectGateBlockers.id, id));
+  const [blocker] = await db.select({ projectId: projectGateBlockers.projectId })
+    .from(projectGateBlockers).where(eq(projectGateBlockers.id, id)).limit(1);
+  if (!blocker) return;
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, blocker.projectId);
+    await tx.update(projectGateBlockers)
+      .set({ status: "resolved", resolvedBy, resolvedAt: new Date() })
+      .where(and(
+        eq(projectGateBlockers.id, id),
+        eq(projectGateBlockers.projectId, blocker.projectId),
+      ));
+  });
 }
 
 // ── Project Test Plan / Report helpers ──────────────────────────────────────
@@ -1792,7 +3669,7 @@ export type PhaseTestReadiness = {
 };
 
 function isFormalTestPhase(phaseId: string): boolean {
-  return phaseId === "evt" || phaseId === "dvt" || phaseId === "pvt";
+  return phaseId === "evt" || phaseId === "dvt" || phaseId === "verification" || phaseId === "pvt";
 }
 
 export async function getProjectTestPlans(projectId: string, phaseId?: string): Promise<ProjectTestPlan[]> {
@@ -1856,8 +3733,11 @@ export async function getProjectTestCaseById(id: number): Promise<ProjectTestCas
 export async function createProjectTestPlan(plan: InsertProjectTestPlan): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(projectTestPlans).values(plan).returning({ id: projectTestPlans.id });
-  return result[0].id;
+  return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, plan.projectId);
+    const result = await tx.insert(projectTestPlans).values(plan).returning({ id: projectTestPlans.id });
+    return result[0].id;
+  });
 }
 
 export async function updateProjectTestPlan(
@@ -1866,14 +3746,26 @@ export async function updateProjectTestPlan(
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(projectTestPlans).set(patch).where(eq(projectTestPlans.id, id));
+  const [plan] = await db.select({ projectId: projectTestPlans.projectId })
+    .from(projectTestPlans).where(eq(projectTestPlans.id, id)).limit(1);
+  if (!plan) return;
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, plan.projectId);
+    await tx.update(projectTestPlans).set(patch).where(and(
+      eq(projectTestPlans.id, id),
+      eq(projectTestPlans.projectId, plan.projectId),
+    ));
+  });
 }
 
 export async function createProjectTestCase(testCase: InsertProjectTestCase): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(projectTestCases).values(testCase).returning({ id: projectTestCases.id });
-  return result[0].id;
+  return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, testCase.projectId);
+    const result = await tx.insert(projectTestCases).values(testCase).returning({ id: projectTestCases.id });
+    return result[0].id;
+  });
 }
 
 export async function updateProjectTestCase(
@@ -1882,7 +3774,16 @@ export async function updateProjectTestCase(
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(projectTestCases).set(patch).where(eq(projectTestCases.id, id));
+  const [testCase] = await db.select({ projectId: projectTestCases.projectId })
+    .from(projectTestCases).where(eq(projectTestCases.id, id)).limit(1);
+  if (!testCase) return;
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, testCase.projectId);
+    await tx.update(projectTestCases).set(patch).where(and(
+      eq(projectTestCases.id, id),
+      eq(projectTestCases.projectId, testCase.projectId),
+    ));
+  });
 }
 
 export async function linkProjectTestCaseIssue(id: number, issueId: number, updatedBy: number): Promise<void> {
@@ -1892,8 +3793,11 @@ export async function linkProjectTestCaseIssue(id: number, issueId: number, upda
 export async function createProjectTestReport(report: InsertProjectTestReport): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(projectTestReports).values(report).returning({ id: projectTestReports.id });
-  return result[0].id;
+  return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, report.projectId);
+    const result = await tx.insert(projectTestReports).values(report).returning({ id: projectTestReports.id });
+    return result[0].id;
+  });
 }
 
 export async function updateProjectTestReport(
@@ -1902,7 +3806,16 @@ export async function updateProjectTestReport(
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(projectTestReports).set(patch).where(eq(projectTestReports.id, id));
+  const [report] = await db.select({ projectId: projectTestReports.projectId })
+    .from(projectTestReports).where(eq(projectTestReports.id, id)).limit(1);
+  if (!report) return;
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, report.projectId);
+    await tx.update(projectTestReports).set(patch).where(and(
+      eq(projectTestReports.id, id),
+      eq(projectTestReports.projectId, report.projectId),
+    ));
+  });
 }
 
 export async function reviewProjectTestReport(
@@ -1912,10 +3825,19 @@ export async function reviewProjectTestReport(
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db
-    .update(projectTestReports)
-    .set({ reviewStatus, reviewedBy: reviewerId, reviewedAt: new Date() })
-    .where(eq(projectTestReports.id, id));
+  const [report] = await db.select({ projectId: projectTestReports.projectId })
+    .from(projectTestReports).where(eq(projectTestReports.id, id)).limit(1);
+  if (!report) return;
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, report.projectId);
+    await tx
+      .update(projectTestReports)
+      .set({ reviewStatus, reviewedBy: reviewerId, reviewedAt: new Date() })
+      .where(and(
+        eq(projectTestReports.id, id),
+        eq(projectTestReports.projectId, report.projectId),
+      ));
+  });
 }
 
 export async function getPhaseTestReadiness(
@@ -2075,8 +3997,11 @@ export async function getProjectNpiReadinessCheckById(id: number): Promise<Proje
 export async function createProjectNpiReadinessCheck(check: InsertProjectNpiReadinessCheck): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(projectNpiReadinessChecks).values(check).returning({ id: projectNpiReadinessChecks.id });
-  return result[0].id;
+  return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, check.projectId);
+    const result = await tx.insert(projectNpiReadinessChecks).values(check).returning({ id: projectNpiReadinessChecks.id });
+    return result[0].id;
+  });
 }
 
 export async function updateProjectNpiReadinessCheck(
@@ -2085,7 +4010,16 @@ export async function updateProjectNpiReadinessCheck(
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(projectNpiReadinessChecks).set(patch).where(eq(projectNpiReadinessChecks.id, id));
+  const [check] = await db.select({ projectId: projectNpiReadinessChecks.projectId })
+    .from(projectNpiReadinessChecks).where(eq(projectNpiReadinessChecks.id, id)).limit(1);
+  if (!check) return;
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, check.projectId);
+    await tx.update(projectNpiReadinessChecks).set(patch).where(and(
+      eq(projectNpiReadinessChecks.id, id),
+      eq(projectNpiReadinessChecks.projectId, check.projectId),
+    ));
+  });
 }
 
 export async function linkProjectNpiReadinessIssue(id: number, issueId: number, updatedBy: number): Promise<void> {
@@ -2154,8 +4088,11 @@ export async function getProjectSampleSignoffById(id: number): Promise<ProjectSa
 export async function createProjectSampleSignoff(signoff: InsertProjectSampleSignoff): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(projectSampleSignoffs).values(signoff).returning({ id: projectSampleSignoffs.id });
-  return result[0].id;
+  return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, signoff.projectId);
+    const result = await tx.insert(projectSampleSignoffs).values(signoff).returning({ id: projectSampleSignoffs.id });
+    return result[0].id;
+  });
 }
 
 export async function updateProjectSampleSignoff(
@@ -2164,7 +4101,16 @@ export async function updateProjectSampleSignoff(
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(projectSampleSignoffs).set(patch).where(eq(projectSampleSignoffs.id, id));
+  const [signoff] = await db.select({ projectId: projectSampleSignoffs.projectId })
+    .from(projectSampleSignoffs).where(eq(projectSampleSignoffs.id, id)).limit(1);
+  if (!signoff) return;
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, signoff.projectId);
+    await tx.update(projectSampleSignoffs).set(patch).where(and(
+      eq(projectSampleSignoffs.id, id),
+      eq(projectSampleSignoffs.projectId, signoff.projectId),
+    ));
+  });
 }
 
 export async function respondProjectSampleSignoff(
@@ -2357,6 +4303,159 @@ export async function deleteCustomFieldDef(id: number): Promise<void> {
   await db.delete(customFieldDefs).where(eq(customFieldDefs.id, id));
 }
 
+// ── 项目集 helpers ────────────────────────────────────────────────────────────
+
+export type ProjectCollectionWithCount = ProjectCollection & { projectCount: number };
+
+/** List all collections with their project counts (newest first). */
+export async function listProjectCollections(): Promise<ProjectCollectionWithCount[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({
+      collection: projectCollections,
+      projectCount: drizzleSql<number>`count(${projectCollectionItems.id})::int`,
+    })
+    .from(projectCollections)
+    .leftJoin(projectCollectionItems, eq(projectCollectionItems.collectionId, projectCollections.id))
+    .groupBy(projectCollections.id)
+    .orderBy(desc(projectCollections.createdAt));
+  return rows.map((r) => ({ ...r.collection, projectCount: r.projectCount }));
+}
+
+export async function getProjectCollection(id: string): Promise<ProjectCollection | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(projectCollections).where(eq(projectCollections.id, id)).limit(1);
+  return rows[0];
+}
+
+/** Create a collection; returns the new id. Name is globally unique (uq_project_collection_name). */
+export async function createProjectCollection(input: {
+  name: string;
+  description?: string | null;
+  createdBy: number;
+}): Promise<string> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const id = `col_${nanoid(12)}`;
+  await db.insert(projectCollections).values({ id, ...input });
+  return id;
+}
+
+export async function updateProjectCollection(
+  id: string,
+  patch: Partial<Pick<ProjectCollection, "name" | "description">>
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(projectCollections).set(patch).where(eq(projectCollections.id, id));
+}
+
+export async function deleteProjectCollection(id: string): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(projectCollections).where(eq(projectCollections.id, id));
+}
+
+/**
+ * Classify projects into a collection.
+ * A project has at most one collection: assigning it again moves it atomically.
+ */
+export async function addProjectsToCollection(
+  collectionId: string,
+  projectIds: string[],
+  addedBy: number
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  if (projectIds.length === 0) return;
+  await db
+    .insert(projectCollectionItems)
+    .values(projectIds.map((projectId) => ({ collectionId, projectId, addedBy })))
+    .onConflictDoUpdate({
+      target: projectCollectionItems.projectId,
+      set: { collectionId, addedBy, createdAt: new Date() },
+    });
+}
+
+export async function removeProjectFromCollection(collectionId: string, projectId: string): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db
+    .delete(projectCollectionItems)
+    .where(and(eq(projectCollectionItems.collectionId, collectionId), eq(projectCollectionItems.projectId, projectId)));
+}
+
+export type CollectionProjectRow = {
+  id: string;
+  name: string;
+  category: string;
+  sopTemplateVersion: string | null;
+  customFields: unknown;
+  currentPhase: string | null;
+  progress: number | null;
+  pmUserId: number | null;
+  archived: boolean;
+  lifecycle: string;
+  addedAt: Date;
+};
+
+/** Projects inside a collection (display fields only), oldest membership first. */
+export async function listCollectionProjects(collectionId: string): Promise<CollectionProjectRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({
+      id: projects.id,
+      name: projects.name,
+      category: projects.category,
+      sopTemplateVersion: projects.sopTemplateVersion,
+      customFields: projects.customFields,
+      currentPhase: projects.currentPhase,
+      progress: projects.progress,
+      pmUserId: projects.pmUserId,
+      archived: projects.archived,
+      lifecycle: projects.lifecycle,
+      addedAt: projectCollectionItems.createdAt,
+    })
+    .from(projectCollectionItems)
+    .innerJoin(projects, eq(projects.id, projectCollectionItems.projectId))
+    .where(eq(projectCollectionItems.collectionId, collectionId))
+    .orderBy(projectCollectionItems.createdAt);
+}
+
+/** Collection ids a project belongs to (zero or one; array kept for caller compatibility). */
+export async function getCollectionIdsForProject(projectId: string): Promise<string[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({ collectionId: projectCollectionItems.collectionId })
+    .from(projectCollectionItems)
+    .where(eq(projectCollectionItems.projectId, projectId));
+  return rows.map((r) => r.collectionId);
+}
+
+export type ProjectCollectionAssignment = {
+  projectId: string;
+  collectionId: string;
+  collectionName: string;
+};
+
+/** Current collection assignment for projects, used to explain move semantics in the UI. */
+export async function listProjectCollectionAssignments(): Promise<ProjectCollectionAssignment[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({
+      projectId: projectCollectionItems.projectId,
+      collectionId: projectCollectionItems.collectionId,
+      collectionName: projectCollections.name,
+    })
+    .from(projectCollectionItems)
+    .innerJoin(projectCollections, eq(projectCollections.id, projectCollectionItems.collectionId));
+}
+
 // ── Gate Reviews helpers ──────────────────────────────────────────────────────
 
 /** Get all gate reviews for a project (optionally filtered by phase) */
@@ -2533,7 +4632,7 @@ export async function getManagementKpisData(userId: number): Promise<ManagementK
       .from(projectTestCases)
       .where(and(
         inArray(projectTestCases.projectId, projectIds),
-        inArray(projectTestCases.phaseId, ["evt", "dvt", "pvt"])
+        inArray(projectTestCases.phaseId, [...MANAGEMENT_VALIDATION_PHASES])
       )),
     db
       .select({
@@ -2626,6 +4725,10 @@ async function buildGateReviewTraceSnapshot(exec: any, input: {
     .where(eq(projects.id, input.projectId))
     .limit(1);
   const productId = project?.productId ?? null;
+  const gateTaskId = project
+    ? getEffectivePhasesForProjectLike(project)
+      .find((phase) => phase.id === input.phaseId)?.gateTaskId ?? null
+    : null;
   const revisionIds = Array.from(new Set([
     project?.baseRevisionId ?? null,
     project?.resultRevisionId ?? null,
@@ -2641,6 +4744,16 @@ async function buildGateReviewTraceSnapshot(exec: any, input: {
     testCaseRows,
     npiRows,
     sampleSignoffRows,
+    deliveryModuleRows,
+    moduleBaselineRows,
+    releaseChangelogRows,
+    definitionSnapshotRows,
+    changeScopeRows,
+    tailoringRows,
+    deliverableOverrideRows,
+    phaseTaskRows,
+    fileRows,
+    deliverableReviewRows,
   ] = await Promise.all([
     productId
       ? exec.select().from(products).where(eq(products.id, productId)).limit(1)
@@ -2685,6 +4798,91 @@ async function buildGateReviewTraceSnapshot(exec: any, input: {
       .from(projectSampleSignoffs)
       .where(and(eq(projectSampleSignoffs.projectId, input.projectId), eq(projectSampleSignoffs.phaseId, input.phaseId)))
       .orderBy(projectSampleSignoffs.createdAt),
+    exec
+      .select()
+      .from(projectProductModuleBindings)
+      .where(eq(projectProductModuleBindings.projectId, input.projectId))
+      .orderBy(projectProductModuleBindings.moduleType),
+    exec
+      .select()
+      .from(projectModuleBaselines)
+      .where(eq(projectModuleBaselines.projectId, input.projectId))
+      .orderBy(projectModuleBaselines.drvModuleKey, projectModuleBaselines.id),
+    exec
+      .select()
+      .from(projectChangelog)
+      .where(and(
+        eq(projectChangelog.projectId, input.projectId),
+        inArray(projectChangelog.status, [...REVISION_CHANGE_STATUSES]),
+      ))
+      .orderBy(projectChangelog.createdDate, projectChangelog.number, projectChangelog.id),
+    project?.productDefinitionSnapshotId
+      ? exec
+        .select({
+          id: productDefinitionSnapshots.id,
+          versionNumber: productDefinitionSnapshots.versionNumber,
+          snapshot: productDefinitionSnapshots.snapshot,
+          confirmedBy: productDefinitionSnapshots.confirmedBy,
+          confirmedAt: productDefinitionSnapshots.confirmedAt,
+        })
+        .from(productDefinitionSnapshots)
+        .where(eq(productDefinitionSnapshots.id, project.productDefinitionSnapshotId))
+        .limit(1)
+      : Promise.resolve([]),
+    exec
+      .select()
+      .from(projectChangeScopeDeclarations)
+      .where(eq(projectChangeScopeDeclarations.projectId, input.projectId))
+      .orderBy(projectChangeScopeDeclarations.version),
+    exec
+      .select()
+      .from(projectTailoring)
+      .where(eq(projectTailoring.projectId, input.projectId))
+      .orderBy(projectTailoring.id),
+    exec
+      .select()
+      .from(projectDeliverableOverrides)
+      .where(eq(projectDeliverableOverrides.projectId, input.projectId))
+      .orderBy(
+        projectDeliverableOverrides.nodePhaseId,
+        projectDeliverableOverrides.deliverableName,
+        projectDeliverableOverrides.id,
+      ),
+    exec
+      .select()
+      .from(projectTasks)
+      .where(and(
+        eq(projectTasks.projectId, input.projectId),
+        eq(projectTasks.phaseId, input.phaseId),
+      ))
+      .orderBy(projectTasks.taskId, projectTasks.id),
+    exec
+      .select({
+        id: projectFiles.id,
+        phaseId: projectFiles.phaseId,
+        taskId: projectFiles.taskId,
+        deliverableName: projectFiles.deliverableName,
+        name: projectFiles.name,
+        fileType: projectFiles.fileType,
+        fileVersion: projectFiles.fileVersion,
+        size: projectFiles.size,
+        createdAt: projectFiles.createdAt,
+      })
+      .from(projectFiles)
+      .where(eq(projectFiles.projectId, input.projectId))
+      .orderBy(projectFiles.id),
+    exec
+      .select({
+        id: projectDeliverableReviews.id,
+        phaseId: projectDeliverableReviews.phaseId,
+        deliverableName: projectDeliverableReviews.deliverableName,
+        status: projectDeliverableReviews.status,
+        reviewedBy: projectDeliverableReviews.reviewedBy,
+        reviewedAt: projectDeliverableReviews.reviewedAt,
+      })
+      .from(projectDeliverableReviews)
+      .where(eq(projectDeliverableReviews.projectId, input.projectId))
+      .orderBy(projectDeliverableReviews.id),
   ]);
   const productRow = product[0] as ProductRow | undefined;
   const testReports = testReportsRows as ProjectTestReport[];
@@ -2717,12 +4915,92 @@ async function buildGateReviewTraceSnapshot(exec: any, input: {
       ? { id: revision.id, revisionLabel: revision.revisionLabel, status: revision.status }
       : null;
   };
+  const projectCustomFields = project?.customFields && typeof project.customFields === "object" && !Array.isArray(project.customFields)
+    ? project.customFields as Record<string, unknown>
+    : {};
+  const executionBaseline = projectCustomFields.projectExecutionBaseline;
+  // The stored Gate trace is visible to normal project participants, so keep
+  // supplier and cost data out of the payload. The private fingerprint below
+  // still includes those fields and therefore detects a commercial BOM change
+  // without disclosing the values in the review record.
+  const tracedBomRows = (bomRows as BomItem[]).map((row) => ({
+    partNumber: row.partNumber,
+    name: row.name,
+    spec: row.spec,
+    quantity: row.quantity,
+    refDesignator: row.refDesignator,
+    componentProductId: row.componentProductId,
+    componentRevisionId: row.componentRevisionId,
+    keyModuleId: row.keyModuleId,
+    keyModuleSnapshot: row.keyModuleSnapshot,
+    sortOrder: row.sortOrder,
+  }));
+  const fingerprintBomRows = (bomRows as BomItem[]).map((row) => ({
+    partNumber: row.partNumber,
+    name: row.name,
+    spec: row.spec,
+    quantity: row.quantity,
+    refDesignator: row.refDesignator,
+    componentProductId: row.componentProductId,
+    componentRevisionId: row.componentRevisionId,
+    keyModuleId: row.keyModuleId,
+    keyModuleSnapshot: row.keyModuleSnapshot,
+    supplierName: row.supplierName,
+    unitCost: row.unitCost,
+    sortOrder: row.sortOrder,
+  }));
+  const tracedDeliveryModules = deliveryModuleRows.map((row: typeof projectProductModuleBindings.$inferSelect) => ({
+    moduleType: row.moduleType,
+    moduleId: row.moduleId,
+    moduleSnapshot: row.moduleSnapshot,
+    customerConfirmationRef: row.customerConfirmationRef,
+  }));
+  const releaseConfigurationFingerprint = createHash("sha256").update(JSON.stringify({
+    productId,
+    baseTechnicalBaselineId: project?.baseTechnicalBaselineId ?? null,
+    productDefinitionSnapshotId: project?.productDefinitionSnapshotId ?? null,
+    productDefinitionSnapshot: definitionSnapshotRows[0] ?? null,
+    projectExecutionBaseline: executionBaseline ?? null,
+    safetyRiskLevel: project?.safetyRiskLevel ?? null,
+    regulatoryRiskLevel: project?.regulatoryRiskLevel ?? null,
+    changeScopeDeclarations: changeScopeRows,
+    tailoring: tailoringRows,
+    deliverableOverrides: deliverableOverrideRows,
+    prerequisiteTasks: phaseTaskRows
+      .filter((row: ProjectTask) => row.taskId !== gateTaskId)
+      .map((row: ProjectTask) => ({
+        taskId: row.taskId,
+        status: row.status,
+        completed: row.completed,
+        deliverables: row.deliverables,
+        requiresApproval: row.requiresApproval,
+        approvalStatus: row.approvalStatus,
+      })),
+    projectModuleBaselines: moduleBaselineRows,
+    workingBom: fingerprintBomRows,
+    deliveryModules: tracedDeliveryModules,
+    releaseChangelog: releaseChangelogRows,
+    files: fileRows,
+    deliverableReviews: deliverableReviewRows,
+    validationEvidence: {
+      testPlans: testPlansRows,
+      testReports: testReportsRows,
+      testCases: testCaseRows,
+      npiReadiness: npiRows,
+      sampleSignoffs: sampleSignoffRows,
+      failedIssueStatuses: failedIssueRows,
+    },
+  })).digest("hex");
 
   return {
     capturedAt: new Date().toISOString(),
     projectId: input.projectId,
     phaseId: input.phaseId,
     gateName: input.gateName ?? "",
+    projectExecutionBaseline:
+      executionBaseline && typeof executionBaseline === "object" && !Array.isArray(executionBaseline)
+        ? executionBaseline as ProjectExecutionBaseline
+        : null,
     product: productRow
       ? {
         id: productRow.id,
@@ -2735,17 +5013,10 @@ async function buildGateReviewTraceSnapshot(exec: any, input: {
     resultRevision: toRevision(project?.resultRevisionId),
     workingBom: {
       lineCount: (bomRows as BomItem[]).length,
-      rows: (bomRows as BomItem[]).map((row) => ({
-        partNumber: row.partNumber,
-        name: row.name,
-        spec: row.spec,
-        quantity: row.quantity,
-        refDesignator: row.refDesignator,
-        componentProductId: row.componentProductId,
-        componentRevisionId: row.componentRevisionId,
-        sortOrder: row.sortOrder,
-      })),
+      rows: tracedBomRows,
     },
+    deliveryModules: tracedDeliveryModules,
+    releaseConfigurationFingerprint,
     customerVariants: (variantRows as CustomerVariant[]).map((variant) => ({
       id: variant.id,
       variantCode: variant.variantCode,
@@ -2814,30 +5085,424 @@ async function buildGateReviewTraceSnapshot(exec: any, input: {
   };
 }
 
-/** Create a gate review */
-export async function createProjectGateReview(
-  review: InsertProjectGateReview,
+export async function getOpenProjectGateSignoffRound(
+  projectId: string,
+  phaseId: string,
+): Promise<ProjectGateSignoffRound | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db.select().from(projectGateSignoffRounds).where(and(
+    eq(projectGateSignoffRounds.projectId, projectId),
+    eq(projectGateSignoffRounds.phaseId, phaseId),
+    eq(projectGateSignoffRounds.status, "open"),
+  )).orderBy(desc(projectGateSignoffRounds.roundNumber)).limit(1);
+  return row ?? null;
+}
+
+export async function listProjectGateSignoffAdditions(
+  projectId: string,
+  phaseId: string,
+): Promise<ProjectGateSignoffAddition[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(projectGateSignoffAdditions).where(and(
+    eq(projectGateSignoffAdditions.projectId, projectId),
+    eq(projectGateSignoffAdditions.phaseId, phaseId),
+    eq(projectGateSignoffAdditions.active, true),
+  )).orderBy(projectGateSignoffAdditions.id);
+}
+
+async function buildProjectGateSignoffRequirementPreview(
+  projectId: string,
+  phaseId: string,
+): Promise<Record<GateSignoffSlot, GateSignoffRequirement>> {
+  const project = await getProjectById(projectId);
+  if (!project) throw new Error("Project not found");
+  const phase = getEffectivePhasesForProjectLike(project).find((item) => item.id === phaseId);
+  if (!phase) throw new Error("Gate phase not found");
+  const additions = await listProjectGateSignoffAdditions(projectId, phaseId);
+  const additionMap = Object.fromEntries(additions.map((row) => [row.slot, row.requirement])) as Partial<Record<GateSignoffSlot, GateSignoffRequirement>>;
+  return buildGateSignoffRequirements(project.category, phase, project, additionMap);
+}
+
+async function buildProjectGateSignoffRequirementPreviewInTransaction(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  exec?: any
-): Promise<number> {
+  tx: any,
+  project: ProjectRow,
+  phaseId: string,
+): Promise<Record<GateSignoffSlot, GateSignoffRequirement>> {
+  const phase = getEffectivePhasesForProjectLike(project).find((item) => item.id === phaseId);
+  if (!phase) throw new Error("Gate phase not found");
+  const additions: ProjectGateSignoffAddition[] = await tx.select()
+    .from(projectGateSignoffAdditions)
+    .where(and(
+      eq(projectGateSignoffAdditions.projectId, project.id),
+      eq(projectGateSignoffAdditions.phaseId, phaseId),
+      eq(projectGateSignoffAdditions.active, true),
+    ))
+    .orderBy(projectGateSignoffAdditions.id);
+  const additionMap = Object.fromEntries(additions.map((row) => [row.slot, row.requirement])) as Partial<Record<GateSignoffSlot, GateSignoffRequirement>>;
+  return buildGateSignoffRequirements(project.category, phase, project, additionMap);
+}
+
+export async function getCurrentGateSignoffRound(projectId: string, phaseId: string): Promise<number> {
+  const db = await getDb();
+  if (!db) return 1;
+  const open = await getOpenProjectGateSignoffRound(projectId, phaseId);
+  if (open) return open.roundNumber;
+  const [reviewMax, snapshotMax, signatureMax] = await Promise.all([
+    db.select({ value: drizzleSql<number>`coalesce(max(${projectGateReviews.roundNumber}), 0)::int` })
+      .from(projectGateReviews).where(and(eq(projectGateReviews.projectId, projectId), eq(projectGateReviews.phaseId, phaseId))),
+    db.select({ value: drizzleSql<number>`coalesce(max(${projectGateSignoffRounds.roundNumber}), 0)::int` })
+      .from(projectGateSignoffRounds).where(and(eq(projectGateSignoffRounds.projectId, projectId), eq(projectGateSignoffRounds.phaseId, phaseId))),
+    db.select({ value: drizzleSql<number>`coalesce(max(${projectGateSignoffs.roundNumber}), 0)::int` })
+      .from(projectGateSignoffs).where(and(eq(projectGateSignoffs.projectId, projectId), eq(projectGateSignoffs.phaseId, phaseId))),
+  ]);
+  const maxRound = Math.max(reviewMax[0]?.value ?? 0, snapshotMax[0]?.value ?? 0, signatureMax[0]?.value ?? 0);
+  if (maxRound === 0) return 1;
+  const [latestSnapshot] = await db.select({ status: projectGateSignoffRounds.status })
+    .from(projectGateSignoffRounds)
+    .where(and(eq(projectGateSignoffRounds.projectId, projectId), eq(projectGateSignoffRounds.phaseId, phaseId)))
+    .orderBy(desc(projectGateSignoffRounds.roundNumber)).limit(1);
+  if (latestSnapshot?.status === "superseded") return maxRound + 1;
+  const reviews = await getProjectGateReviews(projectId, phaseId);
+  const latest = pickLatestReview(reviews);
+  return latest?.decision === "rejected" ? maxRound + 1 : maxRound;
+}
+
+export async function getProjectGateSignoffRequirements(
+  projectId: string,
+  phaseId: string,
+): Promise<Record<GateSignoffSlot, GateSignoffRequirement>> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+  const roundNumber = await getCurrentGateSignoffRound(projectId, phaseId);
+  const [snapshot] = await db.select().from(projectGateSignoffRounds).where(and(
+    eq(projectGateSignoffRounds.projectId, projectId),
+    eq(projectGateSignoffRounds.phaseId, phaseId),
+    eq(projectGateSignoffRounds.roundNumber, roundNumber),
+  )).limit(1);
+  return snapshot?.requirements ?? buildProjectGateSignoffRequirementPreview(projectId, phaseId);
+}
+
+export async function openProjectGateSignoffRound(input: {
+  projectId: string;
+  phaseId: string;
+  openedBy: number;
+}): Promise<ProjectGateSignoffRound> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, input.projectId);
+    // A signoff round belongs only to the project's current Gate. Serialize
+    // opening with Gate completion so a stale screen cannot create a fresh
+    // round for a phase that has already advanced.
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${input.projectId}:${input.phaseId}`}))`);
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${input.projectId}:${input.phaseId}:signoff-round`}))`);
+    const [lockedProject] = await tx.select()
+      .from(projects)
+      .where(eq(projects.id, input.projectId))
+      .limit(1);
+    if (!lockedProject) throw new Error("Project not found");
+    if (lockedProject.currentPhase !== input.phaseId) {
+      throw new Error("只能为项目当前阶段开启 Gate 会签");
+    }
+    const [existing] = await tx.select().from(projectGateSignoffRounds).where(and(
+      eq(projectGateSignoffRounds.projectId, input.projectId),
+      eq(projectGateSignoffRounds.phaseId, input.phaseId),
+      eq(projectGateSignoffRounds.status, "open"),
+    )).orderBy(desc(projectGateSignoffRounds.roundNumber)).limit(1);
+    if (existing) return existing;
+
+    // Risk mutation follows phase -> risk lock order as well. Compute the
+    // requirement matrix and snapshot only after both locks are held, so a
+    // waiting opener cannot publish stale requirements.
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${input.projectId}:risk-scope`}))`);
+    const requirements = await buildProjectGateSignoffRequirementPreviewInTransaction(
+      tx,
+      lockedProject,
+      input.phaseId,
+    );
+    const [declaration] = await tx.select().from(projectChangeScopeDeclarations)
+      .where(eq(projectChangeScopeDeclarations.projectId, input.projectId))
+      .orderBy(desc(projectChangeScopeDeclarations.version))
+      .limit(1);
+    const [roundMax] = await tx.select({
+      value: drizzleSql<number>`greatest(
+        coalesce((select max("roundNumber") from "project_gate_reviews" where "projectId" = ${input.projectId} and "phaseId" = ${input.phaseId}), 0),
+        coalesce((select max("roundNumber") from "project_gate_signoff_rounds" where "projectId" = ${input.projectId} and "phaseId" = ${input.phaseId}), 0),
+        coalesce((select max("roundNumber") from "project_gate_signoffs" where "projectId" = ${input.projectId} and "phaseId" = ${input.phaseId}), 0)
+      )::int`,
+    }).from(projects).where(eq(projects.id, input.projectId));
+    const existingReviews = await tx.select({ decision: projectGateReviews.decision, roundNumber: projectGateReviews.roundNumber })
+      .from(projectGateReviews)
+      .where(and(eq(projectGateReviews.projectId, input.projectId), eq(projectGateReviews.phaseId, input.phaseId)))
+      .orderBy(desc(projectGateReviews.roundNumber), desc(projectGateReviews.id)).limit(1);
+    const existingSnapshots = await tx.select({ id: projectGateSignoffRounds.id })
+      .from(projectGateSignoffRounds)
+      .where(and(eq(projectGateSignoffRounds.projectId, input.projectId), eq(projectGateSignoffRounds.phaseId, input.phaseId)))
+      .limit(1);
+    const maxRound = roundMax?.value ?? 0;
+    const hasUnsignedLegacyRound = maxRound > 0 && existingReviews.length === 0 && existingSnapshots.length === 0;
+    const roundNumber = maxRound === 0 ? 1 : hasUnsignedLegacyRound ? maxRound : maxRound + 1;
+    const [row] = await tx.insert(projectGateSignoffRounds).values({
+      projectId: input.projectId,
+      phaseId: input.phaseId,
+      roundNumber,
+      status: "open",
+      requirements,
+      riskSnapshot: {
+        safetyRiskLevel: lockedProject.safetyRiskLevel,
+        regulatoryRiskLevel: lockedProject.regulatoryRiskLevel,
+        safetyReasons: declaration?.assessment.safetyReasons ?? [],
+        regulatoryReasons: declaration?.assessment.regulatoryReasons ?? [],
+      },
+      sopTemplateVersion: lockedProject.sopTemplateVersion,
+      openedBy: input.openedBy,
+    } as InsertProjectGateSignoffRound).returning();
+    return row;
+  });
+}
+
+async function supersedeOpenGateSignoffRoundsInTransaction(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const run = async (tx: any): Promise<number> => {
-    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${review.projectId}:${review.phaseId}`}))`);
+  tx: any,
+  projectId: string,
+  actorId: number,
+  reason: string,
+  phaseId: string,
+): Promise<number> {
+  const where = phaseId
+    ? and(eq(projectGateSignoffRounds.projectId, projectId), eq(projectGateSignoffRounds.phaseId, phaseId), eq(projectGateSignoffRounds.status, "open"))
+    : and(eq(projectGateSignoffRounds.projectId, projectId), eq(projectGateSignoffRounds.status, "open"));
+  const rows = await tx.update(projectGateSignoffRounds).set({
+    status: "superseded",
+    supersededBy: actorId,
+    supersededAt: new Date(),
+    supersedeReason: reason,
+    updatedAt: new Date(),
+  }).where(where).returning({ id: projectGateSignoffRounds.id });
+  return rows.length;
+}
+
+export async function addProjectGateSignoffRequirement(input: {
+  projectId: string;
+  phaseId: string;
+  slot: GateSignoffSlot;
+  requirement: Exclude<GateSignoffRequirement, "not_applicable">;
+  reason: string;
+  addedBy: number;
+}): Promise<ProjectGateSignoffAddition> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, input.projectId);
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${input.projectId}:${input.phaseId}`}))`);
+    const [lockedProject] = await tx.select().from(projects)
+      .where(eq(projects.id, input.projectId))
+      .limit(1);
+    if (!lockedProject) throw new Error("Project not found");
+    if (lockedProject.currentPhase !== input.phaseId) {
+      throw new Error("Gate 已推进，不能修改历史阶段会签要求");
+    }
+    const preview = await buildProjectGateSignoffRequirementPreviewInTransaction(
+      tx,
+      lockedProject,
+      input.phaseId,
+    );
+    const promoted = promoteGateSignoffRequirement(preview[input.slot], input.requirement);
+    if (promoted === preview[input.slot]) throw new Error("该槽位已达到相同或更高要求，不能降级或重复加签");
+    const [row] = await tx.insert(projectGateSignoffAdditions).values({ ...input, active: true } as InsertProjectGateSignoffAddition)
+      .onConflictDoUpdate({
+        target: [projectGateSignoffAdditions.projectId, projectGateSignoffAdditions.phaseId, projectGateSignoffAdditions.slot],
+        set: { requirement: promoted, reason: input.reason, active: true, addedBy: input.addedBy, updatedAt: new Date() },
+      }).returning();
+    await supersedeOpenGateSignoffRoundsInTransaction(
+      tx,
+      input.projectId,
+      input.addedBy,
+      `项目级加签：${input.slot}`,
+      input.phaseId,
+    );
+    return row;
+  });
+}
+
+export async function listProjectGateSignoffs(
+  projectId: string,
+  phaseId: string,
+  roundNumber?: number,
+): Promise<ProjectGateSignoff[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const round = roundNumber ?? await getCurrentGateSignoffRound(projectId, phaseId);
+  return db.select().from(projectGateSignoffs).where(and(
+    eq(projectGateSignoffs.projectId, projectId),
+    eq(projectGateSignoffs.phaseId, phaseId),
+    eq(projectGateSignoffs.roundNumber, round),
+  )).orderBy(projectGateSignoffs.id);
+}
+
+export async function upsertProjectGateSignoff(input: {
+  projectId: string;
+  phaseId: string;
+  roundNumber: number;
+  slot: GateSignoffSlot;
+  requirement: GateSignoffRequirement;
+  status: GateSignoffStatus;
+  signedBy: number | null;
+  note?: string | null;
+  viaDelegationId?: number | null;
+}): Promise<ProjectGateSignoff> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, input.projectId);
+    // Signatures and the final Gate decision share one project/phase lock. A
+    // signer that arrives after the review transaction completed must never
+    // be able to rewrite the now-historical round.
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${input.projectId}:${input.phaseId}`}))`);
+    const [lockedProject] = await tx.select({ currentPhase: projects.currentPhase })
+      .from(projects)
+      .where(eq(projects.id, input.projectId))
+      .limit(1);
+    if (!lockedProject) throw new Error("Project not found");
+    if (lockedProject.currentPhase !== input.phaseId) {
+      throw new Error("Gate 已推进，不能修改历史阶段会签");
+    }
+    const [round] = await tx.select({ status: projectGateSignoffRounds.status })
+      .from(projectGateSignoffRounds)
+      .where(and(
+        eq(projectGateSignoffRounds.projectId, input.projectId),
+        eq(projectGateSignoffRounds.phaseId, input.phaseId),
+        eq(projectGateSignoffRounds.roundNumber, input.roundNumber),
+      ))
+      .limit(1);
+    if (round?.status !== "open") {
+      throw new Error("Gate 会签轮次已关闭，不能修改签字");
+    }
+    const [row] = await tx.insert(projectGateSignoffs).values({
+      ...input,
+      signedAt: input.status === "pending" || input.status === "not_applicable" ? null : new Date(),
+      note: input.note ?? null,
+    } as InsertProjectGateSignoff).onConflictDoUpdate({
+      target: [
+        projectGateSignoffs.projectId,
+        projectGateSignoffs.phaseId,
+        projectGateSignoffs.roundNumber,
+        projectGateSignoffs.slot,
+      ],
+      set: {
+        requirement: input.requirement,
+        status: input.status,
+        signedBy: input.signedBy,
+        signedAt: input.status === "pending" || input.status === "not_applicable" ? null : new Date(),
+        note: input.note ?? null,
+        viaDelegationId: input.viaDelegationId ?? null,
+        updatedAt: new Date(),
+      },
+    }).returning();
+    return row;
+  });
+}
+
+async function assertProjectGateSignoffsCompleteInTransaction(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  tx: any,
+  project: ProjectRow,
+  phaseId: string,
+): Promise<number> {
+  const [round] = await tx.select().from(projectGateSignoffRounds).where(and(
+    eq(projectGateSignoffRounds.projectId, project.id),
+    eq(projectGateSignoffRounds.phaseId, phaseId),
+    eq(projectGateSignoffRounds.status, "open"),
+  )).orderBy(desc(projectGateSignoffRounds.roundNumber)).limit(1);
+  if (!round) throw new Error("Gate 会签轮次未开启或已关闭");
+
+  const rows = await tx.select().from(projectGateSignoffs).where(and(
+    eq(projectGateSignoffs.projectId, project.id),
+    eq(projectGateSignoffs.phaseId, phaseId),
+    eq(projectGateSignoffs.roundNumber, round.roundNumber),
+  ));
+  const statuses = Object.fromEntries(rows.map((row: ProjectGateSignoff) => [row.slot, row.status])) as Partial<Record<GateSignoffSlot, GateSignoffStatus>>;
+  const readiness = gateSignoffsReady(round.requirements, statuses);
+  if (!readiness.ready) throw new Error(`Gate 会签未完成：${readiness.blockers.join("；")}`);
+
+  if (project.category === "jdm" && phaseId === "input") {
+    const productSignoff = rows.find((row: ProjectGateSignoff) => row.slot === "product");
+    if (productSignoff?.status !== "approved" || !productSignoff.signedBy) {
+      throw new Error("JDM 产品定义 Gate 缺少指定产品负责人的批准");
+    }
+    if (productSignoff.signedBy !== project.productOwnerUserId) {
+      const [signer] = await tx.select({ role: users.role }).from(users)
+        .where(eq(users.id, productSignoff.signedBy))
+        .limit(1);
+      if (!isSystemAdminRole(signer?.role)) {
+        throw new Error("JDM 产品定义 Gate 的 product 槽必须由指定产品负责人签署；系统管理员代签会保留审计记录");
+      }
+    }
+  }
+  return round.roundNumber;
+}
+
+export async function assertProjectGateSignoffsComplete(projectId: string, phaseId: string, actorId?: number): Promise<void> {
+  if (actorId && !(await getOpenProjectGateSignoffRound(projectId, phaseId))) {
+    await openProjectGateSignoffRound({ projectId, phaseId, openedBy: actorId });
+  }
+  const [requirements, roundNumber] = await Promise.all([
+    getProjectGateSignoffRequirements(projectId, phaseId),
+    getCurrentGateSignoffRound(projectId, phaseId),
+  ]);
+  const rows = await listProjectGateSignoffs(projectId, phaseId, roundNumber);
+  const statuses = Object.fromEntries(rows.map((row) => [row.slot, row.status])) as Partial<Record<GateSignoffSlot, GateSignoffStatus>>;
+  const result = gateSignoffsReady(requirements, statuses);
+  if (!result.ready) throw new Error(`Gate 会签未完成：${result.blockers.join("；")}`);
+}
+
+/** Create a gate review */
+export type GateConditionInput = { description: string; ownerUserId: number; dueDate: string };
+
+export async function createProjectGateReviewWithRound(
+  review: InsertProjectGateReview & { conditionItems?: GateConditionInput[] },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec?: any,
+  requireCurrentPhase = true,
+): Promise<{ id: number; roundNumber: number }> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const { conditionItems = [], ...storedReview } = review;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const run = async (tx: any): Promise<{ id: number; roundNumber: number }> => {
+    await acquireProjectReleaseStateLock(tx, storedReview.projectId);
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${storedReview.projectId}:${storedReview.phaseId}`}))`);
+    if (requireCurrentPhase) {
+      const [lockedProject] = await tx.select({ currentPhase: projects.currentPhase })
+        .from(projects)
+        .where(eq(projects.id, storedReview.projectId))
+        .limit(1);
+      if (!lockedProject) throw new Error("Project not found");
+      if (lockedProject.currentPhase !== storedReview.phaseId) {
+        throw new Error("只能记录项目当前阶段的 Gate 评审");
+      }
+    }
+    const [openRound] = await tx.select().from(projectGateSignoffRounds).where(and(
+      eq(projectGateSignoffRounds.projectId, storedReview.projectId),
+      eq(projectGateSignoffRounds.phaseId, storedReview.phaseId),
+      eq(projectGateSignoffRounds.status, "open"),
+    )).orderBy(desc(projectGateSignoffRounds.roundNumber)).limit(1);
     const latest = await tx
       .select({ maxRound: drizzleSql<number>`coalesce(max(${projectGateReviews.roundNumber}), 0)::int` })
       .from(projectGateReviews)
       .where(and(
-        eq(projectGateReviews.projectId, review.projectId),
-        eq(projectGateReviews.phaseId, review.phaseId),
+        eq(projectGateReviews.projectId, storedReview.projectId),
+        eq(projectGateReviews.phaseId, storedReview.phaseId),
       ));
-    const nextRound = (latest[0]?.maxRound ?? 0) + 1;
-    const traceSnapshot = await buildGateReviewTraceSnapshot(tx, review);
+    const nextRound = openRound?.roundNumber ?? ((latest[0]?.maxRound ?? 0) + 1);
+    const traceSnapshot = await buildGateReviewTraceSnapshot(tx, storedReview);
     const result = await tx
       .insert(projectGateReviews)
       .values({
-        ...review,
+        ...storedReview,
         roundNumber: nextRound,
         productId: traceSnapshot.product?.id ?? null,
         baseRevisionId: traceSnapshot.baseRevision?.id ?? null,
@@ -2845,11 +5510,412 @@ export async function createProjectGateReview(
         traceSnapshot,
       })
       .returning({ id: projectGateReviews.id });
-    return result[0].id;
+    if (openRound) {
+      await tx.update(projectGateSignoffRounds).set({
+        status: "completed",
+        completedAt: new Date(),
+        updatedAt: new Date(),
+      }).where(eq(projectGateSignoffRounds.id, openRound.id));
+    }
+    const reviewId = result[0].id;
+    if (
+      storedReview.decision === "conditional" &&
+      conditionItems.length > 0
+    ) {
+      for (let index = 0; index < conditionItems.length; index += 1) {
+        const item = conditionItems[index];
+        await createProjectCondition({
+          projectId: storedReview.projectId,
+          sourceType: "gate",
+          sourceId: `${reviewId}:${index + 1}`,
+          title: `${storedReview.gateName || storedReview.phaseName || storedReview.phaseId} 条件 ${index + 1}`,
+          description: item.description,
+          ownerUserId: item.ownerUserId,
+          dueDate: item.dueDate,
+          linkedEcoProjectId: null,
+          resolutionNote: null,
+          createdBy: storedReview.createdBy ?? item.ownerUserId,
+        }, tx);
+      }
+    } else if (
+      storedReview.decision === "conditional" &&
+      storedReview.conditions?.trim() &&
+      storedReview.conditionOwnerUserId &&
+      storedReview.conditionDueDate
+    ) {
+      await createProjectCondition({
+        projectId: storedReview.projectId,
+        sourceType: "gate",
+        sourceId: String(reviewId),
+        title: `${storedReview.gateName || storedReview.phaseName || storedReview.phaseId} 条件项`,
+        description: storedReview.conditions,
+        ownerUserId: storedReview.conditionOwnerUserId,
+        dueDate: storedReview.conditionDueDate,
+        linkedEcoProjectId: null,
+        resolutionNote: null,
+        createdBy: storedReview.createdBy ?? storedReview.conditionOwnerUserId,
+      }, tx);
+    }
+    return { id: reviewId, roundNumber: nextRound };
   };
   // exec 传入外层事务则并入之（advisory lock 绑定该事务）；否则自开事务
   if (exec) return run(exec);
   return db.transaction(run);
+}
+
+/** Backward-compatible id-only helper for callers that do not need round metadata. */
+export async function createProjectGateReview(
+  review: InsertProjectGateReview & { conditionItems?: GateConditionInput[] },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec?: any,
+): Promise<number> {
+  return (await createProjectGateReviewWithRound(review, exec, false)).id;
+}
+
+export async function listProjectStabilityReports(projectId: string): Promise<ProjectStabilityReport[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(projectStabilityReports)
+    .where(eq(projectStabilityReports.projectId, projectId))
+    .orderBy(projectStabilityReports.periodStart, projectStabilityReports.id);
+}
+
+export async function createProjectStabilityReport(
+  input: Omit<InsertProjectStabilityReport, "id" | "createdAt" | "updatedAt" | "qaConfirmedBy" | "qaConfirmedAt">,
+): Promise<ProjectStabilityReport> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  if (input.periodEnd < input.periodStart) throw new Error("稳定记录结束日期不能早于开始日期");
+  const outputQuantity = input.outputQuantity ?? 0;
+  const targetOutputQuantity = input.targetOutputQuantity ?? 0;
+  const fpyBasisPoints = input.fpyBasisPoints ?? 0;
+  const targetFpyBasisPoints = input.targetFpyBasisPoints ?? 0;
+  const capacityAttainmentBasisPoints = input.capacityAttainmentBasisPoints ?? 0;
+  if (outputQuantity < 0 || targetOutputQuantity <= 0) {
+    throw new Error("稳定记录必须填写大于 0 的目标产量，实际产量不能为负数");
+  }
+  if (
+    fpyBasisPoints < 0 || fpyBasisPoints > 10_000 ||
+    targetFpyBasisPoints <= 0 || targetFpyBasisPoints > 10_000
+  ) {
+    throw new Error("稳定记录必须填写 0–100% 的实际 FPY 和大于 0 的目标 FPY");
+  }
+  if (capacityAttainmentBasisPoints < 0 || capacityAttainmentBasisPoints > 10_000) {
+    throw new Error("产能达成率必须在 0–100% 之间");
+  }
+  const release = await getMpReleaseByProjectId(input.projectId);
+  if (!release) throw new Error("项目尚未完成产品交付，不能填写稳定期记录");
+  const releaseISO = release.releasedAt.toISOString().slice(0, 10);
+  if (input.periodStart < releaseISO) throw new Error("稳定记录周期必须从量产发布日之后开始");
+  const overlap = await db.select({ id: projectStabilityReports.id }).from(projectStabilityReports).where(and(
+    eq(projectStabilityReports.projectId, input.projectId),
+    lte(projectStabilityReports.periodStart, input.periodEnd),
+    gte(projectStabilityReports.periodEnd, input.periodStart),
+  )).limit(1);
+  if (overlap.length > 0) throw new Error("稳定记录周期不能重叠");
+  const [row] = await db.insert(projectStabilityReports).values(input).returning();
+  return row;
+}
+
+export async function confirmProjectStabilityReport(reportId: number, projectId: string, qaUserId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(projectStabilityReports).set({
+    qaConfirmedBy: qaUserId,
+    qaConfirmedAt: new Date(),
+    updatedAt: new Date(),
+  }).where(and(eq(projectStabilityReports.id, reportId), eq(projectStabilityReports.projectId, projectId)));
+}
+
+function coveredCalendarDays(rows: ProjectStabilityReport[]): number {
+  const day = 86_400_000;
+  const periods = rows.map((row) => ({
+    start: Date.parse(`${row.periodStart}T00:00:00Z`),
+    end: Date.parse(`${row.periodEnd}T00:00:00Z`),
+  })).filter((row) => Number.isFinite(row.start) && Number.isFinite(row.end)).sort((a, b) => a.start - b.start);
+  let total = 0;
+  let cursorStart: number | null = null;
+  let cursorEnd: number | null = null;
+  for (const period of periods) {
+    if (cursorStart === null || cursorEnd === null) {
+      cursorStart = period.start;
+      cursorEnd = period.end;
+    } else if (period.start <= cursorEnd + day) {
+      cursorEnd = Math.max(cursorEnd, period.end);
+    } else {
+      total += Math.floor((cursorEnd - cursorStart) / day) + 1;
+      cursorStart = period.start;
+      cursorEnd = period.end;
+    }
+  }
+  if (cursorStart !== null && cursorEnd !== null) total += Math.floor((cursorEnd - cursorStart) / day) + 1;
+  return total;
+}
+
+export async function getProjectStabilityReadiness(projectId: string): Promise<{
+  ready: boolean;
+  confirmedReportCount: number;
+  coveredDays: number;
+  blockers: string[];
+}> {
+  const [reports, openP0P1] = await Promise.all([
+    listProjectStabilityReports(projectId),
+    getOpenP0P1Count(projectId),
+  ]);
+  const confirmed = reports.filter((report) => !!report.qaConfirmedAt && !!report.qaConfirmedBy);
+  const blockers: string[] = [];
+  const coveredDays = coveredCalendarDays(confirmed);
+  if (confirmed.length < 2) blockers.push(`至少需要 2 期经 QA 确认的稳定记录（当前 ${confirmed.length} 期）`);
+  if (coveredDays < 14) blockers.push(`稳定记录累计覆盖不足 14 天（当前 ${coveredDays} 天）`);
+  const belowTarget = confirmed.filter((report) =>
+    (report.targetOutputQuantity > 0 && report.outputQuantity < report.targetOutputQuantity) ||
+    (report.targetFpyBasisPoints > 0 && report.fpyBasisPoints < report.targetFpyBasisPoints) ||
+    report.capacityAttainmentBasisPoints < 10_000
+  );
+  if (belowTarget.length > 0) blockers.push(`${belowTarget.length} 期稳定记录未达到产量、FPY 或目标产能`);
+  if (openP0P1 > 0) blockers.push(`仍有 ${openP0P1} 个未关闭 P0/P1 问题`);
+  return { ready: blockers.length === 0, confirmedReportCount: confirmed.length, coveredDays, blockers };
+}
+
+export type JdmDefinitionFreezeInput = {
+  executionBaseline: ProjectExecutionBaseline;
+};
+
+const JDM_DEFINITION_REQUIRED_TASKS = [
+  ["jdm_product_spec", "产品规格书"],
+  ["jdm_csr", "CSR"],
+  ["drv_common_risk_scope", "风险声明"],
+  ["jdm_product_owner_approval", "产品负责人确认"],
+  ["jdm_customer_spec_csr_confirm", "客户确认"],
+] as const;
+
+const JDM_DEFINITION_REQUIRED_DELIVERABLES = [
+  "产品规格书 PSD",
+  "客户特殊要求清单 CSR",
+  "规格确认书（客户签字）",
+  "设计输入冻结确认（客户）",
+] as const;
+
+function buildFrozenJdmExecutionBaseline(
+  project: ProjectRow,
+  freeze: JdmDefinitionFreezeInput | null | undefined,
+  actorId: number,
+): ProjectExecutionBaseline {
+  const storedCustomFields = project.customFields && typeof project.customFields === "object" && !Array.isArray(project.customFields)
+    ? project.customFields as Record<string, unknown>
+    : {};
+  const storedBaseline = storedCustomFields.projectExecutionBaseline;
+  if (
+    !storedBaseline ||
+    typeof storedBaseline !== "object" ||
+    Array.isArray(storedBaseline) ||
+    (storedBaseline as Record<string, unknown>).modelVersion !== "project-track-v1" ||
+    (storedBaseline as Record<string, unknown>).status !== "draft"
+  ) {
+    throw new Error("JDM 产品定义 Gate 缺少可冻结的执行基线草稿");
+  }
+  const requested = freeze?.executionBaseline;
+  if (!requested || typeof requested !== "object" || Array.isArray(requested)) {
+    throw new Error("JDM 产品定义 Gate 必须提交完整的六模块执行基线");
+  }
+  const draft = storedBaseline as ProjectExecutionBaseline;
+  const baseline: ProjectExecutionBaseline = {
+    ...requested,
+    modelVersion: "project-track-v1",
+    status: "frozen",
+    // 客户原始概念快照在创建时已经冻结，Gate 只能沿用，不能被请求覆盖。
+    customerConceptRef: draft.customerConceptRef,
+    frozenAt: new Date().toISOString(),
+    frozenBy: actorId,
+  };
+  const validation = validateProjectExecutionBaseline(baseline, { track: "jdm" });
+  if (!validation.ok) {
+    throw new Error(`JDM 六模块执行基线无效：${validation.issues.map(issue => issue.message).join("；")}`);
+  }
+  return baseline;
+}
+
+async function freezeJdmControlledModuleBaseline(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  tx: any,
+  projectId: string,
+  baseline: ProjectExecutionBaseline,
+  actorId: number,
+): Promise<void> {
+  const moduleReuse = baseline.moduleReuse;
+  if (!moduleReuse) throw new Error("JDM 产品定义 Gate 缺少六模块复用状态");
+  const physicalModules: Array<{
+    drvModuleKey: PhysicalDrvModuleId;
+    moduleType: KeyModuleType;
+  }> = [
+    { drvModuleKey: "battery", moduleType: "battery_energy" },
+    { drvModuleKey: "core_function", moduleType: "core_function" },
+    { drvModuleKey: "electronics", moduleType: "electronics_hardware" },
+  ];
+  const bindings = await tx.select({
+    binding: projectProductModuleBindings,
+    status: keyModules.status,
+  }).from(projectProductModuleBindings)
+    .innerJoin(keyModules, eq(keyModules.id, projectProductModuleBindings.moduleId))
+    .where(eq(projectProductModuleBindings.projectId, projectId))
+    .for("update");
+  type ControlledBindingRow = {
+    binding: typeof projectProductModuleBindings.$inferSelect;
+    status: string;
+  };
+  const bindingByType = new Map<KeyModuleType, ControlledBindingRow>(
+    (bindings as ControlledBindingRow[]).map((row) => [row.binding.moduleType, row]),
+  );
+
+  const rows: Array<Omit<InsertProjectModuleBaseline, "id" | "projectId" | "createdAt">> = [];
+  for (const definition of physicalModules) {
+    const reuseState = moduleReuse[definition.drvModuleKey];
+    if (reuseState !== "reused") continue;
+    const selected = bindingByType.get(definition.moduleType);
+    if (!selected) {
+      throw new Error(`JDM 产品定义 Gate：${definition.drvModuleKey} 标记复用时必须选择精确的已批准关键模块`);
+    }
+    if (selected.status !== "approved") {
+      throw new Error("JDM 复用的关键模块已不再处于批准状态，请重新选择");
+    }
+    if (!selected.binding.customerConfirmationRef?.trim()) {
+      throw new Error("JDM 复用的关键模块缺少客户书面确认引用");
+    }
+    rows.push({
+      drvModuleKey: definition.drvModuleKey,
+      reuseState,
+      keyModuleId: selected.binding.moduleId,
+      sourceProductId: null,
+      sourceTechnicalBaselineId: null,
+      moduleSnapshot: selected.binding.moduleSnapshot,
+      confirmedBy: actorId,
+      confirmedAt: new Date(),
+    });
+  }
+  if (rows.length > 0) {
+    await tx.insert(projectModuleBaselines).values(
+      rows.map((row) => ({ ...row, projectId })),
+    );
+  }
+}
+
+async function assertJdmDefinitionGateHardcards(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  tx: any,
+  projectId: string,
+): Promise<number> {
+  const taskIds = JDM_DEFINITION_REQUIRED_TASKS.map(([taskId]) => taskId);
+  const taskRows: Array<{ taskId: string; status: string; completed: boolean }> = await tx
+    .select({ taskId: projectTasks.taskId, status: projectTasks.status, completed: projectTasks.completed })
+    .from(projectTasks)
+    .where(and(
+      eq(projectTasks.projectId, projectId),
+      eq(projectTasks.phaseId, "input"),
+      inArray(projectTasks.taskId, taskIds),
+    ));
+  const taskById = new Map(taskRows.map(row => [row.taskId, row]));
+  const incomplete = JDM_DEFINITION_REQUIRED_TASKS
+    .filter(([taskId]) => {
+      const task = taskById.get(taskId);
+      return !task || (task.status !== "done" && !task.completed);
+    })
+    .map(([, label]) => label);
+  if (incomplete.length > 0) {
+    throw new Error(`JDM 产品定义 Gate 未就绪：${incomplete.join("、")}尚未完成`);
+  }
+
+  const deliverableNames = [...JDM_DEFINITION_REQUIRED_DELIVERABLES];
+  const [files, reviews] = await Promise.all([
+    tx.select({ deliverableName: projectFiles.deliverableName, createdAt: projectFiles.createdAt })
+      .from(projectFiles)
+      .where(and(
+        eq(projectFiles.projectId, projectId),
+        eq(projectFiles.phaseId, "input"),
+        inArray(projectFiles.deliverableName, deliverableNames),
+      )),
+    tx.select({
+      deliverableName: projectDeliverableReviews.deliverableName,
+      status: projectDeliverableReviews.status,
+      reviewedAt: projectDeliverableReviews.reviewedAt,
+    }).from(projectDeliverableReviews)
+      .where(and(
+        eq(projectDeliverableReviews.projectId, projectId),
+        eq(projectDeliverableReviews.phaseId, "input"),
+        inArray(projectDeliverableReviews.deliverableName, deliverableNames),
+      )),
+  ]);
+  const latestFileByName = new Map<string, Date>();
+  for (const file of files) {
+    if (!file.deliverableName) continue;
+    const current = latestFileByName.get(file.deliverableName);
+    if (!current || file.createdAt > current) latestFileByName.set(file.deliverableName, file.createdAt);
+  }
+  const reviewByName = new Map<string, {
+    deliverableName: string;
+    status: "pending" | "approved" | "rejected";
+    reviewedAt: Date | null;
+  }>(reviews.map((review: {
+    deliverableName: string;
+    status: "pending" | "approved" | "rejected";
+    reviewedAt: Date | null;
+  }) => [review.deliverableName, review] as const));
+  const missingDeliverables = deliverableNames.filter(name => {
+    const fileAt = latestFileByName.get(name);
+    const review = reviewByName.get(name);
+    const reviewStatus = fileAt && review?.status === "approved" && review.reviewedAt && review.reviewedAt >= fileAt
+      ? "approved"
+      : review?.status === "approved"
+        ? null
+        : review?.status ?? null;
+    return !isDeliverableSatisfied(!!fileAt, reviewStatus);
+  });
+  if (missingDeliverables.length > 0) {
+    throw new Error(`JDM 产品定义 Gate 缺少已审核证据：${missingDeliverables.join("、")}`);
+  }
+
+  // 与风险版本写入使用同一把锁，保证“取最新版本→冻结 Gate”期间不会
+  // 并发插入另一版声明，留下无法证明 Gate 采用哪一版的审计歧义。
+  await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${projectId}:risk-scope`}))`);
+  const [riskDeclaration] = await tx.select({
+    version: projectChangeScopeDeclarations.version,
+    engineeringConfirmedAt: projectChangeScopeDeclarations.engineeringConfirmedAt,
+    qaOrCertConfirmedAt: projectChangeScopeDeclarations.qaOrCertConfirmedAt,
+  })
+    .from(projectChangeScopeDeclarations)
+    .where(eq(projectChangeScopeDeclarations.projectId, projectId))
+    .orderBy(desc(projectChangeScopeDeclarations.version))
+    .limit(1);
+  if (!riskDeclaration) {
+    throw new Error("JDM 产品定义 Gate 缺少正式风险声明与评估结论");
+  }
+  if (!riskDeclaration.engineeringConfirmedAt || !riskDeclaration.qaOrCertConfirmedAt) {
+    throw new Error("JDM 产品定义 Gate 的最新风险声明尚未完成研发与 QA/认证确认");
+  }
+  return riskDeclaration.version;
+}
+
+async function seedJdmExecutionPhases(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  tx: any,
+  projectId: string,
+  phases: SOPPhase[],
+  createdBy: number,
+): Promise<void> {
+  for (const phase of phases.filter(item => item.id !== "input")) {
+    // 不吞掉唯一键冲突：若数据库已有不完整的未来阶段残片，本次 Gate
+    // 必须整体回滚，由管理员先清理脏数据，不能伪装成一次成功的冻结。
+    await tx.insert(projectPhases).values({ projectId, phaseId: phase.id });
+    for (const task of phase.tasks) {
+      await tx.insert(projectTasks).values({
+        projectId,
+        phaseId: phase.id,
+        taskId: task.id,
+        completed: false,
+        visibleRoles: task.visibleRoles,
+        updatedBy: createdBy,
+      });
+    }
+  }
 }
 
 /**
@@ -2868,17 +5934,164 @@ export async function confirmGateReview(input: {
   participants?: string | null;
   decision: GateDecision;
   conditions?: string | null;
+  conditionOwnerUserId?: number | null;
+  conditionDueDate?: string | null;
+  conditionItems?: GateConditionInput[];
   notes?: string | null;
   createdBy: number;
-}): Promise<{ reviewId: number; roundNumber: number; advancedTo: string | null }> {
+  jdmDefinitionFreeze?: JdmDefinitionFreezeInput | null;
+}): Promise<{ reviewId: number; roundNumber: number; advancedTo: string | null; closed: boolean }> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const project = await getProjectById(input.projectId);
   if (!project) throw new Error("Project not found");
+  if (project.currentPhase !== input.phaseId) {
+    throw new Error("只能裁决项目当前阶段的 Gate");
+  }
+  const projectTemplatePhases = getEffectivePhasesForProjectLike(project);
+  const requestedPhase = projectTemplatePhases.find((item) => item.id === input.phaseId);
+  if (!requestedPhase) throw new Error("Gate phase not found");
+  const gateTaskId = requestedPhase.gateTaskId;
+  if (!gateTaskId) throw new Error("Gate task not found in effective phase");
+  if (input.gateTaskId && input.gateTaskId !== gateTaskId) {
+    throw new Error("Gate task does not match the project's effective phase");
+  }
+  if (
+    requestedPhase.isCloseGate &&
+    input.decision === "approved" &&
+    project.sopTemplateVersion === SOP_TEMPLATE_VERSION_CURRENT
+  ) {
+    const [stability, certification, conditions, handoff] = await Promise.all([
+      getProjectStabilityReadiness(input.projectId),
+      getProjectCertificationCoverage(input.projectId),
+      getProjectConditionsReadiness(input.projectId),
+      getProjectCloseHandoffReadiness(input.projectId),
+    ]);
+    const blockers = [
+      ...stability.blockers,
+      ...certification.missing.map((item) => `缺少有效证书覆盖：${certificationRequirementLabel(item)}`),
+      ...conditions.blockers.map((item) => `未闭环条件项：${item}`),
+      ...handoff.blockers.map((item) => `量产移交未完成：${item}`),
+    ];
+    if (blockers.length > 0) throw new Error(`项目关闭条件未满足：${blockers.join("；")}`);
+  }
 
-  const { reviewId, advancedTo } = await db.transaction(async (tx) => {
+  const { reviewId, roundNumber, advancedTo, closed, generatedJdmExecution } = await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, input.projectId);
+    // 锁必须先于事务内的项目读取。否则两个并发请求都可能在事务外读到
+    // currentPhase=input，再各自写一轮评审和后续阶段。
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${input.projectId}:${input.phaseId}`}))`);
+    const [lockedProject] = await tx.select().from(projects)
+      .where(eq(projects.id, input.projectId))
+      .limit(1);
+    if (!lockedProject) throw new Error("Project not found");
+    if (lockedProject.currentPhase !== input.phaseId) {
+      throw new Error("只能裁决项目当前阶段的 Gate");
+    }
+
+    let phases = getEffectivePhasesForProjectLike(lockedProject);
+    let phase = phases.find((item) => item.id === input.phaseId);
+    if (!phase) throw new Error("Gate phase not found");
+    const lockedGateTaskId = phase.gateTaskId;
+    if (!lockedGateTaskId) throw new Error("Gate task not found in effective phase");
+    if (input.gateTaskId && input.gateTaskId !== lockedGateTaskId) {
+      throw new Error("Gate task does not match the project's effective phase");
+    }
+    if (phase.isCloseGate && input.decision === "conditional") {
+      throw new Error("项目关闭 Gate 不允许有条件通过；请先关闭遗留条件或选择不通过");
+    }
+    if (phase.isCloseGate && input.decision === "approved") {
+      const released = await tx.select({ id: mpReleases.id })
+        .from(mpReleases)
+        .where(eq(mpReleases.projectId, input.projectId))
+        .limit(1);
+      if (released.length === 0) throw new Error("项目尚未完成产品交付，不能关闭归档项目");
+    }
+
+    let generatedJdmExecution = false;
+    let validatedSignoffRound: number | null = null;
+    if (
+      lockedProject.category === "jdm" &&
+      input.phaseId === "input" &&
+      lockedGateTaskId === "jdm_product_definition_gate" &&
+      input.decision !== "rejected"
+    ) {
+      const frozenBaseline = buildFrozenJdmExecutionBaseline(
+        lockedProject,
+        input.jdmDefinitionFreeze,
+        input.createdBy,
+      );
+      const riskScopeVersion = await assertJdmDefinitionGateHardcards(tx, input.projectId);
+      frozenBaseline.riskScopeVersion = riskScopeVersion;
+      await freezeJdmControlledModuleBaseline(
+        tx,
+        input.projectId,
+        frozenBaseline,
+        input.createdBy,
+      );
+      // Product-owner/customer/professional signoffs are checked again under
+      // the same lock that freezes the definition and completes the round.
+      // This closes the gap between the router readiness check and commit.
+      validatedSignoffRound = await assertProjectGateSignoffsCompleteInTransaction(
+        tx,
+        lockedProject,
+        input.phaseId,
+      );
+      const customFields = lockedProject.customFields && typeof lockedProject.customFields === "object" && !Array.isArray(lockedProject.customFields)
+        ? lockedProject.customFields as Record<string, unknown>
+        : {};
+      const frozenCustomFields = {
+        ...customFields,
+        projectExecutionBaseline: frozenBaseline,
+      };
+      const frozenProject = { ...lockedProject, customFields: frozenCustomFields };
+      phases = getEffectivePhasesForProjectLike(frozenProject);
+      phase = phases.find((item) => item.id === input.phaseId);
+      if (!phase || phases.length <= 1 || phases[1]?.id !== "design") {
+        throw new Error("JDM 冻结执行基线未能生成有效的 P2-P6 流程");
+      }
+      // 先在事务内写正式基线，使 Gate 追溯快照读取到冻结后的事实；若
+      // 后续任一阶段/任务冲突，整个事务会连同基线更新一起回滚。
+      await tx.update(projects).set({
+        customFields: frozenCustomFields,
+        updatedAt: new Date(),
+      }).where(eq(projects.id, input.projectId));
+      await seedJdmExecutionPhases(tx, input.projectId, phases, input.createdBy);
+      generatedJdmExecution = true;
+    }
+
+    if (input.decision !== "rejected" && validatedSignoffRound === null) {
+      validatedSignoffRound = await assertProjectGateSignoffsCompleteInTransaction(
+        tx,
+        lockedProject,
+        input.phaseId,
+      );
+    }
+
+    const gateTaskWhere = and(
+      eq(projectTasks.projectId, input.projectId),
+      eq(projectTasks.phaseId, input.phaseId),
+      eq(projectTasks.taskId, lockedGateTaskId),
+    );
+    const [gateTask] = await tx.select({ id: projectTasks.id })
+      .from(projectTasks)
+      .where(gateTaskWhere)
+      .limit(1);
+    if (!gateTask) throw new Error("Gate task row not found");
+    // Gate 评审是唯一审批链；清掉可能由旧入口遗留的普通任务审批配置，
+    // 避免 setTaskCompletion 把 Gate 置为 pending_approval 后仍推进阶段。
+    await tx.update(projectTasks).set({
+      requiresApproval: false,
+      approverUserId: null,
+      approvalStatus: "none",
+      approvalNote: null,
+      approvalRequestedBy: null,
+      approvalRequestedAt: null,
+      approvalDecidedBy: null,
+      approvalDecidedAt: null,
+    }).where(gateTaskWhere);
     // 1) 记录评审（顾问锁并入本事务，自动算 roundNumber）
-    const reviewId = await createProjectGateReview({
+    const createdReview = await createProjectGateReviewWithRound({
       projectId: input.projectId,
       phaseId: input.phaseId,
       phaseName: input.phaseName ?? "",
@@ -2887,33 +6100,83 @@ export async function confirmGateReview(input: {
       participants: input.participants ?? null,
       decision: input.decision,
       conditions: input.conditions ?? null,
+      conditionOwnerUserId: input.conditionOwnerUserId ?? null,
+      conditionDueDate: input.conditionDueDate ?? null,
+      conditionItems: input.conditionItems ?? [],
       notes: input.notes ?? null,
       createdBy: input.createdBy,
     }, tx);
+    const reviewId = createdReview.id;
+    if (validatedSignoffRound !== null && createdReview.roundNumber !== validatedSignoffRound) {
+      throw new Error("Gate 会签轮次与评审轮次不一致，请刷新后重试");
+    }
 
     let advancedTo: string | null = null;
+    let closed = false;
     if (input.decision !== "rejected") {
       // 2) 标记 gate task 完成
-      if (input.gateTaskId) {
-        await setTaskCompletion(input.projectId, input.phaseId, input.gateTaskId, true, input.createdBy, tx);
-      }
+      await setTaskCompletion(input.projectId, input.phaseId, lockedGateTaskId, true, input.createdBy, tx);
       // 3) 仅当复审的是「当前阶段」且存在下一阶段时才推进
-      if (project.currentPhase === input.phaseId) {
-        const phases = getPhasesForCategory(project.category);
+      if (lockedProject.currentPhase === input.phaseId) {
         const idx = phases.findIndex((p) => p.id === input.phaseId);
         const next = idx >= 0 && idx < phases.length - 1 ? phases[idx + 1] : null;
         if (next) {
           await updateProject(input.projectId, { currentPhase: next.id }, tx);
           advancedTo = next.id;
+        } else if (phase.isCloseGate && input.decision === "approved") {
+          await updateProject(input.projectId, { archived: true }, tx);
+          if (lockedProject.productId) {
+            const [handoff] = await tx.select().from(projectCloseHandoffs)
+              .where(and(
+                eq(projectCloseHandoffs.projectId, input.projectId),
+                eq(projectCloseHandoffs.status, "accepted"),
+              ))
+              .limit(1);
+            if (handoff) {
+              await tx.update(products).set({
+                lifecycleState: "maintenance",
+                maintenanceOwnerUserId: handoff.maintenanceOwnerUserId,
+                afterSalesOwnerUserId: handoff.afterSalesOwnerUserId,
+                updatedAt: new Date(),
+              }).where(eq(products.id, lockedProject.productId));
+            }
+          }
+          closed = true;
         }
       }
+    } else {
+      // A rejected Gate is an explicit business block. Persist it in the same
+      // transaction as the review so task status and the review round cannot
+      // diverge. A later approved/conditional round uses setTaskCompletion
+      // above and moves the task to done.
+      await upsertProjectTask(input.projectId, input.phaseId, lockedGateTaskId, {
+        status: "blocked",
+        completedAt: null,
+        updatedBy: input.createdBy,
+      }, tx);
     }
-    return { reviewId, advancedTo };
+    return {
+      reviewId,
+      roundNumber: createdReview.roundNumber,
+      advancedTo,
+      closed,
+      generatedJdmExecution,
+    };
   });
 
-  const reviews = await getProjectGateReviews(input.projectId, input.phaseId);
-  const roundNumber = reviews.find((r) => r.id === reviewId)?.roundNumber ?? 1;
-  return { reviewId, roundNumber, advancedTo };
+  // setTaskCompletion 在事务内无法从全局连接看到尚未提交的冻结基线；提交后
+  // 重新计算一次，确保 P2-P6 的依赖状态使用正式 JDM 模板。
+  if (generatedJdmExecution) {
+    try {
+      await refreshProjectTaskStatuses(input.projectId);
+    } catch (error) {
+      // Gate 主事务已经提交，提交后派生状态刷新不能把真实成功伪装成失败。
+      // 后续读取/定时刷新仍会按冻结后的模板自愈。
+      console.warn("[jdm-gate] post-commit task status refresh failed (non-fatal):", error);
+    }
+  }
+
+  return { reviewId, roundNumber, advancedTo, closed };
 }
 
 /** Update a gate review */
@@ -2923,14 +6186,57 @@ export async function updateProjectGateReview(
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(projectGateReviews).set(patch).where(eq(projectGateReviews.id, id));
+  const [existing] = await db.select({ projectId: projectGateReviews.projectId })
+    .from(projectGateReviews).where(eq(projectGateReviews.id, id)).limit(1);
+  if (!existing) return;
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, existing.projectId);
+    await tx.update(projectGateReviews).set(patch).where(and(
+      eq(projectGateReviews.id, id),
+      eq(projectGateReviews.projectId, existing.projectId),
+    ));
+    const [review] = await tx.select().from(projectGateReviews)
+      .where(and(
+        eq(projectGateReviews.id, id),
+        eq(projectGateReviews.projectId, existing.projectId),
+      ))
+      .limit(1);
+    if (
+      review?.decision === "conditional" &&
+      review.conditions?.trim() &&
+      review.conditionOwnerUserId &&
+      review.conditionDueDate
+    ) {
+      await createProjectCondition({
+        projectId: review.projectId,
+        sourceType: "gate",
+        sourceId: String(review.id),
+        title: `${review.gateName || review.phaseName || review.phaseId} 条件项`,
+        description: review.conditions,
+        ownerUserId: review.conditionOwnerUserId,
+        dueDate: review.conditionDueDate,
+        linkedEcoProjectId: null,
+        resolutionNote: null,
+        createdBy: review.createdBy ?? review.conditionOwnerUserId,
+      }, tx);
+    }
+  });
 }
 
 /** Delete a gate review */
 export async function deleteProjectGateReview(id: number): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.delete(projectGateReviews).where(eq(projectGateReviews.id, id));
+  const [review] = await db.select({ projectId: projectGateReviews.projectId })
+    .from(projectGateReviews).where(eq(projectGateReviews.id, id)).limit(1);
+  if (!review) return;
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, review.projectId);
+    await tx.delete(projectGateReviews).where(and(
+      eq(projectGateReviews.id, id),
+      eq(projectGateReviews.projectId, review.projectId),
+    ));
+  });
 }
 
 // ── Changelog helpers ─────────────────────────────────────────────────────────
@@ -2958,8 +6264,11 @@ export async function getProjectChangelog(projectId: string): Promise<ProjectCha
 export async function createProjectChangeRecord(record: InsertProjectChangeRecord): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(projectChangelog).values(record).returning({ id: projectChangelog.id });
-  return result[0].id;
+  return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, record.projectId);
+    const result = await tx.insert(projectChangelog).values(record).returning({ id: projectChangelog.id });
+    return result[0].id;
+  });
 }
 
 /** Update a changelog record */
@@ -2969,14 +6278,32 @@ export async function updateProjectChangeRecord(
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(projectChangelog).set(patch).where(eq(projectChangelog.id, id));
+  const [record] = await db.select({ projectId: projectChangelog.projectId })
+    .from(projectChangelog).where(eq(projectChangelog.id, id)).limit(1);
+  if (!record) return;
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, record.projectId);
+    await tx.update(projectChangelog).set(patch).where(and(
+      eq(projectChangelog.id, id),
+      eq(projectChangelog.projectId, record.projectId),
+    ));
+  });
 }
 
 /** Delete a changelog record */
 export async function deleteProjectChangeRecord(id: number): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.delete(projectChangelog).where(eq(projectChangelog.id, id));
+  const [record] = await db.select({ projectId: projectChangelog.projectId })
+    .from(projectChangelog).where(eq(projectChangelog.id, id)).limit(1);
+  if (!record) return;
+  await db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, record.projectId);
+    await tx.delete(projectChangelog).where(and(
+      eq(projectChangelog.id, id),
+      eq(projectChangelog.projectId, record.projectId),
+    ));
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2994,11 +6321,57 @@ export async function createProjectFile(record: Omit<InsertProjectFile, "id" | "
     fileVersion: normalizeFileVersion(record.fileVersion),
     visibility: normalizeProjectFileVisibility(record.visibility),
   };
-  const result = await db.insert(projectFiles).values(normalized).returning({ id: projectFiles.id });
-  // 上传新版本后触发交付物重审（若已审核过则回退待审）
+  const fileId = await db.transaction(async (tx) => {
+    // File metadata and review invalidation form one release-visible unit. The
+    // same advisory lock is held while a technical baseline captures evidence.
+    await acquireProjectReleaseStateLock(tx, record.projectId);
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`project-files:${record.projectId}`}))`);
+    const result = await tx.insert(projectFiles).values(normalized).returning({ id: projectFiles.id });
+    if (record.deliverableName && record.phaseId) {
+      const [existingReview] = await tx.select().from(projectDeliverableReviews)
+        .where(and(
+          eq(projectDeliverableReviews.projectId, record.projectId),
+          eq(projectDeliverableReviews.phaseId, record.phaseId),
+          eq(projectDeliverableReviews.deliverableName, record.deliverableName),
+        ))
+        .limit(1)
+        .for("update");
+      if (existingReview && existingReview.status !== "pending") {
+        const after = {
+          ...existingReview,
+          status: "pending" as const,
+          submittedBy: record.uploadedBy,
+          reviewedBy: null,
+          reviewedAt: null,
+          reviewNote: null,
+        };
+        await tx.update(projectDeliverableReviews).set({
+          status: "pending",
+          submittedBy: record.uploadedBy,
+          submittedAt: new Date(),
+          reviewedBy: null,
+          reviewedAt: null,
+          reviewNote: null,
+        }).where(eq(projectDeliverableReviews.id, existingReview.id));
+        await createActivityLog({
+          projectId: record.projectId,
+          userId: record.uploadedBy,
+          action: "deliverable_review.reset",
+          entityType: "deliverable_review",
+          entityId: `${record.projectId}:${record.phaseId}:${record.deliverableName}`,
+          meta: {
+            phaseId: record.phaseId,
+            deliverableName: record.deliverableName,
+            before: existingReview,
+            after,
+          },
+        }, tx);
+      }
+    }
+    return result[0].id;
+  });
   if (record.deliverableName && record.phaseId) {
-    const { resetReviewOnReupload, maybeAutoSubmitDeliverableReviewOnUpload } = await loadDeliverableReviewService();
-    await resetReviewOnReupload(record.projectId, record.phaseId, record.deliverableName, record.uploadedBy);
+    const { maybeAutoSubmitDeliverableReviewOnUpload } = await loadDeliverableReviewService();
     await maybeAutoSubmitDeliverableReviewOnUpload({
       projectId: record.projectId,
       phaseId: record.phaseId,
@@ -3008,7 +6381,7 @@ export async function createProjectFile(record: Omit<InsertProjectFile, "id" | "
       console.warn("[deliverable-review] auto submit on upload failed (non-fatal):", error);
     });
   }
-  return result[0].id;
+  return fileId;
 }
 
 /** List all files for a project, optionally filtered by phase and/or taskId */
@@ -3038,6 +6411,17 @@ export async function getProjectFileById(id: number): Promise<ProjectFile | unde
     .where(eq(projectFiles.id, id))
     .limit(1);
   return row;
+}
+
+/** Released technical baselines retain their source specification evidence. */
+export async function isProjectFileReferencedByTechnicalBaseline(id: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const [row] = await db.select({ id: productTechnicalBaselines.id })
+    .from(productTechnicalBaselines)
+    .where(drizzleSql`${productTechnicalBaselines.specSnapshot}->'specificationFiles' @> ${JSON.stringify([{ sourceFileId: id }])}::jsonb`)
+    .limit(1);
+  return Boolean(row);
 }
 
 /**
@@ -3072,13 +6456,53 @@ export async function deleteProjectFile(id: number): Promise<{ storageKey: strin
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const [row] = await db
-    .select({ storageKey: projectFiles.storageKey })
+    .select({ projectId: projectFiles.projectId, storageKey: projectFiles.storageKey })
     .from(projectFiles)
     .where(eq(projectFiles.id, id))
     .limit(1);
   if (!row) return null;
-  await db.delete(projectFiles).where(eq(projectFiles.id, id));
-  return { storageKey: row.storageKey };
+  return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, row.projectId);
+    const [deleted] = await tx.delete(projectFiles).where(and(
+      eq(projectFiles.id, id),
+      eq(projectFiles.projectId, row.projectId),
+    )).returning({ storageKey: projectFiles.storageKey });
+    return deleted ?? null;
+  });
+}
+
+export class ProjectFileBaselineConflictError extends Error {}
+
+/** Atomically protect released specification evidence from deletion. */
+export async function deleteProjectFileWithBaselineGuard(
+  id: number,
+  projectId: string,
+): Promise<{ storageKey: string } | null> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, projectId);
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`project-files:${projectId}`}))`);
+    const [row] = await tx.select({
+      projectId: projectFiles.projectId,
+      storageKey: projectFiles.storageKey,
+    }).from(projectFiles)
+      .where(eq(projectFiles.id, id))
+      .limit(1)
+      .for("update");
+    if (!row || row.projectId !== projectId) return null;
+    const [baseline] = await tx.select({ id: productTechnicalBaselines.id })
+      .from(productTechnicalBaselines)
+      .where(drizzleSql`${productTechnicalBaselines.specSnapshot}->'specificationFiles' @> ${JSON.stringify([{ sourceFileId: id }])}::jsonb`)
+      .limit(1);
+    if (baseline) {
+      throw new ProjectFileBaselineConflictError(
+        "该规格文件已进入产品技术基线，不能删除；如需更正请通过新项目发布新的技术基线",
+      );
+    }
+    await tx.delete(projectFiles).where(eq(projectFiles.id, id));
+    return { storageKey: row.storageKey };
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3178,9 +6602,13 @@ export type TaskMetaPatch = {
   assigneeUserId?: number | null;
   /** YYYY-MM-DD string (column is mode:'string', so pass as-is) */
   dueDate?: string | null;
+  /** 人工开始的实际时刻；计划排期继续使用 projectTasks.startDate。 */
+  actualStartedAt?: Date | null;
+  completionNote?: string | null;
   status?: TaskStatus;
   priority?: TaskPriority;
   completedAt?: Date | null;
+  completedBy?: number | null;
   /** 派生审计列：状态变化时更新。 */
   statusChangedAt?: Date;
   /** 派生镜像列，勿手动传；由 status 推导。见 deriveCompletion */
@@ -3195,6 +6623,8 @@ export type TaskMetaPatch = {
   approvalRequestedAt?: Date | null;
   approvalDecidedBy?: number | null;
   approvalDecidedAt?: Date | null;
+  approvalActedAsRole?: ProjectMemberRole | null;
+  approvalViaDelegationId?: number | null;
 };
 
 /**
@@ -3209,6 +6639,7 @@ function deriveCompletion(patch: TaskMetaPatch): TaskMetaPatch {
     ...patch,
     completed: isDone,
     completedAt: isDone ? (patch.completedAt ?? new Date()) : null,
+    completedBy: isDone ? (patch.completedBy ?? patch.updatedBy ?? null) : null,
   };
 }
 
@@ -3226,49 +6657,81 @@ function toTaskDbPatch(patch: TaskMetaPatch, current?: Pick<ProjectTask, "status
   return dbPatch;
 }
 
-function getTaskDependencyMap(category: string | undefined): Map<string, string[]> {
+function getTaskDependencyMap(
+  category: string | undefined,
+  templateVersion?: string | null,
+  projectLike?: ProjectTemplateLike,
+  rows: ProjectTask[] = [],
+): Map<string, string[]> {
+  const tasks = projectLike
+    ? buildOperationalProjectSchedTasks(projectLike, rows)
+    : buildSchedTasks(getPhasesForCategory(category, templateVersion));
   return new Map(
-    buildSchedTasks(getPhasesForCategory(category)).map((task) => [task.id, task.dependsOn ?? []])
+    tasks.map((task) => [task.id, task.dependsOn ?? []])
   );
+}
+
+type AutomaticTaskStatusContext = {
+  projectStartDate?: string | null;
+  projectLike?: ProjectTemplateLike;
+};
+
+function shouldApplyDependencyBlocks(
+  rows: ProjectTask[],
+  todayISO: string,
+  context?: AutomaticTaskStatusContext
+): boolean {
+  if (!context) return true;
+  if (context.projectStartDate && context.projectStartDate <= todayISO) return true;
+  return rows.some((row) => {
+    if (row.completed || row.status === "done" || row.status === "pending_approval") return true;
+    if (row.completedAt) return true;
+    if (row.actualStartedAt) return true;
+    return false;
+  });
 }
 
 function automaticTaskStatus(
   task: ProjectTask,
   rowsByTaskId: Map<string, ProjectTask>,
   dependencies: Map<string, string[]>,
-  todayISO: string
+  applyDependencyBlocks: boolean
 ): TaskStatus {
   if (task.status === "skipped") return "skipped";
   // 待审批是显式保留态：勾完成进入待审后不被排期/依赖重算吞掉；completed 仍为 false → 下游依赖视为未完成。
   if (task.status === "pending_approval") return "pending_approval";
   if (task.completed || task.status === "done") return "done";
 
-  if (task.startDate && task.startDate > todayISO) return "todo";
+  if (!applyDependencyBlocks) return "todo";
 
+  // 前置未完成 = 还没轮到 = 待开始（todo），不是阻塞。依赖只闸住"进行中"的推进；
+  // "blocked" 不再由依赖图自动派生，留给显式异常场景（当前无自动写入方）。
   const unresolvedDependency = (dependencies.get(task.taskId) ?? []).some((dependencyId) => {
     const dependency = rowsByTaskId.get(dependencyId);
     if (!dependency) return true;
     return dependency.status !== "done" && dependency.status !== "skipped" && !dependency.completed;
   });
-  if (unresolvedDependency) return "blocked";
+  if (unresolvedDependency) return "todo";
 
-  if (task.startDate && task.startDate <= todayISO) return "in_progress";
-  if (task.assigneeUserId) return "in_progress";
-  if (task.dueDate && task.dueDate <= todayISO) return "in_progress";
+  // 计划开始日、负责人和到期日都不是执行承诺；只有人工「开始」会产生进行中。
+  if (task.actualStartedAt) return "in_progress";
   return "todo";
 }
 
 export function applyAutomaticTaskStatuses(
   rows: ProjectTask[],
   category: string | undefined,
-  todayISO = todayInShanghaiISO()
+  todayISO = todayInShanghaiISO(),
+  context?: AutomaticTaskStatusContext,
+  templateVersion?: string | null,
 ): ProjectTask[] {
-  const dependencies = getTaskDependencyMap(category);
+  const dependencies = getTaskDependencyMap(category, templateVersion, context?.projectLike, rows);
   const rowsByTaskId = new Map(rows.map((row) => [row.taskId, row]));
+  const applyDependencyBlocks = shouldApplyDependencyBlocks(rows, todayISO, context);
   const now = new Date();
 
   return rows.map((row) => {
-    const status = automaticTaskStatus(row, rowsByTaskId, dependencies, todayISO);
+    const status = automaticTaskStatus(row, rowsByTaskId, dependencies, applyDependencyBlocks);
     const completed = status === "done";
     const completedAt = completed ? (row.completedAt ?? now) : null;
     if (row.status === status && row.completed === completed && row.completedAt === completedAt) return row;
@@ -3277,8 +6740,9 @@ export function applyAutomaticTaskStatuses(
 }
 
 /**
- * Recalculate operational task status from dependencies, schedule, assignment,
- * and completion. Manual non-terminal status changes are intentionally not a
+ * Recalculate operational task status from dependencies, explicit human start,
+ * and completion. Planned schedule and assignment never imply execution has begun.
+ * Manual non-terminal status changes are intentionally not a
  * control surface; "done" and "skipped" remain explicit terminal states.
  */
 export async function refreshProjectTaskStatuses(
@@ -3287,14 +6751,22 @@ export async function refreshProjectTaskStatuses(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   exec?: any
 ): Promise<number> {
-  const db = exec ?? (await getDb());
-  if (!db) return 0;
+  if (!exec) {
+    const db = await getDb();
+    if (!db) return 0;
+    return db.transaction(async (tx) => refreshProjectTaskStatuses(projectId, todayISO, tx));
+  }
+  const db = exec;
+  await acquireProjectReleaseStateLock(db, projectId);
   const project = await getProjectById(projectId);
   if (!project) return 0;
   const rows: ProjectTask[] = await db.select().from(projectTasks).where(eq(projectTasks.projectId, projectId));
   if (rows.length === 0) return 0;
 
-  const nextRows = applyAutomaticTaskStatuses(rows, project.category, todayISO);
+  const nextRows = applyAutomaticTaskStatuses(rows, project.category, todayISO, {
+    projectStartDate: project.startDate ?? null,
+    projectLike: project,
+  }, project.sopTemplateVersion);
   const rowsById = new Map(rows.map((row) => [row.id, row]));
   let changed = 0;
 
@@ -3320,6 +6792,18 @@ export async function refreshProjectTaskStatuses(
     changed += 1;
   }
 
+  // §5：projects.progress 降级为派生缓存，仅供排序/导出；页面展示一律读服务端摘要。
+  // 与存量不同才写（直连 SQL 改状态后 refresh 可能 changed=0，但缓存仍需追上）。
+  try {
+    // 必须用当前连接（可能是未提交事务）读任务，否则全局连接看到旧状态、写回旧进度
+    const summary = await getProjectProgressSummary(projectId, db);
+    if (project.progress !== summary.progress) {
+      await db.update(projects).set({ progress: summary.progress }).where(eq(projects.id, projectId));
+    }
+  } catch (error) {
+    console.warn("[progress-cache] refresh write failed (non-fatal):", error);
+  }
+
   return changed;
 }
 
@@ -3331,10 +6815,20 @@ export async function updateTaskMeta(
   projectId: string,
   phaseId: string,
   taskId: string,
-  patch: TaskMetaPatch
+  patch: TaskMetaPatch,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec?: any,
 ): Promise<void> {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
+  if (!exec) {
+    const db = await getDb();
+    if (!db) throw new Error("Database not available");
+    await db.transaction(async (tx) => {
+      await updateTaskMeta(projectId, phaseId, taskId, patch, tx);
+    });
+    return;
+  }
+  const db = exec;
+  await acquireProjectReleaseStateLock(db, projectId);
   const existing = await db
     .select({ id: projectTasks.id, status: projectTasks.status })
     .from(projectTasks)
@@ -3362,7 +6856,7 @@ export async function updateTaskMeta(
     await db.insert(projectTasks).values({ projectId, phaseId, taskId, ...dbPatch });
   }
   if (patch.status === undefined) {
-    await refreshProjectTaskStatuses(projectId);
+    await refreshProjectTaskStatuses(projectId, undefined, db);
   }
 }
 
@@ -3381,16 +6875,27 @@ export async function setTaskCompletion(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   exec?: any
 ): Promise<{ outcome: CompletionOutcome }> {
-  const db = exec ?? (await getDb());
-  const current = db
-    ? (
-        await db
-          .select()
-          .from(projectTasks)
-          .where(and(eq(projectTasks.projectId, projectId), eq(projectTasks.phaseId, phaseId), eq(projectTasks.taskId, taskId)))
-          .limit(1)
-      )[0]
-    : null;
+  if (!exec) {
+    const db = await getDb();
+    if (!db) throw new Error("Database not available");
+    return db.transaction(async (tx) => setTaskCompletion(
+      projectId,
+      phaseId,
+      taskId,
+      completed,
+      updatedBy,
+      tx,
+    ));
+  }
+  const db = exec;
+  await acquireProjectReleaseStateLock(db, projectId);
+  const current = (
+    await db
+      .select()
+      .from(projectTasks)
+      .where(and(eq(projectTasks.projectId, projectId), eq(projectTasks.phaseId, phaseId), eq(projectTasks.taskId, taskId)))
+      .limit(1)
+  )[0] ?? null;
 
   // 需审批任务勾完成 → 进入待审批（completed 仍 false，不计入进度/看板完成/Gate）
   if (completed && current?.requiresApproval) {
@@ -3399,6 +6904,8 @@ export async function setTaskCompletion(
       approvalStatus: "pending",
       approvalRequestedBy: updatedBy ?? null,
       approvalRequestedAt: new Date(),
+      approvalActedAsRole: null,
+      approvalViaDelegationId: null,
       updatedBy: updatedBy ?? null,
     }, exec);
     await refreshProjectTaskStatuses(projectId, undefined, exec);
@@ -3415,7 +6922,7 @@ export async function setTaskCompletion(
   // 普通完成
   if (completed) {
     await upsertProjectTask(projectId, phaseId, taskId, {
-      status: "done", completedAt: new Date(), updatedBy: updatedBy ?? null,
+      status: "done", completedAt: new Date(), completedBy: updatedBy ?? null, updatedBy: updatedBy ?? null,
     }, exec);
     await refreshProjectTaskStatuses(projectId, undefined, exec);
     if (updatedBy != null) {
@@ -3427,10 +6934,13 @@ export async function setTaskCompletion(
     return { outcome: "completed" };
   }
 
-  // 取消勾选（含撤回 pending_approval）：清审批待审，status 交 refresh 归位
+  // 取消勾选（含撤回 pending_approval）：清审批待审，status 交 refresh 归位。
+  // actualStartedAt 一并清空：否则 refresh 会把任务弹回 in_progress，与
+  // task.uncomplete 事件流声称的 todo 相矛盾（重新开始只需再点一次 ▶开始）。
   await upsertProjectTask(projectId, phaseId, taskId, {
-    status: "todo", completedAt: null,
+    status: "todo", completedAt: null, completedBy: null, actualStartedAt: null,
     approvalStatus: "none", approvalRequestedBy: null, approvalRequestedAt: null,
+    approvalActedAsRole: null, approvalViaDelegationId: null,
     updatedBy: updatedBy ?? null,
   }, exec);
   await refreshProjectTaskStatuses(projectId, undefined, exec);
@@ -3453,18 +6963,27 @@ export async function setTaskApprovalConfig(
   phaseId: string,
   taskId: string,
   cfg: { requiresApproval: boolean; approverUserId: number | null },
-  actorBy?: number | null
+  actorBy?: number | null,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec?: any,
 ): Promise<void> {
-  const db = await getDb();
-  const current = db
-    ? (
-        await db
-          .select()
-          .from(projectTasks)
-          .where(and(eq(projectTasks.projectId, projectId), eq(projectTasks.phaseId, phaseId), eq(projectTasks.taskId, taskId)))
-          .limit(1)
-      )[0]
-    : null;
+  if (!exec) {
+    const db = await getDb();
+    if (!db) throw new Error("Database not available");
+    await db.transaction(async (tx) => {
+      await setTaskApprovalConfig(projectId, phaseId, taskId, cfg, actorBy, tx);
+    });
+    return;
+  }
+  const db = exec;
+  await acquireProjectReleaseStateLock(db, projectId);
+  const current = (
+    await db
+      .select()
+      .from(projectTasks)
+      .where(and(eq(projectTasks.projectId, projectId), eq(projectTasks.phaseId, phaseId), eq(projectTasks.taskId, taskId)))
+      .limit(1)
+  )[0] ?? null;
   const patch: Parameters<typeof upsertProjectTask>[3] = {
     requiresApproval: cfg.requiresApproval,
     approverUserId: cfg.approverUserId,
@@ -3477,14 +6996,14 @@ export async function setTaskApprovalConfig(
     patch.approvalRequestedBy = null;
     patch.approvalRequestedAt = null;
   }
-  await upsertProjectTask(projectId, phaseId, taskId, patch);
-  await refreshProjectTaskStatuses(projectId);
+  await upsertProjectTask(projectId, phaseId, taskId, patch, db);
+  await refreshProjectTaskStatuses(projectId, undefined, db);
   if (actorBy != null) {
     await createActivityLog({
       projectId, userId: actorBy, action: "task.update_meta",
       entityType: "task", entityId: taskId,
       meta: { phaseId, requiresApproval: cfg.requiresApproval, approverUserId: cfg.approverUserId },
-    });
+    }, db);
   }
 }
 
@@ -3500,38 +7019,79 @@ export async function decideTaskApproval(
   decision: "approved" | "rejected",
   actor: number,
   note: string | null,
-  isProxy: boolean
+  isProxy: boolean,
+  actedAsRole?: ProjectMemberRole | null,
+  viaDelegationId?: number | null,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec?: any,
 ): Promise<void> {
-  const db = await getDb();
-  const current = db
-    ? (
-        await db
-          .select()
-          .from(projectTasks)
-          .where(and(eq(projectTasks.projectId, projectId), eq(projectTasks.phaseId, phaseId), eq(projectTasks.taskId, taskId)))
-          .limit(1)
-      )[0]
-    : null;
-  const requester = current?.approvalRequestedBy ?? null;
-  if (decision === "approved") {
-    await upsertProjectTask(projectId, phaseId, taskId, {
-      status: "done", completedAt: new Date(),
-      approvalStatus: "approved", approvalDecidedBy: actor, approvalDecidedAt: new Date(),
-      approvalNote: note, updatedBy: actor,
+  if (!exec) {
+    const db = await getDb();
+    if (!db) throw new Error("Database not available");
+    await db.transaction(async (tx) => {
+      await acquireProjectReleaseStateLock(tx, projectId);
+      await decideTaskApproval(projectId, phaseId, taskId, decision, actor, note, isProxy, actedAsRole, viaDelegationId, tx);
     });
-  } else {
-    await upsertProjectTask(projectId, phaseId, taskId, {
-      status: "todo", completedAt: null,
-      approvalStatus: "rejected", approvalDecidedBy: actor, approvalDecidedAt: new Date(),
-      approvalNote: note, updatedBy: actor,
-    });
+    return;
   }
-  await refreshProjectTaskStatuses(projectId);
+  const db = exec;
+  await acquireProjectReleaseStateLock(db, projectId);
+  const [current] = await db
+    .select()
+    .from(projectTasks)
+    .where(and(
+      eq(projectTasks.projectId, projectId),
+      eq(projectTasks.phaseId, phaseId),
+      eq(projectTasks.taskId, taskId),
+    ))
+    .limit(1);
+  if (
+    !current ||
+    !current.requiresApproval ||
+    current.status !== "pending_approval" ||
+    current.approvalStatus !== "pending"
+  ) {
+    throw new Error("任务当前不在待审批状态");
+  }
+  const requester = current.approvalRequestedBy ?? null;
+  const decidedAt = new Date();
+  const [updated] = await db.update(projectTasks).set(decision === "approved" ? {
+    status: "done",
+    completed: true,
+    completedAt: decidedAt,
+    completedBy: requester,
+    approvalStatus: "approved",
+    approvalDecidedBy: actor,
+    approvalDecidedAt: decidedAt,
+    approvalNote: note,
+    approvalActedAsRole: actedAsRole ?? null,
+    approvalViaDelegationId: viaDelegationId ?? null,
+    updatedBy: actor,
+  } : {
+    status: "todo",
+    completed: false,
+    completedAt: null,
+    completedBy: null,
+    approvalStatus: "rejected",
+    approvalDecidedBy: actor,
+    approvalDecidedAt: decidedAt,
+    approvalNote: note,
+    approvalActedAsRole: actedAsRole ?? null,
+    approvalViaDelegationId: viaDelegationId ?? null,
+    updatedBy: actor,
+  }).where(and(
+    eq(projectTasks.id, current.id),
+    eq(projectTasks.requiresApproval, true),
+    eq(projectTasks.status, "pending_approval"),
+    eq(projectTasks.approvalStatus, "pending"),
+  )).returning({ id: projectTasks.id });
+  if (!updated) throw new Error("任务审批状态已变化，请刷新后重试");
+  await refreshProjectTaskStatuses(projectId, undefined, db);
   await createActivityLog({
     projectId, userId: actor, action: decision === "approved" ? "task.approve" : "task.reject",
     entityType: "task", entityId: taskId,
-    meta: { phaseId, note, approver: current?.approverUserId ?? null, requester, proxyBy: isProxy ? actor : undefined },
-  });
+    meta: { phaseId, note, approver: current?.approverUserId ?? null, requester, actedAsRole, viaDelegationId, proxyBy: isProxy ? actor : undefined },
+  }, db);
 }
 
 /**
@@ -3544,10 +7104,25 @@ export async function setTaskDeliverable(
   taskId: string,
   name: string,
   done: boolean,
-  updatedBy?: number | null
+  updatedBy?: number | null,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec?: any,
 ): Promise<Record<string, boolean>> {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
+  if (!exec) {
+    const db = await getDb();
+    if (!db) throw new Error("Database not available");
+    return db.transaction(async (tx) => setTaskDeliverable(
+      projectId,
+      phaseId,
+      taskId,
+      name,
+      done,
+      updatedBy,
+      tx,
+    ));
+  }
+  const db = exec;
+  await acquireProjectReleaseStateLock(db, projectId);
   const existing = await db
     .select({ id: projectTasks.id, deliverables: projectTasks.deliverables })
     .from(projectTasks)
@@ -3587,10 +7162,10 @@ function normalizeTailoringTargets(targets: TailoringTarget[]): TailoringTarget[
 }
 
 function resolveTailoringTargetTasks(
-  category: string,
-  targets: TailoringTarget[]
+  project: ProjectTemplateLike,
+  targets: TailoringTarget[],
 ): Array<{ phaseId: string; taskId: string }> {
-  const phases = getPhasesForCategory(category);
+  const phases = getEffectivePhasesForProjectLike(project);
   const phaseById = new Map(phases.map((phase) => [phase.id, phase]));
   const tasks: Array<{ phaseId: string; taskId: string }> = [];
   const seen = new Set<string>();
@@ -3618,8 +7193,8 @@ function resolveTailoringTargetTasks(
   return tasks;
 }
 
-function assertNoReleaseGateTailoring(category: string, targets: TailoringTarget[]): void {
-  const phases = getPhasesForCategory(category);
+function assertNoReleaseGateTailoring(project: ProjectTemplateLike, targets: TailoringTarget[]): void {
+  const phases = getEffectivePhasesForProjectLike(project);
   const phaseById = new Map(phases.map((phase) => [phase.id, phase]));
   for (const target of normalizeTailoringTargets(targets)) {
     const phase = phaseById.get(target.phaseId);
@@ -3630,6 +7205,33 @@ function assertNoReleaseGateTailoring(category: string, targets: TailoringTarget
     if (target.scope === "task" && phase.isReleaseGate && target.taskId === phase.gateTaskId) {
       throw new Error("MP Release Gate 任务不可裁剪");
     }
+  }
+}
+
+function assertNoNpdV3RedlineTailoring(project: ProjectTemplateLike, targets: TailoringTarget[]): void {
+  const phases = getEffectivePhasesForProjectLike(project);
+  const redlineTaskIds = getNpdV3RedlinePolicy(project).taskIds;
+  for (const target of normalizeTailoringTargets(targets)) {
+    const phase = phases.find((item) => item.id === target.phaseId);
+    if (!phase) continue;
+    const protectedTarget = target.scope === "phase"
+      ? phase.tasks.some((task) => redlineTaskIds.has(task.id))
+      : phase.tasks.some((task) => task.id === target.taskId && redlineTaskIds.has(task.id));
+    if (protectedTarget) {
+      throw new Error("NPD v3 红线任务不可裁剪（安全/认证、量产放行、客户放行）");
+    }
+  }
+}
+
+function assertNoProtectedTailoring(project: ProjectTemplateLike, targets: TailoringTarget[]): void {
+  // 保留既有 Release Gate 专用文案，再补项目感知的 v3 永久红线。
+  assertNoReleaseGateTailoring(project, targets);
+  assertNoNpdV3RedlineTailoring(project, targets);
+}
+
+function assertLegacyTailoringAllowed(project: ProjectTemplateLike): void {
+  if (project.category === "derivative") {
+    throw new Error("DRV 任务减负只允许通过创建时冻结的六模块执行基线；受控变更将在下一增量开放");
   }
 }
 
@@ -3654,11 +7256,12 @@ export async function createProjectTailoringRequest(input: {
   if (!db) throw new Error("Database not available");
   const project = await getProjectById(input.projectId);
   if (!project) throw new Error("项目不存在");
+  assertLegacyTailoringAllowed(project);
   const targets = normalizeTailoringTargets(input.targets);
   if (targets.length === 0) throw new Error("请至少选择一个裁剪对象");
-  assertNoReleaseGateTailoring(project.category, targets);
+  assertNoProtectedTailoring(project, targets);
 
-  const resolvedTasks = resolveTailoringTargetTasks(project.category, targets);
+  const resolvedTasks = resolveTailoringTargetTasks(project, targets);
   const taskRows = await getProjectTasks(input.projectId);
   const taskByKey = new Map(taskRows.map((task) => [`${task.phaseId}:${task.taskId}`, task]));
   for (const task of resolvedTasks) {
@@ -3691,11 +7294,12 @@ async function getProjectTailoringById(id: number): Promise<ProjectTailoring | u
 
 async function applyTailoringTargets(
   projectId: string,
-  category: string,
+  project: ProjectTemplateLike,
   targets: TailoringTarget[],
-  updatedBy: number
+  updatedBy: number,
 ): Promise<void> {
-  const tasks = resolveTailoringTargetTasks(category, targets);
+  assertNoProtectedTailoring(project, targets);
+  const tasks = resolveTailoringTargetTasks(project, targets);
   for (const task of tasks) {
     const rows = await getProjectTasks(projectId, task.phaseId);
     const existing = rows.find((row) => row.taskId === task.taskId);
@@ -3760,8 +7364,14 @@ export async function reviewProjectTailoring(input: {
   if (!project) throw new Error("项目不存在");
 
   if (input.decision === "approved") {
-    assertNoReleaseGateTailoring(project.category, tailoring.targets ?? []);
-    await applyTailoringTargets(tailoring.projectId, project.category, tailoring.targets ?? [], input.reviewedBy);
+    assertLegacyTailoringAllowed(project);
+    assertNoProtectedTailoring(project, tailoring.targets ?? []);
+    await applyTailoringTargets(
+      tailoring.projectId,
+      project,
+      tailoring.targets ?? [],
+      input.reviewedBy,
+    );
   }
 
   await db
@@ -3800,7 +7410,7 @@ export async function revokeProjectTailoring(input: {
     .where(eq(projectTailoring.id, input.id));
 
   const remainingSets = await getApprovedTailoringSets(tailoring.projectId);
-  const tasks = resolveTailoringTargetTasks(project.category, tailoring.targets ?? []);
+  const tasks = resolveTailoringTargetTasks(project, tailoring.targets ?? []);
   for (const task of tasks) {
     if (taskCoveredByTailoring(task, remainingSets)) continue;
     const rows = await getProjectTasks(tailoring.projectId, task.phaseId);
@@ -3836,13 +7446,23 @@ export async function setDeliverableOverride(input: {
   if (!db) throw new Error("Database not available");
   const project = await getProjectById(input.projectId);
   if (!project) throw new Error("项目不存在");
-  const phases = getPhasesForCategory(project.category);
+  if (project.category === "derivative" && input.action !== "clear") {
+    throw new Error("DRV 任务与 Gate 交付物只允许通过创建时冻结的六模块执行基线确定；受控变更将在下一增量开放");
+  }
+  const phases = getEffectivePhasesForProjectLike(project);
   if (!phases.some((phase) => phase.id === input.nodePhaseId)) {
     throw new Error("交付物提交节点不存在");
   }
 
+  if (
+    input.action === "remove" &&
+    isNpdV3RedlineAuditDeliverable(project, input.deliverableName)
+  ) {
+    throw new Error("NPD v3 红线审计交付物不可移除");
+  }
+
   if (input.action !== "clear") {
-    const library = getDeliverableLibrary(project.category);
+    const library = getDeliverableLibraryForPhases(phases);
     if (!library.includes(input.deliverableName)) {
       throw new Error("交付物不在当前品类资源库中");
     }
@@ -3923,22 +7543,59 @@ export async function applyGrandfatherExemptions(
 export async function getProjectEffectiveProcess(projectId: string): Promise<EffectiveProcess | null> {
   const project = await getProjectById(projectId);
   if (!project) return null;
-  const sets = await getApprovedTailoringSets(projectId);
-  const overrides = await listDeliverableOverrides(projectId);
+  let sets = {
+    tailoredPhaseIds: new Set<string>(),
+    tailoredTaskIds: new Set<string>(),
+  };
+  let overrides: ProjectDeliverableOverride[] = [];
+  // DRV 第一增量只有冻结的六模块执行基线可以减任务。即使数据库中存在
+  // 旧裁剪/豁免记录，读取路径也必须 fail closed，不能绕过公共任务和 Gate 证据。
+  if (project.category !== "derivative") {
+    [sets, overrides] = await Promise.all([
+      getApprovedTailoringSets(projectId),
+      listDeliverableOverrides(projectId),
+    ]);
+  }
+  const highRisk = isHighSopRisk(project);
+  const npdV3RedlinePolicy = getNpdV3RedlinePolicy(project);
+  const basePhases = getEffectivePhasesForProjectLike(project);
+  const tailoredTaskIds = new Set<string>(sets.tailoredTaskIds);
+  const protectedTaskIds = highRisk
+    ? new Set(basePhases.flatMap((phase) => phase.tasks.filter(isHighRiskProtectedTask).map((task) => task.id)))
+    : new Set<string>();
+  for (const taskId of Array.from(protectedTaskIds)) tailoredTaskIds.delete(taskId);
+  for (const phase of basePhases) {
+    for (const task of phase.tasks) {
+      if (!npdV3RedlinePolicy.taskIds.has(task.id)) continue;
+      tailoredTaskIds.delete(task.id);
+      tailoredTaskIds.delete(`${phase.id}:${task.id}`);
+    }
+  }
+  const tailoredPhaseIds = new Set(Array.from(sets.tailoredPhaseIds).filter((phaseId) => {
+    const phase = basePhases.find((item) => item.id === phaseId);
+    if (!phase) return true;
+    if (phase.tasks.some((task) => npdV3RedlinePolicy.taskIds.has(task.id))) return false;
+    return !highRisk || !phaseContainsHighRiskControls(phase);
+  }));
   return getEffectiveProcess(
     project.category,
-    sets.tailoredPhaseIds,
-    sets.tailoredTaskIds,
+    tailoredPhaseIds,
+    tailoredTaskIds,
     overrides.map((override) => ({
       nodePhaseId: override.nodePhaseId,
       deliverableName: override.deliverableName,
       action: override.action,
-    }))
+    })).filter((override) => {
+      if (override.action !== "remove") return true;
+      if (npdV3RedlinePolicy.auditDeliverables.has(override.deliverableName)) return false;
+      return !highRisk || !isHighRiskProtectedDeliverable(override.deliverableName);
+    }),
+    basePhases
   );
 }
 
 /**
- * 按角色把未分配的任务自动指派给对应项目成员（responsible role 取自任务 visibleRoles 首个非管理角色）。
+ * 按角色把未分配的任务自动指派给对应项目成员（responsible role 取自任务 visibleRoles 首个责任角色）。
  * 不覆盖已手动分配的任务。返回新建的分配明细，供上层发钉钉通知。
  * roleOverrides:显式角色分工(立项向导),优先于成员表推导——成员表一人一角色,
  * 表达不了创建者兼任/一人多角色,向导里填了什么就按什么派。
@@ -3951,31 +7608,100 @@ export async function assignTasksByRole(
   const db = await getDb();
   if (!db) return [];
   const members = await getProjectMembers(projectId);
+  const project = await getProjectById(projectId);
   const roleToUser = new Map<string, number>();
-  for (const m of members) if (!roleToUser.has(m.role)) roleToUser.set(m.role, m.userId);
+  for (const m of members) {
+    for (const role of [m.role, ...normalizeExtraRoles(m.role, m.extraRoles)]) {
+      if (!roleToUser.has(role)) roleToUser.set(role, m.userId);
+    }
+  }
+  if (project?.pmUserId) roleToUser.set("project_manager", project.pmUserId);
+  if (project?.createdBy) roleToUser.set("owner", project.createdBy);
   if (roleOverrides) for (const [role, userId] of Object.entries(roleOverrides)) roleToUser.set(role, userId);
   const tasks = await getProjectTasks(projectId);
   const out: Array<{ userId: number; taskId: string; phaseId: string; dueDate: string | null; instructions: string | null }> = [];
   for (const t of tasks) {
+    if (t.status === "skipped") continue;
     if (t.assigneeUserId) continue; // 不覆盖已分配
     const roles = (t.visibleRoles as string[] | null) ?? [];
-    // 责任角色 = visibleRoles 首个非管理角色;Gate/无角色任务优先归项目经理/PMO。
-    const primary = roles.find((r) => !["project_manager", "manager", "owner"].includes(r))
+    // 责任角色 = visibleRoles 首个非管理层角色；Gate/无角色任务优先归项目经理/PMO。
+    const primary = roles.find((r) => !["manager", "owner"].includes(r))
       ?? (roleToUser.has("project_manager") ? "project_manager" : "pm");
-    // 只分给该角色对应成员;该角色没配人则留空(让缺口可见),不强塞给 PM。
-    const userId = roleToUser.get(primary);
+    const formalUserId = roleToUser.get(primary);
+    const userId = formalUserId
+      ?? roleToUser.get("project_manager")
+      ?? roleToUser.get("owner");
     if (!userId) continue;
-    await db.update(projectTasks).set({ assigneeUserId: userId, updatedBy }).where(eq(projectTasks.id, t.id));
+    await db.update(projectTasks).set({
+      assigneeUserId: userId,
+      staffingGapRole: formalUserId ? null : primary as ProjectMemberRole,
+      updatedBy,
+    }).where(eq(projectTasks.id, t.id));
     out.push({ userId, taskId: t.taskId, phaseId: t.phaseId, dueDate: t.dueDate ?? null, instructions: t.instructions ?? null });
   }
   if (out.length > 0) await refreshProjectTaskStatuses(projectId);
   return out;
 }
 
+export type ProjectStaffingGap = {
+  role: ProjectMemberRole;
+  taskCount: number;
+  candidateUserId: number | null;
+};
+
+export async function listProjectStaffingGaps(projectId: string): Promise<ProjectStaffingGap[]> {
+  const [tasks, members] = await Promise.all([
+    getProjectTasks(projectId),
+    getProjectMembers(projectId),
+  ]);
+  const candidates = new Map<ProjectMemberRole, number>();
+  for (const member of members) {
+    for (const role of [member.role, ...normalizeExtraRoles(member.role, member.extraRoles)]) {
+      if (!candidates.has(role)) candidates.set(role, member.userId);
+    }
+  }
+  const counts = new Map<ProjectMemberRole, number>();
+  for (const task of tasks) {
+    if (!task.staffingGapRole || task.completed || task.status === "done" || task.status === "skipped") continue;
+    counts.set(task.staffingGapRole, (counts.get(task.staffingGapRole) ?? 0) + 1);
+  }
+  return Array.from(counts, ([role, taskCount]) => ({
+    role,
+    taskCount,
+    candidateUserId: candidates.get(role) ?? null,
+  }));
+}
+
+export async function transferProjectStaffingGap(
+  projectId: string,
+  role: ProjectMemberRole,
+  toUserId: number,
+  updatedBy: number,
+): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const member = await getProjectMember(projectId, toUserId);
+  const roles = member ? [member.role, ...normalizeExtraRoles(member.role, member.extraRoles)] : [];
+  if (!roles.includes(role)) throw new Error("接收人不持有待补岗位");
+  const rows = await db.update(projectTasks).set({
+    assigneeUserId: toUserId,
+    staffingGapRole: null,
+    updatedBy,
+  }).where(and(
+    eq(projectTasks.projectId, projectId),
+    eq(projectTasks.staffingGapRole, role),
+    eq(projectTasks.completed, false),
+    drizzleSql`${projectTasks.status} NOT IN ('done', 'skipped')`,
+  )).returning({ id: projectTasks.id });
+  return rows.length;
+}
+
 export type TaskWithContext = ProjectTask & {
   projectName: string;
   projectNumber: string;
   projectCategory: string;
+  sopTemplateVersion?: string | null;
+  customFields?: unknown;
 };
 
 /**
@@ -4006,6 +7732,8 @@ export async function getMyTasks(userId: number): Promise<TaskWithContext[]> {
       projectName: projects.name,
       projectNumber: projects.projectNumber,
       projectCategory: projects.category,
+      sopTemplateVersion: projects.sopTemplateVersion,
+      customFields: projects.customFields,
     })
     .from(projectTasks)
     .innerJoin(projects, eq(projectTasks.projectId, projects.id))
@@ -4037,6 +7765,7 @@ export async function getOverdueTasks(projectIds?: string[]): Promise<TaskWithCo
   const today = todayInShanghaiISO();
   const baseConditions = [
     eq(projects.archived, false),
+    eq(projects.lifecycle, "active"),
     drizzleSql`${projectTasks.dueDate} IS NOT NULL`,
     drizzleSql`${projectTasks.dueDate} < ${today}`,
     drizzleSql`${projectTasks.status} != 'done'`,
@@ -4086,6 +7815,7 @@ export async function getBlockedTasks(projectIds?: string[]): Promise<TaskWithCo
   const baseConditions = [
     eq(projectTasks.status, "blocked"),
     eq(projects.archived, false),
+    eq(projects.lifecycle, "active"),
   ];
   const whereClause = projectIds
     ? and(...baseConditions, inArray(projectTasks.projectId, projectIds))
@@ -4132,6 +7862,9 @@ export async function getUnassignedActiveTasks(projectIds?: string[]): Promise<T
   if (projectIds && projectIds.length === 0) return [];
   const baseConditions = [
     eq(projects.archived, false),
+    eq(projects.lifecycle, "active"),
+    eq(projectTasks.phaseId, projects.currentPhase),
+    or(isNull(projectTasks.startDate), lte(projectTasks.startDate, todayInShanghaiISO())),
     isNull(projectTasks.assigneeUserId),
     drizzleSql`${projectTasks.status} NOT IN ('done','skipped','pending_approval')`,
   ];
@@ -4170,6 +7903,99 @@ export async function getUnassignedActiveTasks(projectIds?: string[]): Promise<T
       projectTasks.projectId
     );
   return rows as TaskWithContext[];
+}
+
+// ── 项目群周摘要：两次批量查询，不按项目 N+1 ──────────────────────────────
+
+export type GroupWeeklyDigestTask = {
+  phaseId: string;
+  taskId: string;
+  status: ProjectTask["status"];
+  dueDate: string | null;
+  completedAt: Date | null;
+  assigneeName: string | null;
+};
+
+export type GroupWeeklyDigestProject = {
+  project: Pick<
+    ProjectRow,
+    "id" | "name" | "projectNumber" | "category" | "sopTemplateVersion" |
+    "customFields" | "currentPhase" | "dingtalkChatId"
+  >;
+  tasks: GroupWeeklyDigestTask[];
+};
+
+/**
+ * Load all weekly group-digest inputs with a fixed two-query budget:
+ * one active-project query and one task/user join for every selected project.
+ */
+export async function getGroupWeeklyDigestProjects(input: {
+  weekStartISO: string;
+  todayISO: string;
+}): Promise<GroupWeeklyDigestProject[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const projectRows = await db.select({
+    id: projects.id,
+    name: projects.name,
+    projectNumber: projects.projectNumber,
+    category: projects.category,
+    sopTemplateVersion: projects.sopTemplateVersion,
+    customFields: projects.customFields,
+    currentPhase: projects.currentPhase,
+    dingtalkChatId: projects.dingtalkChatId,
+  }).from(projects).where(and(
+    eq(projects.archived, false),
+    eq(projects.lifecycle, "active"),
+    drizzleSql`${projects.dingtalkChatId} IS NOT NULL AND ${projects.dingtalkChatId} <> ''`,
+  )).orderBy(projects.id);
+  if (projectRows.length === 0) return [];
+
+  const projectIds = projectRows.map((project) => project.id);
+  const nextWeekStartISO = addDaysISO(input.weekStartISO, 7);
+  const nextWeekEndISO = addDaysISO(input.weekStartISO, 13);
+  const weekStartAt = new Date(`${input.weekStartISO}T00:00:00+08:00`);
+  const nextWeekStartAt = new Date(`${nextWeekStartISO}T00:00:00+08:00`);
+  const openTask = drizzleSql`${projectTasks.status} NOT IN ('done','skipped')`;
+  const taskRows = await db.select({
+    projectId: projectTasks.projectId,
+    phaseId: projectTasks.phaseId,
+    taskId: projectTasks.taskId,
+    status: projectTasks.status,
+    dueDate: projectTasks.dueDate,
+    completedAt: projectTasks.completedAt,
+    assigneeName: drizzleSql<string | null>`COALESCE(${users.name}, ${users.username}, ${users.email})`,
+  }).from(projectTasks)
+    .innerJoin(projects, eq(projectTasks.projectId, projects.id))
+    .leftJoin(users, eq(projectTasks.assigneeUserId, users.id))
+    .where(and(
+      inArray(projectTasks.projectId, projectIds),
+      or(
+        and(gte(projectTasks.completedAt, weekStartAt), lt(projectTasks.completedAt, nextWeekStartAt)),
+        and(openTask, drizzleSql`${projectTasks.dueDate} < ${input.todayISO}`),
+        and(openTask, gte(projectTasks.dueDate, nextWeekStartISO), lte(projectTasks.dueDate, nextWeekEndISO)),
+        eq(projectTasks.phaseId, projects.currentPhase),
+      ),
+    ))
+    .orderBy(projectTasks.projectId, projectTasks.dueDate, projectTasks.taskId);
+
+  const tasksByProject = new Map<string, GroupWeeklyDigestTask[]>();
+  for (const task of taskRows) {
+    const tasks = tasksByProject.get(task.projectId) ?? [];
+    tasks.push({
+      phaseId: task.phaseId,
+      taskId: task.taskId,
+      status: task.status,
+      dueDate: task.dueDate,
+      completedAt: task.completedAt,
+      assigneeName: task.assigneeName,
+    });
+    tasksByProject.set(task.projectId, tasks);
+  }
+  return projectRows.map((project) => ({
+    project,
+    tasks: tasksByProject.get(project.id) ?? [],
+  }));
 }
 
 // ── 个人每日摘要：状态扫描型聚合输入 ────────────────────────────────────────
@@ -4229,6 +8055,7 @@ export async function getPersonalDailyDigestItems(input: {
     .innerJoin(projects, eq(projectTasks.projectId, projects.id))
     .where(and(
       eq(projects.archived, false),
+      eq(projects.lifecycle, "active"),
       drizzleSql`${projectTasks.assigneeUserId} IS NOT NULL`,
       drizzleSql`${projectTasks.dueDate} IS NOT NULL`,
       drizzleSql`${projectTasks.dueDate} <= ${soonISO}`,
@@ -4271,6 +8098,7 @@ export async function getPersonalDailyDigestItems(input: {
     .innerJoin(projects, eq(projectTasks.projectId, projects.id))
     .where(and(
       eq(projects.archived, false),
+      eq(projects.lifecycle, "active"),
       eq(projectTasks.status, "blocked"),
       drizzleSql`${projectTasks.assigneeUserId} IS NOT NULL`,
     ));
@@ -4311,6 +8139,7 @@ export async function getPersonalDailyDigestItems(input: {
       .innerJoin(projects, eq(projectDeliverableReviews.projectId, projects.id))
       .where(and(
         eq(projects.archived, false),
+        eq(projects.lifecycle, "active"),
         eq(projectDeliverableReviews.status, "pending"),
       ));
 
@@ -4352,6 +8181,7 @@ export async function getPersonalDailyDigestItems(input: {
       .innerJoin(projects, eq(projectIssues.projectId, projects.id))
       .where(and(
         eq(projects.archived, false),
+        eq(projects.lifecycle, "active"),
         drizzleSql`${projects.pmUserId} IS NOT NULL`,
         drizzleSql`${projectIssues.status} NOT IN ('resolved','closed','wont_fix')`,
         or(
@@ -4448,6 +8278,84 @@ export async function listProductsByCategory(category?: string): Promise<Product
     return db.select().from(products).where(eq(products.category, category)).orderBy(desc(products.updatedAt));
   }
   return db.select().from(products).orderBy(desc(products.updatedAt));
+}
+
+export type ProductTechnicalBaselineSummary = Pick<
+  ProductTechnicalBaseline,
+  "id" | "productId" | "baselineLabel" | "sourceProjectId" |
+  "releasedBy" | "releasedAt" | "createdAt"
+> & {
+  sourceProjectName: string | null;
+};
+
+export type ProductTechnicalBaselineDetail = ProductTechnicalBaseline & {
+  sourceProjectName: string | null;
+  assignments: ProductModuleAssignment[];
+};
+
+/** 产品的技术交付历史；与包装、印刷等轻量 Product Revision 完全分离。 */
+export async function listProductTechnicalBaselines(
+  productId: string,
+): Promise<ProductTechnicalBaselineSummary[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({
+    id: productTechnicalBaselines.id,
+    productId: productTechnicalBaselines.productId,
+    baselineLabel: productTechnicalBaselines.baselineLabel,
+    sourceProjectId: productTechnicalBaselines.sourceProjectId,
+    releasedBy: productTechnicalBaselines.releasedBy,
+    releasedAt: productTechnicalBaselines.releasedAt,
+    createdAt: productTechnicalBaselines.createdAt,
+    sourceProjectName: projects.name,
+  })
+    .from(productTechnicalBaselines)
+    .leftJoin(projects, eq(projects.id, productTechnicalBaselines.sourceProjectId))
+    .where(eq(productTechnicalBaselines.productId, productId))
+    .orderBy(desc(productTechnicalBaselines.releasedAt));
+  return rows.map((row) => ({
+    ...row,
+    sourceProjectName: row.sourceProjectName ?? null,
+  }));
+}
+
+/** 读取一份不可变技术基线及其可查询的关键模块引用。 */
+export async function getProductTechnicalBaseline(
+  id: string,
+): Promise<ProductTechnicalBaselineDetail | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const [row] = await db.select({
+    baseline: productTechnicalBaselines,
+    sourceProjectName: projects.name,
+  })
+    .from(productTechnicalBaselines)
+    .leftJoin(projects, eq(projects.id, productTechnicalBaselines.sourceProjectId))
+    .where(eq(productTechnicalBaselines.id, id))
+    .limit(1);
+  if (!row) return undefined;
+  const assignments = await db.select()
+    .from(productModuleAssignments)
+    .where(eq(productModuleAssignments.technicalBaselineId, id))
+    .orderBy(productModuleAssignments.moduleType);
+  return {
+    ...row.baseline,
+    sourceProjectName: row.sourceProjectName ?? null,
+    assignments,
+  };
+}
+
+/** 产品详情默认展示的当前技术基线。 */
+export async function getCurrentProductTechnicalBaseline(
+  productId: string,
+): Promise<ProductTechnicalBaselineDetail | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const [product] = await db.select({
+    currentTechnicalBaselineId: products.currentTechnicalBaselineId,
+  }).from(products).where(eq(products.id, productId)).limit(1);
+  if (!product?.currentTechnicalBaselineId) return undefined;
+  return getProductTechnicalBaseline(product.currentTechnicalBaselineId);
 }
 
 type ProductDefinitionPatch = Partial<Omit<
@@ -4686,6 +8594,43 @@ export async function createProductRevision(r: InsertProductRevision): Promise<n
   return res[0].id;
 }
 
+/** 产品库轻量变更实施后生成 Revision；项目发布不会调用此函数。 */
+export async function createLightweightProductRevision(
+  productId: string,
+  actorId: number,
+): Promise<{ id: number; revisionLabel: string }> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.transaction(async (tx) => {
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`light-revision:${productId}`}))`);
+    const [product] = await tx.select().from(products).where(eq(products.id, productId)).limit(1);
+    if (!product) throw new Error("产品不存在");
+    const existing = await tx.select({ id: productRevisions.id })
+      .from(productRevisions)
+      .where(eq(productRevisions.productId, productId));
+    const index = existing.length;
+    const revisionLabel = index < 26 ? `Rev ${String.fromCharCode(65 + index)}` : `Rev ${index + 1}`;
+    if (product.currentRevisionId) {
+      await tx.update(productRevisions)
+        .set({ status: "superseded" })
+        .where(eq(productRevisions.id, product.currentRevisionId));
+    }
+    const [revision] = await tx.insert(productRevisions).values({
+      productId,
+      revisionLabel,
+      parentRevisionId: product.currentRevisionId ?? null,
+      createdByProjectId: null,
+      status: "released",
+      releasedAt: new Date(),
+      releasedBy: actorId,
+    }).returning({ id: productRevisions.id });
+    await tx.update(products)
+      .set({ currentRevisionId: revision.id, updatedAt: new Date() })
+      .where(eq(products.id, productId));
+    return { id: revision.id, revisionLabel };
+  });
+}
+
 export async function listProductRevisions(productId: string): Promise<Array<ProductRevision & { snapshotChangelog: RevisionChangeEntry[] }>> {
   const db = await getDb();
   if (!db) return [];
@@ -4755,14 +8700,12 @@ export async function getDownstreamVariantImpact(
 
 // ── MP Release 量产发布 ───────────────────────────────────────────────────────
 
-/** 关联项目到产品；同时把项目派生起点设为产品当前版本 */
+/** 兼容旧数据的可选项目/产品关联；不再把 Product Revision 带入项目。 */
 export async function setProjectProduct(projectId: string, productId: string): Promise<void> {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-  const product = await getProductById(productId);
-  await db.update(projects)
-    .set({ productId, baseRevisionId: product?.currentRevisionId ?? null })
-    .where(eq(projects.id, projectId));
+  const [product, project] = await Promise.all([getProductById(productId), getProjectById(projectId)]);
+  if (!product) throw new Error("关联产品不存在");
+  if (!project) throw new Error("项目不存在");
+  await updateProject(projectId, { productId, baseRevisionId: null });
 }
 
 /** 开放的 P0/P1 问题数（未 resolved/closed/wont_fix） */
@@ -4802,7 +8745,7 @@ export interface ReleaseGateStatus {
 
 /** 计算某项目「MP Release 前置 Gate」的最新决议与 Gate Readiness。 */
 export async function getReleaseGateStatus(project: ProjectRow): Promise<ReleaseGateStatus> {
-  const phase = getReleaseGatePhase(project.category);
+  const phase = getEffectivePhasesForProjectLike(project).find((item) => item.isReleaseGate) ?? null;
   if (!phase) {
     return {
       phaseId: null,
@@ -4841,6 +8784,45 @@ export async function getReleaseGateStatus(project: ProjectRow): Promise<Release
   };
 }
 
+/** Configuration and hard-card state frozen into an external MP approval. */
+export async function getProjectReleaseStateFingerprint(projectId: string): Promise<string> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const project = await getProjectById(projectId);
+  if (!project) throw new Error("项目不存在");
+  const gate = await getReleaseGateStatus(project);
+  const configuration = gate.phaseId
+    ? await buildGateReviewTraceSnapshot(db, {
+        projectId,
+        phaseId: gate.phaseId,
+        gateName: gate.gateName,
+      })
+    : null;
+  const openP0P1 = await getOpenP0P1Count(projectId);
+  return createHash("sha256").update(JSON.stringify({
+    projectId,
+    productId: project.productId,
+    baseTechnicalBaselineId: project.baseTechnicalBaselineId,
+    lifecycle: project.lifecycle,
+    gate: {
+      phaseId: gate.phaseId,
+      decision: gate.decision,
+      roundNumber: gate.roundNumber,
+      conditions: gate.conditions,
+      dimensions: gate.dimensions,
+    },
+    openP0P1,
+    releaseConfigurationFingerprint: configuration?.releaseConfigurationFingerprint ?? null,
+  })).digest("hex");
+}
+
+export async function getMpReleaseByProjectId(projectId: string) {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db.select().from(mpReleases).where(eq(mpReleases.projectId, projectId)).limit(1);
+  return row ?? null;
+}
+
 /** 阶段级未闭环 P0/P1（resolved 仍需报告人/QA 验证，closed/wont_fix 才放行）。 */
 export async function getPhaseOpenP0P1(projectId: string, phaseId: string): Promise<{ count: number; titles: string[] }> {
   const db = await getDb();
@@ -4862,7 +8844,14 @@ export async function getApproachingGates(): Promise<Array<{
 }>> {
   const db = await getDb();
   if (!db) return [];
-  const projs = await db.select({ id: projects.id, category: projects.category }).from(projects).where(eq(projects.archived, false));
+  const projs = await db.select({
+    id: projects.id,
+    category: projects.category,
+    sopTemplateVersion: projects.sopTemplateVersion,
+    customFields: projects.customFields,
+  })
+    .from(projects)
+    .where(and(eq(projects.archived, false), eq(projects.lifecycle, "active")));
   if (projs.length === 0) return [];
   const projectIds = projs.map((p) => p.id);
   const allTasks = await db.select({ projectId: projectTasks.projectId, taskId: projectTasks.taskId, status: projectTasks.status, dueDate: projectTasks.dueDate, completed: projectTasks.completed })
@@ -4875,7 +8864,7 @@ export async function getApproachingGates(): Promise<Array<{
   }
   const out: Array<{ projectId: string; phaseId: string; gateTaskId: string; gateName: string; dueDate: string; status: string }> = [];
   for (const p of projs) {
-    const phases = getPhasesForCategory(p.category);
+    const phases = getEffectivePhasesForProjectLike(p);
     const rows = tasksByProject.get(p.id) ?? [];
     const byTask = new Map(rows.map((r) => [r.taskId, r]));
     for (const phase of phases) {
@@ -4898,7 +8887,7 @@ export async function getGateReadiness(projectId: string, phaseId: string): Prom
     getProjectEffectiveProcess(projectId),
   ]);
   if (!project) return null;
-  const phase = getPhasesForCategory(project.category).find((p) => p.id === phaseId);
+  const phase = getEffectivePhasesForProjectLike(project).find((p) => p.id === phaseId);
   if (!phase) return null;
 
   // 裁剪集成：被裁阶段的 Gate 视为 N/A（不阻塞）；非裁剪阶段的应交付物用"有效提交集"（含归集+override）。
@@ -4908,8 +8897,8 @@ export async function getGateReadiness(projectId: string, phaseId: string): Prom
   }
 
   const required = effPhase?.submittedDeliverables ?? phase.gateStandard.requiredDeliverables;
-  // 8 组只读查询彼此独立，并行拉取（此前串行 10 次往返是 portfolio N+1 的主放大器）
-  const [tasks, uploadedSet, critical, testReports, npiReadiness, sampleSignoffs, gateBlockers, reviews] = await Promise.all([
+  // 9 组只读查询彼此独立，并行拉取（此前串行 10 次往返是 portfolio N+1 的主放大器）
+  const [tasks, uploadedSet, critical, testReports, npiReadiness, sampleSignoffs, gateBlockers, reviews, openRound] = await Promise.all([
     getProjectTasks(projectId, phaseId),
     loadDeliverableReviewService().then(({ getReviewSatisfiedSet }) => getReviewSatisfiedSet(projectId, phaseId, required)),
     getPhaseOpenP0P1(projectId, phaseId),
@@ -4918,6 +8907,7 @@ export async function getGateReadiness(projectId: string, phaseId: string): Prom
     getPhaseSampleSignoffReadiness(projectId, phaseId, phaseId.toUpperCase()),
     getProjectGateBlockers(projectId, phaseId),
     getProjectGateReviews(projectId, phaseId),
+    getOpenProjectGateSignoffRound(projectId, phaseId),
   ]);
 
   const byTask = new Map(tasks.map((t) => [t.taskId, t]));
@@ -4947,6 +8937,7 @@ export async function getGateReadiness(projectId: string, phaseId: string): Prom
     criticalIssues: { titles: critical.titles },
     roleBlocks: { titles: openGateBlockerTitles },
     latestReview: latest ? { decision: latest.decision as "approved" | "conditional" | "rejected", conditions: latest.conditions ?? null, notes: latest.notes ?? null } : null,
+    hasNewerOpenRound: !!latest && !!openRound && openRound.roundNumber > latest.roundNumber,
   });
 }
 
@@ -4962,42 +8953,110 @@ export async function isReleaseOverrideAuthorized(
   return member?.role === "owner" || member?.role === "manager";
 }
 
-/** 下一个版本号字母 Rev A/B/C… */
+/** 产品库轻量改版的下一个 Revision 标签。 */
 export async function nextRevisionLabel(productId: string): Promise<string> {
   const revs = await listProductRevisions(productId);
   return `Rev ${String.fromCharCode(65 + revs.length)}`;
 }
 
 /**
- * 量产发布：前置校验 → 事务内 生成 Revision + 发布记录 + 产品转量产态 + 项目归档。
+ * 项目完成：前置校验 → 事务内生成/交付独立产品 + 发布记录，不生成 Revision。
+ * 项目保持活跃进入 2-8 周稳定期，只有最终 Close Gate 才归档。
  * 抛错表示校验未过（绕不过去的硬闸）。
  */
-export async function releaseProject(input: {
+/**
+ * 项目生命周期变更（盲点3「项目杀不掉」）：
+ * - terminated 终止 = 终局：理由必填、连带 archived 从活跃视图消失、不可恢复、不可发布
+ * - paused 暂停 = 可恢复：保持可见但退出自动化到期扫描（getAutomationDue 系列与 getOverdueTasks）
+ * - active 恢复：清空理由
+ * 权限同量产发布（创建人/PM/项目 owner|manager/系统 admin）。
+ */
+export async function setProjectLifecycle(input: {
   projectId: string;
+  lifecycle: "active" | "paused" | "terminated";
+  reason?: string | null;
   actor: { id: number; role: string };
-  notes?: string;
-  override?: { overrideReason: string; followUpOwner: number; dueDate: string };
-  externalApprovalInstanceId?: number | null;
-}): Promise<{ revisionId: number; revisionLabel: string }> {
+}): Promise<{ from: string; to: string }> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const project = await getProjectById(input.projectId);
-  if (!project) throw new Error("项目不存在");
-  const canReleaseActor = await isReleaseOverrideAuthorized(project, input.actor);
-  if (!canReleaseActor) throw new Error("无权限量产发布（需项目创建人/PM/manager 或系统管理员）");
+  return db.transaction(async (tx) => {
+    await acquireProjectReleaseStateLock(tx, input.projectId);
+    const [project] = await tx.select().from(projects)
+      .where(eq(projects.id, input.projectId))
+      .limit(1)
+      .for("update");
+    if (!project) throw new Error("项目不存在");
+    const authorized = await isReleaseOverrideAuthorized(project, input.actor);
+    if (!authorized) throw new Error("无权限变更项目生命周期（需项目创建人/PM/manager 或系统管理员）");
+    if (project.lifecycle === "terminated") throw new Error("项目已终止，生命周期不可再变更");
+    const from = project.lifecycle;
+    if (from === input.lifecycle) return { from, to: input.lifecycle };
 
-  // —— 绝对硬卡 1：已关联产品 ——
-  if (!project.productId) throw new Error("项目未关联产品，无法发布");
-  // —— 绝对硬卡 2：P0/P1 全关闭 ——
-  const openCount = await getOpenP0P1Count(input.projectId);
-  if (openCount > 0) throw new Error(`存在 ${openCount} 个未关闭的 P0/P1 问题，不能发布`);
+    const reason = (input.reason ?? "").trim();
+    if (input.lifecycle !== "active" && !reason) {
+      throw new Error(input.lifecycle === "terminated" ? "终止项目必须填写理由" : "暂停项目必须填写理由");
+    }
+    if (input.lifecycle === "terminated") {
+      const [review] = await tx.select().from(projectTerminationReviews)
+        .where(and(eq(projectTerminationReviews.projectId, input.projectId), eq(projectTerminationReviews.status, "approved")))
+        .limit(1);
+      if (!review) throw new Error("项目终止前必须完成结构化终止评审并获得独立批准");
+      const items = await tx.select().from(projectTerminationItems)
+        .where(eq(projectTerminationItems.reviewId, review.id));
+      const incomplete = items.filter((item) => !item.completed || !item.evidenceReference?.trim());
+      if (incomplete.length > 0) throw new Error(`终止善后仍有 ${incomplete.length} 项未完成或缺少证据`);
+    }
+    await tx.update(projects).set({
+      lifecycle: input.lifecycle,
+      lifecycleReason: input.lifecycle === "active" ? null : reason,
+      lifecycleChangedAt: new Date(),
+      lifecycleChangedBy: input.actor.id,
+      ...(input.lifecycle === "terminated" ? { archived: true } : {}),
+    }).where(eq(projects.id, input.projectId));
+    return { from, to: input.lifecycle };
+  });
+}
 
-  // —— 前置 Gate ——
-  const gate = await getReleaseGateStatus(project);
+export type ReleaseProductDraft = {
+  name?: string;
+  productNumber?: string;
+  category?: string;
+  targetMarkets?: string[];
+};
+
+export type ProjectReleaseResult = {
+  productId: string;
+  productName: string;
+  createdProduct: boolean;
+  technicalBaselineId: string;
+  technicalBaselineLabel: string;
+  revisionId: null;
+  revisionLabel: null;
+};
+
+const PRODUCT_SPECIFICATION_DELIVERABLES = [
+  "产品规格基线确认记录",
+  "产品规格书 PSD",
+  "产品需求文档 PRD",
+  "PRD产品需求文档",
+  "PSD产品规格书",
+  "图纸/规格完整性确认",
+  "设计输入冻结确认（客户）",
+] as const;
+
+const DRV_MODULE_BY_KEY_MODULE_TYPE: Record<KeyModuleType, PhysicalDrvModuleId> = {
+  battery_energy: "battery",
+  core_function: "core_function",
+  electronics_hardware: "electronics",
+};
+
+function assertReleaseGateReady(
+  gate: ReleaseGateStatus,
+  override?: { overrideReason: string; followUpOwner: number; dueDate: string },
+): boolean {
   if (!gate.phaseId) throw new Error("未定义 MP Release 前置 Gate，无法发布");
   const failedHardDimensions = gate.dimensions.filter((d) => !d.ok && d.dimension !== "review_conditions");
   const deliverableBlock = failedHardDimensions.find((d) => d.dimension === "deliverables");
-  // —— 绝对硬卡 3：交付物审核合格 ——
   if (deliverableBlock) {
     throw new Error(`前置 Gate 必备交付物未审核通过（${gate.deliverables.done}/${gate.deliverables.total}）`);
   }
@@ -5005,63 +9064,490 @@ export async function releaseProject(input: {
   if (otherHardBlocks.length > 0) {
     throw new Error(`前置 Gate 未就绪：${otherHardBlocks.map((d) => d.summary).join("；")}`);
   }
-  // —— 绝对硬卡 4：Gate 有记录且非 rejected ——
   if (gate.decision === null || gate.decision === "rejected") {
     throw new Error("前置 Gate 未通过（无评审记录或已驳回），不能发布");
   }
-
-  // —— conditional 仅授权用户留痕强制 ——
-  let overridden = false;
-  if (gate.decision === "conditional") {
-    if (!input.override) throw new Error("前置 Gate 为有条件通过，需 owner/PM/manager 填写理由强制发布");
-    const ov = input.override;
-    if (!ov.overrideReason?.trim() || !ov.followUpOwner || !ov.dueDate?.trim()) {
-      throw new Error("强制发布需填写理由、跟进负责人与截止日期");
-    }
-    overridden = true;
+  if (gate.decision !== "conditional") return false;
+  if (!override) throw new Error("前置 Gate 为有条件通过，需 owner/PM/manager 填写理由强制发布");
+  if (!override.overrideReason?.trim() || !override.followUpOwner || !override.dueDate?.trim()) {
+    throw new Error("强制发布需填写理由、跟进负责人与截止日期");
   }
+  return true;
+}
 
-  const productId = project.productId;
+export async function releaseProject(input: {
+  projectId: string;
+  actor: { id: number; role: string };
+  notes?: string;
+  product?: ReleaseProductDraft;
+  override?: { overrideReason: string; followUpOwner: number; dueDate: string };
+  externalApprovalInstanceId?: number | null;
+  expectedReleaseStateFingerprint?: string | null;
+}): Promise<ProjectReleaseResult> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const initialProject = await getProjectById(input.projectId);
+  if (!initialProject) throw new Error("项目不存在");
+  const canReleaseActor = await isReleaseOverrideAuthorized(initialProject, input.actor);
+  if (!canReleaseActor) throw new Error("无权限量产发布（需项目创建人/PM/manager 或系统管理员）");
+  if (initialProject.lifecycle === "terminated") throw new Error("项目已终止，不能量产发布");
+  if (initialProject.lifecycle === "paused") throw new Error("项目已暂停，恢复后才能量产发布");
+
+  // —— 绝对硬卡 1：P0/P1 全关闭 ——
+  const openCount = await getOpenP0P1Count(input.projectId);
+  if (openCount > 0) throw new Error(`存在 ${openCount} 个未关闭的 P0/P1 问题，不能发布`);
+
+  // —— 前置 Gate ——
+  let gate = await getReleaseGateStatus(initialProject);
+  let overridden = assertReleaseGateReady(gate, input.override);
 
   return db.transaction(async (tx) => {
+    // Canonical release lock order: the project-scoped state barrier is always
+    // first, before narrower release/file/BOM/delivery locks or row locks.
+    await acquireProjectReleaseStateLock(tx, input.projectId);
     await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`release:${input.projectId}`}))`);
-    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`product:${productId}`}))`);
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`project-files:${input.projectId}`}))`);
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`bom:${input.projectId}`}))`);
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`delivery-modules:${input.projectId}`}))`);
+    // Keep the release barrier project-scoped. BOM, file and delivery-module
+    // writers use their dedicated locks; release-visible child tables acquire
+    // release-state through database triggers. A global table lock would make
+    // an unrelated project's task update deadlock with this transaction.
+    const [project] = await tx.select().from(projects)
+      .where(eq(projects.id, input.projectId))
+      .limit(1)
+      .for("update");
+    if (!project) throw new Error("项目不存在");
+    if (!(await isReleaseOverrideAuthorized(project, input.actor))) {
+      throw new Error("无权限量产发布（需项目创建人/PM/manager 或系统管理员）");
+    }
+    if (project.lifecycle === "terminated") throw new Error("项目已终止，不能量产发布");
+    if (project.lifecycle === "paused") throw new Error("项目已暂停，恢复后才能量产发布");
     const existingRelease = await tx.select({ id: mpReleases.id })
       .from(mpReleases)
       .where(eq(mpReleases.projectId, input.projectId))
       .limit(1);
     if (existingRelease.length > 0) throw new Error("项目已发布，不能重复发布");
+    const lockedOpenIssues = await tx.select({ id: projectIssues.id })
+      .from(projectIssues)
+      .where(and(
+        eq(projectIssues.projectId, input.projectId),
+        inArray(projectIssues.severity, ["P0", "P1"]),
+        drizzleSql`${projectIssues.status} NOT IN ('resolved','closed','wont_fix')`,
+      ));
+    const lockedOpenCount = lockedOpenIssues.length;
+    if (lockedOpenCount > 0) {
+      throw new Error(`存在 ${lockedOpenCount} 个未关闭的 P0/P1 问题，不能发布`);
+    }
+    gate = await getReleaseGateStatus(project);
+    overridden = assertReleaseGateReady(gate, input.override);
+    const [latestReleaseGateReview] = await tx.select({
+      traceSnapshot: projectGateReviews.traceSnapshot,
+    }).from(projectGateReviews)
+      .where(and(
+        eq(projectGateReviews.projectId, input.projectId),
+        eq(projectGateReviews.phaseId, gate.phaseId!),
+      ))
+      .orderBy(
+        desc(projectGateReviews.roundNumber),
+        desc(projectGateReviews.createdAt),
+        desc(projectGateReviews.id),
+      )
+      .limit(1);
+    const currentReleaseTrace = await buildGateReviewTraceSnapshot(tx, {
+      projectId: input.projectId,
+      phaseId: gate.phaseId!,
+      gateName: gate.gateName,
+    });
+    const approvedConfigurationFingerprint = latestReleaseGateReview?.traceSnapshot
+      ?.releaseConfigurationFingerprint;
+    if (
+      !approvedConfigurationFingerprint ||
+      approvedConfigurationFingerprint !== currentReleaseTrace.releaseConfigurationFingerprint
+    ) {
+      throw new Error("产品、BOM、关键模块或规格证据已在 Gate 后变化，请重新完成 Gate 评审后发布");
+    }
+    if (input.expectedReleaseStateFingerprint) {
+      const lockedReleaseFingerprint = await getProjectReleaseStateFingerprint(input.projectId);
+      if (lockedReleaseFingerprint !== input.expectedReleaseStateFingerprint) {
+        throw new Error("钉钉审批后的发布配置或硬卡状态已变化，本次审批已失效，请重新发起");
+      }
+    }
 
-    const existingRevisions = await tx.select({ id: productRevisions.id })
-      .from(productRevisions)
-      .where(eq(productRevisions.productId, productId));
-    const label = `Rev ${String.fromCharCode(65 + existingRevisions.length)}`;
+    let productId = project.productId;
+    let productName = "";
+    let createdProduct = false;
+    let baseTechnicalBaseline: ProductTechnicalBaseline | undefined;
+    if (productId) {
+      await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`product:${productId}`}))`);
+      const [existingProduct] = await tx.select().from(products)
+        .where(eq(products.id, productId))
+        .limit(1)
+        .for("update");
+      if (!existingProduct) throw new Error("项目关联的产品不存在");
+      if (!canApproveProductTechnicalChange(input.actor, existingProduct)) {
+        throw new Error("发布到现有产品必须由该产品负责人批准");
+      }
+      if (project.category === "eco") {
+        if (!project.baseTechnicalBaselineId) {
+          throw new Error("ECO 缺少冻结的来源技术基线，不能发布");
+        }
+        if (existingProduct.currentTechnicalBaselineId !== project.baseTechnicalBaselineId) {
+          throw new Error("产品当前技术基线已变化，ECO 必须先基于最新基线重新建项或 rebase");
+        }
+        [baseTechnicalBaseline] = await tx.select().from(productTechnicalBaselines)
+          .where(and(
+            eq(productTechnicalBaselines.id, project.baseTechnicalBaselineId),
+            eq(productTechnicalBaselines.productId, existingProduct.id),
+          ))
+          .limit(1);
+        if (!baseTechnicalBaseline) {
+          throw new Error("ECO 来源技术基线不存在或不属于关联产品，不能发布");
+        }
+      }
+      productName = existingProduct.name;
+    } else {
+      if (project.category === "eco") {
+        throw new Error("ECO 必须关联要变更的现有产品");
+      }
+      productId = `prd_${nanoid(12)}`;
+      productName = input.product?.name?.trim() || project.name;
+      const productType = typeof project.customFields?.productType === "string"
+        ? project.customFields.productType.trim()
+        : "";
+      await tx.insert(products).values({
+        id: productId,
+        productNumber: input.product?.productNumber?.trim() || project.projectNumber,
+        name: productName,
+        type: "finished",
+        category: input.product?.category?.trim() || productType,
+        targetMarkets: input.product?.targetMarkets ?? [],
+        lifecycleState: "mass_production",
+        productManagerUserId: project.productOwnerUserId ?? project.createdBy,
+        createdBy: input.actor.id,
+      });
+      createdProduct = true;
+      await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`product:${productId}`}))`);
+    }
 
     const open = await tx.select().from(projectIssues)
       .where(and(eq(projectIssues.projectId, input.projectId),
         drizzleSql`${projectIssues.status} NOT IN ('resolved','closed','wont_fix')`));
 
-    const [rev] = await tx.insert(productRevisions).values({
-      productId, revisionLabel: label,
-      parentRevisionId: project.baseRevisionId ?? null,
-      createdByProjectId: input.projectId,
-      status: "released", releasedAt: new Date(), releasedBy: input.actor.id,
-    }).returning({ id: productRevisions.id });
+    // All working-BOM mutation paths share this lock. Once acquired, the BOM
+    // snapshot below cannot race with add/update/delete/bulk import.
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`bom:${input.projectId}`}))`);
+    const workingBom = await tx.select().from(bomItems)
+      .where(eq(bomItems.projectId, input.projectId))
+      .orderBy(bomItems.sortOrder, bomItems.id);
 
-    const frozenBom = await freezeBomToRevision(input.projectId, rev.id, tx);
+    const moduleBaselines = await tx.select().from(projectModuleBaselines)
+      .where(eq(projectModuleBaselines.projectId, input.projectId))
+      .orderBy(projectModuleBaselines.drvModuleKey);
+    // bind/unbind 使用同一把锁。发布取得锁并锁定 binding + module 行后，最终
+    // 选型在本事务内不可再被最后一刻替换或解绑。
+    await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`delivery-modules:${input.projectId}`}))`);
+    const deliveryModuleBindings = await tx.select().from(projectProductModuleBindings)
+      .where(eq(projectProductModuleBindings.projectId, input.projectId))
+      .orderBy(projectProductModuleBindings.moduleType)
+      .for("update");
+    const inheritedAssignments = baseTechnicalBaseline
+      ? await tx.select().from(productModuleAssignments)
+          .where(eq(productModuleAssignments.technicalBaselineId, baseTechnicalBaseline.id))
+          .orderBy(productModuleAssignments.moduleType)
+      : [];
+    if (baseTechnicalBaseline) {
+      const boundTypes = new Set(deliveryModuleBindings.map((binding) => binding.moduleType));
+      const missingInheritedTypes = inheritedAssignments
+        .filter((assignment) => !boundTypes.has(assignment.moduleType))
+        .map((assignment) => assignment.moduleType);
+      if (missingInheritedTypes.length > 0) {
+        throw new Error(`ECO 必须保留完整的产品关键模块基线；缺少：${missingInheritedTypes.join("、")}`);
+      }
+    }
+    const controlledBomModuleIds = workingBom.flatMap((row) =>
+      row.keyModuleId ? [row.keyModuleId] : []
+    );
+    const controlledModuleIds = Array.from(new Set([
+      ...deliveryModuleBindings.map((binding) => binding.moduleId),
+      ...controlledBomModuleIds,
+    ]));
+    const lockedControlledModules = controlledModuleIds.length > 0
+      ? await tx.select({
+        id: keyModules.id,
+        moduleType: keyModules.moduleType,
+        status: keyModules.status,
+      }).from(keyModules)
+        .where(inArray(keyModules.id, controlledModuleIds))
+        .for("update")
+      : [];
+    const obsoleteControlledModule = lockedControlledModules.find((module) => module.status === "obsolete");
+    if (obsoleteControlledModule) {
+      throw new Error("产品交付配置包含已停用关键模块，必须先更换为已批准模块后再发布");
+    }
+    const deliveryTypeById = new Map(lockedControlledModules.map((module) => [
+      module.id,
+      module.moduleType,
+    ]));
+    if (deliveryModuleBindings.length > 0) {
+      const invalidDeliveryBinding = deliveryModuleBindings.find((binding) =>
+        deliveryTypeById.get(binding.moduleId) !== binding.moduleType
+      );
+      if (invalidDeliveryBinding) {
+        throw new Error("产品交付模块绑定与模块主数据类型不一致，请重新绑定后再发布");
+      }
+    }
 
-    // 盖章：把本项目 implemented+approved 的变更并入新版本，并由返回行生成快照(集合天然一致)
-    const stampedChanges = await tx.update(projectChangelog)
-      .set({ revisionId: rev.id })
+    // 最终交付绑定也覆盖技术基线中的顶层受控 BOM 行，避免 assignment 已换型、
+    // BOM 快照仍指向 DRV 建项复用模块。没有对应行（典型 NPD/JDM/OBT）时补一行。
+    let frozenBom: Record<string, unknown>[] = workingBom.map((row) => ({ ...row }));
+    for (const binding of deliveryModuleBindings) {
+      const snapshot = binding.moduleSnapshot;
+      const moduleNumber = typeof snapshot.moduleNumber === "string" ? snapshot.moduleNumber : "";
+      const moduleName = typeof snapshot.name === "string" ? snapshot.name : moduleNumber;
+      const model = typeof snapshot.model === "string" ? snapshot.model : "";
+      let replaced = false;
+      frozenBom = frozenBom.flatMap((row) => {
+        const currentModuleId = typeof row.keyModuleId === "string" ? row.keyModuleId : null;
+        if (!currentModuleId || deliveryTypeById.get(currentModuleId) !== binding.moduleType) {
+          return [row];
+        }
+        if (replaced) return [];
+        replaced = true;
+        return [{
+          ...row,
+          keyModuleId: binding.moduleId,
+          keyModuleSnapshot: binding.moduleSnapshot,
+          partNumber: moduleNumber,
+          name: moduleName,
+          spec: model,
+          quantity: 1,
+          componentProductId: null,
+          componentRevisionId: null,
+          supplierName: "",
+          unitCost: "",
+        }];
+      });
+      if (!replaced) {
+        const maxSortOrder = frozenBom.reduce((max, row) => {
+          const value = typeof row.sortOrder === "number" ? row.sortOrder : 0;
+          return Math.max(max, value);
+        }, 0);
+        frozenBom.push({
+          revisionId: null,
+          projectId: input.projectId,
+          partNumber: moduleNumber,
+          name: moduleName,
+          spec: model,
+          quantity: 1,
+          refDesignator: "",
+          componentProductId: null,
+          componentRevisionId: null,
+          keyModuleId: binding.moduleId,
+          keyModuleSnapshot: binding.moduleSnapshot,
+          supplierName: "",
+          unitCost: "",
+          sortOrder: maxSortOrder + 10,
+        });
+      }
+    }
+
+    const definitionSnapshot = project.productDefinitionSnapshotId
+      ? (await tx.select().from(productDefinitionSnapshots)
+          .where(eq(productDefinitionSnapshots.id, project.productDefinitionSnapshotId))
+          .limit(1))[0]
+      : undefined;
+
+    // DRV intentionally does not ask for a specification reference at project
+    // creation. Capture the specification submitted later by its task (and the
+    // equivalent JDM/NPD artifacts) so the product baseline still has a durable
+    // pointer to the released design input.
+    const specificationCandidates = await tx.select({
+      id: projectFiles.id,
+      phaseId: projectFiles.phaseId,
+      taskId: projectFiles.taskId,
+      deliverableName: projectFiles.deliverableName,
+      fileType: projectFiles.fileType,
+      fileVersion: projectFiles.fileVersion,
+      name: projectFiles.name,
+      size: projectFiles.size,
+      visibility: projectFiles.visibility,
+      createdAt: projectFiles.createdAt,
+    }).from(projectFiles)
+      .where(and(
+        eq(projectFiles.projectId, input.projectId),
+        inArray(projectFiles.deliverableName, [...PRODUCT_SPECIFICATION_DELIVERABLES]),
+      ))
+      .orderBy(desc(projectFiles.createdAt), desc(projectFiles.id));
+    const specificationReviews = await tx.select({
+      phaseId: projectDeliverableReviews.phaseId,
+      deliverableName: projectDeliverableReviews.deliverableName,
+      status: projectDeliverableReviews.status,
+      reviewedBy: projectDeliverableReviews.reviewedBy,
+      reviewedAt: projectDeliverableReviews.reviewedAt,
+    }).from(projectDeliverableReviews)
+      .where(and(
+        eq(projectDeliverableReviews.projectId, input.projectId),
+        inArray(projectDeliverableReviews.deliverableName, [...PRODUCT_SPECIFICATION_DELIVERABLES]),
+      ));
+    const reviewByDeliverable = new Map(specificationReviews.map((review) => [
+      `${review.phaseId}\u0000${review.deliverableName}`,
+      review,
+    ]));
+    const seenSpecificationDeliverables = new Set<string>();
+    const specificationFiles = specificationCandidates.filter((file) => {
+      if (!file.phaseId || !file.deliverableName) return false;
+      const key = `${file.phaseId}\u0000${file.deliverableName}`;
+      if (seenSpecificationDeliverables.has(key)) return false;
+      seenSpecificationDeliverables.add(key);
+      const review = reviewByDeliverable.get(key);
+      return review?.status === "approved"
+        && !!review.reviewedAt
+        && review.reviewedAt >= file.createdAt;
+    }).map((file) => ({
+      sourceFileId: file.id,
+      phaseId: file.phaseId,
+      taskId: file.taskId,
+      deliverableName: file.deliverableName,
+      fileType: file.fileType,
+      fileVersion: file.fileVersion,
+      name: file.name,
+      size: file.size,
+      visibility: file.visibility,
+      approvedBy: reviewByDeliverable.get(`${file.phaseId}\u0000${file.deliverableName}`)?.reviewedBy ?? null,
+      approvedAt: reviewByDeliverable.get(`${file.phaseId}\u0000${file.deliverableName}`)?.reviewedAt ?? null,
+    }));
+    const inheritedSpecSnapshot = baseTechnicalBaseline?.specSnapshot ?? null;
+    const inheritedSpecificationFiles = inheritedSpecSnapshot && Array.isArray(inheritedSpecSnapshot.specificationFiles)
+      ? inheritedSpecSnapshot.specificationFiles
+      : [];
+    const inheritedProductDefinitionSnapshot = inheritedSpecSnapshot
+      && inheritedSpecSnapshot.productDefinitionSnapshot
+      && typeof inheritedSpecSnapshot.productDefinitionSnapshot === "object"
+      ? inheritedSpecSnapshot.productDefinitionSnapshot
+      : null;
+    if (
+      !definitionSnapshot &&
+      specificationFiles.length === 0 &&
+      !inheritedProductDefinitionSnapshot &&
+      inheritedSpecificationFiles.length === 0
+    ) {
+      throw new Error("缺少已审核的产品规格或设计输入文件，不能生成产品技术基线");
+    }
+
+    const existingTechnicalBaselines = await tx.select({
+      baselineLabel: productTechnicalBaselines.baselineLabel,
+    }).from(productTechnicalBaselines)
+      .where(eq(productTechnicalBaselines.productId, productId));
+    const nextTechnicalBaselineNumber = existingTechnicalBaselines.reduce((max, row) => {
+      const match = /^TB-(\d+)$/.exec(row.baselineLabel);
+      return match ? Math.max(max, Number(match[1])) : max;
+    }, 0) + 1;
+    const technicalBaselineId = `ptb_${nanoid(12)}`;
+    const technicalBaselineLabel = `TB-${String(nextTechnicalBaselineNumber).padStart(3, "0")}`;
+    const releasedAt = new Date();
+
+    const keyModulesSnapshot: Record<string, unknown> = {
+      ...(baseTechnicalBaseline?.keyModulesSnapshot ?? {}),
+      ...Object.fromEntries(moduleBaselines.map((baseline) => [
+        baseline.drvModuleKey,
+        {
+          reuseState: baseline.reuseState,
+          keyModuleId: baseline.keyModuleId,
+          sourceProductId: baseline.sourceProductId,
+          sourceTechnicalBaselineId: baseline.sourceTechnicalBaselineId,
+          moduleSnapshot: baseline.moduleSnapshot,
+          confirmedBy: baseline.confirmedBy,
+          confirmedAt: baseline.confirmedAt,
+        },
+      ])),
+    };
+    const baselineByDrvModule = new Map(moduleBaselines.map((baseline) => [
+      baseline.drvModuleKey,
+      baseline,
+    ]));
+    for (const binding of deliveryModuleBindings) {
+      const drvModuleKey = DRV_MODULE_BY_KEY_MODULE_TYPE[binding.moduleType];
+      const initialBaseline = baselineByDrvModule.get(drvModuleKey);
+      keyModulesSnapshot[drvModuleKey] = {
+        selectionSource: "project_product_delivery",
+        initialReuseState: initialBaseline?.reuseState ?? null,
+        keyModuleId: binding.moduleId,
+        moduleSnapshot: binding.moduleSnapshot,
+        boundBy: binding.boundBy,
+        boundAt: binding.boundAt,
+      };
+    }
+    const projectExecutionBaseline = project.customFields && typeof project.customFields === "object"
+      ? (project.customFields as Record<string, unknown>).projectExecutionBaseline ?? null
+      : null;
+    const specSnapshot: Record<string, unknown> = {
+      ...(inheritedSpecSnapshot ?? {}),
+      productDefinitionSnapshot: definitionSnapshot?.snapshot ?? inheritedProductDefinitionSnapshot,
+      projectExecutionBaseline: projectExecutionBaseline
+        ?? inheritedSpecSnapshot?.projectExecutionBaseline
+        ?? null,
+      specificationFiles: specificationFiles.length > 0
+        ? specificationFiles
+        : inheritedSpecificationFiles,
+      ...(baseTechnicalBaseline ? { inheritedFromTechnicalBaselineId: baseTechnicalBaseline.id } : {}),
+    };
+
+    await tx.insert(productTechnicalBaselines).values({
+      id: technicalBaselineId,
+      productId,
+      baselineLabel: technicalBaselineLabel,
+      sourceProjectId: input.projectId,
+      keyModulesSnapshot,
+      bomSnapshot: frozenBom as unknown as Record<string, unknown>[],
+      specSnapshot,
+      releasedBy: input.actor.id,
+      releasedAt,
+    });
+
+    const controlledAssignmentsByType = new Map<KeyModuleType, {
+      technicalBaselineId: string;
+      moduleType: KeyModuleType;
+      moduleId: string;
+      moduleSnapshot: Record<string, unknown>;
+    }>();
+    for (const baseline of moduleBaselines) {
+      const moduleType = KEY_MODULE_TYPE_BY_DRV_MODULE[
+        baseline.drvModuleKey as PhysicalDrvModuleId
+      ];
+      if (!moduleType || baseline.reuseState !== "reused" || !baseline.keyModuleId) continue;
+      controlledAssignmentsByType.set(moduleType, {
+        technicalBaselineId,
+        moduleType,
+        moduleId: baseline.keyModuleId,
+        moduleSnapshot: baseline.moduleSnapshot,
+      });
+    }
+    // 最终交付绑定优先于 DRV 建项复用基线；NPD/JDM/OBT 没有建项复用基线时
+    // 则直接补齐产品技术基线的关键模块 assignment。
+    for (const binding of deliveryModuleBindings) {
+      controlledAssignmentsByType.set(binding.moduleType, {
+        technicalBaselineId,
+        moduleType: binding.moduleType,
+        moduleId: binding.moduleId,
+        moduleSnapshot: binding.moduleSnapshot,
+      });
+    }
+    const controlledAssignments = Array.from(controlledAssignmentsByType.values());
+    if (controlledAssignments.length > 0) {
+      await tx.insert(productModuleAssignments).values(controlledAssignments);
+    }
+
+    // 项目交付快照独立保存，不再把项目变更盖章到 Product Revision。
+    const stampedChanges = await tx.select().from(projectChangelog)
       .where(and(
         eq(projectChangelog.projectId, input.projectId),
         inArray(projectChangelog.status, [...REVISION_CHANGE_STATUSES]),
-      ))
-      .returning();
+      ));
     const snapshotChangelog = buildRevisionChangelogSnapshot(stampedChanges as any);
 
-    await tx.insert(mpReleases).values({
-      productId, revisionId: rev.id, projectId: input.projectId,
+    const [releaseRow] = await tx.insert(mpReleases).values({
+      productId, revisionId: null, projectId: input.projectId,
       externalApprovalInstanceId: input.externalApprovalInstanceId ?? null,
       snapshotBom: frozenBom as unknown[],
       snapshotChangelog: snapshotChangelog as unknown[],
@@ -5074,39 +9560,94 @@ export async function releaseProject(input: {
       conditionsSnapshot: overridden ? gate.conditions : null,
       followUpOwner: overridden ? input.override!.followUpOwner : null,
       dueDate: overridden ? input.override!.dueDate : null,
-    } as InsertMpRelease);
+    } as InsertMpRelease).returning({ id: mpReleases.id });
+
+    if (overridden) {
+      const condition = await createProjectCondition({
+        projectId: input.projectId,
+        sourceType: "release",
+        sourceId: String(releaseRow.id),
+        title: "量产发布条件跟进",
+        description: gate.conditions?.trim() || input.override!.overrideReason,
+        ownerUserId: input.override!.followUpOwner,
+        dueDate: input.override!.dueDate,
+        linkedEcoProjectId: null,
+        resolutionNote: null,
+        createdBy: input.actor.id,
+      }, tx);
+      await tx.update(mpReleases).set({ followUpConditionId: condition.id })
+        .where(eq(mpReleases.id, releaseRow.id));
+    }
 
     await tx.update(products)
-      .set({ currentRevisionId: rev.id, lifecycleState: "mass_production" })
+      .set({
+        lifecycleState: "mass_production",
+        currentTechnicalBaselineId: technicalBaselineId,
+        updatedAt: releasedAt,
+      })
       .where(eq(products.id, productId));
 
+    const releasePhases = getEffectivePhasesForProjectLike(project);
+    const releasePhaseIndex = releasePhases.findIndex((phase) => phase.isReleaseGate);
+    const stabilizationPhase = releasePhaseIndex >= 0 ? releasePhases[releasePhaseIndex + 1] : null;
     await tx.update(projects)
-      .set({ resultRevisionId: rev.id, archived: true })
+      .set({
+        productId,
+        baseRevisionId: null,
+        resultRevisionId: null,
+        ...(stabilizationPhase ? { currentPhase: stabilizationPhase.id } : {}),
+      })
       .where(eq(projects.id, input.projectId));
 
-    return { revisionId: rev.id, revisionLabel: label };
+    return {
+      productId,
+      productName,
+      createdProduct,
+      technicalBaselineId,
+      technicalBaselineLabel,
+      revisionId: null,
+      revisionLabel: null,
+    };
   });
 }
 
 
 // ── BOM ───────────────────────────────────────────────────────────────────────
 
-export async function addBomLine(projectId: string, line: Partial<InsertBomItem> & { name: string }): Promise<number> {
-  const db = await getDb(); if (!db) throw new Error("Database not available");
+export async function addBomLine(
+  projectId: string,
+  line: Partial<InsertBomItem> & { name: string },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec?: any,
+): Promise<number> {
+  const db = exec ?? await getDb(); if (!db) throw new Error("Database not available");
   const r = await db.insert(bomItems).values({ ...line, projectId, revisionId: null }).returning({ id: bomItems.id });
   return r[0].id;
 }
-export async function getBomLineById(id: number): Promise<BomItem | undefined> {
-  const db = await getDb(); if (!db) return undefined;
+export async function getBomLineById(
+  id: number,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec?: any,
+): Promise<BomItem | undefined> {
+  const db = exec ?? await getDb(); if (!db) return undefined;
   const [row] = await db.select().from(bomItems).where(eq(bomItems.id, id)).limit(1);
   return row;
 }
-export async function updateBomLine(id: number, patch: Partial<InsertBomItem>): Promise<void> {
-  const db = await getDb(); if (!db) throw new Error("Database not available");
+export async function updateBomLine(
+  id: number,
+  patch: Partial<InsertBomItem>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec?: any,
+): Promise<void> {
+  const db = exec ?? await getDb(); if (!db) throw new Error("Database not available");
   await db.update(bomItems).set(patch).where(eq(bomItems.id, id));
 }
-export async function deleteBomLine(id: number): Promise<void> {
-  const db = await getDb(); if (!db) throw new Error("Database not available");
+export async function deleteBomLine(
+  id: number,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exec?: any,
+): Promise<void> {
+  const db = exec ?? await getDb(); if (!db) throw new Error("Database not available");
   await db.delete(bomItems).where(eq(bomItems.id, id));
 }
 export async function listWorkingBom(projectId: string): Promise<BomItem[]> {
@@ -5453,6 +9994,24 @@ export async function updateUserNotificationPrefs(
 
 const ACTIVE_ACTION_ITEM_STATUSES = ["open", "sent", "read", "escalated", "snoozed"] as const;
 
+export async function listActiveActionItemsForProjectKind(
+  projectId: string,
+  kind: InsertActionItem["kind"],
+): Promise<ActionItem[]> {
+  const db = await getDb();
+  if (!db) return [];
+  try {
+    return db.select().from(actionItems).where(and(
+      eq(actionItems.projectId, projectId),
+      eq(actionItems.kind, kind),
+      inArray(actionItems.status, ACTIVE_ACTION_ITEM_STATUSES),
+    ));
+  } catch (error) {
+    if (isMissingRelationError(error)) return [];
+    throw error;
+  }
+}
+
 function isMissingRelationError(error: unknown): boolean {
   let current: unknown = error;
   while (current && typeof current === "object") {
@@ -5500,64 +10059,91 @@ export async function upsertActionItem(input: UpsertActionItemInput): Promise<{
   if (!db) return { actionItem: null, shouldNotify: false };
 
   try {
-    const [existing] = await db
-      .select()
-      .from(actionItems)
-      .where(eq(actionItems.dedupeKey, input.dedupeKey))
-      .limit(1);
-    const now = new Date();
+    return await db.transaction(async (tx) => {
+      await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`action:${input.dedupeKey}`}))`);
+      const [existing] = await tx
+        .select()
+        .from(actionItems)
+        .where(eq(actionItems.dedupeKey, input.dedupeKey))
+        .limit(1);
+      const now = new Date();
+      const existingMetadata = existing?.metadata ?? {};
+      const dispatch = existingMetadata.automationDispatch;
+      const dispatchRecord = dispatch && typeof dispatch === "object" && !Array.isArray(dispatch)
+        ? dispatch as Record<string, unknown>
+        : {};
+      const claimedAt = typeof dispatchRecord.claimedAt === "string" ? Date.parse(dispatchRecord.claimedAt) : NaN;
+      const activelySending = dispatchRecord.status === "sending"
+        && Number.isFinite(claimedAt)
+        && claimedAt > now.getTime() - 5 * 60_000;
+      const shouldNotify = !existing
+        || existing.status === "done"
+        || existing.status === "closed"
+        || (!existing.firstSentAt && !activelySending);
+      const snoozedUntil = input.snoozedUntil !== undefined
+        ? input.snoozedUntil
+        : shouldNotify
+          ? null
+          : existing?.snoozedUntil ?? null;
+      const metadata = {
+        ...existingMetadata,
+        ...(input.metadata ?? {}),
+        ...(shouldNotify ? {
+          automationDispatch: { status: "sending", claimedAt: now.toISOString(), error: null },
+        } : {}),
+      };
 
-    if (existing) {
-      const shouldNotify = existing.status === "done" || existing.status === "closed";
-      const [row] = await db
-        .update(actionItems)
-        .set({
+      if (existing) {
+        const [row] = await tx
+          .update(actionItems)
+          .set({
+            kind: input.kind,
+            projectId: input.projectId,
+            entityType: input.entityType,
+            entityId: input.entityId,
+            recipientUserId: input.recipientUserId,
+            level: input.level ?? existing.level,
+            title: input.title,
+            body: input.body ?? null,
+            actionUrl: input.actionUrl,
+            status: shouldNotify ? "open" : existing.status,
+            priority: input.priority ?? existing.priority,
+            dueAt: input.dueAt ?? null,
+            snoozedUntil,
+            sourceActivityLogId: input.sourceActivityLogId ?? existing.sourceActivityLogId,
+            metadata,
+            handledAt: shouldNotify ? null : existing.handledAt,
+            closedAt: shouldNotify ? null : existing.closedAt,
+            updatedAt: now,
+          })
+          .where(eq(actionItems.id, existing.id))
+          .returning();
+        return { actionItem: row ?? existing, shouldNotify };
+      }
+
+      const [row] = await tx
+        .insert(actionItems)
+        .values({
           kind: input.kind,
           projectId: input.projectId,
           entityType: input.entityType,
           entityId: input.entityId,
+          dedupeKey: input.dedupeKey,
           recipientUserId: input.recipientUserId,
-          level: input.level ?? existing.level,
+          level: input.level ?? "owner",
           title: input.title,
           body: input.body ?? null,
           actionUrl: input.actionUrl,
-          status: shouldNotify ? "open" : existing.status,
-          priority: input.priority ?? existing.priority,
+          status: "open",
+          priority: input.priority ?? "normal",
           dueAt: input.dueAt ?? null,
-          snoozedUntil: input.snoozedUntil ?? null,
-          sourceActivityLogId: input.sourceActivityLogId ?? existing.sourceActivityLogId,
-          metadata: input.metadata ?? existing.metadata ?? {},
-          handledAt: shouldNotify ? null : existing.handledAt,
-          closedAt: shouldNotify ? null : existing.closedAt,
-          updatedAt: now,
+          snoozedUntil,
+          sourceActivityLogId: input.sourceActivityLogId ?? null,
+          metadata,
         })
-        .where(eq(actionItems.id, existing.id))
         .returning();
-      return { actionItem: row ?? existing, shouldNotify };
-    }
-
-    const [row] = await db
-      .insert(actionItems)
-      .values({
-        kind: input.kind,
-        projectId: input.projectId,
-        entityType: input.entityType,
-        entityId: input.entityId,
-        dedupeKey: input.dedupeKey,
-        recipientUserId: input.recipientUserId,
-        level: input.level ?? "owner",
-        title: input.title,
-        body: input.body ?? null,
-        actionUrl: input.actionUrl,
-        status: "open",
-        priority: input.priority ?? "normal",
-        dueAt: input.dueAt ?? null,
-        snoozedUntil: input.snoozedUntil ?? null,
-        sourceActivityLogId: input.sourceActivityLogId ?? null,
-        metadata: input.metadata ?? {},
-      })
-      .returning();
-    return { actionItem: row ?? null, shouldNotify: Boolean(row) };
+      return { actionItem: row ?? null, shouldNotify: Boolean(row) };
+    });
   } catch (error) {
     if (isMissingRelationError(error)) return { actionItem: null, shouldNotify: true };
     throw error;
@@ -5572,6 +10158,9 @@ export async function markActionItemSent(id: number): Promise<void> {
       .update(actionItems)
       .set({
         status: "sent",
+        metadata: drizzleSql`${actionItems.metadata} || ${JSON.stringify({
+          automationDispatch: { status: "sent", sentAt: new Date().toISOString(), error: null },
+        })}::jsonb`,
         firstSentAt: drizzleSql`coalesce(${actionItems.firstSentAt}, now())`,
         lastSentAt: new Date(),
         updatedAt: new Date(),
@@ -5582,24 +10171,40 @@ export async function markActionItemSent(id: number): Promise<void> {
   }
 }
 
+export async function markActionItemDispatchFailed(id: number, error: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    await db.update(actionItems).set({
+      status: "open",
+      metadata: drizzleSql`${actionItems.metadata} || ${JSON.stringify({
+        automationDispatch: { status: "failed", failedAt: new Date().toISOString(), error: error.slice(0, 1000) },
+      })}::jsonb`,
+      updatedAt: new Date(),
+    }).where(eq(actionItems.id, id));
+  } catch (dispatchError) {
+    if (!isMissingRelationError(dispatchError)) throw dispatchError;
+  }
+}
+
 export async function closeActionItems(input: {
   dedupeKey?: string;
   kind?: InsertActionItem["kind"];
   entityType?: string;
   entityId?: string;
   recipientUserId?: number;
-}): Promise<void> {
+}): Promise<number[]> {
   const db = await getDb();
-  if (!db) return;
+  if (!db) return [];
   const conditions = [];
   if (input.dedupeKey) conditions.push(eq(actionItems.dedupeKey, input.dedupeKey));
   if (input.kind) conditions.push(eq(actionItems.kind, input.kind));
   if (input.entityType) conditions.push(eq(actionItems.entityType, input.entityType));
   if (input.entityId) conditions.push(eq(actionItems.entityId, input.entityId));
   if (input.recipientUserId) conditions.push(eq(actionItems.recipientUserId, input.recipientUserId));
-  if (conditions.length === 0) return;
+  if (conditions.length === 0) return [];
   try {
-    await db
+    const rows = await db
       .update(actionItems)
       .set({
         status: "closed",
@@ -5607,9 +10212,12 @@ export async function closeActionItems(input: {
         closedAt: new Date(),
         updatedAt: new Date(),
       })
-      .where(and(...conditions));
+      .where(and(...conditions))
+      .returning({ id: actionItems.id });
+    return rows.map((row) => row.id);
   } catch (error) {
     if (!isMissingRelationError(error)) throw error;
+    return [];
   }
 }
 
@@ -5749,6 +10357,7 @@ export async function listActionItemsForSla(): Promise<ActionItemSlaRow[]> {
       .innerJoin(projects, eq(actionItems.projectId, projects.id))
       .where(and(
         eq(projects.archived, false),
+        eq(projects.lifecycle, "active"),
         eq(actionItems.level, "owner"),
         inArray(actionItems.status, ACTIVE_ACTION_ITEM_STATUSES),
         or(isNull(actionItems.snoozedUntil), drizzleSql`${actionItems.snoozedUntil} <= now()`),
@@ -5892,6 +10501,27 @@ export async function finishAutomationHeartbeat(input: {
   }
 }
 
+/** Persist tailer progress after each fully handled activity row. */
+export async function advanceAutomationHeartbeatCursor(
+  schedulerKey: string,
+  lastCursorId: number,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    await db.update(automationHeartbeats).set({
+      lastCursorId: drizzleSql`greatest(${automationHeartbeats.lastCursorId}, ${lastCursorId})`,
+      updatedAt: new Date(),
+    }).where(eq(automationHeartbeats.schedulerKey, schedulerKey));
+  } catch (error) {
+    if (isMissingColumnError(error, "lastCursorId")) {
+      await ensureAutomationHeartbeatCursorColumn(db);
+      return advanceAutomationHeartbeatCursor(schedulerKey, lastCursorId);
+    }
+    if (!isMissingRelationError(error)) throw error;
+  }
+}
+
 export async function getAutomationHeartbeat(
   schedulerKey = AUTOMATION_SCHEDULER_KEY,
 ): Promise<AutomationHeartbeat | null> {
@@ -5922,6 +10552,15 @@ export type AutomationRuleDefault = {
   config: Record<string, unknown>;
 };
 
+export type AutomationRuleDefaultChange = {
+  ruleKey: string;
+  legacyEnabled: boolean;
+  nextEnabled: boolean;
+  legacyConfig: Record<string, unknown>;
+  nextConfig: Record<string, unknown>;
+  onlyWhenSystemManaged: true;
+};
+
 export async function seedAutomationRuleDefaults(defaults: AutomationRuleDefault[]): Promise<void> {
   const db = await getDb();
   if (!db) return;
@@ -5934,6 +10573,35 @@ export async function seedAutomationRuleDefaults(defaults: AutomationRuleDefault
       target: automationRules.ruleKey,
     });
   }
+}
+
+/**
+ * Idempotently update old system-seeded defaults without touching an admin's
+ * choice. Both updatedBy=null and full old-value equality are required, so a
+ * customized row (including one changed directly in SQL) is preserved unless
+ * it is byte-for-byte JSON-equivalent to the published legacy default.
+ */
+export async function syncAutomationRuleDefaultChanges(
+  changes: readonly AutomationRuleDefaultChange[],
+): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  let updated = 0;
+  for (const change of changes) {
+    if (!change.onlyWhenSystemManaged) continue;
+    const rows = await db.update(automationRules).set({
+      enabled: change.nextEnabled,
+      config: change.nextConfig,
+      updatedAt: new Date(),
+    }).where(and(
+      eq(automationRules.ruleKey, change.ruleKey),
+      isNull(automationRules.updatedBy),
+      eq(automationRules.enabled, change.legacyEnabled),
+      drizzleSql`${automationRules.config} = ${JSON.stringify(change.legacyConfig)}::jsonb`,
+    )).returning({ id: automationRules.id });
+    updated += rows.length;
+  }
+  return updated;
 }
 
 export async function listAutomationRuleRows(): Promise<AutomationRuleRow[]> {
@@ -5971,6 +10639,73 @@ export async function createAutomationRun(record: Omit<InsertAutomationRun, "id"
   const db = await getDb();
   if (!db) return;
   await db.insert(automationRuns).values(record);
+}
+
+export type AutomationClaimInput = {
+  claimKey: string;
+  ruleKey: string;
+  projectId?: string | null;
+  entityId?: string | null;
+  sourceActivityLogId?: number | null;
+  /** Rolling cadence lower bound. Omit for a permanent source-event claim. */
+  since?: Date;
+  leaseMs?: number;
+};
+
+/**
+ * Acquire a database-backed lease before any external side effect. The single
+ * INSERT .. ON CONFLICT statement closes the check-then-send race across app
+ * instances. Error claims are immediately retryable; abandoned running claims
+ * become retryable after the lease expires.
+ */
+export async function tryClaimAutomation(input: AutomationClaimInput): Promise<{ token: string } | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const token = nanoid();
+  const staleBefore = new Date(Date.now() - Math.max(input.leaseMs ?? 5 * 60_000, 10_000));
+  const cadencePredicate = input.since
+    ? drizzleSql`("automation_claims"."lastFiredAt" IS NULL OR "automation_claims"."lastFiredAt" < ${input.since})`
+    : drizzleSql`"automation_claims"."lastFiredAt" IS NULL`;
+  const result = await db.execute(drizzleSql`
+    INSERT INTO "automation_claims" (
+      "claimKey", "ruleKey", "projectId", "entityId", "sourceActivityLogId",
+      "token", "status", "claimedAt", "lastError", "updatedAt"
+    ) VALUES (
+      ${input.claimKey}, ${input.ruleKey}, ${input.projectId ?? null}, ${input.entityId ?? null},
+      ${input.sourceActivityLogId ?? null}, ${token}, 'running', now(), NULL, now()
+    )
+    ON CONFLICT ("claimKey") DO UPDATE SET
+      "token" = EXCLUDED."token",
+      "status" = 'running',
+      "claimedAt" = now(),
+      "sourceActivityLogId" = COALESCE(EXCLUDED."sourceActivityLogId", "automation_claims"."sourceActivityLogId"),
+      "lastError" = NULL,
+      "updatedAt" = now()
+    WHERE
+      ("automation_claims"."status" <> 'running' OR "automation_claims"."claimedAt" < ${staleBefore})
+      AND ${cadencePredicate}
+    RETURNING "token"
+  `);
+  return result.rows.length > 0 ? { token } : null;
+}
+
+export async function finishAutomationClaim(input: {
+  claimKey: string;
+  token: string;
+  status: "fired" | "skipped" | "error";
+  error?: string | null;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(automationClaims).set({
+    status: input.status,
+    lastFiredAt: input.status === "error" ? undefined : new Date(),
+    lastError: input.error?.slice(0, 1000) ?? null,
+    updatedAt: new Date(),
+  }).where(and(
+    eq(automationClaims.claimKey, input.claimKey),
+    eq(automationClaims.token, input.token),
+  ));
 }
 
 export async function hasRecentAutomationFire(input: {
@@ -6330,6 +11065,7 @@ export type AutomationDueTask = ProjectTask & {
 export async function getAutomationDueTasks(): Promise<AutomationDueTask[]> {
   const db = await getDb();
   if (!db) return [];
+  const scanEndISO = addDaysISO(todayInShanghaiISO(), 14);
   return db
     .select({
       ...getTableColumns(projectTasks),
@@ -6339,8 +11075,9 @@ export async function getAutomationDueTasks(): Promise<AutomationDueTask[]> {
     .innerJoin(projects, eq(projectTasks.projectId, projects.id))
     .where(and(
       eq(projects.archived, false),
+      eq(projects.lifecycle, "active"),
       drizzleSql`${projectTasks.dueDate} IS NOT NULL`,
-      drizzleSql`${projectTasks.dueDate} <= CURRENT_DATE + INTERVAL '14 days'`,
+      lte(projectTasks.dueDate, scanEndISO),
       drizzleSql`${projectTasks.status} NOT IN ('done','skipped')`
     ));
 }
@@ -6349,15 +11086,17 @@ export async function getAutomationDueTasks(): Promise<AutomationDueTask[]> {
 export async function getAutomationDueIssues(): Promise<ProjectIssue[]> {
   const db = await getDb();
   if (!db) return [];
+  const scanEndISO = addDaysISO(todayInShanghaiISO(), 14);
   return db
     .select(getTableColumns(projectIssues))
     .from(projectIssues)
     .innerJoin(projects, eq(projectIssues.projectId, projects.id))
     .where(and(
       eq(projects.archived, false),
+      eq(projects.lifecycle, "active"),
       drizzleSql`${projectIssues.targetDate} IS NOT NULL`,
       drizzleSql`${projectIssues.targetDate} <> ''`,
-      drizzleSql`${projectIssues.targetDate} <= TO_CHAR(CURRENT_DATE + INTERVAL '14 days', 'YYYY-MM-DD')`,
+      lte(projectIssues.targetDate, scanEndISO),
       drizzleSql`${projectIssues.status} NOT IN ('resolved','closed','wont_fix')`
     ));
 }
@@ -6372,6 +11111,7 @@ export async function getAutomationCriticalIssues(): Promise<ProjectIssue[]> {
     .innerJoin(projects, eq(projectIssues.projectId, projects.id))
     .where(and(
       eq(projects.archived, false),
+      eq(projects.lifecycle, "active"),
       inArray(projectIssues.severity, ["P0", "P1"] as const),
       inArray(projectIssues.status, ["open", "in_progress"] as const),
     ));
@@ -6387,6 +11127,7 @@ export async function getAutomationPendingDeliverableReviews(): Promise<ProjectD
     .innerJoin(projects, eq(projectDeliverableReviews.projectId, projects.id))
     .where(and(
       eq(projects.archived, false),
+      eq(projects.lifecycle, "active"),
       eq(projectDeliverableReviews.status, "pending"),
     ));
 }
@@ -6397,7 +11138,15 @@ export async function getAutomationGatePrereqs(): Promise<Array<{
 }>> {
   const db = await getDb();
   if (!db) return [];
-  const projs = await db.select({ id: projects.id, category: projects.category }).from(projects).where(eq(projects.archived, false));
+  const projs = await db
+    .select({
+      id: projects.id,
+      category: projects.category,
+      sopTemplateVersion: projects.sopTemplateVersion,
+      customFields: projects.customFields,
+    })
+    .from(projects)
+    .where(and(eq(projects.archived, false), eq(projects.lifecycle, "active")));
   if (projs.length === 0) return [];
   const projectIds = projs.map((p) => p.id);
   const allTasks = await db.select({ projectId: projectTasks.projectId, taskId: projectTasks.taskId, status: projectTasks.status, dueDate: projectTasks.dueDate, completed: projectTasks.completed })
@@ -6410,7 +11159,7 @@ export async function getAutomationGatePrereqs(): Promise<Array<{
   }
   const out: Array<{ projectId: string; taskId: string; phaseId: string; dueDate: string | null; status: string; incompletePrereqCount: number; title: string }> = [];
   for (const p of projs) {
-    const phases = getPhasesForCategory(p.category);
+    const phases = getEffectivePhasesForProjectLike(p);
     const rows = tasksByProject.get(p.id) ?? [];
     const byTask = new Map(rows.map((r) => [r.taskId, r]));
     const isDone = (id: string) => { const r = byTask.get(id); return r ? (r.status === "done" || r.status === "skipped" || !!r.completed) : false; };
@@ -6496,7 +11245,9 @@ export async function getCalendar(userId: number, fromDate: string, toDate: stri
   for (const r of phaseRows) {
     if (tailoredByProject.get(r.projectId)?.phaseIds.has(r.phaseId)) continue;
     const p = projById.get(r.projectId);
-    const phase = p ? getPhasesForCategory(p.category).find((item) => item.id === r.phaseId) : null;
+    const phase = p
+      ? getEffectivePhasesForProjectLike(p).find((item) => item.id === r.phaseId)
+      : null;
     if (p) events.push({ date: r.endDate!, type: "phase", projectId: p.id, projectName: p.name, label: `${phase?.name ?? r.phaseId} 截止` });
   }
 
@@ -6520,7 +11271,7 @@ export async function getCalendar(userId: number, fromDate: string, toDate: stri
       tailored?.taskIds.has(r.taskId) ||
       tailored?.taskIds.has(`${r.phaseId}:${r.taskId}`)
     ) continue;
-    const phase = getPhasesForCategory(p.category).find((item) => item.id === r.phaseId);
+    const phase = getEffectivePhasesForProjectLike(p).find((item) => item.id === r.phaseId);
     if (phase?.gateTaskId === r.taskId) {
       events.push({
         date: r.dueDate!,

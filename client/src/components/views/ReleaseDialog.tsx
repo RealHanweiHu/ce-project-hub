@@ -1,11 +1,11 @@
-// 量产发布对话框：前置校验（产品关联 + 无开放 P0/P1）→ 发布生成 Rev。
-import { useState } from 'react';
+// 项目完成与产品交付对话框：项目硬卡通过后，生成/交付独立产品；不生成 Revision。
+import { useEffect, useState } from 'react';
 import { Rocket, CheckCircle2, XCircle, Loader2, AlertTriangle, Send, RefreshCw } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 
@@ -43,10 +43,9 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
     { projectId },
     { enabled: open },
   );
-  const { data: products = [] } = trpc.products.list.useQuery(undefined, { enabled: open });
   const { data: members = [] } = trpc.members.list.useQuery({ projectId }, { enabled: open });
 
-  const [selectedProductId, setSelectedProductId] = useState('');
+  const [productDraft, setProductDraft] = useState({ name: '', productNumber: '', category: '' });
   const [notes, setNotes] = useState('');
 
   // Force-release form state
@@ -54,17 +53,18 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
   const [followUpOwner, setFollowUpOwner] = useState<number | ''>('');
   const [dueDate, setDueDate] = useState('');
 
-  const setProjectMutation = trpc.products.setProject.useMutation({
-    onSuccess: () => {
-      utils.products.releasePrecheck.invalidate({ projectId });
-      toast.success('已关联产品');
-    },
-    onError: (e) => toast.error(e.message),
-  });
+  useEffect(() => {
+    if (!open || precheck?.hasProduct) return;
+    setProductDraft({
+      name: precheck?.suggestedProduct.name ?? '',
+      productNumber: precheck?.suggestedProduct.productNumber ?? '',
+      category: precheck?.suggestedProduct.category ?? '',
+    });
+  }, [open, projectId, precheck?.hasProduct, precheck?.suggestedProduct.name, precheck?.suggestedProduct.productNumber, precheck?.suggestedProduct.category]);
 
   const releaseMutation = trpc.products.release.useMutation({
     onSuccess: (res) => {
-      toast.success(`已发布 ${res.revisionLabel}`);
+      toast.success(res.createdProduct ? `已生成产品 ${res.productName}` : `已交付产品 ${res.productName}`);
       utils.products.list.invalidate();
       onReleased();
     },
@@ -76,7 +76,7 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
       if (res.approval?.status === 'sync_failed') {
         toast.error(`审批已登记，但钉钉同步失败：${res.approval.lastError ?? '未知原因'}。可稍后重新发起`);
       } else {
-        toast.success(res.alreadyPending ? '已有待处理审批' : '发布审批已发起');
+        toast.success(res.alreadyPending ? '已有待处理审批' : '完成与产品交付审批已发起');
       }
       utils.products.releasePrecheck.invalidate({ projectId });
     },
@@ -89,10 +89,10 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
       utils.products.list.invalidate();
       const status = res.approval?.status;
       if (status === 'approved') {
-        toast.success('审批已通过，发布已完成');
+        toast.success('审批已通过，产品交付已完成');
         onReleased();
       } else if (status === 'business_blocked') {
-        toast.warning(`审批已通过，但发布被硬卡拦截：${res.approval?.lastError ?? ''}`);
+        toast.warning(`审批已通过，但完成操作被硬卡拦截：${res.approval?.lastError ?? ''}`);
       } else if (status === 'rejected') {
         toast.error('审批已驳回');
       } else {
@@ -120,6 +120,12 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
     overrideReason.trim().length > 0 &&
     followUpOwner !== '' &&
     dueDate.length > 0;
+  const productDraftReady = !!precheck?.hasProduct || productDraft.name.trim().length > 0;
+  const outputProduct = precheck?.hasProduct ? undefined : {
+    name: productDraft.name.trim(),
+    productNumber: productDraft.productNumber.trim() || undefined,
+    category: productDraft.category.trim() || undefined,
+  };
 
   const blockers = precheck?.blockers ?? [];
   const blockersText = blockers.join('；');
@@ -127,16 +133,15 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
   const approvalInstances = ((precheck as { approvalInstances?: ApprovalInstance[] } | undefined)?.approvalInstances ?? []);
   const pendingApproval = (precheck as { pendingApproval?: ApprovalInstance | null } | undefined)?.pendingApproval ?? null;
   const latestApproval = approvalInstances[0] ?? null;
-  const approvalCanSubmit = approvalRequired && (precheck?.canRelease || precheck?.canForceRelease) && (!precheck?.canForceRelease || forceFormValid);
+  const approvalCanSubmit = approvalRequired && productDraftReady && (precheck?.canRelease || precheck?.canForceRelease) && (!precheck?.canForceRelease || forceFormValid);
   const hardCardsSatisfied =
-    !!precheck?.hasProduct &&
     (precheck?.openP0P1 ?? 0) === 0 &&
     delOk &&
     gateDecision !== null &&
     gateDecision !== 'rejected';
 
   const handleNormalRelease = () => {
-    releaseMutation.mutate({ projectId, notes: notes.trim() || undefined });
+    releaseMutation.mutate({ projectId, notes: notes.trim() || undefined, product: outputProduct });
   };
 
   const handleForceRelease = () => {
@@ -144,6 +149,7 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
     releaseMutation.mutate({
       projectId,
       notes: notes.trim() || undefined,
+      product: outputProduct,
       override: {
         overrideReason: overrideReason.trim(),
         followUpOwner: followUpOwner as number,
@@ -155,6 +161,7 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
   const handleSubmitApproval = () => {
     submitApprovalMutation.mutate({
       projectId,
+      product: outputProduct,
       override: precheck?.canForceRelease && followUpOwner !== ''
         ? {
             overrideReason: overrideReason.trim(),
@@ -175,8 +182,11 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Rocket size={16} className="text-primary" /> 量产发布
+            <Rocket size={16} className="text-primary" /> 项目完成与产品交付
           </DialogTitle>
+          <DialogDescription className="sr-only">
+            完成项目并将成果作为独立产品交付到产品库；此操作不生成 Revision。
+          </DialogDescription>
         </DialogHeader>
 
         {isLoading ? (
@@ -190,27 +200,32 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
                   ? 'border-[color:var(--warning)] bg-[color:var(--warning-soft)]'
                   : 'border-destructive bg-[color:var(--destructive-soft)]'
             }`}>
-              <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">发布结论</div>
+              <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">完成结论</div>
               <div className="text-sm font-semibold" style={{
                 color: precheck?.canRelease ? 'var(--success)' : precheck?.canForceRelease ? 'var(--warning)' : 'var(--destructive)',
               }}>
-                {precheck?.canRelease && '硬卡已满足，可以正常发布'}
+                {precheck?.alreadyReleased && '产品交付已完成，项目正在稳定期'}
+                {!precheck?.alreadyReleased && precheck?.canRelease && '硬卡已满足，可以完成项目并交付产品'}
                 {precheck?.canForceRelease && '硬卡已满足，但 Gate 为有条件通过'}
-                {!precheck?.canRelease && !precheck?.canForceRelease && '硬卡未满足，暂不可发布'}
+                {!precheck?.alreadyReleased && !precheck?.canRelease && !precheck?.canForceRelease && '硬卡未满足，暂不可完成并交付'}
               </div>
               <div className="mt-1 text-[11px] text-muted-foreground leading-snug">
-                {hardCardsSatisfied
+                {precheck?.alreadyReleased
+                  ? '请完成 2–8 周爬坡/稳定验证，并通过 Close Gate 后归档项目。'
+                  : hardCardsSatisfied
                   ? gateConditional
-                    ? '需要记录例外风险、跟进负责人与截止日，发布责任由批准人承接。'
-                    : '产品、P0/P1、交付物审核、Gate 决议均已满足。'
-                  : '下方红色项是发布硬卡，补齐后再拍板。'}
+                    ? '需要记录例外风险、跟进负责人与截止日，完成与交付责任由批准人承接。'
+                    : 'P0/P1、交付物审核和 Gate 决议均已满足。'
+                  : '下方红色项是完成硬卡，补齐后再拍板。'}
               </div>
             </div>
 
             {/* 前置校验 */}
             <div className="space-y-2 border border-border rounded-[9px] p-3 bg-secondary">
               <div className="text-[10px] uppercase tracking-widest text-muted-foreground">前置校验</div>
-              <Check ok={!!precheck?.hasProduct}>已关联产品</Check>
+              <Check ok={productDraftReady}>
+                {precheck?.hasProduct ? `交付到产品：${precheck.productName}` : '独立产品信息已准备'}
+              </Check>
               <Check ok={(precheck?.openP0P1 ?? 0) === 0}>
                 无未关闭 P0/P1 问题{(precheck?.openP0P1 ?? 0) > 0 ? `（当前 ${precheck?.openP0P1} 个）` : ''}
               </Check>
@@ -239,6 +254,13 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
                   </div>
                 )}
               </div>
+              {/* 其余未过的硬卡维度（前置任务/本阶段 P0P1 等）也并入本清单，
+                  不再在底部用「发布阻断」红框重列一遍（同一阻塞只出现一次） */}
+              {(precheck?.releaseGate?.dimensions ?? [])
+                .filter((dim) => !dim.ok && dim.dimension !== 'review_conditions' && dim.dimension !== 'deliverables')
+                .map((dim) => (
+                  <Check key={dim.dimension} ok={false}>{dim.summary}</Check>
+                ))}
             </div>
 
             {approvalRequired && (
@@ -262,41 +284,61 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
                     )}
                   </div>
                 ) : (
-                  <div className="text-sm text-muted-foreground">尚未发起发布审批</div>
+                  <div className="text-sm text-muted-foreground">尚未发起完成与产品交付审批</div>
                 )}
               </div>
             )}
 
-            {/* 未关联产品 → 关联 */}
-            {!precheck?.hasProduct && (
-              <div className="space-y-1.5">
-                <Label className="text-sm text-foreground">关联产品</Label>
-                <div className="flex gap-2">
-                  <select
-                    value={selectedProductId}
-                    onChange={(e) => setSelectedProductId(e.target.value)}
-                    className="flex-1 border border-border rounded-[7px] text-sm px-2 py-2 bg-card"
-                  >
-                    <option value="">选择产品…</option>
-                    {(products as { id: string; name: string; category: string }[]).map((p) => (
-                      <option key={p.id} value={p.id}>{p.name}（{p.category || '未分类'}）</option>
-                    ))}
-                  </select>
-                  <Button
-                    variant="outline"
-                    disabled={!selectedProductId || setProjectMutation.isPending}
-                    onClick={() => setProjectMutation.mutate({ projectId, productId: selectedProductId })}
-                  >关联</Button>
+            <div className="space-y-2 rounded-[9px] border border-[color:var(--acc-border)] bg-[color:var(--acc-soft)] p-3">
+              <div className="text-[10px] uppercase tracking-widest text-muted-foreground">输出产品</div>
+              {precheck?.hasProduct ? (
+                <div>
+                  <div className="text-sm font-medium text-foreground">{precheck.productName}</div>
+                  <p className="mt-1 text-[11px] text-muted-foreground">该历史项目已有输出产品，本次只完成产品交付，不生成 Revision。</p>
                 </div>
-                <p className="text-[11px] text-muted-foreground">产品库里没有？先去「产品库」新建。</p>
-              </div>
-            )}
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="col-span-2 space-y-1">
+                      <span className="text-[11px] text-foreground">产品名称 <span className="text-destructive">*</span></span>
+                      <input
+                        value={productDraft.name}
+                        onChange={(e) => setProductDraft({ ...productDraft, name: e.target.value })}
+                        className="w-full rounded-[7px] border border-border bg-card px-2 py-2 text-sm"
+                        placeholder="项目完成后生成的产品名称"
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-[11px] text-foreground">产品编号</span>
+                      <input
+                        value={productDraft.productNumber}
+                        onChange={(e) => setProductDraft({ ...productDraft, productNumber: e.target.value })}
+                        className="w-full rounded-[7px] border border-border bg-card px-2 py-2 text-sm"
+                        placeholder="可沿用项目编号"
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-[11px] text-foreground">产品分类</span>
+                      <input
+                        value={productDraft.category}
+                        onChange={(e) => setProductDraft({ ...productDraft, category: e.target.value })}
+                        className="w-full rounded-[7px] border border-border bg-card px-2 py-2 text-sm"
+                        placeholder="如：充气泵"
+                      />
+                    </label>
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-muted-foreground">
+                    完成后直接在产品库生成一个独立产品。Revision 不在这里创建，仅用于后续包装、印刷、标签等轻微改版。
+                  </p>
+                </>
+              )}
+            </div>
 
-            {/* 强制发布表单（仅 canForceRelease 时渲染） */}
+            {/* 强制完成表单（仅 canForceRelease 时渲染） */}
             {precheck?.canForceRelease && (
               <div className="space-y-3 border border-destructive rounded-[9px] p-3 bg-[color:var(--destructive-soft)]">
                 <div className="text-[10px] uppercase tracking-widest text-destructive">
-                  有条件通过 — 强制发布
+                  有条件通过 — 强制完成与交付
                 </div>
                 {precheck.releaseGate?.conditions && (
                   <div className="text-[11px] text-destructive leading-snug">
@@ -304,13 +346,13 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
                   </div>
                 )}
                 <div className="space-y-1.5">
-                  <Label className="text-sm text-foreground">强制发布理由 <span className="text-destructive">*</span></Label>
+                  <Label className="text-sm text-foreground">强制完成理由 <span className="text-destructive">*</span></Label>
                   <textarea
                     value={overrideReason}
                     onChange={(e) => setOverrideReason(e.target.value)}
                     rows={2}
                     className="w-full border border-destructive rounded-[7px] text-sm px-2 py-2 bg-card"
-                    placeholder="说明强制发布的原因…"
+                    placeholder="说明强制完成与交付的原因…"
                   />
                 </div>
                 <div className="space-y-1.5">
@@ -340,42 +382,33 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
               </div>
             )}
 
-            {/* 发布说明 */}
+            {/* 完成与产品交付说明 */}
             <div className="space-y-1.5">
-              <Label className="text-sm text-foreground">量产注意事项 / 备注</Label>
+              <Label className="text-sm text-foreground">完成与交付备注</Label>
               <textarea
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 rows={3}
                 className="w-full border border-border rounded-[7px] text-sm px-2 py-2 bg-card"
-                placeholder="发布说明、风险、量产注意事项…"
+                placeholder="完成说明、遗留风险、量产注意事项…"
               />
             </div>
 
-            {/* 阻断原因列表（可强制发布时由上方强制表单替代，避免红框与表单并存） */}
-            {blockers.length > 0 && !precheck?.canForceRelease && (
-              <div className="space-y-1 border border-destructive rounded-[9px] p-2.5 bg-[color:var(--destructive-soft)]">
-                <div className="text-[10px] uppercase tracking-widest text-destructive">发布阻断</div>
-                {blockers.map((b, i) => (
-                  <div key={i} className="flex items-start gap-1.5 text-[11px] text-destructive">
-                    <XCircle size={12} className="mt-0.5 shrink-0" />
-                    {b}
-                  </div>
-                ))}
-              </div>
-            )}
+            {/* 阻断明细已全部体现在「前置校验」逐项清单里，不再单独渲染红框重列（B4 去重） */}
 
-            <p className="text-[11px] text-muted-foreground leading-relaxed">
-              发布将生成新版本（Rev）、把产品转为「量产」状态、并归档本项目。此动作不可撤销。
-            </p>
+            {!precheck?.alreadyReleased && (
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                完成操作会生成或交付一个独立产品，不生成 Revision。项目随后进入 2–8 周稳定期，Close Gate 通过后再归档。
+              </p>
+            )}
           </div>
         )}
 
         <DialogFooter className="flex-col items-end gap-1.5">
-          {/* 有条件通过但当前用户无权强制发布时的提示 */}
+          {/* 有条件通过但当前用户无权强制完成时的提示 */}
           {!precheck?.canRelease && !precheck?.canForceRelease && gateConditional && (
             <p className="text-[11px] text-muted-foreground w-full text-right">
-              需项目创建人/PM/管理者强制发布
+              需项目创建人/PM/管理者强制完成与交付
             </p>
           )}
           <div className="flex gap-2">
@@ -405,29 +438,29 @@ export function ReleaseDialog({ projectId, open, onOpenChange, onReleased }: Rel
             ) : precheck?.canRelease ? (
               <Button
                 className="bg-primary hover:opacity-90 text-primary-foreground gap-1.5"
-                disabled={releaseMutation.isPending}
+                disabled={!productDraftReady || releaseMutation.isPending}
                 onClick={handleNormalRelease}
               >
                 <Rocket size={14} />
-                {releaseMutation.isPending ? '发布中…' : '确认发布'}
+                {releaseMutation.isPending ? '交付中…' : '完成并交付产品'}
               </Button>
             ) : precheck?.canForceRelease ? (
               <Button
                 className="bg-destructive hover:opacity-90 text-white gap-1.5"
-                disabled={!forceFormValid || releaseMutation.isPending}
+                disabled={!productDraftReady || !forceFormValid || releaseMutation.isPending}
                 onClick={handleForceRelease}
               >
                 <Rocket size={14} />
-                {releaseMutation.isPending ? '发布中…' : '强制发布'}
+                {releaseMutation.isPending ? '交付中…' : '强制完成并交付'}
               </Button>
             ) : (
               <Button
                 className="bg-secondary text-muted-foreground gap-1.5 cursor-not-allowed"
                 disabled
-                title={blockersText || '发布条件未满足'}
+                title={blockersText || '完成条件未满足'}
               >
                 <XCircle size={14} />
-                不可发布
+                暂不可完成
               </Button>
             )}
           </div>

@@ -1,29 +1,59 @@
 // 项目总揽：左侧分区导航 + 右侧内容。把原先堆在一页的功能整理为
 // 基础信息 / 团队与分工 / 排期与周会 / 钉钉群 / 自定义字段 五个分区。
 import { useEffect, useState } from 'react';
-import { Project, HEALTH_CONFIG, getProjectPhases, computeOverallProgress } from '@/lib/data';
-import { CATEGORY_MAP } from '@/lib/sop-templates';
+import { Project, getProjectPhases } from '@/lib/data';
 import { trpc } from '@/lib/trpc';
+import { useProjectPermission } from '@/hooks/useProjectPermission';
 import {
-  Hash, User, AlertTriangle, CalendarRange, Flag, GaugeCircle, ListChecks, Bug, GitBranch,
-  Users, CalendarClock, RefreshCw, UserCheck, Rocket, FileText, MessagesSquare, CheckCircle2, Loader2, Boxes, ShieldAlert, Edit3,
+  AlertTriangle, ListChecks, GitBranch,
+  Users, CalendarClock, RefreshCw, UserCheck, Rocket, FileText, MessagesSquare, CheckCircle2, Loader2, Boxes, ShieldAlert,
+  PauseCircle,
+  Handshake,
+  WalletCards,
 } from 'lucide-react';
 import { MeetingConfigPanel } from './MeetingConfigPanel';
 import { MembersPanel } from './MembersPanel';
 import { CustomFieldsPanel } from './CustomFieldsPanel';
 import { KickoffWizard } from './KickoffWizard';
 import { RisksPanel } from './RisksPanel';
+import { CertificationCoveragePanel } from './CertificationCoveragePanel';
+import { ControlledConditionsPanel } from './ControlledConditionsPanel';
+import { CloseHandoffPanel } from './CloseHandoffPanel';
+import { ProjectExpensePanel } from './ProjectExpensePanel';
+import { ControlledTransitionPanel } from './ControlledTransitionPanel';
+import { TerminationReviewPanel } from './TerminationReviewPanel';
 import { isProjectedOverdue } from '@shared/health';
+import {
+  EMPTY_CHANGE_SCOPE_DECLARATION,
+  type ProjectChangeScopeDeclaration,
+} from '@shared/sop-risk';
 import { toast } from 'sonner';
 
-type SectionKey = 'info' | 'risks' | 'team' | 'schedule' | 'dingtalk' | 'fields';
+const CHANGE_SCOPE_FIELDS: Array<{ key: keyof ProjectChangeScopeDeclaration; label: string }> = [
+  { key: 'batteryCellChange', label: '电芯变化' },
+  { key: 'batteryPackOrBmsChange', label: '电池包 / BMS / 保护板变化' },
+  { key: 'protectionParameterChange', label: '充放电或保护参数变化' },
+  { key: 'powerOrThermalBoundaryChange', label: '功率 / 电流 / 温升边界变化' },
+  { key: 'pressurizedStructureChange', label: '受压结构或过压保护变化' },
+  { key: 'targetMarketExpansion', label: '新增目标市场' },
+  { key: 'criticalSafetySupplierChange', label: '关键安全件供应商 / 二供变化' },
+  { key: 'safetyRelatedSoftwareChange', label: '安全相关固件 / OTA / APP 变化' },
+  { key: 'eolTestChange', label: 'EOL 测试项目、限值或能力变化' },
+  { key: 'otherSafetyOrRegulatoryChange', label: '其他安全或法规变化' },
+];
+
+type SectionKey = 'info' | 'process' | 'risks' | 'expenses' | 'close' | 'team' | 'schedule' | 'dingtalk' | 'fields' | 'lifecycle';
 const SECTIONS: Array<{ key: SectionKey; label: string; icon: React.ComponentType<{ size?: number }> }> = [
   { key: 'info', label: '基础信息', icon: FileText },
+  { key: 'process', label: '流程策略', icon: GitBranch },
   { key: 'risks', label: '风险生命周期', icon: ShieldAlert },
+  { key: 'expenses', label: '项目费用', icon: WalletCards },
+  { key: 'close', label: '关闭移交', icon: Handshake },
   { key: 'team', label: '团队与分工', icon: Users },
   { key: 'schedule', label: '排期与周会', icon: CalendarClock },
   { key: 'dingtalk', label: '钉钉对接群', icon: MessagesSquare },
   { key: 'fields', label: '自定义字段', icon: ListChecks },
+  { key: 'lifecycle', label: '暂停与终止', icon: PauseCircle },
 ];
 
 type ProductHandoff = {
@@ -68,43 +98,28 @@ export function OverviewPanel({
   canEdit,
   canManageMembers,
   isAdmin,
-  onOpenRiskOverride,
 }: {
   project: Project;
   onUpdate: (p: Project) => void;
   canEdit: boolean;
   canManageMembers: boolean;
   isAdmin: boolean;
-  onOpenRiskOverride?: () => void;
 }) {
-  const { data: members = [] } = trpc.members.list.useQuery({ projectId: project.id });
-  const { data: users = [] } = trpc.admin.listUsersForSelect.useQuery(undefined, { staleTime: 60_000 });
-  const { data: productList = [] } = trpc.products.list.useQuery(undefined, { staleTime: 60_000 });
+  // 多岗成员按"有效角色集合"判权，不再只看主角色（accessRole）——否则兼任 scm/cert
+  // 的成员在费用/认证面板拿不到 extraRoles 授予的能力（一人多岗设计 §2.1）。
+  const unionPerms = useProjectPermission(project.id);
+  const hasAnyRole = (list: readonly string[]) =>
+    unionPerms.roles.some((role) => list.includes(role)) || list.includes(project.accessRole ?? '');
   const { data: productHandoff, isLoading: productHandoffLoading } = trpc.projects.productHandoff.useQuery(
     { projectId: project.id },
     { staleTime: 60_000 },
   );
-  const linkedProduct = project.productId ? (productList as Array<{ id: string; name: string }>).find((p) => p.id === project.productId) : null;
   const utils = trpc.useUtils();
 
   const [section, setSection] = useState<SectionKey>('info');
   const [kickoffOpen, setKickoffOpen] = useState(false);
 
-  const catConfig = project.category ? CATEGORY_MAP[project.category] : null;
   const phases = getProjectPhases(project);
-  const currentPhaseName = phases.find((p) => p.id === project.currentPhase)?.name ?? project.currentPhase;
-  const overallProgress = computeOverallProgress(project);
-  const health = HEALTH_CONFIG[project.risk];
-  const pmName = project.pmUserId ? users.find((u) => u.id === project.pmUserId)?.name ?? '—' : '—';
-
-  let doneTasks = 0, totalTasks = 0;
-  for (const phase of phases) {
-    const taskState = project.phases[phase.id]?.tasks ?? {};
-    for (const task of phase.tasks) { totalTasks += 1; if (taskState[task.id]) doneTasks += 1; }
-  }
-  const taskRate = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
-  const openIssues = phases.reduce((sum, phase) => sum + (project.phases[phase.id]?.issues ?? []).filter((i) => i.status === 'open' || i.status === 'in_progress').length, 0);
-  const pendingChanges = (project.changeLog ?? []).filter((r) => r.status === 'proposed').length;
 
   let projectedEnd: string | null = null;
   for (const phase of phases) {
@@ -168,64 +183,6 @@ export function OverviewPanel({
               canGenerate={canEdit}
             />
 
-            {catConfig && (
-              <div className={`rounded-[11px] border border-border bg-card flex items-start gap-4 border ${catConfig.borderColor} ${catConfig.color} p-4 shadow-none`}>
-                <span className="text-3xl leading-none">{catConfig.icon}</span>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className={`text-sm font-semibold ${catConfig.textColor}`}>{catConfig.name}</span>
-                    <span className={`text-[10px] px-1.5 py-0.5 border ${catConfig.borderColor} ${catConfig.textColor}`}>{catConfig.badge}</span>
-                    <span className="text-[10px] text-muted-foreground">{catConfig.phaseCount} 阶段 · {catConfig.typicalDuration}</span>
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{catConfig.desc}</p>
-                </div>
-              </div>
-            )}
-
-            <div>
-              <h3 className="text-[11px] uppercase tracking-widest text-muted-foreground mb-3">关键信息</h3>
-              <div className="grid grid-cols-2 gap-x-8 gap-y-5 rounded-[12px] border border-border bg-card px-5 py-[18px] md:grid-cols-3">
-                <InfoCell icon={<Hash size={13} />} label="项目编号" value={project.code || '—'} mono />
-                <InfoCell icon={<User size={13} />} label="项目经理" value={pmName} />
-                <InfoCell icon={<Boxes size={13} />} label="关联产品" value={linkedProduct ? linkedProduct.name : (project.productId ? project.productId : '新产品 / 未关联')} />
-                <InfoCell icon={<AlertTriangle size={13} />} label="项目健康度" value={
-                  <div className="space-y-1.5">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className={`inline-flex items-center gap-1.5 ${health?.color}`}>
-                        <span className={`h-1.5 w-1.5 rounded-full ${health?.dot ?? 'bg-muted-foreground'}`} />
-                        {health?.label ?? project.risk}
-                      </span>
-                      <span className="text-[10px] text-muted-foreground">{project.riskOverrideRisk ? '手动覆盖' : '自动计算'}</span>
-                      {canEdit && onOpenRiskOverride && (
-                        <button
-                          type="button"
-                          onClick={onOpenRiskOverride}
-                          className="rounded-[7px] inline-flex items-center gap-1 border border-border bg-card px-2 py-1 text-[10px] text-[color:var(--secondary-foreground)] transition-colors hover:border-[color:var(--acc-border)] hover:text-foreground"
-                        >
-                          <Edit3 size={10} />
-                          手动覆盖
-                        </button>
-                      )}
-                    </div>
-                    {project.riskOverrideReason && (
-                      <div className="text-[11px] leading-relaxed text-muted-foreground">原因：{project.riskOverrideReason}</div>
-                    )}
-                    {!canEdit && (
-                      <div className="text-[11px] text-muted-foreground">仅 Owner / 管理层 / PM 可覆盖</div>
-                    )}
-                  </div>
-                } />
-                <InfoCell icon={<Flag size={13} />} label="当前阶段" value={currentPhaseName} />
-                <InfoCell icon={<CalendarRange size={13} />} label="计划起止" value={`${project.startDate || '—'} ~ ${project.targetDate || '—'}`} mono />
-                <InfoCell className="col-span-2 md:col-span-3" icon={<GaugeCircle size={13} />} label="整体进度" value={
-                  <div className="flex items-center gap-3">
-                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-secondary min-w-[48px]"><div className="h-full rounded-full bg-primary" style={{ width: `${overallProgress}%` }} /></div>
-                    <span className="num text-xs text-[color:var(--secondary-foreground)]">{overallProgress}%</span>
-                  </div>
-                } />
-              </div>
-            </div>
-
             <div>
               <h3 className="text-[11px] uppercase tracking-widest text-muted-foreground mb-3">立项信息</h3>
               <div className="grid grid-cols-1 gap-x-8 gap-y-[18px] rounded-[12px] border border-border bg-card px-5 py-[18px] md:grid-cols-2">
@@ -236,22 +193,44 @@ export function OverviewPanel({
               </div>
             </div>
 
-            <div>
-              <h3 className="text-[11px] uppercase tracking-widest text-muted-foreground mb-3">关键指标</h3>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <Metric icon={<ListChecks size={15} />} label="任务完成率" value={`${taskRate}%`} sub={`${doneTasks}/${totalTasks}`} />
-                <Metric icon={<Bug size={15} />} label="开放问题" value={String(openIssues)} accent={openIssues > 0 ? 'text-[color:var(--destructive)]' : undefined} />
-                <Metric icon={<GitBranch size={15} />} label="待决变更" value={String(pendingChanges)} accent={pendingChanges > 0 ? 'text-[color:var(--warning)]' : undefined} />
-                <Metric icon={<Users size={15} />} label="项目成员" value={String(members.length)} />
-              </div>
-            </div>
           </>
         )}
 
+        {section === 'process' && (
+          <div className="space-y-5">
+            <ControlledTransitionPanel project={project} canEdit={canEdit || isAdmin} />
+          </div>
+        )}
+
+        {section === 'lifecycle' && (
+          <ProjectLifecyclePanel project={project} canEdit={canEdit} />
+        )}
+
+        {section === 'close' && (
+          <CloseHandoffPanel projectId={project.id} canEdit={canEdit || isAdmin} isAdmin={isAdmin} />
+        )}
+
+        {section === 'expenses' && (
+          <ProjectExpensePanel
+            projectId={project.id}
+            canView={isAdmin || canEdit || hasAnyRole(['owner', 'manager', 'project_manager', 'pm', 'scm'])}
+            canEdit={isAdmin || canEdit || hasAnyRole(['pm', 'scm'])}
+          />
+        )}
+
         {section === 'risks' && (
-          <div>
+          <div className="space-y-6">
+            <SopRiskScopePanel project={project} canEdit={canEdit} isAdmin={isAdmin} />
+            <CertificationCoveragePanel
+              projectId={project.id}
+              canEdit={canEdit || isAdmin || hasAnyRole(['cert', 'qa', 'battery_safety'])}
+              canReview={isAdmin || hasAnyRole(['cert', 'qa', 'battery_safety'])}
+            />
+            <ControlledConditionsPanel projectId={project.id} canEdit={canEdit || isAdmin} />
+            <div>
             <h3 className="text-[11px] uppercase tracking-widest text-muted-foreground mb-3">风险生命周期</h3>
             <RisksPanel projectId={project.id} canEdit={canEdit} />
+            </div>
           </div>
         )}
 
@@ -533,6 +512,232 @@ function ProductDefinitionHandoffPanel({
   );
 }
 
+/** 项目生命周期面板：暂停（可恢复）/ 恢复 / 终止（终局，理由必填+善后说明留痕）。权限同项目完成与产品交付。 */
+function ProjectLifecyclePanel({ project, canEdit }: { project: Project; canEdit: boolean }) {
+  const utils = trpc.useUtils();
+  const lifecycle = project.lifecycle ?? 'active';
+  const [pauseReason, setPauseReason] = useState('');
+
+  const mut = trpc.projects.setLifecycle.useMutation({
+    onSuccess: async (_r, vars) => {
+      await Promise.all([
+        utils.projects.get.invalidate({ id: project.id }),
+        utils.projects.list.invalidate(),
+      ]);
+      toast.success(
+        vars.lifecycle === 'terminated' ? '项目已终止并归档（终局，不可恢复）'
+          : vars.lifecycle === 'paused' ? '项目已暂停：保留可见，退出逾期与自动化提醒'
+            : '项目已恢复'
+      );
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const badge = lifecycle === 'terminated'
+    ? <span className="text-[10px] rounded px-1.5 py-0.5 bg-rose-100 text-rose-700 border border-rose-200">已终止</span>
+    : lifecycle === 'paused'
+      ? <span className="text-[10px] rounded px-1.5 py-0.5 bg-amber-100 text-amber-700 border border-amber-200">已暂停</span>
+      : <span className="text-[10px] rounded px-1.5 py-0.5 bg-emerald-100 text-emerald-700 border border-emerald-200">进行中</span>;
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h3 className="text-[11px] uppercase tracking-widest text-muted-foreground mb-3">暂停与终止</h3>
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground">当前状态</span>
+          {badge}
+        </div>
+        {lifecycle !== 'active' && project.lifecycleReason && (
+          <p className="mt-1.5 text-xs text-muted-foreground">理由：{project.lifecycleReason}</p>
+        )}
+      </div>
+
+      {lifecycle === 'terminated' && (
+        <p className="text-xs text-muted-foreground">
+          项目已终止并归档：不再出现在活跃列表与统计中，不能完成产品交付，也不可恢复。善后记录见项目动态。
+        </p>
+      )}
+
+      {lifecycle === 'paused' && canEdit && (
+        <div className="rounded-lg border border-border p-3 space-y-2">
+          <div className="text-xs text-muted-foreground">暂停中：项目保留可见，但不进逾期统计与自动化提醒。</div>
+          <button
+            disabled={mut.isPending}
+            onClick={() => mut.mutate({ projectId: project.id, lifecycle: 'active' })}
+            className="text-xs rounded px-3 py-1.5 bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50"
+          >恢复项目</button>
+        </div>
+      )}
+
+      {lifecycle === 'active' && canEdit && (
+        <div className="rounded-lg border border-border p-3 space-y-2">
+          <div className="text-xs font-medium text-foreground">暂停项目</div>
+          <div className="text-xs text-muted-foreground">适用：等客户回复、等物料等外部依赖。暂停可随时恢复。</div>
+          <textarea
+            value={pauseReason}
+            onChange={(e) => setPauseReason(e.target.value)}
+            placeholder="暂停理由（必填），例：等客户确认规格，预计两周"
+            className="w-full text-xs rounded border border-border bg-background p-2 min-h-[52px]"
+          />
+          <button
+            disabled={mut.isPending || !pauseReason.trim()}
+            onClick={() => mut.mutate({ projectId: project.id, lifecycle: 'paused', reason: pauseReason.trim() })}
+            className="text-xs rounded px-3 py-1.5 bg-secondary text-foreground border border-border hover:bg-secondary/80 disabled:opacity-50"
+          >暂停项目</button>
+        </div>
+      )}
+
+      {lifecycle !== 'terminated' && <TerminationReviewPanel projectId={project.id} canEdit={canEdit} />}
+
+      {!canEdit && lifecycle !== 'terminated' && (
+        <p className="text-xs text-muted-foreground">仅项目创建人 / PM / 管理层可暂停或终止项目。</p>
+      )}
+    </div>
+  );
+}
+
+function SopRiskScopePanel({ project, canEdit, isAdmin }: { project: Project; canEdit: boolean; isAdmin: boolean }) {
+  const utils = trpc.useUtils();
+  const { data: riskScope, isLoading } = trpc.projects.riskScope.useQuery({ projectId: project.id });
+  const [draft, setDraft] = useState<ProjectChangeScopeDeclaration>(EMPTY_CHANGE_SCOPE_DECLARATION);
+
+  useEffect(() => {
+    setDraft({
+      ...EMPTY_CHANGE_SCOPE_DECLARATION,
+      ...(riskScope?.declaration ?? project.changeScopeDeclaration ?? {}),
+      targetMarkets: riskScope?.declaration?.targetMarkets ?? project.changeScopeDeclaration?.targetMarkets ?? [],
+    });
+  }, [project.id, project.changeScopeDeclaration, riskScope?.id]);
+
+  const save = trpc.projects.setRiskScope.useMutation({
+    onSuccess: async () => {
+      await Promise.all([
+        utils.projects.riskScope.invalidate({ projectId: project.id }),
+        utils.projects.get.invalidate({ id: project.id }),
+      ]);
+      toast.success('变更范围声明已生成新版本，风险和 Gate 要求已重新计算');
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const confirmScope = trpc.projects.confirmRiskScope.useMutation({
+    onSuccess: async () => {
+      await utils.projects.riskScope.invalidate({ projectId: project.id });
+      toast.success('专业确认已记录');
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
+  const assessment = riskScope?.assessment;
+  const highSafety = (assessment?.safetyRiskLevel ?? project.safetyRiskLevel) === 'high';
+  const highRegulatory = (assessment?.regulatoryRiskLevel ?? project.regulatoryRiskLevel) === 'high';
+  const scopePerms = useProjectPermission(project.id);
+  const scopeHasAnyRole = (list: readonly string[]) =>
+    scopePerms.roles.some((role) => list.includes(role)) || list.includes(project.accessRole ?? '');
+  const canConfirmEngineering = isAdmin || scopeHasAnyRole(['rd_hw', 'rd_sw', 'rd_mech']);
+  const canConfirmQaOrCert = isAdmin || scopeHasAnyRole(['qa', 'cert', 'battery_safety']);
+
+  return (
+    <div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-[11px] uppercase tracking-widest text-muted-foreground">变更范围声明与自动风险</h3>
+        <div className="flex items-center gap-2 text-[10px]">
+          <span className={`rounded border px-2 py-1 ${highSafety ? 'border-red-300 bg-red-50 text-red-700' : 'border-border text-muted-foreground'}`}>
+            安全 {highSafety ? '高风险' : '标准'}
+          </span>
+          <span className={`rounded border px-2 py-1 ${highRegulatory ? 'border-red-300 bg-red-50 text-red-700' : 'border-border text-muted-foreground'}`}>
+            法规 {highRegulatory ? '高风险' : '标准'}
+          </span>
+          {riskScope?.version && <span className="num text-muted-foreground">v{riskScope.version}</span>}
+        </div>
+      </div>
+
+      <div className="rounded-[11px] border border-border bg-card p-4">
+        <p className="mb-4 text-xs leading-relaxed text-muted-foreground">
+          系统只读取这些结构化选项和产品目标市场，不扫描备注关键词。风险升级会作废未完成的 Gate 会签轮次并按新矩阵重开。
+        </p>
+        {isLoading ? (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 size={13} className="animate-spin" />加载声明…</div>
+        ) : (
+          <>
+            <div className="grid gap-2 md:grid-cols-2">
+              {CHANGE_SCOPE_FIELDS.map((field) => (
+                <label key={field.key} className="flex items-start gap-2 rounded-[8px] border border-border bg-background px-3 py-2 text-xs text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={draft[field.key] === true}
+                    disabled={!canEdit}
+                    onChange={(event) => setDraft((current) => ({ ...current, [field.key]: event.target.checked }))}
+                    className="mt-0.5"
+                  />
+                  <span>{field.label}</span>
+                </label>
+              ))}
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                本项目目标市场
+                <input
+                  value={draft.targetMarkets.join(', ')}
+                  disabled={!canEdit}
+                  onChange={(event) => setDraft((current) => ({
+                    ...current,
+                    targetMarkets: event.target.value.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean),
+                  }))}
+                  placeholder="例如 US, EU, JP"
+                  className="mt-1 w-full rounded-[8px] border border-border bg-background px-3 py-2 text-xs normal-case text-foreground outline-none focus:border-primary disabled:bg-secondary"
+                />
+              </label>
+              <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                声明备注（不参与自动判定）
+                <input
+                  value={draft.notes ?? ''}
+                  disabled={!canEdit}
+                  onChange={(event) => setDraft((current) => ({ ...current, notes: event.target.value }))}
+                  placeholder="说明范围和依据"
+                  className="mt-1 w-full rounded-[8px] border border-border bg-background px-3 py-2 text-xs normal-case text-foreground outline-none focus:border-primary disabled:bg-secondary"
+                />
+              </label>
+            </div>
+
+            {(assessment?.safetyReasons?.length || assessment?.regulatoryReasons?.length) ? (
+              <div className="mt-3 rounded-[8px] border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
+                {[...(assessment?.safetyReasons ?? []), ...(assessment?.regulatoryReasons ?? [])].filter((item, index, all) => all.indexOf(item) === index).join('；')}
+              </div>
+            ) : null}
+
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+              <div className="text-[11px] text-muted-foreground">
+                研发确认：{riskScope?.engineeringConfirmedAt ? '已确认' : '待确认'} · QA/认证确认：{riskScope?.qaOrCertConfirmedAt ? '已确认' : '待确认'}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {riskScope?.version && (canConfirmEngineering || canConfirmQaOrCert) && (
+                  <>
+                    {canConfirmEngineering && (
+                      <button type="button" onClick={() => confirmScope.mutate({ projectId: project.id, version: riskScope.version, kind: 'engineering' })}
+                        disabled={confirmScope.isPending} className="rounded-[8px] border border-border px-3 py-1.5 text-xs hover:bg-secondary disabled:opacity-50">研发确认</button>
+                    )}
+                    {canConfirmQaOrCert && (
+                      <button type="button" onClick={() => confirmScope.mutate({ projectId: project.id, version: riskScope.version, kind: 'qa_or_cert' })}
+                        disabled={confirmScope.isPending} className="rounded-[8px] border border-border px-3 py-1.5 text-xs hover:bg-secondary disabled:opacity-50">QA/认证确认</button>
+                    )}
+                  </>
+                )}
+                {canEdit && (
+                  <button type="button" onClick={() => save.mutate({ projectId: project.id, declaration: draft })}
+                    disabled={save.isPending} className="inline-flex items-center gap-1.5 rounded-[8px] bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-50">
+                    {save.isPending && <Loader2 size={12} className="animate-spin" />}
+                    保存为新版本
+                  </button>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Field({ label, value, onCommit, canEdit, placeholder, textarea, className }: {
   label: string; value: string; onCommit: (v: string) => void; canEdit: boolean; placeholder?: string; textarea?: boolean; className?: string;
 }) {
@@ -552,27 +757,6 @@ function Field({ label, value, onCommit, canEdit, placeholder, textarea, classNa
         <input value={draft} onChange={(e) => setDraft(e.target.value)} onBlur={commit} placeholder={placeholder}
           className={editClass} />
       )}
-    </div>
-  );
-}
-
-function InfoCell({ icon, label, value, mono, className }: { icon: React.ReactNode; label: string; value: React.ReactNode; mono?: boolean; className?: string }) {
-  return (
-    <div className={className}>
-      <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground mb-1">{icon}{label}</div>
-      <div className={`text-sm text-foreground ${mono ? 'num' : ''}`}>{value}</div>
-    </div>
-  );
-}
-
-function Metric({ icon, label, value, sub, accent }: { icon: React.ReactNode; label: string; value: string; sub?: string; accent?: string }) {
-  return (
-    <div className="rounded-[10px] border border-border bg-card p-4">
-      <div className="flex items-center gap-1.5 text-muted-foreground">{icon}<span className="text-[10px] uppercase tracking-wider">{label}</span></div>
-      <div className="mt-2 flex items-baseline gap-1.5">
-        <span className={`text-2xl font-semibold ${accent ?? 'text-foreground'}`}>{value}</span>
-        {sub && <span className="text-[11px] num text-muted-foreground">{sub}</span>}
-      </div>
     </div>
   );
 }

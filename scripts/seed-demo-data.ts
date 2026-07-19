@@ -353,7 +353,7 @@ const DEMO_MY_TASKS: DemoTaskAssignment[] = [
   { projectId: "demo-002", phaseId: "design",  taskId: "d4", status: "in_progress", priority: "medium", dueDate: "2026-06-26" },
   { projectId: "demo-003", phaseId: "evt",     taskId: "e3", status: "todo",        priority: "critical", dueDate: "2026-06-30" },
   { projectId: "demo-006", phaseId: "design",  taskId: "ed2", status: "todo",       priority: "low",    dueDate: "2026-07-06" },
-  { projectId: "demo-008", phaseId: "input",   taskId: "jin1", status: "in_progress", priority: "medium", dueDate: "2026-07-14" },
+  { projectId: "demo-008", phaseId: "input",   taskId: "jdm_input_snapshot", status: "in_progress", priority: "medium", dueDate: "2026-07-14" },
   // ── ~3 completed (status done, completed flag, completedAt set) ──
   { projectId: "demo-005", phaseId: "mp",      taskId: "mp1", status: "done", priority: "medium", dueDate: "2026-06-05", completed: true, completedAt: "2026-06-04T09:30:00Z" },
   { projectId: "demo-004", phaseId: "dvt",     taskId: "v1",  status: "done", priority: "high",   dueDate: "2026-06-09", completed: true, completedAt: "2026-06-09T15:10:00Z" },

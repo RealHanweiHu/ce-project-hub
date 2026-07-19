@@ -25,6 +25,7 @@ function configured(value: string | number | null | undefined): boolean {
 }
 import {
   createUserWithPassword,
+  acquireProjectReleaseStateLock,
   getDb,
   getUserByEmail,
   getUserByUsername,
@@ -55,12 +56,18 @@ import {
   productDefinitionSnapshots,
   productDefinitionChanges,
   productRevisions,
+  productTechnicalBaselines,
   mpReleases,
+  keyModules,
+  projectModuleBaselines,
+  projectProductModuleBindings,
   customerVariants,
   comments,
   notifications,
   automationRules,
   calendarExceptions as calendarExceptionsTable,
+  PROJECT_MEMBER_ROLES,
+  projectRoleFallbackReviewers,
 } from "../../drizzle/schema";
 import { eq, desc, and, notInArray, or, like, inArray, sql as drizzleSql } from "drizzle-orm";
 
@@ -76,6 +83,47 @@ const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
 });
 
 export const adminRouter = router({
+  fallbackReviewers: router({
+    list: adminProcedure.query(async () => {
+      const db = await getDb();
+      if (!db) return [];
+      return db.select({
+        id: projectRoleFallbackReviewers.id,
+        role: projectRoleFallbackReviewers.role,
+        userId: projectRoleFallbackReviewers.userId,
+        active: projectRoleFallbackReviewers.active,
+        userName: users.name,
+        userEmail: users.email,
+      }).from(projectRoleFallbackReviewers)
+        .leftJoin(users, eq(projectRoleFallbackReviewers.userId, users.id))
+        .orderBy(projectRoleFallbackReviewers.role, users.name);
+    }),
+    upsert: adminProcedure
+      .input(z.object({ role: z.enum(PROJECT_MEMBER_ROLES), userId: z.number().int().positive(), active: z.boolean().default(true) }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const [user] = await db.select({ role: users.role }).from(users).where(eq(users.id, input.userId)).limit(1);
+        if (!user || isSystemExternalRole(user.role)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "兜底审核人必须是内部账号" });
+        }
+        const [row] = await db.insert(projectRoleFallbackReviewers).values({
+          role: input.role, userId: input.userId, active: input.active, createdBy: ctx.user.id,
+        }).onConflictDoUpdate({
+          target: [projectRoleFallbackReviewers.role, projectRoleFallbackReviewers.userId],
+          set: { active: input.active, updatedAt: new Date() },
+        }).returning();
+        return row;
+      }),
+    remove: adminProcedure
+      .input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        await db.update(projectRoleFallbackReviewers).set({ active: false }).where(eq(projectRoleFallbackReviewers.id, input.id));
+        return { success: true };
+      }),
+  }),
   /**
    * Search registered users for project invite.
    * Returns up to 10 matches on name/username/email, excluding existing members.
@@ -234,6 +282,13 @@ export const adminRouter = router({
 
       const replacementUserId = ctx.user.id;
       await db.transaction(async (tx) => {
+        // Account deletion touches ownership, membership and evidence across projects.
+        // Take every project barrier in stable order before the first project write so
+        // it cannot race an in-flight release or deadlock on row-trigger lock order.
+        const projectIds = await tx.select({ id: projects.id }).from(projects).orderBy(projects.id);
+        for (const project of projectIds) {
+          await acquireProjectReleaseStateLock(tx, project.id);
+        }
         // User-owned collaboration rows can be removed; business records keep their history
         // while references to the deleted account are cleared or transferred to this admin.
         await tx.execute(drizzleSql`
@@ -258,6 +313,12 @@ export const adminRouter = router({
         await tx.update(projects)
           .set({ pmUserId: null })
           .where(eq(projects.pmUserId, input.userId));
+        await tx.update(projects)
+          .set({ productOwnerUserId: replacementUserId })
+          .where(eq(projects.productOwnerUserId, input.userId));
+        await tx.update(projects)
+          .set({ customerSignoffOwnerUserId: replacementUserId })
+          .where(eq(projects.customerSignoffOwnerUserId, input.userId));
         await tx.update(projects)
           .set({ riskOverrideUpdatedBy: null })
           .where(eq(projects.riskOverrideUpdatedBy, input.userId));
@@ -341,6 +402,15 @@ export const adminRouter = router({
         await tx.update(products)
           .set({ createdBy: replacementUserId })
           .where(eq(products.createdBy, input.userId));
+        await tx.update(products)
+          .set({ productManagerUserId: replacementUserId })
+          .where(eq(products.productManagerUserId, input.userId));
+        await tx.update(products)
+          .set({ maintenanceOwnerUserId: replacementUserId })
+          .where(eq(products.maintenanceOwnerUserId, input.userId));
+        await tx.update(products)
+          .set({ afterSalesOwnerUserId: replacementUserId })
+          .where(eq(products.afterSalesOwnerUserId, input.userId));
         await tx.update(productDefinitions)
           .set({ confirmedBy: null })
           .where(eq(productDefinitions.confirmedBy, input.userId));
@@ -359,6 +429,24 @@ export const adminRouter = router({
         await tx.update(productRevisions)
           .set({ releasedBy: null })
           .where(eq(productRevisions.releasedBy, input.userId));
+        await tx.update(keyModules)
+          .set({ createdBy: replacementUserId })
+          .where(eq(keyModules.createdBy, input.userId));
+        await tx.update(keyModules)
+          .set({ technicalConfirmedBy: replacementUserId })
+          .where(eq(keyModules.technicalConfirmedBy, input.userId));
+        await tx.update(keyModules)
+          .set({ approvedBy: replacementUserId })
+          .where(eq(keyModules.approvedBy, input.userId));
+        await tx.update(projectModuleBaselines)
+          .set({ confirmedBy: replacementUserId })
+          .where(eq(projectModuleBaselines.confirmedBy, input.userId));
+        await tx.update(projectProductModuleBindings)
+          .set({ boundBy: replacementUserId })
+          .where(eq(projectProductModuleBindings.boundBy, input.userId));
+        await tx.update(productTechnicalBaselines)
+          .set({ releasedBy: replacementUserId })
+          .where(eq(productTechnicalBaselines.releasedBy, input.userId));
         await tx.update(mpReleases)
           .set({ acceptedBy: null })
           .where(eq(mpReleases.acceptedBy, input.userId));
@@ -371,8 +459,11 @@ export const adminRouter = router({
         await tx.update(customerVariants)
           .set({ createdBy: replacementUserId })
           .where(eq(customerVariants.createdBy, input.userId));
+        // updatedBy 是"此规则被人工定制过"的唯一标记（syncAutomationRuleDefaultChanges
+        // 只强改 updatedBy IS NULL 的系统行）：置空会让被删用户定制过的规则在下次
+        // 引擎启动时被默认值迁移静默覆盖，改挂到接管人名下保住标记。
         await tx.update(automationRules)
-          .set({ updatedBy: null })
+          .set({ updatedBy: replacementUserId })
           .where(eq(automationRules.updatedBy, input.userId));
 
         await tx.delete(users).where(eq(users.id, input.userId));

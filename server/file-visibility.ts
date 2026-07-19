@@ -10,8 +10,11 @@ export function normalizeProjectFileVisibility(value: unknown): ProjectFileVisib
     : "internal";
 }
 
-export function canRoleViewInternalWorkspace(role: ProjectMemberRole): boolean {
-  return ROLE_PERMISSIONS[role]?.canViewInternalWorkspace ?? false;
+export function canRoleViewInternalWorkspace(
+  roleOrRoles: ProjectMemberRole | Iterable<ProjectMemberRole>,
+): boolean {
+  const roles = typeof roleOrRoles === "string" ? [roleOrRoles] : Array.from(roleOrRoles);
+  return roles.some((role) => ROLE_PERMISSIONS[role]?.canViewInternalWorkspace ?? false);
 }
 
 /**
@@ -27,14 +30,19 @@ export function resolveDefaultUploadVisibility(role: ProjectMemberRole): Project
 }
 
 export function canRoleViewFileVisibility(
-  role: ProjectMemberRole,
+  roleOrRoles: ProjectMemberRole | Iterable<ProjectMemberRole>,
   visibility: string | null | undefined,
 ): boolean {
-  const permissions = ROLE_PERMISSIONS[role];
-  if (!permissions) return false;
+  // 并集语义与 canRoleViewInternalWorkspace 一致：多岗成员任一角色可见即可见，
+  // 否则 pm 主角色 + scm 兼任的人会因单角色索引丢失 supplier 文件可见性。
+  const roles = typeof roleOrRoles === "string" ? [roleOrRoles] : Array.from(roleOrRoles);
   const normalized = normalizeProjectFileVisibility(visibility);
-  if (normalized === "public") return permissions.canView;
-  if (normalized === "customer") return permissions.canViewCustomerFiles;
-  if (normalized === "supplier") return permissions.canViewSupplierFiles;
-  return permissions.canViewInternalFiles;
+  return roles.some((role) => {
+    const permissions = ROLE_PERMISSIONS[role];
+    if (!permissions) return false;
+    if (normalized === "public") return permissions.canView;
+    if (normalized === "customer") return permissions.canViewCustomerFiles;
+    if (normalized === "supplier") return permissions.canViewSupplierFiles;
+    return permissions.canViewInternalFiles;
+  });
 }

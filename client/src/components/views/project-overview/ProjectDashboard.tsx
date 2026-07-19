@@ -3,10 +3,10 @@
 // 数据全部来自 project + 现有 hooks/selector，不新增后端调用。
 import {
   AlertTriangle, ArrowRight, CheckCircle2, Circle,
-  ListChecks, Bug, GaugeCircle, Flag, Calendar,
+  ListChecks, Bug, GaugeCircle, Flag,
 } from 'lucide-react';
 import {
-  Project, HEALTH_CONFIG, getProjectPhases, computeOverallProgress,
+  Project, HEALTH_CONFIG, getProjectPhases, getOverallProgress,
   Issue, ChangeRecord, ISSUE_SEVERITIES,
 } from '@/lib/data';
 import { CHANGE_TYPE_CONFIG } from './../ChangeLog';
@@ -14,8 +14,6 @@ import { LinearCard, Kicker, LinearBar } from '@/components/linear/primitives';
 import { trpc } from '@/lib/trpc';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
-const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-
 function daysFromToday(iso?: string | null): number | null {
   if (!iso) return null;
   const today = new Date();
@@ -68,24 +66,32 @@ export function ProjectDashboard({
   onSelectTab: (tab: string) => void;
 }) {
   const { data: users = [] } = trpc.admin.listUsersForSelect.useQuery(undefined, { staleTime: 60_000 });
+  // 设计4 §1 焦点三卡：下一里程碑/前三阻断 来自统一状态摘要；待决事项来自个人行动项
+  const { data: statusSummary } = trpc.projects.statusSummary.useQuery(
+    { projectId: project.id }, { staleTime: 5_000 },
+  );
+  const { data: myWork } = trpc.workbench.mine.useQuery(undefined, { staleTime: 15_000 });
   const userName = (id?: number | null) => (id ? users.find((u) => u.id === id)?.name ?? '—' : '未分配');
 
   const phases = getProjectPhases(project);
-  const overallProgress = computeOverallProgress(project);
+  const overallProgress = getOverallProgress(project);
   const health = HEALTH_CONFIG[project.risk];
   const currentPhaseName = phases.find((p) => p.id === project.currentPhase)?.name ?? project.currentPhase;
 
   // ── tasks: flatten across phases ────────────────────────────────────────────
-  let doneTasks = 0, totalTasks = 0;
+  // 计数与列表/组合看板同口径：读服务端摘要，不再本地累计（本地循环只负责挑待办行）
+  const doneTasks = statusSummary?.counts?.taskDone
+    ?? project.phaseProgress?.reduce((n, item) => n + item.done, 0) ?? 0;
+  const totalTasks = statusSummary?.counts?.taskTotal
+    ?? project.phaseProgress?.reduce((n, item) => n + item.total, 0) ?? 0;
   const todoTasks: FlatTask[] = [];
   for (const phase of phases) {
     const pd = project.phases[phase.id];
     const checked = pd?.tasks ?? {};
     const details = pd?.taskDetails ?? {};
     for (const task of phase.tasks) {
-      totalTasks += 1;
       const isDone = checked[task.id] === true;
-      if (isDone) { doneTasks += 1; continue; }
+      if (isDone) continue;
       const d = details[task.id];
       const status = d?.taskStatus ?? 'todo';
       if (status === 'done' || status === 'skipped') continue;
@@ -116,26 +122,84 @@ export function ProjectDashboard({
   const recentChanges: ChangeRecord[] = [...(project.changeLog ?? [])]
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 
-  // ── next gate: nearest undone gate task with a due date ─────────────────────
-  let nextGate: { name: string; due: string; days: number } | null = null;
-  for (const phase of phases) {
-    const pd = project.phases[phase.id];
-    const gateDone = pd?.tasks?.[phase.gateTaskId] === true;
-    if (gateDone) continue;
-    const due = pd?.taskDetails?.[phase.gateTaskId]?.dueDate;
-    if (!due) continue;
-    const days = daysFromToday(due);
-    if (days === null) continue;
-    if (!nextGate || due < nextGate.due) {
-      const gateTask = phase.tasks.find((t) => t.id === phase.gateTaskId);
-      nextGate = { name: gateTask?.name ?? phase.gate, due, days };
-    }
-  }
-
   const atRisk = project.risk === 'high' || project.risk === 'medium';
+
+  // ── 设计4 §1 焦点三卡数据 ────────────────────────────────────────────────
+  const summaryGate = statusSummary?.nextGate ?? null;
+  const gapDims = summaryGate?.gaps ?? [];
+  const criticalTitles = gapDims.find((g) => g.dimension === 'critical_issues')?.blockers ?? [];
+  const missingDeliverables = gapDims.find((g) => g.dimension === 'deliverables')?.blockers ?? [];
+  const overdueRedline = statusSummary?.overdueRedlineTasks ?? [];
+  type Blocker = { kind: string; label: string; owner: string | null; tab: string };
+  const topBlockers: Blocker[] = [
+    ...criticalTitles.map((title) => ({ kind: 'P0/P1', label: title, owner: null, tab: 'issues' })),
+    ...overdueRedline.map((task) => ({
+      kind: '逾期红线', label: task.name, owner: userName(task.assigneeUserId), tab: 'tasks',
+    })),
+    ...missingDeliverables.map((name) => ({ kind: '缺证据', label: name, owner: null, tab: 'tasks' })),
+  ].slice(0, 3);
+  const pendingMine = (myWork?.actionItems ?? []).filter((item: { projectId?: string | null; kind?: string }) =>
+    item.projectId === project.id &&
+    ['task_approval', 'deliverable_review', 'mp_release_confirm', 'issue_validation'].includes(item.kind ?? ''),
+  ).slice(0, 3);
+  const gateDays = summaryGate?.dueDate ? daysFromToday(summaryGate.dueDate) : null;
 
   return (
     <div className="space-y-4">
+      {/* ── 设计4 §1：焦点三卡（排版固定，不随内容增减改变）──────────────────── */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="rounded-[11px] border border-border bg-card p-4 min-h-[104px]">
+          <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1.5">🎯 下一里程碑</div>
+          {summaryGate ? (
+            <button type="button" className="text-left w-full" onClick={() => onSelectTab('tasks')}>
+              <div className="text-sm font-semibold text-foreground truncate">{summaryGate.gateName}</div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                {summaryGate.dueDate ? `${summaryGate.dueDate} · ${gateDays != null && gateDays >= 0 ? `剩 ${gateDays} 天` : `已逾期 ${Math.abs(gateDays ?? 0)} 天`}` : '未排期'}
+                {summaryGate.ready === true
+                  ? <span className="ml-2 text-[color:var(--success)]">缺口清零 ✓</span>
+                  : <span className="ml-2 text-[color:var(--warning)]">还差 {summaryGate.gapCount} 项</span>}
+              </div>
+            </button>
+          ) : (
+            <div className="text-xs text-muted-foreground">当前阶段无 Gate 信息</div>
+          )}
+        </div>
+        <div className="rounded-[11px] border border-border bg-card p-4 min-h-[104px]">
+          <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1.5">🚧 前三阻断</div>
+          {topBlockers.length === 0 ? (
+            <div className="text-xs text-[color:var(--success)]">无阻断 ✓</div>
+          ) : (
+            <ul className="space-y-1">
+              {topBlockers.map((blocker, i) => (
+                <li key={i}>
+                  <button type="button" className="w-full text-left text-xs flex items-center gap-1.5" onClick={() => onSelectTab(blocker.tab)}>
+                    <span className="shrink-0 rounded px-1 text-[10px] border border-[color:var(--warning)] text-[color:var(--warning)]">{blocker.kind}</span>
+                    <span className="truncate text-foreground">{blocker.label}</span>
+                    {blocker.owner && <span className="shrink-0 text-muted-foreground">@{blocker.owner}</span>}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <div className="rounded-[11px] border border-border bg-card p-4 min-h-[104px]">
+          <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1.5">⏳ 待决事项</div>
+          {pendingMine.length === 0 ? (
+            <div className="text-xs text-[color:var(--success)]">没有等你的决定 ✓</div>
+          ) : (
+            <ul className="space-y-1">
+              {pendingMine.map((item: { id: number; title?: string | null }) => (
+                <li key={item.id}>
+                  <button type="button" className="w-full text-left text-xs text-foreground truncate hover:underline" onClick={() => onSelectTab('tasks')}>
+                    {item.title ?? '待处理事项'}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+
       {/* ── 风险预警横幅（仅风险项目显示，缺省不占位）──────────────────────────── */}
       {atRisk && (
         <div
@@ -272,28 +336,24 @@ export function ProjectDashboard({
             </div>
           </LinearCard>
 
-          {/* 下一 GATE */}
+          {/* 保留原右栏两卡节奏；Gate 数据只在顶部焦点卡展示。 */}
           <LinearCard className="overflow-hidden p-0">
-            <div className="bg-primary p-4 text-primary-foreground">
-              <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] opacity-80">
-                <Flag size={12} />下一 GATE
-              </div>
-              {nextGate ? (
-                <div className="mt-2.5">
-                  <div className="num text-2xl font-semibold leading-none">
-                    {nextGate.days >= 0 ? `T-${nextGate.days} 天后` : `已超期 ${-nextGate.days} 天`}
-                  </div>
-                  <div className="mt-2 truncate text-sm font-medium">{nextGate.name}</div>
-                  <div className="mt-1 flex items-center gap-1.5 text-xs opacity-80">
-                    <Calendar size={11} />
-                    <span className="num">{nextGate.due}</span>
-                    <span>· {WEEKDAYS[new Date(`${nextGate.due}T00:00:00`).getDay()]}</span>
-                  </div>
+            <button
+              type="button"
+              onClick={() => onSelectTab('tasks')}
+              className="min-h-[116px] w-full bg-primary p-4 text-left text-primary-foreground transition-opacity hover:opacity-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+            >
+              <Kicker className="flex items-center gap-1.5 text-primary-foreground/80">
+                <Flag size={12} />Gate 评审入口
+              </Kicker>
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold">查看 Gate 任务</div>
+                  <div className="mt-1 text-xs text-primary-foreground/75">就绪清单与评审操作集中在任务页</div>
                 </div>
-              ) : (
-                <div className="mt-2.5 flex h-[68px] items-center text-sm opacity-80">暂无即将 Gate</div>
-              )}
-            </div>
+                <ArrowRight size={16} className="shrink-0" aria-hidden="true" />
+              </div>
+            </button>
           </LinearCard>
         </div>
       </div>

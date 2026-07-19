@@ -6,7 +6,7 @@ import {
   getProjectMembers,
 } from "./db";
 import { projectDeliverableReviews, projectFiles, projects } from "../drizzle/schema";
-import type { ProjectDeliverableReview } from "../drizzle/schema";
+import type { ProjectDeliverableReview, ProjectMemberRole } from "../drizzle/schema";
 import { and, eq, sql } from "drizzle-orm";
 import { isDeliverableSatisfied } from "../shared/deliverable-review";
 import { canRoleReviewDeliverables, preferredDeliverableReviewerRoles } from "../shared/deliverable-permissions";
@@ -19,25 +19,13 @@ import {
 import { buildDeliverableReviewActionPath, buildProjectActionPath } from "../shared/action-links";
 import { notifyGateReadyIfReady } from "./gate-ready-notify";
 import type { NotifyPersonalDeps } from "./notification-gateway";
+import { assertFourEyes, redlineKindForDeliverable } from "../shared/redline-four-eyes";
+import { getEffectiveProjectRoles } from "./project-access";
 
 export type ReviewDeps = NotifyPersonalDeps;
 
 function preferredReviewerRoles(deliverableName: string) {
   return preferredDeliverableReviewerRoles(deliverableName);
-}
-
-function effectiveReviewerRole(input: {
-  reviewerUserId: number;
-  explicitRole: string | null;
-  projectCreatedBy?: number | null;
-  projectPmUserId?: number | null;
-}): string | null {
-  if (input.reviewerUserId === input.projectCreatedBy) return "owner";
-  if (input.reviewerUserId === input.projectPmUserId) {
-    if (input.explicitRole === "owner" || input.explicitRole === "manager") return input.explicitRole;
-    return "project_manager";
-  }
-  return input.explicitRole;
 }
 
 export async function pickDefaultDeliverableReviewer(input: {
@@ -51,21 +39,20 @@ export async function pickDefaultDeliverableReviewer(input: {
   const excluded = input.excludeUserId ?? null;
   const preferred = preferredReviewerRoles(input.deliverableName);
 
-  const eligible = members
-    .map((member) => ({
-      userId: member.userId,
-      role: effectiveReviewerRole({
-        reviewerUserId: member.userId,
-        explicitRole: member.role,
-        projectCreatedBy: project?.createdBy ?? null,
-        projectPmUserId: input.pmUserId ?? project?.pmUserId ?? null,
-      }),
-    }))
-    .filter((member) => member.userId !== excluded && canRoleReviewDeliverables(member.role));
+  const eligible: Array<{ userId: number; roles: string[] }> = [];
+  for (const member of members) {
+    if (member.userId === excluded) continue;
+    const roles = project
+      ? Array.from(await getEffectiveProjectRoles(project, member.userId))
+      : [member.role];
+    if (roles.some((role) => canRoleReviewDeliverables(role))) {
+      eligible.push({ userId: member.userId, roles });
+    }
+  }
 
   if (preferred.length > 0) {
     for (const role of preferred) {
-      const reviewer = eligible.find((member) => member.role === role);
+      const reviewer = eligible.find((member) => member.roles.includes(role));
       if (reviewer) return reviewer.userId;
     }
     return null;
@@ -152,7 +139,7 @@ export async function submitDeliverableReview(
       projectId: input.projectId,
       entityType: "deliverable_review",
       entityId,
-      dedupeKey: actionDedupeKey({ kind: "deliverable_review", entityId, recipientUserId: input.reviewerUserId }),
+      dedupeKey: actionDedupeKey({ kind: "deliverable_review", projectId: input.projectId, entityId, recipientUserId: input.reviewerUserId }),
       recipientUserId: input.reviewerUserId,
       title: "交付物待审核",
       body: `项目交付物「${input.deliverableName}」待你审核。`,
@@ -200,14 +187,20 @@ export async function maybeAutoSubmitDeliverableReviewOnUpload(
 }
 
 export async function reviewDeliverable(
-  input: { projectId: string; phaseId: string; deliverableName: string; decision: "approved" | "rejected"; reviewedBy: number; note: string | null },
+  input: { projectId: string; phaseId: string; deliverableName: string; decision: "approved" | "rejected"; reviewedBy: number; note: string | null; actedAsRole?: ProjectMemberRole | null; viaDelegationId?: number | null },
   deps?: ReviewDeps
 ): Promise<void> {
   const db = await getDb(); if (!db) throw new Error("no db");
   const existing = await findReview(db, input.projectId, input.phaseId, input.deliverableName);
   if (!existing || existing.status !== "pending") throw new Error("仅待审交付物可审核");
+  const project = await getProjectById(input.projectId);
+  if (project && redlineKindForDeliverable(project, input.phaseId, input.deliverableName)) {
+    assertFourEyes(existing.submittedBy, input.reviewedBy);
+  }
   await db.update(projectDeliverableReviews).set({
     status: input.decision, reviewedBy: input.reviewedBy, reviewedAt: sql`now()`, reviewNote: input.note,
+    actedAsRole: input.actedAsRole ?? null,
+    viaDelegationId: input.viaDelegationId ?? null,
   }).where(eq(projectDeliverableReviews.id, existing.id));
   await createActivityLog({
     projectId: input.projectId,
@@ -224,6 +217,8 @@ export async function reviewDeliverable(
         ...existing,
         status: input.decision,
         reviewedBy: input.reviewedBy,
+        actedAsRole: input.actedAsRole ?? null,
+        viaDelegationId: input.viaDelegationId ?? null,
         reviewNote: input.note,
       },
     },
@@ -251,7 +246,7 @@ export async function reviewDeliverable(
         projectId: input.projectId,
         entityType: "deliverable_review",
         entityId,
-        dedupeKey: actionDedupeKey({ kind: "deliverable_rework", entityId, recipientUserId: existing.submittedBy }),
+        dedupeKey: actionDedupeKey({ kind: "deliverable_rework", projectId: input.projectId, entityId, recipientUserId: existing.submittedBy }),
         recipientUserId: existing.submittedBy,
         title: "交付物被驳回",
         body: `「${input.deliverableName}」被驳回${input.note ? "：" + input.note : ""}。`,
@@ -275,7 +270,13 @@ export async function resetReviewOnReupload(
   const db = await getDb(); if (!db) throw new Error("Database not available");
   const existing = await findReview(db, projectId, phaseId, deliverableName);
   if (!existing || existing.status === "pending") return;
-  await db.update(projectDeliverableReviews).set({ status: "pending", reviewedBy: null, reviewedAt: null, reviewNote: null, submittedAt: sql`now()` })
+  // submittedBy 必须跟着"当前证据的实际提供者"走：四眼比对的是证据提交人，
+  // 若审核人自己重传后仍按旧提交人比对，红线对象会被自审自批绕过（设计 §2.3/§5）。
+  await db.update(projectDeliverableReviews).set({
+    status: "pending", reviewedBy: null, reviewedAt: null, reviewNote: null,
+    submittedAt: sql`now()`,
+    ...(actorId != null ? { submittedBy: actorId } : {}),
+  })
     .where(eq(projectDeliverableReviews.id, existing.id));
   await createActivityLog({
     projectId,
@@ -308,7 +309,7 @@ export async function resetReviewOnReupload(
       projectId,
       entityType: "deliverable_review",
       entityId,
-      dedupeKey: actionDedupeKey({ kind: "deliverable_review", entityId, recipientUserId: existing.reviewerUserId }),
+      dedupeKey: actionDedupeKey({ kind: "deliverable_review", projectId, entityId, recipientUserId: existing.reviewerUserId }),
       recipientUserId: existing.reviewerUserId,
       title: "交付物已更新待重审",
       body: `「${deliverableName}」已上传新版本，待你重新审核。`,
