@@ -5,6 +5,7 @@
 // ProjectDetailView: phase navigation, Gantt chart tab, task checklist, task details, file upload
 
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowLeft, CheckCircle2, Circle, ChevronRight,
   Paperclip,
@@ -3188,19 +3189,24 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
             {/* Side Panel: 阶段备注 + 全阶段进度 */}
             <div className="space-y-4 lg:sticky lg:top-24 self-start">
               {/* 任务详情子窗口（点击任务弹出） */}
-              {selectedTask && (
+              {selectedTask && (typeof document !== 'undefined' ? createPortal(
                 <div
                   className="fixed inset-0 z-50 flex justify-center overflow-y-auto bg-black/40 backdrop-blur-sm p-4 sm:p-8"
                   onClick={() => setSelectedTaskId(null)}
                 >
                   <div
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="task-detail-dialog-title"
                     className="relative w-full max-w-4xl h-fit my-auto rounded-[11px] border border-border bg-card shadow-2xl"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <button
+                      type="button"
                       onClick={() => setSelectedTaskId(null)}
                       className="absolute top-3.5 right-3.5 z-10 p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
                       title="关闭 (Esc)"
+                      aria-label="关闭任务详情"
                     >
                       <X size={18} />
                     </button>
@@ -3221,7 +3227,7 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                             </span>
                           )}
                         </div>
-                        <h3 className="text-xl font-bold tracking-[-0.3px] leading-tight text-foreground">{selectedTask.name}</h3>
+                        <h3 id="task-detail-dialog-title" className="text-xl font-bold tracking-[-0.3px] leading-tight text-foreground">{selectedTask.name}</h3>
                         <p className="text-sm text-muted-foreground mt-1 leading-relaxed">{selectedTask.desc}</p>
                       </div>
                     </div>
@@ -3640,8 +3646,9 @@ export function ProjectDetailView({ project, onUpdate, onBack, initialPhaseId, i
                     </div>
                     </div>{/* /scroll-body */}
                   </div>{/* /modal-panel */}
-                </div>
-              )}
+                </div>,
+                document.body
+              ) : null)}
 
               {/* Phase Notes */}
               <LinearCard className="p-5">
